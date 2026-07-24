@@ -489,6 +489,10 @@ pub struct AppState {
     /// `server.require_auth` overrides this either way. process-level rather
     /// than snapshot-level so a control-plane reload can never clear it
     pub managed_auth: bool,
+    /// live egress policy every upstream client's resolver consults at connect
+    /// time; swapped on reload so hostname/rebinding enforcement re-tunes
+    /// without rebuilding pooled clients (#656)
+    pub egress: rolter_proxy::egress_resolver::SharedEgressPolicy,
     pub forwarder: Arc<Forwarder>,
     /// bounded worker queues keyed by provider; queue settings come from the
     /// live snapshot so a hot reload takes effect for subsequent requests
@@ -603,7 +607,14 @@ impl AppState {
         // created before the snapshot so the fastest strategy's latency
         // sources can hold a handle to the same tracker the guards record into
         let loads = crate::load::LoadTracker::new();
-        let forwarder = Arc::new(Forwarder::with_timeouts(&config.timeouts));
+        // one live egress policy shared by every upstream client's resolver, so
+        // a hot reload re-tunes connect-time enforcement without discarding
+        // pooled connections (#656)
+        let egress = Arc::new(ArcSwap::from_pointee(config.egress.clone()));
+        let forwarder = Arc::new(Forwarder::with_timeouts_and_egress(
+            &config.timeouts,
+            egress.clone(),
+        ));
         let provider_queues = ProviderQueues::new(forwarder.clone(), metrics.clone());
         let cache_telemetry = crate::cache_telemetry::CacheTelemetry::new(metrics.clone());
         cache_telemetry.configure(&config.providers);
@@ -615,6 +626,7 @@ impl AppState {
             ))),
             // opted into by the binary when a snapshot url is configured
             managed_auth: false,
+            egress,
             forwarder,
             provider_queues,
             metrics,
@@ -658,6 +670,9 @@ impl AppState {
         // configured clients capture CA roots at construction time; clearing
         // them makes bundle rotation take effect on the next request
         self.forwarder.reload();
+        // the resolver reads this on every lookup, so a policy change takes
+        // effect on the next connect without rebuilding a single client
+        self.egress.store(Arc::new(config.egress.clone()));
         self.cache_telemetry.configure(&config.providers);
         self.snapshot.store(Arc::new(Snapshot::build_with_telemetry(
             config,
@@ -787,6 +802,24 @@ mod tests {
         let price = snap.prices.get("gpt-4o").expect("price kept");
         assert_eq!(snap.base_currency, "EUR");
         assert!((price.input_per_mtok - 9.0).abs() < 1e-12, "{price:?}");
+    }
+
+    #[test]
+    fn reload_retunes_connect_time_egress_in_place() {
+        // the resolver reads this handle on every lookup, so tightening the
+        // policy must take effect without rebuilding a single pooled client
+        let mut config = GatewayConfig::default();
+        let state = AppState::with_logging(&config, None);
+        assert!(!state.egress.load().block_private);
+
+        config.egress.block_private = true;
+        state.reload(&config, 1);
+        assert!(state.egress.load().block_private);
+        assert!(state
+            .egress
+            .load()
+            .deny_reason("10.0.0.5".parse().unwrap())
+            .is_some());
     }
 
     #[test]

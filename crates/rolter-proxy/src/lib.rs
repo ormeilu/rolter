@@ -7,23 +7,30 @@
 //! extensible translation registry before dispatch; responses are translated by
 //! the gateway while they stream back to the caller.
 
+pub mod egress_resolver;
 mod translation;
 
 pub use translation::{Protocol, TranslatedStream, TranslationPlan};
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
 use dashmap::DashMap;
 use reqwest::{Client, Method, Proxy, RequestBuilder, Response};
-use rolter_core::{Error, ProviderConfig, ProviderKind, Result, TimeoutConfig};
+use rolter_core::{EgressPolicy, Error, ProviderConfig, ProviderKind, Result, TimeoutConfig};
+
+use crate::egress_resolver::{EgressResolver, SharedEgressPolicy};
 
 /// Forwards requests to upstream providers using pooled, reused HTTP clients.
 pub struct Forwarder {
     default: Client,
     configured: DashMap<ClientKey, Client>,
+    /// live egress policy consulted by every client's resolver; swapping it
+    /// re-tunes enforcement without rebuilding the pooled clients
+    egress: SharedEgressPolicy,
     /// connect-establishment timeout baked into every client
     connect_timeout: Option<Duration>,
     /// time-to-response-headers bound applied around each `send()` (0 disables)
@@ -67,15 +74,29 @@ impl Forwarder {
         Self::with_timeouts(&TimeoutConfig::default())
     }
 
-    /// Create a forwarder whose clients honour `timeouts`.
+    /// Create a forwarder whose clients honour `timeouts`, enforcing the
+    /// default egress policy. Use [`Self::with_timeouts_and_egress`] to share a
+    /// live policy that a config reload can swap.
     pub fn with_timeouts(timeouts: &TimeoutConfig) -> Self {
+        Self::with_timeouts_and_egress(
+            timeouts,
+            Arc::new(arc_swap::ArcSwap::from_pointee(EgressPolicy::default())),
+        )
+    }
+
+    /// Create a forwarder whose clients enforce `egress` at connect time.
+    /// Swapping the policy behind the [`arc_swap::ArcSwap`] re-tunes every
+    /// pooled client in place.
+    pub fn with_timeouts_and_egress(timeouts: &TimeoutConfig, egress: SharedEgressPolicy) -> Self {
         let connect_timeout =
             (timeouts.connect_secs > 0).then(|| Duration::from_secs(timeouts.connect_secs));
         let request_timeout =
             (timeouts.request_secs > 0).then(|| Duration::from_secs(timeouts.request_secs));
         Self {
-            default: build_client(None, &[], connect_timeout).unwrap_or_else(|_| Client::new()),
+            default: build_client(None, &[], connect_timeout, &egress)
+                .unwrap_or_else(|_| Client::new()),
             configured: DashMap::new(),
+            egress,
             connect_timeout,
             request_timeout,
             next_proxy: AtomicUsize::new(0),
@@ -104,7 +125,12 @@ impl Forwarder {
         if let Some(client) = self.configured.get(&key) {
             return Ok(client.clone());
         }
-        let client = build_client(key.proxy.as_deref(), &key.ca_bundles, self.connect_timeout)?;
+        let client = build_client(
+            key.proxy.as_deref(),
+            &key.ca_bundles,
+            self.connect_timeout,
+            &self.egress,
+        )?;
         Ok(self.configured.entry(key).or_insert(client).clone())
     }
 
@@ -485,11 +511,16 @@ fn build_client(
     proxy: Option<&str>,
     ca_bundles: &[PathBuf],
     connect_timeout: Option<Duration>,
+    egress: &SharedEgressPolicy,
 ) -> Result<Client> {
     let mut builder = Client::builder()
         .pool_idle_timeout(Duration::from_secs(90))
         .pool_max_idle_per_host(64)
-        .tcp_nodelay(true);
+        .tcp_nodelay(true)
+        // classify what DNS actually returns, immediately before connecting:
+        // the only point that catches a hostname pointing at cloud instance
+        // metadata, or a name that rebinds to one after it was configured
+        .dns_resolver(Arc::new(EgressResolver::new(egress.clone())));
     if let Some(ct) = connect_timeout {
         builder = builder.connect_timeout(ct);
     }

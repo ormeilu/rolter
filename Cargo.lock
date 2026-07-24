@@ -2416,6 +2416,7 @@ dependencies = [
 name = "rolter-proxy"
 version = "0.0.10"
 dependencies = [
+ "arc-swap",
  "bytes",
  "dashmap",
  "futures-util",
@@ -2424,6 +2425,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-rustls",
+ "tracing",
 ]
 
 [[package]]

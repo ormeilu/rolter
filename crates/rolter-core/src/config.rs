@@ -2548,14 +2548,35 @@ impl EgressPolicy {
         let Some(host) = url_host(url) else {
             return Ok(());
         };
-        if self.allow_hosts.iter().any(|h| h == host) {
+        if self.host_is_allowed(host) {
             return Ok(());
         }
         let Ok(ip) = host.parse::<std::net::IpAddr>() else {
             // a hostname: nothing to classify without DNS
             return Ok(());
         };
-        let denied = match ip {
+        match self.deny_reason(ip) {
+            Some(range) => Err(format!(
+                "{what} '{url}' resolves to a {range} address, which the egress policy denies \
+                 (allow it explicitly via egress.allow_hosts if this is intentional)"
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether `host` is exempt from every check, matched verbatim against
+    /// `allow_hosts` (an IP literal or a hostname).
+    pub fn host_is_allowed(&self, host: &str) -> bool {
+        self.allow_hosts.iter().any(|h| h == host)
+    }
+
+    /// Why this policy denies `ip`, or `None` when it is permitted.
+    ///
+    /// Split out from [`Self::check_url`] so a connect-time check can classify
+    /// an address DNS produced, which is the only rebinding-safe point to do
+    /// it (see the connect-time resolver in `rolter-proxy`).
+    pub fn deny_reason(&self, ip: std::net::IpAddr) -> Option<&'static str> {
+        match ip {
             std::net::IpAddr::V4(v4) => {
                 if v4.is_link_local() && self.block_link_local {
                     Some("link-local (cloud instance metadata lives here)")
@@ -2581,13 +2602,6 @@ impl EgressPolicy {
                     None
                 }
             }
-        };
-        match denied {
-            Some(range) => Err(format!(
-                "{what} '{url}' resolves to a {range} address, which the egress policy denies \
-                 (allow it explicitly via egress.allow_hosts if this is intentional)"
-            )),
-            None => Ok(()),
         }
     }
 }
