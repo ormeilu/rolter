@@ -140,6 +140,11 @@ struct ControlState {
     /// set when `--clickhouse-url` is configured; backs the usage/cost
     /// analytics endpoints
     clickhouse: Option<analytics::ClickHouseClient>,
+    /// egress policy from the bootstrap config (defaults when there is none);
+    /// the CRUD API rejects a provider whose `api_base` it denies, so an SSRF
+    /// target never reaches the database in the first place
+    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
+    egress: Arc<rolter_core::EgressPolicy>,
     /// when set, the CRUD API and `/internal/snapshot` require
     /// `Authorization: Bearer <token>`
     admin_token: Option<Arc<String>>,
@@ -199,6 +204,12 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         );
     }
 
+    let egress = Arc::new(
+        bootstrap
+            .as_ref()
+            .map(|c| c.egress.clone())
+            .unwrap_or_default(),
+    );
     #[allow(unused_variables)]
     let (store, pool) = build_store(&args, bootstrap).await?;
     let http = reqwest::Client::new();
@@ -210,6 +221,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         config_owned,
         redis,
         clickhouse,
+        egress: egress.clone(),
         admin_token,
         http,
         gateway_url,
@@ -221,6 +233,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         config_owned,
         redis,
         clickhouse,
+        egress: egress.clone(),
         admin_token,
         http,
         gateway_url,
@@ -341,6 +354,7 @@ pub async fn test_app_with_admin_token(
         config_owned: Arc::new(ConfigOwned::default()),
         redis: None,
         clickhouse: None,
+        egress: Arc::new(Default::default()),
         admin_token: admin_token.map(Arc::new),
         http: reqwest::Client::new(),
         gateway_url: Arc::new("http://localhost:4000".to_string()),
@@ -826,6 +840,7 @@ mod tests {
         ControlState {
             store: Arc::new(InMemoryConfigStore::new(GatewayConfig::default())),
             config_owned: Arc::new(ConfigOwned::default()),
+            egress: Arc::new(Default::default()),
             redis: None,
             clickhouse: None,
             admin_token: token.map(|t| Arc::new(t.to_string())),

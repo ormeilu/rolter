@@ -14,6 +14,38 @@
 - Optional global or per-provider **custom CA bundles** add private PKI roots to outbound upstream clients while retaining public roots, certificate-chain validation, and hostname verification.
 - Terminate TLS at the gateway or a fronting proxy/ingress in production.
 
+## Egress policy (SSRF)
+
+A provider's `api_base` decides where the gateway sends traffic, so an admin
+surface that accepts an arbitrary one turns the proxy into an SSRF primitive
+aimed at whatever the gateway's network position can reach.
+
+rolter is built to run self-hosted and air-gapped, so upstreams legitimately
+live on loopback, RFC1918 and container networks — blanket-denying private
+destinations would break the core use case. What no legitimate LLM upstream
+needs is the **link-local** range, which is where cloud instance metadata lives
+(`169.254.169.254`, `fe80::/10`). That is denied by default; everything else is
+opt-in:
+
+```toml
+[egress]
+block_link_local = true   # default — cloud instance metadata
+block_loopback   = false  # sidecar / single-host deployments
+block_private    = false  # on-prem clusters
+allow_hosts      = []     # exact-host escape hatch
+```
+
+Enforced in two places: the control plane rejects a denied `api_base` at
+**write time** (`400`, so it never reaches the database), and snapshot
+validation re-checks it, so a bootstrap toml can't smuggle one in either.
+
+Only **IP literals** are classified. Resolving hostnames during config
+validation would make it depend on live DNS — reintroducing the "one bad row
+freezes every gateway" failure mode described in
+[config-and-hot-reload.md](config-and-hot-reload.md) — and would be bypassable
+by DNS rebinding regardless. Connect-time address re-checking is tracked
+separately.
+
 ## Wire transparency
 
 - Outbound requests to upstream providers carry **no rolter-identifying marks**: no `User-Agent`, no added `X-*`/`Via` headers, no metadata injected into the JSON body, no marks in SSE framing. The only headers sent are functionally required ones — `content-type`, the provider's auth header, and `anthropic-version` for Anthropic.
