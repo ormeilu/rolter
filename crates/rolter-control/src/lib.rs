@@ -723,7 +723,17 @@ async fn get_snapshot(
         return StatusCode::NOT_MODIFIED.into_response();
     }
     match state.store.load().await {
-        Ok(config) => {
+        Ok(mut config) => {
+            // prune rows that are only unservable by themselves (a route whose
+            // targets aren't set up yet) so one half-built entry can't 500 the
+            // snapshot and freeze config propagation for every other tenant
+            let omitted = config.sanitize_for_snapshot();
+            if !omitted.is_empty() {
+                tracing::warn!(
+                    ?omitted,
+                    "omitted unservable entries from the config snapshot"
+                );
+            }
             // never distribute a broken config to gateways: reply with the
             // problems instead so the operator can fix the source
             if let Err(problems) = config.validate() {
