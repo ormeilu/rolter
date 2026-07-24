@@ -82,6 +82,11 @@ pub struct Args {
     /// plane's management API when it sets the same `ROLTER_ADMIN_TOKEN`)
     #[arg(long, env = "ROLTER_ADMIN_TOKEN")]
     pub admin_token: Option<String>,
+    /// bearer token sent on snapshot polls when the control plane gates
+    /// `/internal/*` on a distinct internal token (`ROLTER_INTERNAL_TOKEN`
+    /// there). Falls back to `--admin-token` when unset
+    #[arg(long, env = "ROLTER_INTERNAL_TOKEN")]
+    pub internal_token: Option<String>,
 }
 
 /// Run the data-plane gateway to completion. The caller owns argument parsing
@@ -152,7 +157,12 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
             snapshot_url,
             period,
             args.redis_url,
-            args.admin_token.clone(),
+            // the snapshot channel carries decrypted provider credentials, so
+            // the control plane can gate it on a token separate from the
+            // operator's; prefer that one and fall back to the admin token
+            args.internal_token
+                .clone()
+                .or_else(|| args.admin_token.clone()),
         );
     } else {
         tracing::info!("no snapshot url configured; running with static bootstrap config");

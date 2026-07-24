@@ -219,7 +219,17 @@ class ControlClient:
         return self._http.request(method, path, json=json, expect=expect)
 
     def snapshot(self) -> Any:
-        return self._http.json("GET", "/internal/snapshot")
+        """read the config snapshot the gateway polls.
+
+        it lives on the internal listener with its own token (#636), not on the
+        operator API this client otherwise drives.
+        """
+        from .stack import INTERNAL_TOKEN, INTERNAL_URL
+        with httpx.Client(base_url=INTERNAL_URL, timeout=30.0) as c:
+            resp = c.get("/internal/snapshot", headers={"Authorization": f"Bearer {INTERNAL_TOKEN}"})
+            if resp.status_code != 200:
+                raise ApiError("GET", "/internal/snapshot", resp.status_code, _safe_body(resp))
+            return resp.json()
 
     def close(self) -> None:
         self._http.close()
