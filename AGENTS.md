@@ -29,6 +29,25 @@ rolter is a high-performance OpenAI/Anthropic-compatible AI gateway and load bal
 - New storage backends implement the `rolter_store` traits behind a cargo feature.
 - The gateway ships a built-in `fake-llm` model (deterministic lorem ipsum, no upstream or config needed) on `/v1/chat/completions` and `/v1/messages` (non-streaming and SSE) plus `/v1/embeddings` (deterministic vectors). Use it for smoke tests and local dev without secrets; a configured route named `fake-llm` shadows the builtin.
 
+## Dashboard design
+
+Before building or reshaping any dashboard screen, run the design skill:
+
+```
+/frontend-design:frontend-design rolter
+```
+
+It sets the aesthetic direction — palette, typography, layout — so a screen is a
+deliberate call for rolter rather than shadcn defaults. It composes with the
+existing rolter design system (DesignSync / the Claude Design project), which
+supplies the tokens and primitives the dashboard already ships: run the skill
+first, then build against the tokens. Never hard-code a hex or font the tokens
+already carry.
+
+This applies to every state a screen has, empty/loading/error included. Assets
+stay vendored locally — the dashboard must work air-gapped, so no runtime CDN
+fonts or images.
+
 ## Commit & PR conventions
 
 This repo uses **Conventional Commits** for commit messages and PR titles. Format:
