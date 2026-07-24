@@ -29,6 +29,7 @@ sequenceDiagram
 - The gateway keeps the routing table in an `ArcSwap<Snapshot>`. Swapping is atomic and wait-free for readers — in-flight requests keep using the old snapshot; new requests see the new one.
 - **Versioning**: `config_version` in Postgres is the monotonic source of truth. The gateway also reconciles on an interval (and at startup) so a missed pub/sub message self-heals.
 - **Validation**: the control plane validates a snapshot (every route target references a known provider, etc.) before bumping the version, so gateways never load a broken config.
+- **Per-row resilience**: validation used to be all-or-nothing, so a single half-built row 500'd `/internal/snapshot` and froze config propagation for *every* tenant. Rows that are unservable only by themselves — a route created before its targets are added, or one whose targets all point at a deleted provider — are now **omitted from the snapshot with a logged warning** instead. Structural problems that span rows (duplicate model names, a bad `metrics_path`, unreadable CA bundles) still fail the whole snapshot, since silently dropping one of two colliding rows would be worse than refusing.
 
 ## Why this design
 

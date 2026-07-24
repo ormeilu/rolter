@@ -2018,6 +2018,68 @@ impl GatewayConfig {
     /// positive weight, unique/non-empty virtual keys, positive budget limits and
     /// rate limits that actually cap something. Returns every problem found, so
     /// callers can log/report them all.
+    /// Drop entries that are unservable *on their own*, returning one warning
+    /// per dropped entry.
+    ///
+    /// Snapshot validation is otherwise all-or-nothing: a single half-built row
+    /// makes [`validate`](Self::validate) fail and `/internal/snapshot` 500,
+    /// which freezes config propagation for **every** tenant, not just the one
+    /// that owns the row. A route created before its targets are added is an
+    /// ordinary transient state in a "create route → then add targets" flow, so
+    /// it must not take the whole data plane's config with it.
+    ///
+    /// Only row-local defects are pruned here. Problems that are structural or
+    /// span rows — duplicate names, a bad `metrics_path`, unreadable CA bundles
+    /// — are deliberately left for `validate` to reject, since silently
+    /// dropping one of two colliding rows would be worse than refusing.
+    pub fn sanitize_for_snapshot(&mut self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let provider_names: std::collections::HashSet<&str> = self
+            .providers
+            .iter()
+            .map(|p| p.name.as_str())
+            .filter(|n| !n.trim().is_empty())
+            .collect();
+
+        // a target can serve traffic only when it points at a known provider
+        // with a non-zero weight; a variant needs at least one such target
+        // tracked by index, not model name: a duplicated model must not let an
+        // unservable row take its servable twin down with it (validate still
+        // rejects the duplication itself)
+        let mut drops: Vec<(usize, String)> = Vec::new();
+        for (idx, route) in self.routes.iter().enumerate() {
+            let servable_target = route
+                .targets
+                .iter()
+                .any(|t| provider_names.contains(t.provider.as_str()) && t.weight > 0);
+            let servable_variant = route.variants.iter().any(|v| {
+                !v.name.trim().is_empty()
+                    && v.targets
+                        .iter()
+                        .any(|t| provider_names.contains(t.provider.as_str()))
+            });
+            if !servable_target && !servable_variant {
+                drops.push((idx, route.model.clone()));
+            }
+        }
+        if !drops.is_empty() {
+            let dropped: std::collections::HashSet<usize> = drops.iter().map(|(i, _)| *i).collect();
+            let mut idx = 0;
+            self.routes.retain(|_| {
+                let keep = !dropped.contains(&idx);
+                idx += 1;
+                keep
+            });
+            for (_, model) in drops {
+                warnings.push(format!(
+                    "route '{model}' omitted from the snapshot: it has no target that \
+                     references a known provider with a positive weight"
+                ));
+            }
+        }
+        warnings
+    }
+
     pub fn validate(&self) -> std::result::Result<(), Vec<String>> {
         let mut problems = Vec::new();
 
@@ -3404,5 +3466,114 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("collides with a readonly group"));
+    }
+
+    // regression for #627: one half-built route used to fail validation and 500
+    // the whole snapshot, freezing config propagation for every tenant
+    fn config_with_a_good_and_a_targetless_route() -> GatewayConfig {
+        let mut cfg: GatewayConfig = toml::from_str(
+            r#"
+            [[providers]]
+            name = "openai"
+            kind = "openai"
+            api_base = "https://api.openai.com/v1"
+
+            [[routes]]
+            model = "good"
+            [[routes.targets]]
+            provider = "openai"
+
+            [[routes]]
+            model = "half-built"
+            [[routes.targets]]
+            provider = "openai"
+            "#,
+        )
+        .unwrap();
+        // targets is a required toml field; clear it post-parse to reach the
+        // "created the route, haven't added targets yet" state
+        cfg.routes[1].targets.clear();
+        cfg
+    }
+
+    #[test]
+    fn sanitize_drops_an_unservable_route_and_keeps_the_valid_one() {
+        let mut cfg = config_with_a_good_and_a_targetless_route();
+        assert!(
+            cfg.validate().is_err(),
+            "precondition: whole config invalid"
+        );
+
+        let warnings = cfg.sanitize_for_snapshot();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("half-built"));
+
+        let models: Vec<_> = cfg.routes.iter().map(|r| r.model.as_str()).collect();
+        assert_eq!(models, vec!["good"]);
+        // the surviving config now serves, instead of 500ing the snapshot
+        assert!(cfg.validate().is_ok(), "{:?}", cfg.validate());
+    }
+
+    #[test]
+    fn sanitize_drops_a_route_whose_targets_are_all_unknown_providers() {
+        let mut cfg: GatewayConfig = toml::from_str(
+            r#"
+            [[providers]]
+            name = "openai"
+            kind = "openai"
+            api_base = "https://api.openai.com/v1"
+
+            [[routes]]
+            model = "ghost"
+            [[routes.targets]]
+            provider = "deleted-provider"
+            "#,
+        )
+        .unwrap();
+        let warnings = cfg.sanitize_for_snapshot();
+        assert_eq!(warnings.len(), 1);
+        assert!(cfg.routes.is_empty());
+    }
+
+    #[test]
+    fn sanitize_keeps_a_servable_duplicate_of_a_dropped_model() {
+        // pruning is by index, so an unservable row must not take its servable
+        // twin with it — validate still reports the duplication itself
+        let mut cfg = config_with_a_good_and_a_targetless_route();
+        cfg.routes[1].model = "good".to_string();
+
+        let warnings = cfg.sanitize_for_snapshot();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(cfg.routes.len(), 1);
+        assert_eq!(cfg.routes[0].targets.len(), 1, "kept the servable twin");
+    }
+
+    #[test]
+    fn sanitize_leaves_structural_problems_for_validate() {
+        // a duplicate model where *both* rows are servable is not row-local:
+        // dropping one silently would be worse than refusing the snapshot
+        let mut cfg: GatewayConfig = toml::from_str(
+            r#"
+            [[providers]]
+            name = "openai"
+            kind = "openai"
+            api_base = "https://api.openai.com/v1"
+
+            [[routes]]
+            model = "dup"
+            [[routes.targets]]
+            provider = "openai"
+
+            [[routes]]
+            model = "dup"
+            [[routes.targets]]
+            provider = "openai"
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.sanitize_for_snapshot().is_empty());
+        assert_eq!(cfg.routes.len(), 2);
+        let problems = cfg.validate().unwrap_err();
+        assert!(problems.iter().any(|p| p.contains("duplicate route model")));
     }
 }
