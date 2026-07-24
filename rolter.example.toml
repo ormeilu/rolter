@@ -279,6 +279,25 @@ disabled = false # revoke without deleting
 # input_per_mtok = 2.5
 # output_per_mtok = 10.0
 # cached_input_per_mtok = 1.25   # optional; defaults to input_per_mtok
+# currency = "USD"               # optional; defaults to the base currency below
+
+# --- currency and conversion rates ---
+# spend and budgets accumulate in `base`. a model priced in any other currency is
+# converted through this table before it reaches a budget counter, so pricing in
+# eur while budgeting in usd is exact rather than silently off by the fx rate.
+#
+# codes are open strings, not an enum: iso-4217 today, a crypto or custom
+# settlement unit tomorrow. adding one means adding a rate row and nothing else.
+# a rate is "how many base units one unit of this currency is worth". the base
+# itself is always 1.0 and needs no row.
+#
+# a model price in a currency with no rate is a *config error*, not a warning:
+# charging face value bills the wrong number and charging zero bills nothing.
+# static rates are also the only air-gapped-safe source, which is why they are
+# the default and not a live fx feed.
+# [currency]
+# base = "USD"
+# rates = { EUR = 1.09, GBP = 1.27 }
 
 # --- spend caps (enforced against redis-tracked cost) ---
 # a request is blocked with 402 when any matching budget's spend has reached its

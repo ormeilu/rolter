@@ -46,6 +46,11 @@ pub struct GatewayConfig {
     pub db_virtual_keys: Vec<VirtualKeyRecord>,
     #[serde(default)]
     pub model_prices: Vec<ModelPriceConfig>,
+    /// settlement currency and rate table. Budgets and accumulated spend are
+    /// denominated in `currency.base`; a model priced in anything else is
+    /// converted through this table before it reaches a counter
+    #[serde(default)]
+    pub currency: crate::currency::CurrencyConfig,
     /// spend caps enforced by the gateway against Redis-tracked cumulative cost
     #[serde(default)]
     pub budgets: Vec<BudgetConfig>,
@@ -1159,8 +1164,8 @@ impl VirtualKeyRecord {
     }
 }
 
-/// Per-model token pricing used to compute `cost_usd` for each request. Rates
-/// are USD per million tokens (matching the `model_prices` catalog).
+/// Per-model token pricing. Rates are `currency` per million tokens (matching
+/// the `model_prices` catalog).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModelPriceConfig {
     /// public model name this price applies to
@@ -1172,13 +1177,20 @@ pub struct ModelPriceConfig {
     /// price for cache-hit input tokens; falls back to `input_per_mtok`
     #[serde(default)]
     pub cached_input_per_mtok: Option<f64>,
+    /// currency the rates above are denominated in. An open code — ISO-4217
+    /// today, a crypto or custom settlement unit tomorrow — resolved against
+    /// [`crate::CurrencyConfig`]'s rate table, never against a fixed enum
+    #[serde(default = "crate::currency::default_base_currency")]
+    pub currency: String,
 }
 
 impl ModelPriceConfig {
-    /// Compute request cost in USD from token counts. `cached_input` is the
-    /// portion of `prompt` tokens served from cache (priced at the cached rate
-    /// when set); pass 0 when unknown.
-    pub fn cost_usd(&self, prompt: u32, completion: u32, cached_input: u32) -> f64 {
+    /// Compute request cost, denominated in this price's own [`Self::currency`]
+    /// — convert it to the base before it reaches a budget counter.
+    ///
+    /// `cached_input` is the portion of `prompt` tokens served from cache
+    /// (priced at the cached rate when set); pass 0 when unknown.
+    pub fn cost(&self, prompt: u32, completion: u32, cached_input: u32) -> f64 {
         let cached = cached_input.min(prompt);
         let fresh = prompt - cached;
         let cached_rate = self.cached_input_per_mtok.unwrap_or(self.input_per_mtok);
@@ -1186,6 +1198,13 @@ impl ModelPriceConfig {
             + cached as f64 * cached_rate
             + completion as f64 * self.output_per_mtok)
             / 1_000_000.0
+    }
+
+    /// [`Self::cost`] under its former name, from when every price was assumed
+    /// to be USD. It is not USD unless [`Self::currency`] says so.
+    #[deprecated(note = "renamed to `cost`: the result is in `self.currency`, not necessarily USD")]
+    pub fn cost_usd(&self, prompt: u32, completion: u32, cached_input: u32) -> f64 {
+        self.cost(prompt, completion, cached_input)
     }
 }
 
@@ -2090,6 +2109,21 @@ impl GatewayConfig {
 
         if let Err(mut ca_problems) = self.validate_ca_bundles() {
             problems.append(&mut ca_problems);
+        }
+
+        problems.extend(self.currency.problems());
+        // a price whose currency has no rate cannot be converted into the base,
+        // and there is no safe way to charge it: pricing it at face value bills
+        // the wrong number, pricing it at zero bills nothing. reject the config
+        // instead, so the failure lands on the operator rather than on spend
+        for price in &self.model_prices {
+            if self.currency.rate(&price.currency).is_none() {
+                problems.push(format!(
+                    "model_prices['{}'] is priced in '{}', which has no rate in [currency.rates] \
+                     (base is '{}'); add a rate or price it in the base currency",
+                    price.model, price.currency, self.currency.base
+                ));
+            }
         }
 
         // the metrics path must be a rooted path that does not shadow a built-in
@@ -3350,27 +3384,75 @@ mod tests {
     }
 
     #[test]
-    fn cost_usd_from_token_counts() {
+    fn cost_from_token_counts() {
         let price = ModelPriceConfig {
             model: "gpt-4o".to_string(),
             input_per_mtok: 2.5,
             output_per_mtok: 10.0,
             cached_input_per_mtok: None,
+            currency: "USD".to_string(),
         };
         // 1000 * 2.5/1e6 + 500 * 10/1e6 = 0.0025 + 0.005 = 0.0075
-        assert!((price.cost_usd(1000, 500, 0) - 0.0075).abs() < 1e-12);
+        assert!((price.cost(1000, 500, 0) - 0.0075).abs() < 1e-12);
     }
 
     #[test]
-    fn cost_usd_applies_cached_rate() {
+    fn cost_applies_cached_rate() {
         let price = ModelPriceConfig {
             model: "gpt-4o".to_string(),
             input_per_mtok: 2.0,
             output_per_mtok: 0.0,
             cached_input_per_mtok: Some(0.5),
+            currency: "USD".to_string(),
         };
         // 600 fresh * 2 + 400 cached * 0.5 = 1200 + 200 = 1400 / 1e6
-        assert!((price.cost_usd(1000, 0, 400) - 0.0014).abs() < 1e-12);
+        assert!((price.cost(1000, 0, 400) - 0.0014).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_price_currency_without_a_rate_is_a_config_error() {
+        // #650: pricing at face value bills the wrong number and pricing at
+        // zero bills nothing, so the config is rejected instead
+        let mut config = GatewayConfig::default();
+        config.model_prices.push(ModelPriceConfig {
+            model: "mistral-large".to_string(),
+            input_per_mtok: 2.0,
+            output_per_mtok: 6.0,
+            cached_input_per_mtok: None,
+            currency: "EUR".to_string(),
+        });
+        let problems = config.validate().unwrap_err();
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("mistral-large") && p.contains("EUR")),
+            "{problems:?}"
+        );
+
+        // adding a rate is the entire fix — no code change, no enum edit
+        config.currency.rates.insert("EUR".to_string(), 1.10);
+        let problems = config.validate().err().unwrap_or_default();
+        assert!(
+            !problems.iter().any(|p| p.contains("mistral-large")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_base_currency_price_needs_no_rate_row() {
+        let mut config = GatewayConfig::default();
+        config.model_prices.push(ModelPriceConfig {
+            model: "gpt-4o".to_string(),
+            input_per_mtok: 2.5,
+            output_per_mtok: 10.0,
+            cached_input_per_mtok: None,
+            currency: "usd".to_string(),
+        });
+        let problems = config.validate().err().unwrap_or_default();
+        assert!(
+            !problems.iter().any(|p| p.contains("gpt-4o")),
+            "{problems:?}"
+        );
     }
 
     #[test]

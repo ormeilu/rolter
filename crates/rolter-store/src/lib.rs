@@ -298,6 +298,7 @@ mod tests {
             input_per_mtok: input,
             output_per_mtok: 0.0,
             cached_input_per_mtok: None,
+            currency: "USD".to_string(),
         }
     }
 
