@@ -123,6 +123,35 @@ impl ConfigStore for MergedConfigStore {
                 .into_iter()
                 .filter(|k| !self.bootstrap.virtual_keys.iter().any(|c| c.key == k.key)),
         );
+        // db-only snapshot fields (#623): the inner store populates these, the
+        // bootstrap toml does not own them, so they must be carried through or the
+        // gateway silently loses every runtime virtual key, price, budget and
+        // rate limit whenever a bootstrap config is present. same "bootstrap wins
+        // a collision, db extends the rest" rule as above.
+        merged.db_virtual_keys.extend(
+            db.db_virtual_keys
+                .into_iter()
+                .filter(|k| !self.bootstrap.db_virtual_keys.iter().any(|c| c.id == k.id)),
+        );
+        merged
+            .model_prices
+            .extend(db.model_prices.into_iter().filter(|p| {
+                !self
+                    .bootstrap
+                    .model_prices
+                    .iter()
+                    .any(|c| c.model == p.model)
+            }));
+        merged.budgets.extend(
+            db.budgets
+                .into_iter()
+                .filter(|b| !self.bootstrap.budgets.iter().any(|c| c.id == b.id)),
+        );
+        merged.rate_limits.extend(
+            db.rate_limits
+                .into_iter()
+                .filter(|r| !self.bootstrap.rate_limits.iter().any(|c| c.id == r.id)),
+        );
         Ok(merged)
     }
 
@@ -246,5 +275,108 @@ mod tests {
             .map(|g| g.slug.as_deref().unwrap())
             .collect();
         assert_eq!(slugs, vec!["vllm-cluster", "vllm-nsk"]);
+    }
+
+    fn db_vkey(id: &str, hash: &str) -> rolter_core::VirtualKeyRecord {
+        rolter_core::VirtualKeyRecord {
+            key_hash: hash.to_string(),
+            id: id.to_string(),
+            org_id: String::new(),
+            team_id: String::new(),
+            project_id: String::new(),
+            models: vec![],
+            providers: vec![],
+            disabled: false,
+            expires_at: None,
+            cache: None,
+        }
+    }
+
+    fn price_val(model: &str, input: f64) -> rolter_core::ModelPriceConfig {
+        rolter_core::ModelPriceConfig {
+            model: model.to_string(),
+            input_per_mtok: input,
+            output_per_mtok: 0.0,
+            cached_input_per_mtok: None,
+        }
+    }
+
+    fn budget(id: &str) -> rolter_core::BudgetConfig {
+        rolter_core::BudgetConfig {
+            scope: rolter_core::BudgetScope::Org,
+            id: id.to_string(),
+            limit_usd: 10.0,
+            period: Default::default(),
+        }
+    }
+
+    fn rate_limit(id: &str) -> rolter_core::RateLimitConfig {
+        rolter_core::RateLimitConfig {
+            scope: rolter_core::BudgetScope::Org,
+            id: id.to_string(),
+            rpm: Some(60),
+            tpm: None,
+        }
+    }
+
+    // regression for #623: a DB-backed inner store populates db_virtual_keys,
+    // model_prices, budgets and rate_limits — none of which the bootstrap toml
+    // owns. the merge must carry them through, or runtime virtual keys 401 at
+    // the gateway (and prices/budgets/limits silently vanish) whenever a
+    // bootstrap config is present.
+    #[tokio::test(flavor = "current_thread")]
+    async fn merged_store_carries_db_only_snapshot_fields() {
+        let bootstrap = GatewayConfig::default();
+
+        let mut db = GatewayConfig::default();
+        db.db_virtual_keys.push(db_vkey("vk1", "hash-1"));
+        db.model_prices.push(price_val("gpt-4o", 3.0));
+        db.budgets.push(budget("b1"));
+        db.rate_limits.push(rate_limit("rl1"));
+
+        let store = MergedConfigStore::new(bootstrap, Arc::new(InMemoryConfigStore::new(db)));
+        let merged = store.load().await.unwrap();
+
+        assert_eq!(merged.db_virtual_keys.len(), 1, "db virtual key dropped");
+        assert_eq!(merged.db_virtual_keys[0].key_hash, "hash-1");
+        assert_eq!(merged.model_prices.len(), 1, "db model price dropped");
+        assert_eq!(merged.budgets.len(), 1, "db budget dropped");
+        assert_eq!(merged.rate_limits.len(), 1, "db rate limit dropped");
+    }
+
+    // the db-only fields follow the same "bootstrap wins a collision, db
+    // extends the rest" rule as providers/routes/groups (#623 audit).
+    #[tokio::test(flavor = "current_thread")]
+    async fn merged_store_bootstrap_wins_over_db_prices_and_limits() {
+        let mut bootstrap = GatewayConfig::default();
+        bootstrap.model_prices.push(price_val("gpt-4o", 1.0));
+        bootstrap.budgets.push(budget("b1"));
+        bootstrap.rate_limits.push(rate_limit("rl1"));
+
+        let mut db = GatewayConfig::default();
+        db.model_prices.push(price_val("gpt-4o", 999.0)); // collides on model → dropped
+        db.model_prices.push(price_val("claude", 2.0)); // db-only → kept
+        db.budgets.push(budget("b1")); // collides on id → dropped
+        db.budgets.push(budget("b2")); // db-only → kept
+        db.rate_limits.push(rate_limit("rl1")); // collides on id → dropped
+        db.rate_limits.push(rate_limit("rl2")); // db-only → kept
+
+        let store = MergedConfigStore::new(bootstrap, Arc::new(InMemoryConfigStore::new(db)));
+        let merged = store.load().await.unwrap();
+
+        let prices: std::collections::HashMap<_, _> = merged
+            .model_prices
+            .iter()
+            .map(|p| (p.model.clone(), p.input_per_mtok))
+            .collect();
+        assert_eq!(prices.get("gpt-4o"), Some(&1.0), "config price must win");
+        assert_eq!(
+            prices.get("claude"),
+            Some(&2.0),
+            "db-only price must survive"
+        );
+        assert_eq!(merged.model_prices.len(), 2);
+        assert_eq!(merged.budgets.len(), 2);
+        assert_eq!(merged.rate_limits.len(), 2);
     }
 }
