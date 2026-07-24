@@ -62,9 +62,9 @@ export default function McpLogs() {
     return (
       <PageBody>
         <div className="rounded-[10px] border border-[color:var(--border-subtle)] p-5 text-sm text-muted-foreground">
-          Analytics isn't configured for this deployment — set{" "}
-          <code className="font-mono">clickhouse_url</code> on the control plane to record MCP
-          tool-call logs.
+          MCP tool-call logs aren't available on this deployment. They need{" "}
+          <code className="font-mono">clickhouse_url</code> set on the control plane, and a
+          control plane new enough to serve <code className="font-mono">/api/v1/mcp/logs</code>.
         </div>
       </PageBody>
     );
@@ -148,7 +148,16 @@ export default function McpLogs() {
         <div className="min-w-0 flex-1">
           {logs.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
           {logs.isError && !unavailable && (
-            <p className="text-sm text-muted-foreground">{(logs.error as Error).message}</p>
+            <div className="space-y-1">
+              <p className="text-sm text-muted-foreground">
+                Couldn't load MCP tool-call logs.
+              </p>
+              {/* the raw message stays, de-emphasised: an operator needs it to
+                  diagnose, but it should not be the whole message they see */}
+              <p className="text-xs text-muted-foreground/70">
+                {(logs.error as Error).message}
+              </p>
+            </div>
           )}
           {rows.length === 0 && logs.isSuccess && (
             <p className="text-sm text-muted-foreground">No MCP tool calls in the last 24h.</p>
