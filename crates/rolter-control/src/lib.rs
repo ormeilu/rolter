@@ -354,6 +354,7 @@ pub async fn test_app_with_admin_token(
         config_owned: Arc::new(ConfigOwned::default()),
         redis: None,
         clickhouse: None,
+        egress: Arc::new(Default::default()),
         admin_token: admin_token.map(Arc::new),
         http: reqwest::Client::new(),
         gateway_url: Arc::new("http://localhost:4000".to_string()),
