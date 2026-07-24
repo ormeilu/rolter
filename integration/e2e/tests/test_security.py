@@ -8,7 +8,8 @@ filed follow-up.
 findings filed while authoring this sweep (tracked as security issues):
 - SSRF egress: provider api_base is not constrained to an allowlist (#634).
 - NUL byte in a CRUD string field → 500 instead of 400 (#635).
-- /internal/snapshot carries decrypted provider api_keys (#636, defense-in-depth).
+- /internal/snapshot carries decrypted provider api_keys (#636 — now split onto
+  its own listener behind its own token; asserted here).
 
 not asserted here (DB/config-level, out of black-box reach): snapshot integrity /
 config_version tamper and guardrail redaction — left to crate-level tests.
@@ -24,7 +25,7 @@ import pytest
 
 from rolter_e2e.bootstrap import SIM_ENGINES, UPSTREAM_MODEL, new_tenant
 from rolter_e2e.client import ControlClient, GatewayClient
-from rolter_e2e.stack import CONTROL_URL, GATEWAY_URL
+from rolter_e2e.stack import ADMIN_TOKEN, CONTROL_URL, GATEWAY_URL, INTERNAL_TOKEN, INTERNAL_URL
 
 
 def _rand(prefix: str) -> str:
@@ -163,15 +164,43 @@ def test_provider_secret_never_leaves_tenant_apis(admin: ControlClient, tenant) 
     tenant-facing CRUD surface — neither the create response nor the list.
 
     (the internal ``/internal/snapshot`` deliberately carries the *decrypted*
-    upstream key: the data plane needs it to authenticate to the provider. that
-    endpoint is superadmin/machine-token gated; hardening its exposure for
-    defense-in-depth is tracked in #636 — it is not asserted here.)
+    upstream key: the data plane needs it to authenticate to the provider. it
+    now sits on its own listener behind its own token — asserted separately in
+    ``test_snapshot_channel_is_a_separate_trust_boundary``.)
     """
     secret = f"sk-live-{uuid.uuid4().hex}{uuid.uuid4().hex}"
     created = admin.create_provider(tenant.org_id, api_base=SIM_ENGINES[0], name=_rand("prov"), api_key=secret)
     listing = admin.raw("GET", f"/api/v1/orgs/{tenant.org_id}/providers").json()
     assert secret not in str(created), "create response leaked the plaintext api_key"
     assert secret not in str(listing), "list response leaked the plaintext api_key"
+
+
+def test_snapshot_channel_is_a_separate_trust_boundary(admin: ControlClient) -> None:
+    """the decrypted-credential channel is not reachable with the operator token
+    on the public API surface (#636).
+
+    three properties, all of which used to be false: /internal/* is absent from
+    the operator port entirely, the admin token does not open it on the internal
+    port, and the gateway's own internal token does.
+    """
+    with httpx.Client(timeout=10) as c:
+        on_public = c.get(f"{CONTROL_URL}/internal/snapshot",
+                          headers={"Authorization": f"Bearer {ADMIN_TOKEN}"})
+        assert on_public.status_code == 404, \
+            f"snapshot still served on the operator port: {on_public.status_code}"
+
+        with_admin = c.get(f"{INTERNAL_URL}/internal/snapshot",
+                           headers={"Authorization": f"Bearer {ADMIN_TOKEN}"})
+        assert with_admin.status_code == 401, \
+            f"operator token opened the snapshot: {with_admin.status_code}"
+
+        with_internal = c.get(f"{INTERNAL_URL}/internal/snapshot",
+                              headers={"Authorization": f"Bearer {INTERNAL_TOKEN}"})
+        assert with_internal.status_code == 200, with_internal.text[:200]
+
+    # and the channel still works end to end: the gateway polls it, so config
+    # written through the operator API must still reach the data plane
+    assert "config" in admin.snapshot()
 
 
 # --------------------------------------------------------------------------- #

@@ -66,6 +66,39 @@ legitimate, a PEM CA bundle being the obvious one. Malformed JSON now also
 comes back in the same OpenAI-style error envelope as every other failure
 instead of axum's default rejection body.
 
+## Control↔data-plane trust boundary
+
+`GET /internal/snapshot` returns provider `api_key`s **decrypted**. That is by
+necessity — the data plane needs the upstream credential to authenticate to the
+provider — but it makes the snapshot channel a different trust boundary from
+the operator-facing management API, and it should be configured as one:
+
+```bash
+ROLTER_INTERNAL_TOKEN=...            # gates /internal/*, distinct from ROLTER_ADMIN_TOKEN
+ROLTER_INTERNAL_ADDR=127.0.0.1:4002  # serves /internal/* on its own socket
+```
+
+With `ROLTER_INTERNAL_TOKEN` set, the operator admin token no longer opens the
+snapshot — only the gateway's own credential does. With `ROLTER_INTERNAL_ADDR`
+set, `/internal/*` is not mounted on the public API router at all, so it is
+absent from the port the dashboard and management API are served from rather
+than merely gated on it. Bind it to loopback or a private interface. The
+gateway sends `ROLTER_INTERNAL_TOKEN` on snapshot polls, falling back to
+`ROLTER_ADMIN_TOKEN`.
+
+Both are optional. Unset, the historical behavior holds — `/internal/*` shares
+the public listener and accepts the admin token — and the control plane logs a
+warning at startup saying so. The tenant-facing CRUD surface never returns a
+provider key in any configuration.
+
+Two things this deliberately does **not** do. There is no mTLS between the
+planes: a shared secret over a private interface is comparable strength when
+the network path is already trusted, and mTLS adds certificate lifecycle to an
+air-gapped deployment. And the snapshot still carries plaintext rather than
+sealed ciphertext: envelope-passing would require the gateway to hold the KEK,
+moving the master secret onto every data-plane node, which is a worse trade for
+most deployments. Revisit both if the planes ever cross an untrusted network.
+
 ## Wire transparency
 
 - Outbound requests to upstream providers carry **no rolter-identifying marks**: no `User-Agent`, no added `X-*`/`Via` headers, no metadata injected into the JSON body, no marks in SSE framing. The only headers sent are functionally required ones — `content-type`, the provider's auth header, and `anthropic-version` for Anthropic.

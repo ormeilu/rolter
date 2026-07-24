@@ -106,6 +106,10 @@ fn gateway_args(args: &EasyUpArgs, db_mode: bool) -> rolter_gateway::Args {
         // /admin/* proxies to the co-hosted control plane
         admin_url: db_mode.then(|| format!("http://127.0.0.1:{}", args.control_port)),
         admin_token: args.admin_token.clone(),
+        // easy-up co-hosts both planes in one process on loopback, so the
+        // snapshot channel never crosses a network boundary and there is
+        // nothing to separate it from (see docs/architecture/security.md)
+        internal_token: None,
     }
 }
 
@@ -125,6 +129,8 @@ fn control_args(args: &EasyUpArgs, database_url: Option<String>) -> rolter_contr
         redis_url: args.redis_url.clone(),
         clickhouse_url: args.clickhouse_url.clone(),
         admin_token: args.admin_token.clone(),
+        internal_token: None,
+        internal_addr: None,
     }
 }
 

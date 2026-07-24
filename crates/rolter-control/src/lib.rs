@@ -90,6 +90,17 @@ pub struct Args {
     /// unset those endpoints are open (a warning is logged at startup)
     #[arg(long, env = "ROLTER_ADMIN_TOKEN")]
     pub admin_token: Option<String>,
+    /// bearer token required on `/internal/*` — the control↔data-plane channel,
+    /// which carries decrypted provider credentials. When set, the operator
+    /// admin token no longer opens that channel; when unset it falls back to
+    /// `--admin-token` (the historical behavior)
+    #[arg(long, env = "ROLTER_INTERNAL_TOKEN")]
+    pub internal_token: Option<String>,
+    /// when set (e.g. `127.0.0.1:4002`), `/internal/*` moves off the public API
+    /// listener onto its own socket, so the plaintext-credential channel is not
+    /// reachable on the port the dashboard and management API are served from
+    #[arg(long, env = "ROLTER_INTERNAL_ADDR")]
+    pub internal_addr: Option<SocketAddr>,
 }
 
 /// Names owned by the bootstrap config file: immutable at runtime,
@@ -148,6 +159,10 @@ struct ControlState {
     /// when set, the CRUD API and `/internal/snapshot` require
     /// `Authorization: Bearer <token>`
     admin_token: Option<Arc<String>>,
+    /// when set, `/internal/*` requires this token *instead of* the admin one,
+    /// so an operator credential no longer unlocks decrypted provider keys.
+    /// Falls back to `admin_token` when unset
+    internal_token: Option<Arc<String>>,
     /// shared client for the `/gw/*` reverse proxy to the gateway data plane
     http: reqwest::Client,
     /// base URL of the rolter-gateway the `/gw/*` proxy forwards to
@@ -204,6 +219,20 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         );
     }
 
+    let internal_token = args
+        .internal_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(|t| Arc::new(t.to_string()));
+    if internal_token.is_none() && admin_token.is_some() {
+        tracing::warn!(
+            "ROLTER_INTERNAL_TOKEN is unset: /internal/snapshot, which carries decrypted \
+             provider credentials, accepts the operator admin token; set a distinct internal \
+             token (and ROLTER_INTERNAL_ADDR) to separate the two trust boundaries"
+        );
+    }
+
     let egress = Arc::new(
         bootstrap
             .as_ref()
@@ -223,6 +252,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         clickhouse,
         egress: egress.clone(),
         admin_token,
+        internal_token,
         http,
         gateway_url,
         pool: pool.clone(),
@@ -235,24 +265,47 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         clickhouse,
         egress: egress.clone(),
         admin_token,
+        internal_token,
         http,
         gateway_url,
     };
 
-    let app = build_app(state)
+    // when the operator gave /internal/* its own socket, it is not mounted on
+    // the public router at all — the plaintext-credential channel is absent
+    // from that surface rather than merely gated on it
+    let split_internal = args.internal_addr.is_some();
+    let app = build_app_with(state.clone(), !split_internal)
         // anything not matched by the api falls through to the built SPA
         .fallback_service(ServeDir::new(&args.ui_dir));
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
     tracing::info!(%addr, ui_dir = %args.ui_dir.display(), "rolter-control listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+
+    let Some(internal_addr) = args.internal_addr else {
+        axum::serve(listener, app).await?;
+        return Ok(());
+    };
+
+    let internal = internal_routes(&state).with_state(state);
+    tracing::info!(addr = %internal_addr, "rolter-control internal api listening");
+    let internal_listener = tokio::net::TcpListener::bind(internal_addr).await?;
+    // both listeners share the process: if either dies the control plane is
+    // degraded (no config propagation, or no dashboard), so exit rather than
+    // limp on with half a control plane
+    tokio::try_join!(async { axum::serve(listener, app).await }, async {
+        axum::serve(internal_listener, internal).await
+    },)?;
     Ok(())
 }
 
 /// Assemble the control-plane API router (no SPA fallback) with `state` applied.
 /// The CRUD routes are only mounted when a postgres pool is present.
-fn build_app(state: ControlState) -> Router {
+/// `mount_internal` controls whether `/internal/*` is served on this router at
+/// all. It is `false` when the operator gave the internal routes their own
+/// listener, so the plaintext-credential channel is simply absent from the
+/// public API surface rather than merely token-gated.
+fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
     #[allow(unused_mut)]
     let mut api = Router::new()
         .route("/healthz", get(|| async { "ok" }))
@@ -288,27 +341,42 @@ fn build_app(state: ControlState) -> Router {
             .merge(security::router());
     }
 
-    // the snapshot endpoint carries decrypted provider credentials, so it stays
-    // behind the shared admin token only (machine/superadmin access, no per-user
-    // sessions) whenever one is configured, and open otherwise
-    let snapshot = Router::new()
+    if mount_internal {
+        api = api.merge(internal_routes(&state));
+    }
+    api.with_state(state)
+}
+
+/// The control↔data-plane routes. They carry decrypted provider credentials,
+/// so they sit behind the internal token (falling back to the admin token) and
+/// can be served on their own listener instead of the public API port — see
+/// [`Args::internal_addr`].
+fn internal_routes(state: &ControlState) -> Router<ControlState> {
+    Router::new()
         .route("/internal/snapshot", get(get_snapshot))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            require_admin_token,
-        ));
-
-    api.merge(snapshot).with_state(state)
+            require_internal_token,
+        ))
 }
 
-/// Reject requests lacking `Authorization: Bearer <admin token>` when a token
-/// is configured; pass-through (open) when none is set.
-async fn require_admin_token(
+/// Reject requests to `/internal/*` lacking the internal bearer token.
+///
+/// The expected token is `--internal-token` when set, so an operator holding
+/// only the admin token cannot read decrypted provider credentials. It falls
+/// back to the admin token when no internal token is configured (the historical
+/// behavior, kept so an existing deployment does not break on upgrade), and
+/// passes through when neither is set.
+async fn require_internal_token(
     State(state): State<ControlState>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    let Some(expected) = state.admin_token.as_deref() else {
+    let expected = state
+        .internal_token
+        .as_deref()
+        .or(state.admin_token.as_deref());
+    let Some(expected) = expected else {
         return next.run(request).await;
     };
     let presented = request
@@ -323,7 +391,7 @@ async fn require_admin_token(
     if !matches {
         return (
             StatusCode::UNAUTHORIZED,
-            Json(json!({"error": {"message": "missing or invalid admin token"}})),
+            Json(json!({"error": {"message": "missing or invalid internal token"}})),
         )
             .into_response();
     }
@@ -356,11 +424,12 @@ pub async fn test_app_with_admin_token(
         clickhouse: None,
         egress: Arc::new(Default::default()),
         admin_token: admin_token.map(Arc::new),
+        internal_token: None,
         http: reqwest::Client::new(),
         gateway_url: Arc::new("http://localhost:4000".to_string()),
         pool: Some(pool),
     };
-    Ok(build_app(state))
+    Ok(build_app_with(state, true))
 }
 
 /// Build the config store: postgres-backed when `--database-url` is set
@@ -837,18 +906,29 @@ mod tests {
     }
 
     fn state_with_token(token: Option<&str>) -> ControlState {
+        state_with_tokens(token, None)
+    }
+
+    fn state_with_tokens(admin: Option<&str>, internal: Option<&str>) -> ControlState {
         ControlState {
             store: Arc::new(InMemoryConfigStore::new(GatewayConfig::default())),
             config_owned: Arc::new(ConfigOwned::default()),
             egress: Arc::new(Default::default()),
             redis: None,
             clickhouse: None,
-            admin_token: token.map(|t| Arc::new(t.to_string())),
+            admin_token: admin.map(|t| Arc::new(t.to_string())),
+            internal_token: internal.map(|t| Arc::new(t.to_string())),
             http: reqwest::Client::new(),
             gateway_url: Arc::new("http://localhost:4000".to_string()),
             #[cfg(feature = "postgres")]
             pool: None,
         }
+    }
+
+    /// the default deployment shape: /internal/* on the same listener as the
+    /// public api, gated by a token
+    fn build_app_with_internal(state: ControlState) -> Router {
+        build_app_with(state, true)
     }
 
     async fn serve(app: Router) -> std::net::SocketAddr {
@@ -862,7 +942,7 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_requires_admin_token_when_configured() {
-        let addr = serve(build_app(state_with_token(Some("sekrit")))).await;
+        let addr = serve(build_app_with_internal(state_with_token(Some("sekrit")))).await;
         let client = reqwest::Client::new();
         let url = format!("http://{addr}/internal/snapshot");
 
@@ -885,8 +965,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_distinct_internal_token_locks_the_admin_token_out_of_the_snapshot() {
+        // the snapshot carries decrypted provider credentials (#636): once the
+        // operator separates the two trust boundaries, an admin credential must
+        // not open that channel any more
+        let addr = serve(build_app_with_internal(state_with_tokens(
+            Some("operator"),
+            Some("machine"),
+        )))
+        .await;
+        let client = reqwest::Client::new();
+        let url = format!("http://{addr}/internal/snapshot");
+
+        let admin = client
+            .get(&url)
+            .bearer_auth("operator")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            admin.status(),
+            401,
+            "admin token still unlocked the snapshot"
+        );
+
+        let machine = client
+            .get(&url)
+            .bearer_auth("machine")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(machine.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn a_separate_internal_listener_removes_the_snapshot_from_the_public_api() {
+        // not merely gated on the public surface — absent from it
+        let state = state_with_tokens(Some("operator"), Some("machine"));
+        let public = serve(build_app_with(state.clone(), false)).await;
+        let internal = serve(internal_routes(&state).with_state(state)).await;
+        let client = reqwest::Client::new();
+
+        let on_public = client
+            .get(format!("http://{public}/internal/snapshot"))
+            .bearer_auth("machine")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(on_public.status(), 404);
+
+        // the public api is otherwise intact
+        let ping = client
+            .get(format!("http://{public}/api/v1/ping"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ping.status(), 200);
+
+        let on_internal = client
+            .get(format!("http://{internal}/internal/snapshot"))
+            .bearer_auth("machine")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(on_internal.status(), 200);
+    }
+
+    #[tokio::test]
     async fn snapshot_open_when_no_token_configured() {
-        let addr = serve(build_app(state_with_token(None))).await;
+        let addr = serve(build_app_with_internal(state_with_token(None))).await;
         let resp = reqwest::Client::new()
             .get(format!("http://{addr}/internal/snapshot"))
             .send()
@@ -910,7 +1057,7 @@ mod tests {
             gateway_url: Arc::new(format!("http://{up_addr}")),
             ..state_with_token(None)
         };
-        let addr = serve(build_app(state)).await;
+        let addr = serve(build_app_with(state, true)).await;
         let client = reqwest::Client::new();
 
         // GET forwards path + response body
@@ -967,7 +1114,7 @@ mod tests {
             store: Arc::new(InMemoryConfigStore::new(config)),
             ..state_with_token(None)
         };
-        let addr = serve(build_app(state)).await;
+        let addr = serve(build_app_with(state, true)).await;
 
         let body = reqwest::Client::new()
             .get(format!("http://{addr}/api/v1/config"))

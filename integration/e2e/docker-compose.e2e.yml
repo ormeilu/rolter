@@ -68,6 +68,10 @@ services:
     command: ["rolter-control"]
     ports:
       - "4001:4001"
+      # the internal (snapshot) port is published so the harness can assert both
+      # sides of the split: the operator token is refused here, and /internal/*
+      # is absent from 4001. a real deployment keeps this on a private interface.
+      - "4002:4002"
     environment:
       RUST_LOG: info
       ROLTER_DATABASE_URL: postgres://rolter:rolter@postgres:5432/rolter
@@ -83,6 +87,11 @@ services:
       # RBAC only enforces when an admin token is set; the harness bootstraps as
       # superadmin with this token, then drives per-role users via session tokens.
       ROLTER_ADMIN_TOKEN: e2e-superadmin-token
+      # the snapshot carries decrypted provider keys, so it is a separate trust
+      # boundary from the operator API (#636): a distinct token gates /internal/*
+      # on its own port, and the admin token above no longer opens it.
+      ROLTER_INTERNAL_TOKEN: e2e-internal-token
+      ROLTER_INTERNAL_ADDR: 0.0.0.0:4002
       # shared with the gateway via the snapshot (control embeds it); virtual keys
       # are stored/matched by hash_key(pepper, key).
       ROLTER_KEY_PEPPER: e2e-key-pepper
@@ -114,7 +123,7 @@ services:
     command:
       - rolter-gateway
       - --snapshot-url
-      - http://control:4001/internal/snapshot
+      - http://control:4002/internal/snapshot
       - --snapshot-poll-secs
       - "2"
       - --redis-url
@@ -129,6 +138,9 @@ services:
       ROLTER_PORT: "4000"
       # admin token so bootstrap CRUD can be proxied through the gateway port too
       ROLTER_ADMIN_TOKEN: e2e-superadmin-token
+      # and the internal token for snapshot polls, which control now gates
+      # separately from the operator credential (#636)
+      ROLTER_INTERNAL_TOKEN: e2e-internal-token
       # MUST match control: the snapshot carries no pepper, so the gateway hashes
       # presented virtual keys with its own ROLTER_KEY_PEPPER to match the stored
       # digest. a mismatch here rejects every key with 401 "invalid api key".

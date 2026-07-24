@@ -22,6 +22,10 @@ COMPOSE_FILE = HERE / "docker-compose.e2e.yml"
 CONTROL_URL = os.environ.get("ROLTER_E2E_CONTROL_URL", "http://localhost:4001")
 GATEWAY_URL = os.environ.get("ROLTER_E2E_GATEWAY_URL", "http://localhost:4000")
 ADMIN_TOKEN = os.environ.get("ROLTER_E2E_ADMIN_TOKEN", "e2e-superadmin-token")
+# the control<->data-plane channel (#636): a separate listener with its own
+# token, since the snapshot carries decrypted provider credentials
+INTERNAL_URL = os.environ.get("ROLTER_E2E_INTERNAL_URL", "http://localhost:4002")
+INTERNAL_TOKEN = os.environ.get("ROLTER_E2E_INTERNAL_TOKEN", "e2e-internal-token")
 
 # throwaway AES-256-GCM envelope key for provider api_key sealing. derived from a
 # readable 32-byte phrase so no key-shaped base64 blob lives in git (keeps secret
