@@ -261,6 +261,14 @@ pub struct ServerConfig {
     /// defaults to 32 MiB
     #[serde(default = "default_max_body_bytes")]
     pub max_body_bytes: usize,
+    /// whether virtual-key auth is enforced when the effective key set is
+    /// empty. `Some(true)` always denies (fail closed), `Some(false)` always
+    /// allows the keyless path, and `None` defers to the deployment: managed
+    /// gateways (those polling a control-plane snapshot) fail closed, while a
+    /// static local config stays keyless for `fake-llm` style development.
+    /// without this, revoking the last key would silently open the data plane
+    #[serde(default)]
+    pub require_auth: Option<bool>,
 }
 
 impl ServerConfig {
@@ -282,6 +290,7 @@ impl Default for ServerConfig {
             key_pepper: None,
             metrics_path: default_metrics_path(),
             max_body_bytes: default_max_body_bytes(),
+            require_auth: None,
         }
     }
 }

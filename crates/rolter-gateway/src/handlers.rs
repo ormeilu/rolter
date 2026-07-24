@@ -594,6 +594,13 @@ pub(crate) fn authenticate(
     headers: &HeaderMap,
 ) -> Result<Option<KeyMeta>, Response> {
     if snap.keys.is_empty() {
+        // an empty key set is only "auth disabled" for unmanaged local dev.
+        // on a managed gateway it means every key was revoked (or none exists
+        // yet), which must lock the data plane down rather than open it
+        if snap.require_auth.unwrap_or(state.managed_auth) {
+            state.metrics.auth_failures_total.fetch_add(1, Relaxed);
+            return Err(error_json(StatusCode::UNAUTHORIZED, "missing api key"));
+        }
         return Ok(None);
     }
     match extract_key(headers) {
@@ -2700,6 +2707,46 @@ mod tests {
     #[tokio::test]
     async fn list_models_open_when_no_keys_configured() {
         let state = AppState::new(&GatewayConfig::default());
+        let resp = list_models(State(state), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // regression for #626: an empty key set used to mean "auth disabled"
+    // unconditionally, so revoking the last virtual key silently opened the
+    // whole data plane. a managed gateway must fail closed instead.
+    #[tokio::test]
+    async fn managed_gateway_denies_when_the_key_set_is_empty() {
+        let mut state = AppState::new(&GatewayConfig::default());
+        state.managed_auth = true;
+        let resp = list_models(State(state.clone()), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        // a garbage key is rejected too — nothing can match an empty set
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer sk-garbage"),
+        );
+        let resp = list_models(State(state), headers).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn require_auth_config_denies_an_empty_key_set_even_unmanaged() {
+        let mut config = GatewayConfig::default();
+        config.server.require_auth = Some(true);
+        let state = AppState::new(&config);
+        let resp = list_models(State(state), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn require_auth_false_keeps_a_managed_gateway_keyless() {
+        // explicit opt-in to the keyless path wins over the managed default
+        let mut config = GatewayConfig::default();
+        config.server.require_auth = Some(false);
+        let mut state = AppState::new(&config);
+        state.managed_auth = true;
         let resp = list_models(State(state), HeaderMap::new()).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
