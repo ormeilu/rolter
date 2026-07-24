@@ -85,8 +85,12 @@ pub struct Snapshot {
     /// config override for whether an empty `keys` set still enforces auth.
     /// `None` defers to the deployment (see [`AppState::managed_auth`])
     pub require_auth: Option<bool>,
-    /// per-model token pricing, keyed by public model name
+    /// per-model token pricing, keyed by public model name, with every rate
+    /// already expressed in [`Self::base_currency`] — a model priced in EUR
+    /// arrives here converted, so the hot path never does FX (#650)
     pub prices: HashMap<String, ModelPriceConfig>,
+    /// currency budgets, recorded spend and `cost_usd` are denominated in
+    pub base_currency: String,
     /// spend caps to enforce, shared cheaply with per-request spend recorders
     pub budgets: Arc<Vec<BudgetConfig>>,
     /// throughput caps to enforce, shared cheaply with per-request recorders
@@ -188,11 +192,32 @@ impl Snapshot {
             }
             groups_by_slug.entry(slug).or_insert_with(|| g.clone());
         }
+        // price rates are converted into the base currency once, here, rather
+        // than per request: cost is linear in the rates, so converting the
+        // rates converts every cost derived from them, exactly.
+        //
+        // a price whose currency has no rate cannot be converted and is dropped
+        // with a loud error. `GatewayConfig::validate` rejects that config
+        // before it can become a snapshot, so this is unreachable in a served
+        // config — but if it ever is reached, an unpriced model is the only
+        // honest outcome: face value and zero are both the wrong number.
+        let fx = rolter_core::StaticRates::new(config.currency.clone());
+        let base_currency = config.currency.base_code();
         let prices: HashMap<String, ModelPriceConfig> = config
             .model_prices
             .iter()
-            .cloned()
-            .map(|p| (p.model.clone(), p))
+            .filter_map(|p| match to_base_currency(&fx, p, &base_currency) {
+                Some(converted) => Some((p.model.clone(), converted)),
+                None => {
+                    tracing::error!(
+                        model = %p.model,
+                        currency = %p.currency,
+                        base = %base_currency,
+                        "no conversion rate for this model's price currency;                          the model is priced as unpriced and accrues no spend"
+                    );
+                    None
+                }
+            })
             .collect();
         let mut routes = HashMap::new();
         for route in &config.routes {
@@ -308,6 +333,7 @@ impl Snapshot {
             pepper,
             require_auth: config.server.require_auth,
             prices,
+            base_currency,
             budgets: Arc::new(config.budgets.clone()),
             rate_limits: Arc::new(config.rate_limits.clone()),
             retry: config.retry.clone(),
@@ -407,6 +433,26 @@ impl Snapshot {
             variant_balancers: Vec::new(),
         }
     }
+}
+
+/// Re-denominate a price into `base`, or `None` when the pair has no rate.
+///
+/// Every rate is scaled by the same factor and the currency label is rewritten,
+/// so the returned price behaves identically to one the operator had entered in
+/// the base currency directly.
+fn to_base_currency(
+    fx: &dyn rolter_core::CurrencyConverter,
+    price: &ModelPriceConfig,
+    base: &str,
+) -> Option<ModelPriceConfig> {
+    let factor = fx.convert(1.0, &price.currency, base)?;
+    Some(ModelPriceConfig {
+        model: price.model.clone(),
+        input_per_mtok: price.input_per_mtok * factor,
+        output_per_mtok: price.output_per_mtok * factor,
+        cached_input_per_mtok: price.cached_input_per_mtok.map(|rate| rate * factor),
+        currency: base.to_string(),
+    })
 }
 
 /// Per-target catalog cost for the `cheapest` strategy: the price of the
@@ -645,6 +691,7 @@ mod tests {
             input_per_mtok: input,
             output_per_mtok: output,
             cached_input_per_mtok: None,
+            currency: "USD".to_string(),
         }
     }
 
@@ -677,6 +724,69 @@ mod tests {
         let prices = HashMap::new();
         let targets = vec![target("a", None)];
         assert_eq!(target_costs(&targets, "gpt", &prices), vec![0.0]);
+    }
+
+    #[test]
+    fn a_non_base_price_is_converted_before_it_can_reach_a_budget() {
+        // the #650 acceptance case: a EUR-priced model must accrue spend in the
+        // USD budget at the configured rate, not at face value
+        let mut config = GatewayConfig::default();
+        config.currency.rates.insert("EUR".to_string(), 1.10);
+        config.model_prices.push(ModelPriceConfig {
+            model: "mistral-large".to_string(),
+            input_per_mtok: 2.0,
+            output_per_mtok: 6.0,
+            cached_input_per_mtok: None,
+            currency: "EUR".to_string(),
+        });
+        let loads = crate::load::LoadTracker::new();
+        let snap = Snapshot::build(&config, &loads);
+
+        let price = snap.prices.get("mistral-large").expect("price kept");
+        assert_eq!(price.currency, "USD");
+        assert!((price.input_per_mtok - 2.2).abs() < 1e-12, "{price:?}");
+        assert!((price.output_per_mtok - 6.6).abs() < 1e-12, "{price:?}");
+        // 1M input + 1M output: EUR 8.00 -> USD 8.80, not USD 8.00
+        assert!((price.cost(1_000_000, 1_000_000, 0) - 8.8).abs() < 1e-9);
+        assert_eq!(snap.base_currency, "USD");
+    }
+
+    #[test]
+    fn a_price_in_an_unconvertible_currency_is_dropped_not_mispriced() {
+        // validate() rejects this config, so a served snapshot never contains
+        // one; if it somehow does, an unpriced model is the only honest outcome
+        let mut config = GatewayConfig::default();
+        config.model_prices.push(ModelPriceConfig {
+            model: "priced-in-doubloons".to_string(),
+            input_per_mtok: 2.0,
+            output_per_mtok: 6.0,
+            cached_input_per_mtok: None,
+            currency: "DBL".to_string(),
+        });
+        let loads = crate::load::LoadTracker::new();
+        let snap = Snapshot::build(&config, &loads);
+        assert!(!snap.prices.contains_key("priced-in-doubloons"));
+    }
+
+    #[test]
+    fn a_non_usd_base_currency_converts_usd_prices_into_it() {
+        // nothing assumes USD is the base: an operator settling in EUR gets
+        // their USD-priced models converted the other way
+        let mut config = GatewayConfig::default();
+        config.currency.base = "EUR".to_string();
+        config.currency.rates.insert("USD".to_string(), 0.9);
+        config.model_prices.push(ModelPriceConfig {
+            model: "gpt-4o".to_string(),
+            input_per_mtok: 10.0,
+            output_per_mtok: 0.0,
+            cached_input_per_mtok: None,
+            currency: "USD".to_string(),
+        });
+        let loads = crate::load::LoadTracker::new();
+        let snap = Snapshot::build(&config, &loads);
+        let price = snap.prices.get("gpt-4o").expect("price kept");
+        assert_eq!(snap.base_currency, "EUR");
+        assert!((price.input_per_mtok - 9.0).abs() < 1e-12, "{price:?}");
     }
 
     #[test]

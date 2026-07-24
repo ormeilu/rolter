@@ -156,6 +156,12 @@ struct ControlState {
     /// target never reaches the database in the first place
     #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
     egress: Arc<rolter_core::EgressPolicy>,
+    /// settlement currency + rate table from the bootstrap config (defaults
+    /// when there is none); the CRUD API rejects a model price in a currency
+    /// this cannot convert, so an unconvertible price never reaches the
+    /// database and never silently charges the wrong amount (#650)
+    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
+    currency: Arc<rolter_core::CurrencyConfig>,
     /// when set, the CRUD API and `/internal/snapshot` require
     /// `Authorization: Bearer <token>`
     admin_token: Option<Arc<String>>,
@@ -239,6 +245,12 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
             .map(|c| c.egress.clone())
             .unwrap_or_default(),
     );
+    let currency = Arc::new(
+        bootstrap
+            .as_ref()
+            .map(|c| c.currency.clone())
+            .unwrap_or_default(),
+    );
     #[allow(unused_variables)]
     let (store, pool) = build_store(&args, bootstrap).await?;
     let http = reqwest::Client::new();
@@ -251,6 +263,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         redis,
         clickhouse,
         egress: egress.clone(),
+        currency: currency.clone(),
         admin_token,
         internal_token,
         http,
@@ -264,6 +277,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         redis,
         clickhouse,
         egress: egress.clone(),
+        currency: currency.clone(),
         admin_token,
         internal_token,
         http,
@@ -423,6 +437,7 @@ pub async fn test_app_with_admin_token(
         redis: None,
         clickhouse: None,
         egress: Arc::new(Default::default()),
+        currency: Arc::new(Default::default()),
         admin_token: admin_token.map(Arc::new),
         internal_token: None,
         http: reqwest::Client::new(),
@@ -914,6 +929,7 @@ mod tests {
             store: Arc::new(InMemoryConfigStore::new(GatewayConfig::default())),
             config_owned: Arc::new(ConfigOwned::default()),
             egress: Arc::new(Default::default()),
+            currency: Arc::new(Default::default()),
             redis: None,
             clickhouse: None,
             admin_token: admin.map(|t| Arc::new(t.to_string())),

@@ -4,6 +4,7 @@
 //! bootstrap that every other rolter crate depends on.
 
 pub mod config;
+pub mod currency;
 pub mod error;
 pub mod guardrail_webhook;
 pub mod guardrails;
@@ -21,6 +22,7 @@ pub use config::{
     ResponsesConfig, RetryConfig, RoleProfile, RouteCache, SemanticCacheConfig, ServerConfig,
     Target, TimeoutConfig, TlsConfig, Variant, VirtualKeyConfig, VirtualKeyRecord, RESERVED_PATHS,
 };
+pub use currency::{CurrencyConfig, CurrencyConverter, StaticRates, DEFAULT_BASE_CURRENCY};
 pub use error::{Error, Result};
 pub use guardrail_webhook::{
     FailureMode, GuardrailWebhookConfig, WebhookAuth, WebhookDecision, WebhookRequest,

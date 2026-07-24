@@ -2084,6 +2084,26 @@ fn default_currency() -> String {
     "USD".to_string()
 }
 
+/// Reject a model price in a currency the deployment cannot convert.
+///
+/// The dashboard has always let an operator pick a currency, but until #650 it
+/// was a display label the cost engine ignored — a EUR price was charged as if
+/// it were USD. Now it is real, which means a code with no rate has to be
+/// refused here: the alternative is storing a price nothing can convert and
+/// discovering it as wrong spend later.
+fn require_known_currency(state: &ControlState, currency: &str) -> ApiResult<()> {
+    require_non_empty(currency, "currency")?;
+    if state.currency.rate(currency).is_some() {
+        return Ok(());
+    }
+    Err(ApiError::Core(Error::Config(format!(
+        "currency '{}' has no conversion rate configured (base is '{}'); \
+         add it to [currency.rates] in the bootstrap config, or price in the base currency",
+        currency.trim(),
+        state.currency.base
+    ))))
+}
+
 fn require_numeric(value: &str, field: &str) -> ApiResult<()> {
     if value.trim().parse::<f64>().is_err() {
         return Err(ApiError::Core(Error::Config(format!(
@@ -2107,6 +2127,7 @@ async fn upsert_model_price(
     if let Some(cached) = &body.cached_input_per_mtok {
         require_numeric(cached, "cached_input_per_mtok")?;
     }
+    require_known_currency(&state, &body.currency)?;
     Ok(Json(
         ModelPriceRepo(pool(&state))
             .upsert(

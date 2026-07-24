@@ -470,6 +470,10 @@ impl PostgresConfigStore {
                 input_per_mtok: r.input_per_mtok.parse().unwrap_or(0.0),
                 output_per_mtok: r.output_per_mtok.parse().unwrap_or(0.0),
                 cached_input_per_mtok: r.cached_input_per_mtok.and_then(|v| v.parse().ok()),
+                // the column has always existed and the dashboard has always
+                // written it; it just never reached the config (#650), so every
+                // non-USD price was charged as if it were USD
+                currency: r.currency,
             })
             .collect())
     }

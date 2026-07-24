@@ -12,7 +12,7 @@ Rolter gives you two complementary levers for controlling how much your gateway 
 
 ## Step 1 — Define model prices
 
-Before budgets can track spend, Rolter needs to know the cost of each model's tokens. Add one `[[model_prices]]` block per model with rates in USD per million tokens.
+Before budgets can track spend, Rolter needs to know the cost of each model's tokens. Add one `[[model_prices]]` block per model with rates per million tokens, denominated in the currency you name (USD by default).
 
 <ParamField path="model" type="string" required>
   The public model name as it appears in your `[[routes]]` configuration.
@@ -27,7 +27,11 @@ Before budgets can track spend, Rolter needs to know the cost of each model's to
 </ParamField>
 
 <ParamField path="cached_input_per_mtok" type="float">
-  Cost in USD per million cache-hit input tokens. Defaults to `input_per_mtok` when omitted.
+  Cost per million cache-hit input tokens. Defaults to `input_per_mtok` when omitted.
+</ParamField>
+
+<ParamField path="currency" type="string" default="USD">
+  Currency the rates above are denominated in. Any code works — ISO-4217, a crypto unit, an internal credit — as long as `[currency.rates]` can convert it to the base currency.
 </ParamField>
 
 ```toml rolter.toml
@@ -46,6 +50,30 @@ output_per_mtok = 15.0
 <Info>
   Models without a `[[model_prices]]` entry log a `cost_usd` of `0` per request. They can still be used, but their spend does not count toward any budget. Add a price entry for every model you want budgets to track.
 </Info>
+
+### Pricing in another currency
+
+Spend and budgets accumulate in a single **base currency**. A model priced in anything else is converted at a rate you configure, once, when the gateway loads its config — so pricing in EUR while budgeting in USD is exact rather than off by the FX rate.
+
+```toml rolter.toml
+[currency]
+base = "USD"
+rates = { EUR = 1.09, GBP = 1.27 }
+
+[[model_prices]]
+model = "mistral-large"
+input_per_mtok = 2.0
+output_per_mtok = 6.0
+currency = "EUR"     # charged into the USD budget at 1.09
+```
+
+A rate is how many base units one unit of that currency is worth. The base itself is always `1.0` and needs no row. Codes are open strings rather than a fixed list, so adding `BTC` or an internal credit unit means adding a rate row — no new release required.
+
+<Warning>
+  A model priced in a currency with no rate is a **config error**, not a warning: the gateway refuses to start and the dashboard refuses the write. Charging face value would bill the wrong number and charging zero would bill nothing, so neither is offered as a fallback.
+
+  Rates are operator-supplied and static, which is deliberate — Rolter must run air-gapped, so it never reaches out to an FX feed.
+</Warning>
 
 ## Step 2 — Configure spend budgets
 

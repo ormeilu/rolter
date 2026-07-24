@@ -365,10 +365,14 @@ impl UsageLoggingStream {
         log.cache_write_tokens = usage.cache_write;
         // cache_hit accounting arrives with the response-cache phase; price the
         // full prompt as fresh input for now
+        // the price arrives already denominated in the deployment's base
+        // currency (converted once when the snapshot is assembled, see
+        // `state::to_base_currency`), so this is base-currency cost — the field
+        // name predates non-USD support (#650)
         log.cost_usd = self
             .price
             .as_ref()
-            .map(|p| p.cost_usd(usage.prompt, usage.completion, usage.cache_read))
+            .map(|p| p.cost(usage.prompt, usage.completion, usage.cache_read))
             .unwrap_or(0.0);
         log.latency_ms = self.started.elapsed().as_millis() as u32;
         log.ttft_ms = self.ttft_ms.unwrap_or(log.latency_ms);
@@ -941,6 +945,7 @@ data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":25}}\n\n";
             input_per_mtok: 1_000_000.0, // 1 usd per token, for an exact assert
             output_per_mtok: 1_000_000.0,
             cached_input_per_mtok: None,
+            currency: "USD".to_string(),
         });
         let mut wrapped = UsageLoggingStream::new(
             Box::pin(inner),
