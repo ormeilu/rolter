@@ -39,12 +39,25 @@ Enforced in two places: the control plane rejects a denied `api_base` at
 **write time** (`400`, so it never reaches the database), and snapshot
 validation re-checks it, so a bootstrap toml can't smuggle one in either.
 
-Only **IP literals** are classified. Resolving hostnames during config
-validation would make it depend on live DNS — reintroducing the "one bad row
+Config-time validation classifies **IP literals** only. Resolving hostnames
+there would make validation depend on live DNS — reintroducing the "one bad row
 freezes every gateway" failure mode described in
 [config-and-hot-reload.md](config-and-hot-reload.md) — and would be bypassable
-by DNS rebinding regardless. Connect-time address re-checking is tracked
-separately.
+by DNS rebinding regardless.
+
+So the same policy is enforced a third time, at **connect time**, by a custom
+resolver on every upstream client: whatever DNS actually returns is classified
+immediately before the connection is made. That covers the two cases config
+validation cannot see — a hostname like `metadata.internal`, and a name that
+resolved to a public address when it was configured but resolves to
+`169.254.169.254` at request time. A denied destination surfaces as a policy
+error naming the host, not an opaque connect failure.
+
+A name that resolves to several addresses keeps the permitted ones: refusing
+the whole name would take down a legitimate multi-homed upstream. Only a name
+left with nothing is refused — which is exactly what rebinding to a denied
+address produces. The resolver reads the policy from a live handle, so a hot
+reload re-tunes enforcement without discarding pooled connections.
 
 ## Control-plane input validation
 
