@@ -251,7 +251,7 @@ function UpsertPriceDialog({
         </Field>
         <Field
           label="Currency"
-          hint="Any code — ISO-4217, crypto, or a custom unit. Anything other than the base currency needs a rate in [currency.rates]; without one the price is rejected rather than mis-charged."
+          hint="Any code — ISO-4217, crypto, or a custom unit. Anything other than the base currency needs a rate in [currency.rates]; without one the price is rejected rather than charged at the wrong rate."
           info="Spend and budgets accumulate in the deployment's base currency. A price in another currency is converted at the configured rate before it reaches a budget."
         >
           <Input value={currency} onChange={(e) => setCurrency(e.target.value)} />

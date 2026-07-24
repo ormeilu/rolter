@@ -159,7 +159,7 @@ struct ControlState {
     /// settlement currency + rate table from the bootstrap config (defaults
     /// when there is none); the CRUD API rejects a model price in a currency
     /// this cannot convert, so an unconvertible price never reaches the
-    /// database and never silently mis-charges (#650)
+    /// database and never silently charges the wrong amount (#650)
     #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
     currency: Arc<rolter_core::CurrencyConfig>,
     /// when set, the CRUD API and `/internal/snapshot` require
