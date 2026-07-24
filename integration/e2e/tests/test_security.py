@@ -270,18 +270,26 @@ def test_rate_limit_holds_under_concurrency(admin: ControlClient, tenant) -> Non
 
 
 # --------------------------------------------------------------------------- #
-# posture: SSRF egress is unconstrained (documents the gap, tracked in #634)   #
+# SSRF: the egress policy denies link-local (cloud metadata) destinations      #
 # --------------------------------------------------------------------------- #
-def test_ssrf_posture_provider_base_url_unconstrained(admin: ControlClient, tenant) -> None:
-    """POSTURE: the control plane accepts a provider whose api_base points at a
-    link-local metadata endpoint — there is no egress allowlist. Pinned so a
-    future allowlist flips this test and prompts revisiting. Tracked in #634.
+def test_ssrf_link_local_api_base_is_rejected(admin: ControlClient, tenant) -> None:
+    """A provider whose api_base points at the cloud instance-metadata endpoint
+    is rejected at write time, so the gateway can never be pointed at it (#634).
 
-    (only the config write is exercised; no request is actually sent to the
-    metadata address.)"""
+    (only the config write is exercised; no request is sent to the metadata
+    address.)"""
     r = admin.raw("POST", f"/api/v1/orgs/{tenant.org_id}/providers",
                   json={"name": _rand("ssrf"), "kind": "openai_compatible",
                         "api_base": "http://169.254.169.254/latest/meta-data", "api_key": "sk-fake"})
-    assert r.status_code < 300, (
-        "an egress allowlist now rejects link-local api_base — update #634 and this posture test"
-    )
+    assert r.status_code >= 400, "link-local api_base must be rejected"
+    assert "link-local" in r.text
+
+
+def test_ssrf_private_upstreams_stay_allowed(admin: ControlClient, tenant) -> None:
+    """The policy must not break rolter's core use case: self-hosted and
+    air-gapped upstreams legitimately live on private/loopback addresses, so
+    only link-local is denied by default (#634)."""
+    r = admin.raw("POST", f"/api/v1/orgs/{tenant.org_id}/providers",
+                  json={"name": _rand("onprem"), "kind": "openai_compatible",
+                        "api_base": "http://10.0.0.5:8000/v1", "api_key": "sk-fake"})
+    assert r.status_code < 300, f"private api_base must stay allowed: {r.text}"

@@ -190,6 +190,18 @@ fn require_non_empty(value: &str, field: &str) -> ApiResult<()> {
     Ok(())
 }
 
+/// Reject an upstream URL the deployment's egress policy denies, so an SSRF
+/// target (cloud instance metadata, by default) never reaches the database.
+/// The gateway re-checks the same policy when it validates a snapshot, but
+/// failing at write time gives the operator a 400 at the point of the mistake
+/// instead of a rejected snapshot later.
+fn require_allowed_egress(state: &ControlState, url: &str, field: &str) -> ApiResult<()> {
+    state
+        .egress
+        .check_url(url, field)
+        .map_err(|problem| ApiError::Core(Error::Config(problem)))
+}
+
 /// Announce a config change after a mutation that touches the effective
 /// gateway config. The version bump itself is transactional with the write
 /// (database triggers from migration 0003), so this only publishes the new
@@ -781,6 +793,7 @@ async fn create_provider(
     require_non_empty(&body.name, "name")?;
     require_not_config_owned(&state.config_owned.providers, &body.name, "provider")?;
     require_non_empty(&body.api_base, "api_base")?;
+    require_allowed_egress(&state, &body.api_base, "api_base")?;
     validate_kind(&body.kind)?;
     let slug = resolve_new_slug(&body.name, body.slug.as_deref())?;
     // seal before touching the database so a missing KEK leaves no row behind
@@ -868,6 +881,7 @@ async fn update_provider(
     }
     if let Some(api_base) = &body.api_base {
         require_non_empty(api_base, "api_base")?;
+        require_allowed_egress(&state, api_base, "api_base")?;
     }
     let slug_change =
         resolve_slug_change(body.slug.as_deref(), &existing.slug, body.allow_slug_change)?;

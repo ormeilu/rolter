@@ -88,6 +88,11 @@ pub struct GatewayConfig {
     /// no external service; disabled by default (ROL-261)
     #[serde(default)]
     pub guardrails: crate::guardrails::GuardrailsConfig,
+    /// where the gateway may send upstream traffic; denies link-local (cloud
+    /// metadata) by default so a crafted provider `api_base` can't turn the
+    /// proxy into an SSRF primitive
+    #[serde(default)]
+    pub egress: EgressPolicy,
     /// custom guardrail webhook: a self-hosted HTTP service consulted before
     /// proxying, vendor-neutral. Disabled by default (ROL-257)
     #[serde(default)]
@@ -2214,12 +2219,27 @@ impl GatewayConfig {
                     ));
                 }
             }
+            // a provider's api_base is attacker-influenced whenever the admin
+            // surface is: without this the gateway is an SSRF primitive aimed at
+            // whatever its network position can reach
+            if let Err(problem) = self.egress.check_url(
+                &provider.api_base,
+                &format!("provider '{}' api_base", provider.name),
+            ) {
+                problems.push(problem);
+            }
             for proxy in provider.egress_proxy_pool() {
                 if !is_proxy_reference(proxy) {
                     problems.push(format!(
                         "provider '{}' has an invalid egress_proxy/egress_proxies entry '{}' (expected http(s)/socks5(h) URL or a whole-value ${{ENV_VAR}} reference without inline credentials)",
                         provider.name, proxy
                     ));
+                }
+                if let Err(problem) = self
+                    .egress
+                    .check_url(proxy, &format!("provider '{}' egress proxy", provider.name))
+                {
+                    problems.push(problem);
                 }
             }
             if let Some(kv) = &provider.kv_events {
@@ -2421,6 +2441,123 @@ fn validate_ca_bundle(path: &Path) -> std::result::Result<(), String> {
 }
 
 /// Whether `s` is a plausible `http`/`https` URL with a non-empty host.
+/// Where the gateway is allowed to send upstream traffic.
+///
+/// rolter's primary deployment is self-hosted and frequently air-gapped, so
+/// upstreams legitimately live on loopback, RFC1918 and container networks —
+/// blanket-denying private destinations would break the core use case. What no
+/// legitimate LLM upstream ever needs is the **link-local** range, which is
+/// where cloud instance-metadata services live (`169.254.169.254`,
+/// `fd00:ec2::254`). That is the SSRF prize, so it is denied by default and the
+/// broader ranges are opt-in.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EgressPolicy {
+    /// deny link-local destinations (`169.254.0.0/16`, `fe80::/10`), which
+    /// includes cloud instance metadata. on by default
+    #[serde(default = "default_true")]
+    pub block_link_local: bool,
+    /// deny loopback destinations (`127.0.0.0/8`, `::1`). off by default:
+    /// sidecar and single-host deployments serve models on localhost
+    #[serde(default)]
+    pub block_loopback: bool,
+    /// deny private/unique-local destinations (`10/8`, `172.16/12`,
+    /// `192.168/16`, `fc00::/7`). off by default: on-prem clusters are the
+    /// common case
+    #[serde(default)]
+    pub block_private: bool,
+    /// hosts exempt from every check above, matched on the URL host verbatim
+    /// (an ip literal or hostname). the escape hatch for a deployment that must
+    /// reach an otherwise-denied address
+    #[serde(default)]
+    pub allow_hosts: Vec<String>,
+}
+
+impl Default for EgressPolicy {
+    fn default() -> Self {
+        Self {
+            block_link_local: true,
+            block_loopback: false,
+            block_private: false,
+            allow_hosts: Vec::new(),
+        }
+    }
+}
+
+/// Extract the host portion of a URL without pulling in a URL parser: strips
+/// the scheme, any userinfo, then the path/query, then a port (or brackets for
+/// an IPv6 literal).
+fn url_host(url: &str) -> Option<&str> {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|a| !a.is_empty())?;
+    // userinfo@host
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if let Some(rest) = authority.strip_prefix('[') {
+        // [ipv6]:port
+        return rest.split(']').next().filter(|h| !h.is_empty());
+    }
+    authority.split(':').next().filter(|h| !h.is_empty())
+}
+
+impl EgressPolicy {
+    /// Reject `url` when its host is an IP literal in a denied range.
+    ///
+    /// Only literals are classified: resolving a hostname here would make
+    /// config validation depend on live DNS, which would reintroduce exactly
+    /// the "one bad row freezes every gateway" failure mode that
+    /// [`GatewayConfig::sanitize_for_snapshot`] exists to avoid (and would be
+    /// bypassable by rebinding anyway). Hostname resolution belongs at connect
+    /// time; see the connect-time follow-up.
+    pub fn check_url(&self, url: &str, what: &str) -> std::result::Result<(), String> {
+        let Some(host) = url_host(url) else {
+            return Ok(());
+        };
+        if self.allow_hosts.iter().any(|h| h == host) {
+            return Ok(());
+        }
+        let Ok(ip) = host.parse::<std::net::IpAddr>() else {
+            // a hostname: nothing to classify without DNS
+            return Ok(());
+        };
+        let denied = match ip {
+            std::net::IpAddr::V4(v4) => {
+                if v4.is_link_local() && self.block_link_local {
+                    Some("link-local (cloud instance metadata lives here)")
+                } else if v4.is_loopback() && self.block_loopback {
+                    Some("loopback")
+                } else if v4.is_private() && self.block_private {
+                    Some("private")
+                } else {
+                    None
+                }
+            }
+            std::net::IpAddr::V6(v6) => {
+                // unicast link-local is fe80::/10; unique-local is fc00::/7
+                let link_local = (v6.segments()[0] & 0xffc0) == 0xfe80;
+                let unique_local = (v6.segments()[0] & 0xfe00) == 0xfc00;
+                if link_local && self.block_link_local {
+                    Some("link-local (cloud instance metadata lives here)")
+                } else if v6.is_loopback() && self.block_loopback {
+                    Some("loopback")
+                } else if unique_local && self.block_private {
+                    Some("private")
+                } else {
+                    None
+                }
+            }
+        };
+        match denied {
+            Some(range) => Err(format!(
+                "{what} '{url}' resolves to a {range} address, which the egress policy denies \
+                 (allow it explicitly via egress.allow_hosts if this is intentional)"
+            )),
+            None => Ok(()),
+        }
+    }
+}
+
 fn is_http_url(s: &str) -> bool {
     for scheme in ["http://", "https://"] {
         if let Some(rest) = s.strip_prefix(scheme) {
@@ -3575,5 +3712,103 @@ mod tests {
         assert_eq!(cfg.routes.len(), 2);
         let problems = cfg.validate().unwrap_err();
         assert!(problems.iter().any(|p| p.contains("duplicate route model")));
+    }
+
+    // #634: a provider api_base pointed at instance metadata turns the gateway
+    // into an SSRF primitive. link-local is denied by default; the private and
+    // loopback ranges stay reachable because self-hosted upstreams live there
+    #[test]
+    fn egress_policy_denies_link_local_by_default() {
+        let policy = EgressPolicy::default();
+        let err = policy
+            .check_url("http://169.254.169.254/latest/meta-data/", "api_base")
+            .unwrap_err();
+        assert!(err.contains("link-local"), "{err}");
+        // ipv6 metadata address, and with a port
+        assert!(policy
+            .check_url("http://[fe80::1]:80/v1", "api_base")
+            .is_err());
+    }
+
+    #[test]
+    fn egress_policy_allows_self_hosted_upstreams_by_default() {
+        let policy = EgressPolicy::default();
+        // the air-gapped / on-prem cases rolter exists to serve
+        for url in [
+            "http://localhost:8000/v1",
+            "http://127.0.0.1:8000/v1",
+            "http://10.0.0.5:8000/v1",
+            "http://192.168.1.10:8000/v1",
+            "http://sim-a:8000/v1",
+            "https://api.openai.com/v1",
+        ] {
+            assert!(
+                policy.check_url(url, "api_base").is_ok(),
+                "{url} was denied"
+            );
+        }
+    }
+
+    #[test]
+    fn egress_policy_can_lock_down_private_and_loopback() {
+        let policy = EgressPolicy {
+            block_private: true,
+            block_loopback: true,
+            ..Default::default()
+        };
+        assert!(policy
+            .check_url("http://10.0.0.5:8000/v1", "api_base")
+            .is_err());
+        assert!(policy
+            .check_url("http://127.0.0.1:8000/v1", "api_base")
+            .is_err());
+        assert!(policy.check_url("http://[fc00::1]/v1", "api_base").is_err());
+        // a public upstream is still fine
+        assert!(policy
+            .check_url("https://api.openai.com/v1", "api_base")
+            .is_ok());
+    }
+
+    #[test]
+    fn egress_allow_hosts_is_an_explicit_escape_hatch() {
+        let policy = EgressPolicy {
+            allow_hosts: vec!["169.254.169.254".to_string()],
+            ..Default::default()
+        };
+        assert!(policy
+            .check_url("http://169.254.169.254/v1", "api_base")
+            .is_ok());
+    }
+
+    #[test]
+    fn url_host_handles_ports_userinfo_and_ipv6() {
+        assert_eq!(url_host("http://example.com/v1"), Some("example.com"));
+        assert_eq!(url_host("http://example.com:8080/v1"), Some("example.com"));
+        assert_eq!(url_host("http://user:pw@10.0.0.1:80/v1"), Some("10.0.0.1"));
+        assert_eq!(url_host("http://[::1]:4000/v1"), Some("::1"));
+        assert_eq!(url_host("http://169.254.169.254"), Some("169.254.169.254"));
+    }
+
+    #[test]
+    fn validate_rejects_a_metadata_api_base() {
+        let cfg: GatewayConfig = toml::from_str(
+            r#"
+            [[providers]]
+            name = "evil"
+            kind = "openai"
+            api_base = "http://169.254.169.254/latest"
+
+            [[routes]]
+            model = "m"
+            [[routes.targets]]
+            provider = "evil"
+            "#,
+        )
+        .unwrap();
+        let problems = cfg.validate().unwrap_err();
+        assert!(
+            problems.iter().any(|p| p.contains("link-local")),
+            "{problems:?}"
+        );
     }
 }
