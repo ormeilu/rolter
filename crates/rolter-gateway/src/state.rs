@@ -82,6 +82,9 @@ pub struct Snapshot {
     pub keys: HashMap<String, KeyMeta>,
     /// deployment secret used to derive the key digests above
     pub pepper: String,
+    /// config override for whether an empty `keys` set still enforces auth.
+    /// `None` defers to the deployment (see [`AppState::managed_auth`])
+    pub require_auth: Option<bool>,
     /// per-model token pricing, keyed by public model name
     pub prices: HashMap<String, ModelPriceConfig>,
     /// spend caps to enforce, shared cheaply with per-request spend recorders
@@ -303,6 +306,7 @@ impl Snapshot {
             routes,
             keys,
             pepper,
+            require_auth: config.server.require_auth,
             prices,
             budgets: Arc::new(config.budgets.clone()),
             rate_limits: Arc::new(config.rate_limits.clone()),
@@ -433,6 +437,12 @@ fn target_costs(
 #[derive(Clone)]
 pub struct AppState {
     pub snapshot: Arc<ArcSwap<Snapshot>>,
+    /// whether this gateway is managed by a control plane (it polls a snapshot
+    /// url). managed deployments fail closed on an empty virtual-key set so
+    /// revoking the last key locks the data plane down instead of opening it;
+    /// `server.require_auth` overrides this either way. process-level rather
+    /// than snapshot-level so a control-plane reload can never clear it
+    pub managed_auth: bool,
     pub forwarder: Arc<Forwarder>,
     /// bounded worker queues keyed by provider; queue settings come from the
     /// live snapshot so a hot reload takes effect for subsequent requests
@@ -557,6 +567,8 @@ impl AppState {
                 &loads,
                 Some(&cache_telemetry),
             ))),
+            // opted into by the binary when a snapshot url is configured
+            managed_auth: false,
             forwarder,
             provider_queues,
             metrics,

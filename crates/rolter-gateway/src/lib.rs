@@ -116,7 +116,12 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     if let Some(url) = &config.logging.clickhouse_url {
         tracing::info!(%url, "clickhouse request logging enabled");
     }
-    let state = AppState::with_logging(&config, args.redis_url.as_deref());
+    let mut state = AppState::with_logging(&config, args.redis_url.as_deref());
+    // a control-plane-managed gateway fails closed when the key set is empty:
+    // revoking the last virtual key must lock the data plane, not open it.
+    // `server.require_auth` still overrides this in either direction
+    state.managed_auth = args.snapshot_url.is_some();
+    let state = state;
 
     // the health prober is always spawned; it self-gates on the live snapshot so a
     // hot-reload can enable/disable and re-tune probing without a restart (ROL-125)
