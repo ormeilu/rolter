@@ -468,13 +468,25 @@ disabled = false # revoke without deleting
 # stage = "pre_call"              # post_call is validated but not yet enforced
 # action = "redact"               # annotate | block | redact
 # replacement = "[REDACTED:EMAIL]"  # defaults to the built-in entity token
-# default_on = true               # apply without a client opt-in
+# default_on = true               # reserved: client opt-in is not implemented,
+#                                 # so every configured rule currently applies
 # include_system = false          # also scan system/developer messages
 # [[guardrails.rules]]
 # name = "card"
 # builtin = "payment_card"        # email | phone | api_token | payment_card
 # action = "block"                # reject with an OpenAI-compatible error
 # default_on = true
+#
+# per-route overrides layer on top of the global rule set above. rules are named,
+# so adding a rule globally still reaches every route that has not opted out of
+# it by name. `enable` wins over `disable` for the same rule. a name no rule
+# defines is a config error, not a silent no-op — a typo in `disable` would
+# otherwise read as "this rule is off here" while the rule kept running.
+# [[routes]]
+# model = "internal-support-bot"
+# [routes.advanced.guardrails]
+# disable = ["email"]             # this route legitimately handles addresses
+# enable  = ["card"]
 
 # Custom guardrail webhook: consult a self-hosted semantic guardrail service
 # (e.g. Guardrails AI, LLM Guard) before proxying. Vendor-neutral; disabled by

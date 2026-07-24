@@ -228,6 +228,69 @@ impl CompiledRule {
     }
 }
 
+/// Per-route guardrail selection, layered over the global rule set.
+///
+/// Named rules only: a route names the rules it wants turned off or on, so
+/// adding a rule globally still reaches every route that has not opted out of
+/// it by name. A name matching no configured rule is rejected at validation
+/// rather than ignored — a typo in `disable` would otherwise read as "this
+/// rule is off here" while the rule kept running.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+pub struct RouteGuardrails {
+    /// rules that do not apply on this route
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disable: Vec<String>,
+    /// rules that apply on this route, overriding `disable` on a conflict
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enable: Vec<String>,
+}
+
+impl RouteGuardrails {
+    pub fn is_empty(&self) -> bool {
+        self.disable.is_empty() && self.enable.is_empty()
+    }
+
+    /// Whether `rule` applies on this route. `enable` wins a conflict, so a
+    /// route that names the same rule in both is explicitly opting in.
+    fn allows(&self, rule: &str) -> bool {
+        if self.enable.iter().any(|name| name == rule) {
+            return true;
+        }
+        !self.disable.iter().any(|name| name == rule)
+    }
+
+    /// Names referenced here that no configured rule defines.
+    pub fn unknown_rules(&self, configured: &[String]) -> Vec<String> {
+        self.disable
+            .iter()
+            .chain(self.enable.iter())
+            .filter(|name| !configured.iter().any(|known| known == *name))
+            .cloned()
+            .collect()
+    }
+}
+
+/// The rules active for one route, resolved once per snapshot rather than per
+/// request. `None` means "every configured rule", which is the common case and
+/// costs nothing to check.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuleSelection {
+    /// index-aligned with [`CompiledGuardrails::rules`]; empty = all active
+    active: Vec<bool>,
+}
+
+impl RuleSelection {
+    fn allows(&self, index: usize) -> bool {
+        self.active.is_empty() || self.active.get(index).copied().unwrap_or(true)
+    }
+
+    /// Whether this selection turns anything off (used to keep the "no
+    /// guardrails work at all" fast path exact).
+    pub fn is_unrestricted(&self) -> bool {
+        self.active.is_empty() || self.active.iter().all(|on| *on)
+    }
+}
+
 /// Compiled guardrails held in the immutable snapshot and shared across requests.
 #[derive(Debug, Clone, Default)]
 pub struct CompiledGuardrails {
@@ -298,6 +361,38 @@ impl CompiledGuardrails {
                 .any(|rule| rule.stage == GuardStage::PreCall)
     }
 
+    /// Whether any pre-call rule survives `selection`. A route that disables
+    /// every rule must skip the scan entirely, not walk the JSON to find
+    /// nothing.
+    pub fn pre_call_active_for(&self, selection: &RuleSelection) -> bool {
+        self.enabled
+            && self
+                .rules
+                .iter()
+                .enumerate()
+                .any(|(idx, rule)| rule.stage == GuardStage::PreCall && selection.allows(idx))
+    }
+
+    /// Names of every configured rule, for validating route overrides.
+    pub fn rule_names(&self) -> Vec<String> {
+        self.rules.iter().map(|rule| rule.name.clone()).collect()
+    }
+
+    /// Resolve a route's override into an index mask, once per snapshot.
+    ///
+    /// Doing it here rather than per request keeps the hot path to an indexed
+    /// bool check, and means an override naming a rule that no longer exists
+    /// simply selects nothing rather than costing a string comparison per
+    /// segment per request.
+    pub fn resolve_selection(&self, route: &RouteGuardrails) -> RuleSelection {
+        if route.is_empty() {
+            return RuleSelection::default();
+        }
+        RuleSelection {
+            active: self.rules.iter().map(|r| route.allows(&r.name)).collect(),
+        }
+    }
+
     /// Scan one text segment against every active pre-call rule, in order.
     ///
     /// `is_system` marks operator-authored system content (skipped unless a rule
@@ -311,6 +406,19 @@ impl CompiledGuardrails {
         budget: &mut usize,
         report: &mut GuardrailReport,
     ) -> ScanOutcome {
+        self.scan_segment_with(text, is_system, budget, report, &RuleSelection::default())
+    }
+
+    /// [`Self::scan_segment`] restricted to the rules `selection` leaves active
+    /// (see [`Self::resolve_selection`]).
+    pub fn scan_segment_with(
+        &self,
+        text: &str,
+        is_system: bool,
+        budget: &mut usize,
+        report: &mut GuardrailReport,
+        selection: &RuleSelection,
+    ) -> ScanOutcome {
         if !self.enabled || *budget == 0 || text.len() > *budget {
             if text.len() > *budget {
                 *budget = 0;
@@ -320,8 +428,11 @@ impl CompiledGuardrails {
         *budget -= text.len();
 
         let mut current = std::borrow::Cow::Borrowed(text);
-        for rule in &self.rules {
+        for (idx, rule) in self.rules.iter().enumerate() {
             if rule.stage != GuardStage::PreCall {
+                continue;
+            }
+            if !selection.allows(idx) {
                 continue;
             }
             if is_system && !rule.include_system {
@@ -518,6 +629,32 @@ mod tests {
         let problems = cfg.validate();
         assert!(problems.iter().any(|p| p.contains("duplicate")));
         assert!(problems.iter().any(|p| p.contains("empty name")));
+    }
+
+    #[test]
+    fn route_override_allows_and_denies_by_name() {
+        let route = RouteGuardrails {
+            disable: vec!["email".to_string()],
+            enable: vec!["card".to_string()],
+        };
+        assert!(!route.allows("email"));
+        assert!(route.allows("card"));
+        // a rule the route says nothing about keeps the global behaviour, so
+        // adding a rule globally still reaches every route
+        assert!(route.allows("phone"));
+    }
+
+    #[test]
+    fn route_override_reports_names_no_rule_defines() {
+        let route = RouteGuardrails {
+            disable: vec!["emial".to_string()],
+            enable: Vec::new(),
+        };
+        assert_eq!(
+            route.unknown_rules(&["email".to_string()]),
+            vec!["emial".to_string()]
+        );
+        assert!(route.unknown_rules(&["emial".to_string()]).is_empty());
     }
 
     #[test]

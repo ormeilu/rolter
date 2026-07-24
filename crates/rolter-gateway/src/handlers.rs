@@ -859,8 +859,11 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
     // place and force the re-serialized forward path below. never logs raw
     // matches — only rule-name/count counters (ROL-261).
     let mut guardrail_redacted = false;
-    if snap.guardrails.pre_call_active() {
-        match crate::guardrails::apply_input(&snap.guardrails, path, &mut parsed) {
+    // the route's override decides which rules apply here; a route that
+    // disables every rule skips the JSON walk entirely (#590)
+    if snap.guardrails.pre_call_active_for(&entry.guardrails) {
+        match crate::guardrails::apply_input(&snap.guardrails, &entry.guardrails, path, &mut parsed)
+        {
             Ok(report) => {
                 if report.redactions > 0 {
                     guardrail_redacted = true;
@@ -2991,6 +2994,7 @@ mod tests {
         let ctx = RouteContext::default();
         // the balancer's pick leads; declared order forms the fallback tail
         let entry = crate::state::RouteEntry {
+            guardrails: Default::default(),
             balancer: rolter_balancer::build(route.strategy, &[]),
             variant_balancers: vec![Box::new(Fixed(1))],
             route: route.clone(),
@@ -2998,6 +3002,7 @@ mod tests {
         assert_eq!(variant_target_order(&entry, &ctx, 0, 2, &[]), vec![1, 0]);
         // an out-of-range pick degrades to plain declared order
         let entry = crate::state::RouteEntry {
+            guardrails: Default::default(),
             balancer: rolter_balancer::build(route.strategy, &[]),
             variant_balancers: vec![Box::new(Fixed(9))],
             route: route.clone(),
@@ -3005,6 +3010,7 @@ mod tests {
         assert_eq!(variant_target_order(&entry, &ctx, 0, 2, &[]), vec![0, 1]);
         // no balancer built for the variant: declared order
         let entry = crate::state::RouteEntry {
+            guardrails: Default::default(),
             balancer: rolter_balancer::build(route.strategy, &[]),
             variant_balancers: Vec::new(),
             route,
@@ -3074,6 +3080,7 @@ mod tests {
             ],
         };
         let entry = crate::state::RouteEntry {
+            guardrails: Default::default(),
             balancer: rolter_balancer::build(route.strategy, &[1, 1]),
             variant_balancers: Vec::new(),
             route,
@@ -3129,6 +3136,7 @@ mod tests {
             ],
         };
         let entry = crate::state::RouteEntry {
+            guardrails: Default::default(),
             balancer: rolter_balancer::build(route.strategy, &[1, 1]),
             variant_balancers: Vec::new(),
             route,
@@ -3172,6 +3180,7 @@ mod tests {
             ],
         };
         let entry = crate::state::RouteEntry {
+            guardrails: Default::default(),
             balancer: rolter_balancer::build(route.strategy, &[1, 1]),
             variant_balancers: Vec::new(),
             route,
@@ -3215,6 +3224,7 @@ mod tests {
             ],
         };
         let entry = crate::state::RouteEntry {
+            guardrails: Default::default(),
             balancer: rolter_balancer::build(route.strategy, &[1, 1]),
             variant_balancers: Vec::new(),
             route,
@@ -3258,6 +3268,7 @@ mod tests {
             cache: None,
         };
         let entry = crate::state::RouteEntry {
+            guardrails: Default::default(),
             balancer: rolter_balancer::build(route.strategy, &[1, 1]),
             variant_balancers: Vec::new(),
             route,
