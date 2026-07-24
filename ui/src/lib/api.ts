@@ -88,10 +88,12 @@ async function sendJson<T>(
   return (await res.json()) as T;
 }
 
-/// thrown by the analytics fetchers when the control plane has no
-/// clickhouse_url configured (503 from crates/rolter-control/src/analytics.rs);
-/// callers check for this to render a calm "not configured" empty state
-/// instead of a real error banner (reserved for 502s / network failures)
+/// thrown by the analytics fetchers when this deployment cannot serve
+/// analytics at all — either the control plane has no clickhouse_url
+/// configured (503 from crates/rolter-control/src/analytics.rs) or the
+/// endpoint does not exist on this binary (404, an older control plane).
+/// Both are deployment shape, not failure, so callers render a calm empty
+/// state instead of an error banner (reserved for 5xx / network failures).
 export class AnalyticsUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -99,11 +101,17 @@ export class AnalyticsUnavailableError extends Error {
   }
 }
 
-async function getAnalytics<T>(url: string): Promise<T> {
+async function getAnalytics<T>(
+  url: string,
+  // a 404 on a collection endpoint means the route is absent from this
+  // binary; on a by-id endpoint it means that one record is missing, which
+  // is a genuine not-found the caller should surface as such
+  { notFoundIsUnavailable = true }: { notFoundIsUnavailable?: boolean } = {},
+): Promise<T> {
   const res = await fetch(url, { headers: authHeaders() });
   if (!res.ok) {
     const err = await apiError(res);
-    if (res.status === 503) {
+    if (res.status === 503 || (res.status === 404 && notFoundIsUnavailable)) {
       throw new AnalyticsUnavailableError(err.message);
     }
     throw err;
@@ -1378,8 +1386,10 @@ export function fetchMcpSummary(
 }
 
 export function fetchMcpLogDetail(eventId: string): Promise<McpLogDetail> {
+  // by-id: a 404 here is "no such event", not "analytics is unavailable"
   return getAnalytics<McpLogDetail>(
     `/api/v1/mcp/logs/${encodeURIComponent(eventId)}`,
+    { notFoundIsUnavailable: false },
   );
 }
 
