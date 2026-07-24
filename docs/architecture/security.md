@@ -46,6 +46,26 @@ freezes every gateway" failure mode described in
 by DNS rebinding regardless. Connect-time address re-checking is tracked
 separately.
 
+## Control-plane input validation
+
+Every control-plane mutation body is decoded through a `SafeJson` extractor
+rather than axum's `Json`. Before the body is deserialized into its typed
+struct, every string in it — nested objects, arrays and object keys included —
+is screened for control characters, and the request is rejected with a `400`
+naming the offending field.
+
+The concrete failure this prevents: Postgres `text` columns cannot store a NUL
+byte, so a field carrying one failed deep inside the store and surfaced as an
+unhandled `500` instead of input validation, violating the "bounded error, no
+`unwrap`/`expect` on a request path" invariant. Screening the whole C0/C1 range
+(and `U+007F`) also closes the log-injection vector a raw escape or newline
+would otherwise open in operator-facing logs.
+
+Tab, newline and carriage return stay allowed — multi-line values are
+legitimate, a PEM CA bundle being the obvious one. Malformed JSON now also
+comes back in the same OpenAI-style error envelope as every other failure
+instead of axum's default rejection body.
+
 ## Wire transparency
 
 - Outbound requests to upstream providers carry **no rolter-identifying marks**: no `User-Agent`, no added `X-*`/`Via` headers, no metadata injected into the JSON body, no marks in SSE framing. The only headers sent are functionally required ones — `content-type`, the provider's auth header, and `anthropic-version` for Anthropic.

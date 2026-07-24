@@ -23,7 +23,7 @@ use rolter_store::postgres::repo::VirtualKeyRepo;
 use crate::analytics::{client_or_503, run, window_params, WindowQuery, WHERE_WINDOW};
 use crate::auth::CurrentUser;
 use crate::crud::{
-    generate_virtual_key, key_pepper, pool, publish_config_change, ApiError, ApiResult,
+    generate_virtual_key, key_pepper, pool, publish_config_change, ApiError, ApiResult, SafeJson,
 };
 use crate::rbac::{authorize, Principal, ScopeChain};
 use crate::ControlState;
@@ -78,7 +78,7 @@ async fn mint_my_key(
     current: CurrentUser,
     State(state): State<ControlState>,
     Path(project_id): Path<Uuid>,
-    Json(body): Json<MintKey>,
+    SafeJson(body): SafeJson<MintKey>,
 ) -> ApiResult<Json<MintedKey>> {
     let chain = ScopeChain::from_project(pool(&state), project_id).await?;
     let principal = Principal::User(current.user.clone());

@@ -15,7 +15,7 @@ use rolter_core::Error;
 use rolter_store::postgres::models::SecuritySettings;
 use rolter_store::postgres::repo::{AuditLogRepo, SecuritySettingsRepo};
 
-use crate::crud::{pool, publish_config_change, ApiError, ApiResult};
+use crate::crud::{pool, publish_config_change, ApiError, ApiResult, SafeJson};
 use crate::rbac::{require_superadmin, Principal};
 use crate::ControlState;
 
@@ -152,7 +152,7 @@ fn seal_dashboard_secret(secret: &str) -> ApiResult<(Vec<u8>, Vec<u8>)> {
 async fn update_security_settings(
     principal: Principal,
     State(state): State<ControlState>,
-    Json(body): Json<UpdateSecuritySettings>,
+    SafeJson(body): SafeJson<UpdateSecuritySettings>,
 ) -> ApiResult<Json<SecuritySettings>> {
     require_superadmin(&principal)?;
     validate_settings(&body)?;

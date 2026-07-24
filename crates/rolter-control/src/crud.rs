@@ -180,6 +180,80 @@ impl IntoResponse for ApiError {
 
 pub(crate) type ApiResult<T> = Result<T, ApiError>;
 
+/// Reject control characters anywhere in a CRUD body's strings.
+///
+/// Postgres `text` columns cannot hold a NUL byte, so a field carrying one
+/// fails deep inside the store and surfaces as an unhandled 500 rather than
+/// input validation. The rest of the C0/C1 range is equally meaningless in a
+/// name, slug, model or URL and is a log-injection vector, so the whole range
+/// is rejected at the API boundary. Tab, newline and carriage return stay
+/// allowed: multi-line values are legitimate (a PEM CA bundle, for one).
+///
+/// `path` names the offending field in the 400 so the caller can find it in a
+/// nested body; the empty string is the request root.
+fn reject_control_chars(value: &serde_json::Value, path: &str) -> ApiResult<()> {
+    match value {
+        serde_json::Value::String(text) => {
+            if let Some(bad) = text
+                .chars()
+                .find(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+            {
+                let field = if path.is_empty() { "body" } else { path };
+                return Err(ApiError::Core(Error::Config(format!(
+                    "{field} must not contain control characters (found U+{:04X})",
+                    bad as u32
+                ))));
+            }
+            Ok(())
+        }
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                // the key itself lands in jsonb columns (advanced config, metadata)
+                reject_control_chars(&serde_json::Value::String(key.clone()), path)?;
+                let child_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                reject_control_chars(child, &child_path)?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Array(items) => {
+            for (idx, child) in items.iter().enumerate() {
+                reject_control_chars(child, &format!("{path}[{idx}]"))?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// `Json`, but every string in the body is screened for control characters
+/// first (see [`reject_control_chars`]) and every failure — malformed JSON
+/// included — comes back in the same OpenAI-style error envelope the rest of
+/// the API uses. Every CRUD handler takes this instead of [`Json`] so the
+/// guarantee holds for fields nobody validates individually.
+pub(crate) struct SafeJson<T>(pub(crate) T);
+
+impl<S, T> axum::extract::FromRequest<S> for SafeJson<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Self::Rejection> {
+        let Json(value) = Json::<serde_json::Value>::from_request(req, state)
+            .await
+            .map_err(|rejection| ApiError::Core(Error::Config(rejection.body_text())))?;
+        reject_control_chars(&value, "")?;
+        let parsed = serde_json::from_value(value)
+            .map_err(|err| ApiError::Core(Error::Config(format!("invalid request body: {err}"))))?;
+        Ok(Self(parsed))
+    }
+}
+
 /// Reject a required field that's empty after trimming.
 fn require_non_empty(value: &str, field: &str) -> ApiResult<()> {
     if value.trim().is_empty() {
@@ -469,7 +543,7 @@ struct CreateOrg {
 async fn create_org(
     principal: Principal,
     State(state): State<ControlState>,
-    Json(body): Json<CreateOrg>,
+    SafeJson(body): SafeJson<CreateOrg>,
 ) -> ApiResult<Json<Org>> {
     require_superadmin(&principal)?;
     require_non_empty(&body.name, "name")?;
@@ -530,7 +604,7 @@ async fn create_team(
     principal: Principal,
     State(state): State<ControlState>,
     Path(org_id): Path<Uuid>,
-    Json(body): Json<CreateTeam>,
+    SafeJson(body): SafeJson<CreateTeam>,
 ) -> ApiResult<Json<Team>> {
     authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
     require_non_empty(&body.name, "name")?;
@@ -591,7 +665,7 @@ async fn create_project(
     principal: Principal,
     State(state): State<ControlState>,
     Path(team_id): Path<Uuid>,
-    Json(body): Json<CreateProject>,
+    SafeJson(body): SafeJson<CreateProject>,
 ) -> ApiResult<Json<Project>> {
     let chain = ScopeChain::from_team(pool(&state), team_id).await?;
     let org_id = chain.org;
@@ -787,7 +861,7 @@ async fn create_provider(
     principal: Principal,
     State(state): State<ControlState>,
     Path(org_id): Path<Uuid>,
-    Json(body): Json<CreateProvider>,
+    SafeJson(body): SafeJson<CreateProvider>,
 ) -> ApiResult<Json<Provider>> {
     authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
     require_non_empty(&body.name, "name")?;
@@ -864,7 +938,7 @@ async fn update_provider(
     principal: Principal,
     State(state): State<ControlState>,
     Path(id): Path<Uuid>,
-    Json(body): Json<UpdateProvider>,
+    SafeJson(body): SafeJson<UpdateProvider>,
 ) -> ApiResult<Json<Provider>> {
     let existing = ProviderRepo(pool(&state)).get(id).await?;
     let org_id = existing.org_id;
@@ -1043,7 +1117,7 @@ async fn create_provider_group(
     principal: Principal,
     State(state): State<ControlState>,
     Path(org_id): Path<Uuid>,
-    Json(body): Json<CreateProviderGroup>,
+    SafeJson(body): SafeJson<CreateProviderGroup>,
 ) -> ApiResult<Json<ProviderGroupView>> {
     authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
     require_non_empty(&body.name, "name")?;
@@ -1086,7 +1160,7 @@ async fn update_provider_group(
     principal: Principal,
     State(state): State<ControlState>,
     Path(id): Path<Uuid>,
-    Json(body): Json<UpdateProviderGroup>,
+    SafeJson(body): SafeJson<UpdateProviderGroup>,
 ) -> ApiResult<Json<ProviderGroupView>> {
     let repo = ProviderGroupRepo(pool(&state));
     let existing = repo.get(id).await?;
@@ -1202,7 +1276,7 @@ async fn create_route(
     principal: Principal,
     State(state): State<ControlState>,
     Path(project_id): Path<Uuid>,
-    Json(body): Json<CreateRoute>,
+    SafeJson(body): SafeJson<CreateRoute>,
 ) -> ApiResult<Json<Route>> {
     let chain = ScopeChain::from_project(pool(&state), project_id).await?;
     let org_id = chain.org;
@@ -1240,7 +1314,7 @@ async fn set_route_enabled(
     principal: Principal,
     State(state): State<ControlState>,
     Path(id): Path<Uuid>,
-    Json(body): Json<SetRouteEnabled>,
+    SafeJson(body): SafeJson<SetRouteEnabled>,
 ) -> ApiResult<Json<Route>> {
     let org_id = authorize_route(&state, &principal, id).await?;
     let row = RouteRepo(pool(&state))
@@ -1274,7 +1348,7 @@ async fn set_route_params(
     principal: Principal,
     State(state): State<ControlState>,
     Path(id): Path<Uuid>,
-    Json(body): Json<SetRouteParams>,
+    SafeJson(body): SafeJson<SetRouteParams>,
 ) -> ApiResult<Json<Route>> {
     let org_id = authorize_route(&state, &principal, id).await?;
     // both must be json objects (or null → treated as empty) so the gateway can
@@ -1480,7 +1554,7 @@ async fn set_route_advanced(
     principal: Principal,
     State(state): State<ControlState>,
     Path(id): Path<Uuid>,
-    Json(body): Json<SetRouteAdvanced>,
+    SafeJson(body): SafeJson<SetRouteAdvanced>,
 ) -> ApiResult<Json<Route>> {
     let org_id = authorize_route(&state, &principal, id).await?;
     let advanced_value = normalize_json_object(body.advanced, "advanced")?;
@@ -1556,7 +1630,7 @@ async fn create_route_target(
     principal: Principal,
     State(state): State<ControlState>,
     Path(route_id): Path<Uuid>,
-    Json(body): Json<CreateRouteTarget>,
+    SafeJson(body): SafeJson<CreateRouteTarget>,
 ) -> ApiResult<Json<RouteTarget>> {
     let org_id = authorize_route(&state, &principal, route_id).await?;
     if body.weight <= 0 {
@@ -1665,7 +1739,7 @@ async fn create_virtual_key(
     principal: Principal,
     State(state): State<ControlState>,
     Path(project_id): Path<Uuid>,
-    Json(body): Json<CreateVirtualKey>,
+    SafeJson(body): SafeJson<CreateVirtualKey>,
 ) -> ApiResult<Json<CreatedVirtualKey>> {
     let chain = ScopeChain::from_project(pool(&state), project_id).await?;
     let org_id = chain.org;
@@ -1708,7 +1782,7 @@ async fn set_virtual_key_providers(
     principal: Principal,
     State(state): State<ControlState>,
     Path(id): Path<Uuid>,
-    Json(body): Json<SetVirtualKeyProviders>,
+    SafeJson(body): SafeJson<SetVirtualKeyProviders>,
 ) -> ApiResult<Json<VirtualKey>> {
     let org_id = authorize_virtual_key(&state, &principal, id).await?;
     let row = VirtualKeyRepo(pool(&state))
@@ -1737,7 +1811,7 @@ async fn set_virtual_key_disabled(
     principal: Principal,
     State(state): State<ControlState>,
     Path(id): Path<Uuid>,
-    Json(body): Json<SetVirtualKeyDisabled>,
+    SafeJson(body): SafeJson<SetVirtualKeyDisabled>,
 ) -> ApiResult<Json<VirtualKey>> {
     let org_id = authorize_virtual_key(&state, &principal, id).await?;
     let row = VirtualKeyRepo(pool(&state))
@@ -1768,7 +1842,7 @@ async fn set_virtual_key_cache(
     principal: Principal,
     State(state): State<ControlState>,
     Path(id): Path<Uuid>,
-    Json(body): Json<SetVirtualKeyCache>,
+    SafeJson(body): SafeJson<SetVirtualKeyCache>,
 ) -> ApiResult<Json<VirtualKey>> {
     let org_id = authorize_virtual_key(&state, &principal, id).await?;
     let row = VirtualKeyRepo(pool(&state))
@@ -1859,7 +1933,7 @@ fn default_period() -> String {
 async fn create_budget(
     principal: Principal,
     State(state): State<ControlState>,
-    Json(body): Json<CreateBudget>,
+    SafeJson(body): SafeJson<CreateBudget>,
 ) -> ApiResult<Json<Budget>> {
     validate_scope(&body.scope_type)?;
     let chain = ScopeChain::from_scope(pool(&state), &body.scope_type, body.scope_id).await?;
@@ -1942,7 +2016,7 @@ struct CreateRateLimit {
 async fn create_rate_limit(
     principal: Principal,
     State(state): State<ControlState>,
-    Json(body): Json<CreateRateLimit>,
+    SafeJson(body): SafeJson<CreateRateLimit>,
 ) -> ApiResult<Json<RateLimit>> {
     validate_scope(&body.scope_type)?;
     let chain = ScopeChain::from_scope(pool(&state), &body.scope_type, body.scope_id).await?;
@@ -2024,7 +2098,7 @@ fn require_numeric(value: &str, field: &str) -> ApiResult<()> {
 async fn upsert_model_price(
     principal: Principal,
     State(state): State<ControlState>,
-    Json(body): Json<UpsertModelPrice>,
+    SafeJson(body): SafeJson<UpsertModelPrice>,
 ) -> ApiResult<Json<ModelPrice>> {
     require_superadmin(&principal)?;
     require_non_empty(&body.model, "model")?;
@@ -2199,7 +2273,7 @@ async fn create_user(
     principal: Principal,
     State(state): State<ControlState>,
     Path(org_id): Path<Uuid>,
-    Json(body): Json<CreateUser>,
+    SafeJson(body): SafeJson<CreateUser>,
 ) -> ApiResult<Json<CreatedUser>> {
     authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
     let email = validate_email(&body.email)?;
@@ -2252,7 +2326,7 @@ async fn update_user(
     principal: Principal,
     State(state): State<ControlState>,
     Path(id): Path<Uuid>,
-    Json(body): Json<UpdateUser>,
+    SafeJson(body): SafeJson<UpdateUser>,
 ) -> ApiResult<Json<User>> {
     require_superadmin(&principal)?;
     let pool = pool(&state);
@@ -2356,7 +2430,7 @@ async fn create_membership(
     principal: Principal,
     State(state): State<ControlState>,
     Path(org_id): Path<Uuid>,
-    Json(body): Json<CreateMembership>,
+    SafeJson(body): SafeJson<CreateMembership>,
 ) -> ApiResult<Json<Membership>> {
     validate_role(&body.role)?;
     let pool = pool(&state);
@@ -2546,6 +2620,63 @@ mod slug_tests {
         // blank upstream_model becomes passthrough (None); zero weight clamps to 1
         assert_eq!(tuples[0], (id, None, 1));
         assert_eq!(tuples[1], (id, Some("qwen3".to_string()), 5));
+    }
+}
+
+#[cfg(test)]
+mod control_char_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn check(value: serde_json::Value) -> ApiResult<()> {
+        reject_control_chars(&value, "")
+    }
+
+    fn message(value: serde_json::Value) -> String {
+        match check(value) {
+            Err(ApiError::Core(Error::Config(problem))) => problem,
+            other => panic!("expected a config error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nul_in_a_string_field_is_rejected_with_the_field_name() {
+        // the #618 e2e payload: a route model carrying an embedded NUL, which
+        // postgres text cannot store and which used to surface as a 500
+        let problem = message(json!({"model": "gpt-4o\u{0}null"}));
+        assert!(problem.contains("model"), "{problem}");
+        assert!(problem.contains("U+0000"), "{problem}");
+    }
+
+    #[test]
+    fn control_chars_are_rejected_anywhere_in_the_body() {
+        assert!(message(json!({"a": {"b": "x\u{1}"}})).contains("a.b"));
+        assert!(
+            message(json!({"targets": [{"provider": "p\u{7}"}]})).contains("targets[0].provider")
+        );
+        assert!(message(json!(["ok", "bad\u{1b}"])).contains("[1]"));
+        // an object key lands in jsonb columns too
+        assert!(check(json!({"k\u{0}": "fine"})).is_err());
+        // c1 and delete are controls as well
+        assert!(check(json!({"a": "x\u{7f}"})).is_err());
+        assert!(check(json!({"a": "x\u{9f}"})).is_err());
+    }
+
+    #[test]
+    fn ordinary_and_multiline_values_pass() {
+        // a PEM ca bundle is a legitimate multi-line field, so tab/newline/cr stay allowed
+        assert!(
+            check(json!({"ca_bundle": "-----BEGIN CERT-----\nabc\r\n\t-----END-----"})).is_ok()
+        );
+        assert!(check(json!({
+            "name": "OpenAI MSK",
+            "api_base": "https://api.openai.com/v1",
+            "weight": 3,
+            "enabled": true,
+            "unset": null,
+            "emoji": "проверка 🚀",
+        }))
+        .is_ok());
     }
 }
 
