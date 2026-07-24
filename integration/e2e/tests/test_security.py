@@ -200,8 +200,7 @@ def test_config_injection_is_parameterized(admin: ControlClient, tenant) -> None
     driven through provider *names* rather than route models: a provider is
     valid config on its own, so this exercises the SQL/parameterization path
     without leaving targetless routes that would poison the shared snapshot
-    (#627). (a separate NUL-byte hardening gap on control CRUD is tracked in
-    #635.)
+    (#627).
     """
     payloads = [
         "'; drop table providers;--",
@@ -210,6 +209,10 @@ def test_config_injection_is_parameterized(admin: ControlClient, tenant) -> None
         "../../etc/passwd",
         "<script>alert(1)</script>",
         "name\" or \"1\"=\"1",
+        # postgres text cannot hold a NUL, so this used to fail inside the store
+        # and surface as a 500; the API now rejects control characters (#635)
+        "nul\x00byte",
+        "bell\x07and\x1bescape",
     ]
     # each name carries the adversarial payload but stays globally unique: provider
     # names are unique across the aggregated snapshot, so a bare payload would
