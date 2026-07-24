@@ -17,8 +17,12 @@ RUN cargo build --release --workspace ${CARGO_FEATURES:+--features "$CARGO_FEATU
 # --- build the ui ---
 FROM oven/bun:1 AS ui-builder
 WORKDIR /ui
-COPY ui/package.json ui/bun.lockb* ./
-RUN bun install
+# bun.lock (text) — the glob used to say bun.lockb (bun's old binary name), which
+# matched nothing, so the image resolved dependencies unpinned on every build and
+# broke as soon as a transitive version drifted. copy the real lockfile and honour
+# it, so the image is reproducible and matches CI
+COPY ui/package.json ui/bun.lock ./
+RUN bun install --frozen-lockfile
 COPY ui/ ./
 RUN bun run build
 
