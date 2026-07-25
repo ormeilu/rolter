@@ -2300,3 +2300,210 @@ async fn config_hot_reload_swaps_routing_without_restart() {
         .unwrap();
     assert_eq!(stale.status(), 404, "model-a should 404 after reload");
 }
+
+/// A mock upstream whose completion carries an address, so an output guardrail
+/// has something to mask. Streams the same text when asked.
+async fn mock_leaky_openai(body: Json<Value>) -> axum::response::Response {
+    let streaming = body
+        .get("stream")
+        .and_then(|s| s.as_bool())
+        .unwrap_or(false);
+    if streaming {
+        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"ops@corp.com\"}}]}\n\n\
+                   data: [DONE]\n\n";
+        (
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse,
+        )
+            .into_response()
+    } else {
+        Json(json!({
+            "id": "chatcmpl-mock",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "write to ops@corp.com"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        }))
+        .into_response()
+    }
+}
+
+/// A config with one output-stage rule over the leaky upstream.
+fn config_with_output_rule(
+    upstream: SocketAddr,
+    action: rolter_core::GuardAction,
+    streaming: rolter_core::StreamingPostCall,
+) -> GatewayConfig {
+    let mut config = config_for("test-model", vec![("up", upstream)]);
+    config.guardrails = rolter_core::GuardrailsConfig {
+        enabled: true,
+        max_scan_bytes: None,
+        streaming_post_call: streaming,
+        rules: vec![rolter_core::GuardrailRule {
+            name: "email".to_string(),
+            builtin: Some(rolter_core::BuiltinRule::Email),
+            pattern: None,
+            stage: rolter_core::GuardStage::PostCall,
+            action,
+            replacement: None,
+            default_on: true,
+            include_system: false,
+        }],
+    };
+    config
+}
+
+#[tokio::test]
+async fn output_guardrail_masks_a_non_streaming_completion() {
+    let upstream =
+        serve(Router::new().route("/v1/chat/completions", post(mock_leaky_openai))).await;
+    let gw = serve_gateway(&config_with_output_rule(
+        upstream,
+        rolter_core::GuardAction::Redact,
+        Default::default(),
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({"model": "test-model", "messages": [{"role": "user", "content": "ping"}]}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "write to [REDACTED:EMAIL]"
+    );
+    // the rest of the completion survives the round-trip through the masker
+    assert_eq!(body["usage"]["total_tokens"], 2);
+    assert_eq!(body["choices"][0]["finish_reason"], "stop");
+}
+
+#[tokio::test]
+async fn a_blocking_output_rule_withholds_the_completion() {
+    let upstream =
+        serve(Router::new().route("/v1/chat/completions", post(mock_leaky_openai))).await;
+    let gw = serve_gateway(&config_with_output_rule(
+        upstream,
+        rolter_core::GuardAction::Block,
+        Default::default(),
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({"model": "test-model", "messages": [{"role": "user", "content": "ping"}]}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 403);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "guardrail_blocked");
+    // the rule name is safe to surface; the matched text never is
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("email"), "{message}");
+    assert!(!message.contains("ops@corp.com"), "{message}");
+}
+
+#[tokio::test]
+async fn a_streamed_request_is_refused_when_output_rules_apply() {
+    // the default fails closed: masking cannot run on a stream, so the request
+    // is refused rather than quietly served unmasked
+    let upstream =
+        serve(Router::new().route("/v1/chat/completions", post(mock_leaky_openai))).await;
+    let gw = serve_gateway(&config_with_output_rule(
+        upstream,
+        rolter_core::GuardAction::Redact,
+        rolter_core::StreamingPostCall::Reject,
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({
+            "model": "test-model",
+            "stream": true,
+            "messages": [{"role": "user", "content": "ping"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "guardrail_streaming_unsupported");
+}
+
+#[tokio::test]
+async fn passthrough_serves_the_stream_with_output_rules_off() {
+    // the opt-out an operator has to write deliberately
+    let upstream =
+        serve(Router::new().route("/v1/chat/completions", post(mock_leaky_openai))).await;
+    let gw = serve_gateway(&config_with_output_rule(
+        upstream,
+        rolter_core::GuardAction::Redact,
+        rolter_core::StreamingPostCall::Passthrough,
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({
+            "model": "test-model",
+            "stream": true,
+            "messages": [{"role": "user", "content": "ping"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("ops@corp.com"), "{text}");
+}
+
+#[tokio::test]
+async fn a_route_without_output_rules_is_untouched() {
+    // the guard must not exist for an unguarded route: input-only rules leave
+    // the response path exactly as it was
+    let upstream =
+        serve(Router::new().route("/v1/chat/completions", post(mock_leaky_openai))).await;
+    let mut config = config_with_output_rule(
+        upstream,
+        rolter_core::GuardAction::Redact,
+        rolter_core::StreamingPostCall::Reject,
+    );
+    config.guardrails.rules[0].stage = rolter_core::GuardStage::PreCall;
+    let gw = serve_gateway(&config).await;
+
+    let streamed = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({
+            "model": "test-model",
+            "stream": true,
+            "messages": [{"role": "user", "content": "ping"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(streamed.status(), 200, "no post_call rule, no rejection");
+
+    let plain = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({"model": "test-model", "messages": [{"role": "user", "content": "ping"}]}))
+        .send()
+        .await
+        .unwrap();
+    let body: Value = plain.json().await.unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "write to ops@corp.com"
+    );
+}

@@ -30,7 +30,7 @@ pub use guardrail_webhook::{
 };
 pub use guardrails::{
     BuiltinRule, CompiledGuardrails, GuardAction, GuardStage, GuardrailReport, GuardrailRule,
-    GuardrailsConfig, ScanOutcome,
+    GuardrailsConfig, ScanOutcome, StreamingPostCall,
 };
 pub use prompt_templates::{
     CompiledTemplates, Decorator, DecoratorPosition, DecoratorRole, PromptTemplate,

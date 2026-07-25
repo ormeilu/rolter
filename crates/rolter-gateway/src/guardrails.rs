@@ -1,15 +1,201 @@
-//! Request-path wiring for the built-in guardrails (ROL-261).
+//! Request- and response-path wiring for the built-in guardrails (ROL-261).
 //!
-//! Walks the text-bearing fields of an OpenAI- or Anthropic-shaped request body
-//! and applies the compiled pre-call rules from the snapshot. Redactions are
-//! written back into the JSON in place; a blocking match returns the offending
-//! rule name so the handler can reject with an OpenAI-compatible error. The walk
-//! only ever passes bounded text slices to the engine, and the returned report
-//! carries rule names and counts only — never the matched values.
+//! Walks the text-bearing fields of an OpenAI- or Anthropic-shaped body and
+//! applies the compiled rules for one stage from the snapshot: the request body
+//! before proxying (`pre_call`), or a buffered response body before delivering
+//! it (`post_call`, #591). Redactions are written back into the JSON in place; a
+//! blocking match returns the offending rule name so the handler can reject with
+//! an OpenAI-compatible error. The walk only ever passes bounded text slices to
+//! the engine, and the returned report carries rule names and counts only —
+//! never the matched values.
 
 use rolter_core::guardrails::RuleSelection;
-use rolter_core::{CompiledGuardrails, GuardrailReport, ScanOutcome};
+use rolter_core::{CompiledGuardrails, GuardStage, GuardrailReport, ScanOutcome};
 use serde_json::Value;
+
+/// One stage's walk over one body: the engine, the route's rule selection, and
+/// the mutable scan state that has to be threaded through every nested field.
+struct Scan<'a> {
+    guardrails: &'a CompiledGuardrails,
+    selection: &'a RuleSelection,
+    stage: GuardStage,
+    budget: usize,
+    report: GuardrailReport,
+}
+
+impl<'a> Scan<'a> {
+    fn new(
+        guardrails: &'a CompiledGuardrails,
+        selection: &'a RuleSelection,
+        stage: GuardStage,
+    ) -> Self {
+        Self {
+            guardrails,
+            selection,
+            stage,
+            budget: guardrails.scan_budget(),
+            report: GuardrailReport::default(),
+        }
+    }
+
+    /// Scan a single JSON string in place, applying a redaction or surfacing a
+    /// block.
+    fn string(&mut self, value: &mut Value, is_system: bool) -> Result<(), String> {
+        let Some(text) = value.as_str() else {
+            return Ok(());
+        };
+        let outcome = match self.stage {
+            GuardStage::PreCall => self.guardrails.scan_segment_with(
+                text,
+                is_system,
+                &mut self.budget,
+                &mut self.report,
+                self.selection,
+            ),
+            GuardStage::PostCall => self.guardrails.scan_output(
+                text,
+                &mut self.budget,
+                &mut self.report,
+                self.selection,
+            ),
+        };
+        match outcome {
+            ScanOutcome::Unchanged => Ok(()),
+            ScanOutcome::Redacted(redacted) => {
+                *value = Value::String(redacted);
+                Ok(())
+            }
+            ScanOutcome::Blocked(rule) => Err(rule),
+        }
+    }
+
+    /// Scan a `content`/`prompt`/`system` value that may be a string, an array of
+    /// strings, or an array of typed parts (`{ "type": "text", "text": "…" }`).
+    fn content(&mut self, value: &mut Value, is_system: bool) -> Result<(), String> {
+        match value {
+            Value::String(_) => self.string(value, is_system),
+            Value::Array(parts) => {
+                for part in parts {
+                    match part {
+                        Value::String(_) => self.string(part, is_system)?,
+                        Value::Object(_) => {
+                            if let Some(text) = part.get_mut("text").filter(|t| t.is_string()) {
+                                self.string(text, is_system)?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Scan every message in a `messages` array, treating `system`/`developer`
+    /// roles as operator-authored system content.
+    fn messages(&mut self, body: &mut Value) -> Result<(), String> {
+        let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+            return Ok(());
+        };
+        for message in messages {
+            let is_system = matches!(
+                message.get("role").and_then(Value::as_str),
+                Some("system") | Some("developer")
+            );
+            if let Some(content) = message.get_mut("content") {
+                self.content(content, is_system)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Scan a named top-level field when the body has it.
+    fn field(&mut self, body: &mut Value, name: &str, is_system: bool) -> Result<(), String> {
+        match body.get_mut(name) {
+            Some(value) => self.content(value, is_system),
+            None => Ok(()),
+        }
+    }
+
+    /// Scan `choices[].message.content`, the legacy `choices[].text`, and the
+    /// arguments of any tool call the model emitted.
+    fn choices(&mut self, body: &mut Value) -> Result<(), String> {
+        let Some(choices) = body.get_mut("choices").and_then(Value::as_array_mut) else {
+            return Ok(());
+        };
+        for choice in choices {
+            if let Some(content) = choice.pointer_mut("/message/content") {
+                self.content(content, false)?;
+            }
+            if let Some(text) = choice.get_mut("text").filter(|t| t.is_string()) {
+                self.string(text, false)?;
+            }
+            if let Some(calls) = choice
+                .pointer_mut("/message/tool_calls")
+                .and_then(Value::as_array_mut)
+            {
+                for call in calls {
+                    if let Some(arguments) = call.pointer_mut("/function/arguments") {
+                        self.encoded_arguments(arguments)?;
+                    }
+                }
+            }
+            // the pre-tool_calls spelling, still emitted by some providers
+            if let Some(arguments) = choice.pointer_mut("/message/function_call/arguments") {
+                self.encoded_arguments(arguments)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Scan every string nested anywhere in a value, keys excluded.
+    ///
+    /// Used for tool-call payloads, whose shape is the tool's own schema rather
+    /// than anything the API defines, so there is no field list to walk.
+    fn nested(&mut self, value: &mut Value) -> Result<(), String> {
+        match value {
+            Value::String(_) => self.string(value, false),
+            Value::Array(items) => {
+                for item in items {
+                    self.nested(item)?;
+                }
+                Ok(())
+            }
+            Value::Object(map) => {
+                for (_, item) in map.iter_mut() {
+                    self.nested(item)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Scan tool arguments that arrive as a JSON document inside a JSON string.
+    ///
+    /// Parsed and re-encoded rather than scanned as raw text, so a replacement
+    /// token containing a quote or a backslash cannot turn valid arguments into
+    /// a string the client fails to parse. Arguments that are not valid JSON —
+    /// a model mid-stream can emit those — are scanned as plain text instead.
+    fn encoded_arguments(&mut self, value: &mut Value) -> Result<(), String> {
+        let Some(raw) = value.as_str() else {
+            // some providers send arguments as an object rather than a string
+            return self.nested(value);
+        };
+        let Ok(mut parsed) = serde_json::from_str::<Value>(raw) else {
+            return self.string(value, false);
+        };
+        let before = self.report.redactions;
+        self.nested(&mut parsed)?;
+        if self.report.redactions > before {
+            if let Ok(encoded) = serde_json::to_string(&parsed) {
+                *value = Value::String(encoded);
+            }
+        }
+        Ok(())
+    }
+}
 
 /// Apply pre-call guardrails to a parsed request body for the given API path.
 ///
@@ -22,146 +208,169 @@ pub fn apply_input(
     path: &str,
     body: &mut Value,
 ) -> Result<GuardrailReport, String> {
-    let mut report = GuardrailReport::default();
-    let mut budget = guardrails.scan_budget();
+    let mut scan = Scan::new(guardrails, selection, GuardStage::PreCall);
 
     match path {
         // OpenAI chat + Responses share the `messages` shape; Responses also
         // accepts a bare `input` string/array
         "/v1/chat/completions" | "/v1/responses" => {
-            scan_messages(guardrails, selection, body, &mut budget, &mut report)?;
-            if let Some(input) = body.get_mut("input") {
-                scan_content(
-                    guardrails,
-                    selection,
-                    input,
-                    false,
-                    &mut budget,
-                    &mut report,
-                )?;
-            }
+            scan.messages(body)?;
+            scan.field(body, "input", false)?;
         }
         // legacy text completions carry a `prompt` string or array of strings
-        "/v1/completions" => {
-            if let Some(prompt) = body.get_mut("prompt") {
-                scan_content(
-                    guardrails,
-                    selection,
-                    prompt,
-                    false,
-                    &mut budget,
-                    &mut report,
-                )?;
-            }
-        }
+        "/v1/completions" => scan.field(body, "prompt", false)?,
         // Anthropic Messages: a top-level `system` plus user/assistant `messages`
         "/v1/messages" => {
-            if let Some(system) = body.get_mut("system") {
-                scan_content(
-                    guardrails,
-                    selection,
-                    system,
-                    true,
-                    &mut budget,
-                    &mut report,
-                )?;
-            }
-            scan_messages(guardrails, selection, body, &mut budget, &mut report)?;
+            scan.field(body, "system", true)?;
+            scan.messages(body)?;
         }
         _ => {}
     }
 
-    Ok(report)
+    Ok(scan.report)
 }
 
-/// Scan every message in a `messages` array, treating `system`/`developer` roles
-/// as operator-authored system content.
-fn scan_messages(
+/// Apply post-call guardrails to a buffered, non-streaming response body.
+///
+/// Same contract as [`apply_input`], one stage later: `Err(rule_name)` means the
+/// completion must not be delivered, and a mutated `body` with
+/// `report.redactions > 0` must be re-serialized before it goes to the client.
+///
+/// Assistant text and tool-call payloads are both walked. Tool arguments are a
+/// place model output routinely lands — an address the model passes to a
+/// `send_email` tool has left the completion just as surely as one it printed —
+/// so they are parsed, masked and re-encoded rather than skipped.
+pub fn apply_output(
     guardrails: &CompiledGuardrails,
     selection: &RuleSelection,
+    path: &str,
     body: &mut Value,
-    budget: &mut usize,
-    report: &mut GuardrailReport,
-) -> Result<(), String> {
-    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
-        return Ok(());
-    };
-    for message in messages {
-        let is_system = matches!(
-            message.get("role").and_then(Value::as_str),
-            Some("system") | Some("developer")
-        );
-        if let Some(content) = message.get_mut("content") {
-            scan_content(guardrails, selection, content, is_system, budget, report)?;
-        }
-    }
-    Ok(())
-}
+) -> Result<GuardrailReport, String> {
+    let mut scan = Scan::new(guardrails, selection, GuardStage::PostCall);
 
-/// Scan a `content`/`prompt`/`system` value that may be a string, an array of
-/// strings, or an array of typed parts (`{ "type": "text", "text": "…" }`).
-fn scan_content(
-    guardrails: &CompiledGuardrails,
-    selection: &RuleSelection,
-    value: &mut Value,
-    is_system: bool,
-    budget: &mut usize,
-    report: &mut GuardrailReport,
-) -> Result<(), String> {
-    match value {
-        Value::String(_) => scan_string(guardrails, selection, value, is_system, budget, report),
-        Value::Array(parts) => {
-            for part in parts {
-                match part {
-                    Value::String(_) => {
-                        scan_string(guardrails, selection, part, is_system, budget, report)?;
-                    }
-                    Value::Object(_) => {
-                        if let Some(text) = part.get_mut("text").filter(|t| t.is_string()) {
-                            scan_string(guardrails, selection, text, is_system, budget, report)?;
+    match path {
+        // OpenAI chat + legacy completions: one message/text per choice
+        "/v1/chat/completions" | "/v1/completions" => scan.choices(body)?,
+        // Anthropic Messages replies with a top-level `content` parts array,
+        // where a `tool_use` part carries its arguments as an `input` object
+        "/v1/messages" => {
+            scan.field(body, "content", false)?;
+            if let Some(parts) = body.get_mut("content").and_then(Value::as_array_mut) {
+                for part in parts {
+                    if part.get("type").and_then(Value::as_str) == Some("tool_use") {
+                        if let Some(input) = part.get_mut("input") {
+                            scan.nested(input)?;
                         }
                     }
-                    _ => {}
                 }
             }
-            Ok(())
         }
-        _ => Ok(()),
+        // Responses: typed `output[].content[].text`, function-call arguments on
+        // the output item itself, plus the flattened `output_text` convenience
+        // field when the provider sends it
+        "/v1/responses" => {
+            if let Some(output) = body.get_mut("output").and_then(Value::as_array_mut) {
+                for item in output {
+                    if let Some(content) = item.get_mut("content") {
+                        scan.content(content, false)?;
+                    }
+                    if let Some(arguments) = item.get_mut("arguments") {
+                        scan.encoded_arguments(arguments)?;
+                    }
+                }
+            }
+            scan.field(body, "output_text", false)?;
+        }
+        _ => {}
     }
+
+    Ok(scan.report)
 }
 
-/// Scan a single JSON string in place, applying a redaction or surfacing a block.
-fn scan_string(
-    guardrails: &CompiledGuardrails,
-    selection: &RuleSelection,
-    value: &mut Value,
-    is_system: bool,
-    budget: &mut usize,
-    report: &mut GuardrailReport,
-) -> Result<(), String> {
-    let Some(text) = value.as_str() else {
-        return Ok(());
-    };
-    match guardrails.scan_segment_with(text, is_system, budget, report, selection) {
-        ScanOutcome::Unchanged => Ok(()),
-        ScanOutcome::Redacted(redacted) => {
-            *value = Value::String(redacted);
-            Ok(())
+/// The output stage resolved on the request path, carried to whichever delivery
+/// path ends up serving the response.
+///
+/// Constructing one is the decision that the response has to be buffered, so
+/// [`resolve`](Self::resolve) returns `None` whenever no post-call rule applies —
+/// a route without them keeps streaming its non-SSE JSON straight through.
+pub struct OutputGuard<'a> {
+    guardrails: &'a CompiledGuardrails,
+    selection: &'a RuleSelection,
+    metrics: &'a crate::metrics::Metrics,
+    path: &'a str,
+}
+
+/// What the output stage decided about a buffered body.
+pub enum OutputDecision {
+    /// deliver the bytes as they are
+    Unchanged,
+    /// deliver these bytes instead
+    Masked(bytes::Bytes),
+    /// withhold the response; carries the rule name, never the matched text
+    Blocked(String),
+}
+
+impl<'a> OutputGuard<'a> {
+    pub fn resolve(
+        guardrails: &'a CompiledGuardrails,
+        selection: &'a RuleSelection,
+        metrics: &'a crate::metrics::Metrics,
+        path: &'a str,
+    ) -> Option<Self> {
+        guardrails.post_call_active_for(selection).then_some(Self {
+            guardrails,
+            selection,
+            metrics,
+            path,
+        })
+    }
+
+    /// Scan a buffered response body.
+    ///
+    /// A body that is not JSON is delivered untouched: the stage masks fields of
+    /// a known response shape, and there is nothing to walk in an opaque payload.
+    /// Callers apply this to successful responses only, so this is not the path
+    /// an upstream error body takes.
+    pub fn apply(&self, bytes: &bytes::Bytes) -> OutputDecision {
+        let Ok(mut parsed) = serde_json::from_slice::<Value>(bytes) else {
+            return OutputDecision::Unchanged;
+        };
+        match apply_output(self.guardrails, self.selection, self.path, &mut parsed) {
+            Ok(report) if report.redactions > 0 => {
+                self.metrics.guardrail_output_redactions_total.fetch_add(
+                    report.redactions as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                match serde_json::to_vec(&parsed) {
+                    Ok(masked) => OutputDecision::Masked(bytes::Bytes::from(masked)),
+                    // re-serializing a value that just came out of serde_json
+                    // cannot realistically fail, but delivering the unmasked
+                    // original is not an acceptable fallback
+                    Err(_) => OutputDecision::Blocked("guardrail_serialization".to_string()),
+                }
+            }
+            Ok(_) => OutputDecision::Unchanged,
+            Err(rule) => {
+                self.metrics
+                    .guardrail_output_blocks_total
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                OutputDecision::Blocked(rule)
+            }
         }
-        ScanOutcome::Blocked(rule) => Err(rule),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rolter_core::{BuiltinRule, GuardAction, GuardStage, GuardrailRule, GuardrailsConfig};
+    use rolter_core::{BuiltinRule, GuardAction, GuardrailRule, GuardrailsConfig};
     use serde_json::json;
 
     fn engine(rules: Vec<GuardrailRule>) -> CompiledGuardrails {
         CompiledGuardrails::from_config(&GuardrailsConfig {
             enabled: true,
             max_scan_bytes: None,
+            streaming_post_call: Default::default(),
             rules,
         })
     }
@@ -292,6 +501,12 @@ mod tests {
         }
     }
 
+    /// The same rule, moved to the output stage.
+    fn out(mut rule: GuardrailRule) -> GuardrailRule {
+        rule.stage = GuardStage::PostCall;
+        rule
+    }
+
     #[test]
     fn openai_chat_string_content_redacted() {
         let g = engine(vec![redact("email", BuiltinRule::Email)]);
@@ -400,5 +615,216 @@ mod tests {
         let mut body = json!({"model": "gpt-4", "prompt": "write to z@z.io"});
         apply_input(&g, &RuleSelection::default(), "/v1/completions", &mut body).unwrap();
         assert_eq!(body["prompt"], json!("write to [REDACTED:EMAIL]"));
+    }
+
+    #[test]
+    fn openai_chat_completion_content_masked() {
+        let g = engine(vec![out(redact("email", BuiltinRule::Email))]);
+        let mut body = json!({
+            "id": "chatcmpl-1",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "write to ops@corp.com"},
+                "finish_reason": "stop"
+            }]
+        });
+        let report = apply_output(
+            &g,
+            &RuleSelection::default(),
+            "/v1/chat/completions",
+            &mut body,
+        )
+        .unwrap();
+        assert_eq!(report.redactions, 1);
+        assert_eq!(
+            body["choices"][0]["message"]["content"],
+            json!("write to [REDACTED:EMAIL]")
+        );
+    }
+
+    #[test]
+    fn a_blocking_output_rule_names_the_rule() {
+        let g = engine(vec![out(block("card", BuiltinRule::PaymentCard))]);
+        let mut body = json!({
+            "choices": [{"message": {"role": "assistant", "content": "4111 1111 1111 1111"}}]
+        });
+        assert_eq!(
+            apply_output(
+                &g,
+                &RuleSelection::default(),
+                "/v1/chat/completions",
+                &mut body
+            ),
+            Err("card".to_string())
+        );
+    }
+
+    #[test]
+    fn anthropic_completion_parts_masked() {
+        let g = engine(vec![out(redact("email", BuiltinRule::Email))]);
+        let mut body = json!({
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "mail ops@corp.com"},
+                {"type": "tool_use", "name": "lookup", "input": {"q": "who@corp.com"}}
+            ]
+        });
+        apply_output(&g, &RuleSelection::default(), "/v1/messages", &mut body).unwrap();
+        assert_eq!(body["content"][0]["text"], json!("mail [REDACTED:EMAIL]"));
+        // a `tool_use` payload is model output too: an address handed to a tool
+        // has left the completion just as surely as one the model printed
+        assert_eq!(body["content"][1]["input"]["q"], json!("[REDACTED:EMAIL]"));
+    }
+
+    #[test]
+    fn openai_tool_call_arguments_are_masked_and_stay_parseable() {
+        let g = engine(vec![out(redact("email", BuiltinRule::Email))]);
+        let mut body = json!({
+            "choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "send_email",
+                    "arguments": "{\"to\":\"ops@corp.com\",\"retries\":2}"
+                }
+            }]}}]
+        });
+        apply_output(
+            &g,
+            &RuleSelection::default(),
+            "/v1/chat/completions",
+            &mut body,
+        )
+        .unwrap();
+
+        // arguments stay a JSON string the client can parse, with non-string
+        // values untouched
+        let arguments = body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .expect("arguments must remain a string");
+        let parsed: Value = serde_json::from_str(arguments).expect("must still parse as JSON");
+        assert_eq!(parsed["to"], json!("[REDACTED:EMAIL]"));
+        assert_eq!(parsed["retries"], json!(2));
+    }
+
+    #[test]
+    fn a_blocking_rule_fires_on_tool_arguments() {
+        let g = engine(vec![out(block("card", BuiltinRule::PaymentCard))]);
+        let mut body = json!({
+            "choices": [{"message": {"tool_calls": [{
+                "function": {"name": "pay", "arguments": "{\"card\":\"4111 1111 1111 1111\"}"}
+            }]}}]
+        });
+        assert_eq!(
+            apply_output(
+                &g,
+                &RuleSelection::default(),
+                "/v1/chat/completions",
+                &mut body
+            ),
+            Err("card".to_string())
+        );
+    }
+
+    #[test]
+    fn unparsable_tool_arguments_are_scanned_as_text() {
+        // a truncated or malformed argument blob still gets masked; it just does
+        // not get re-encoded as JSON, because it never was JSON
+        let g = engine(vec![out(redact("email", BuiltinRule::Email))]);
+        let mut body = json!({
+            "choices": [{"message": {"tool_calls": [{
+                "function": {"name": "send", "arguments": "{\"to\": \"ops@corp.com\""}
+            }]}}]
+        });
+        apply_output(
+            &g,
+            &RuleSelection::default(),
+            "/v1/chat/completions",
+            &mut body,
+        )
+        .unwrap();
+        let arguments = body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap();
+        assert!(!arguments.contains("ops@corp.com"), "{arguments}");
+    }
+
+    #[test]
+    fn responses_function_call_arguments_are_masked() {
+        let g = engine(vec![out(redact("email", BuiltinRule::Email))]);
+        let mut body = json!({
+            "output": [{
+                "type": "function_call",
+                "name": "send_email",
+                "arguments": "{\"to\":\"ops@corp.com\"}"
+            }]
+        });
+        apply_output(&g, &RuleSelection::default(), "/v1/responses", &mut body).unwrap();
+        let arguments = body["output"][0]["arguments"].as_str().unwrap();
+        assert!(!arguments.contains("ops@corp.com"), "{arguments}");
+    }
+
+    #[test]
+    fn responses_output_and_output_text_masked() {
+        let g = engine(vec![out(redact("email", BuiltinRule::Email))]);
+        let mut body = json!({
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "a@b.com"}]}],
+            "output_text": "a@b.com"
+        });
+        apply_output(&g, &RuleSelection::default(), "/v1/responses", &mut body).unwrap();
+        assert_eq!(
+            body["output"][0]["content"][0]["text"],
+            json!("[REDACTED:EMAIL]")
+        );
+        assert_eq!(body["output_text"], json!("[REDACTED:EMAIL]"));
+    }
+
+    #[test]
+    fn the_stages_do_not_bleed_into_each_other() {
+        // an input rule must not fire on a response body, and vice versa: the
+        // stage is the whole point of having two of them
+        let g = engine(vec![redact("email", BuiltinRule::Email)]);
+        let mut response =
+            json!({"choices": [{"message": {"role": "assistant", "content": "a@b.com"}}]});
+        apply_output(
+            &g,
+            &RuleSelection::default(),
+            "/v1/chat/completions",
+            &mut response,
+        )
+        .unwrap();
+        assert_eq!(
+            response["choices"][0]["message"]["content"],
+            json!("a@b.com")
+        );
+        assert!(!g.post_call_active_for(&RuleSelection::default()));
+
+        let out_only = engine(vec![out(redact("email", BuiltinRule::Email))]);
+        let mut request = json!({"messages": [{"role": "user", "content": "a@b.com"}]});
+        apply_input(
+            &out_only,
+            &RuleSelection::default(),
+            "/v1/chat/completions",
+            &mut request,
+        )
+        .unwrap();
+        assert_eq!(request["messages"][0]["content"], json!("a@b.com"));
+        assert!(!out_only.pre_call_active_for(&RuleSelection::default()));
+    }
+
+    #[test]
+    fn a_route_override_reaches_the_output_stage_too() {
+        let g = engine(vec![out(redact("email", BuiltinRule::Email))]);
+        let mut body = json!({"choices": [{"message": {"content": "a@b.com"}}]});
+        apply_output(
+            &g,
+            &selection(&g, &["email"], &[]),
+            "/v1/chat/completions",
+            &mut body,
+        )
+        .unwrap();
+        assert_eq!(body["choices"][0]["message"]["content"], json!("a@b.com"));
+        assert!(!g.post_call_active_for(&selection(&g, &["email"], &[])));
     }
 }

@@ -37,11 +37,30 @@ pub enum GuardStage {
     PreCall,
     /// non-streaming response content, before delivering to the client.
     ///
-    /// Reserved: the built-in engine compiles and validates `post_call` rules but
-    /// the gateway does not yet run the output stage. Streaming/SSE boundaries and
-    /// response buffering are documented and gated as follow-up work before output
-    /// masking is enabled (see the issue's phasing).
+    /// The gateway buffers a non-streaming response body, applies these rules and
+    /// then delivers the masked copy. Streamed (SSE) responses cannot be masked
+    /// without buffering the whole completion, so they are governed separately by
+    /// [`StreamingPostCall`] rather than silently passing through unscanned.
     PostCall,
+}
+
+/// What to do when a request asks for a streamed response on a route that has
+/// `post_call` rules.
+///
+/// Output masking needs the whole text before it can decide: a match can straddle
+/// any number of token boundaries, so a rule that redacts `a@b.com` cannot act on
+/// a frame that so far holds only `a@b`. Buffering the completion would remove the
+/// only property streaming has. So the operator chooses, and the default fails
+/// closed — a masking rule that silently stops applying because the client passed
+/// `"stream": true` is the failure mode worth ruling out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamingPostCall {
+    /// refuse the request with an OpenAI-compatible error naming the stage
+    #[default]
+    Reject,
+    /// serve the stream with output rules not applied (input rules still run)
+    Passthrough,
 }
 
 /// What a rule does when it matches.
@@ -137,6 +156,9 @@ pub struct GuardrailsConfig {
     /// cap on total bytes scanned per request; defaults to [`DEFAULT_MAX_SCAN_BYTES`]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_scan_bytes: Option<usize>,
+    /// how streamed responses behave when `post_call` rules exist
+    #[serde(default)]
+    pub streaming_post_call: StreamingPostCall,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<GuardrailRule>,
 }
@@ -296,6 +318,7 @@ impl RuleSelection {
 pub struct CompiledGuardrails {
     enabled: bool,
     max_scan_bytes: usize,
+    streaming_post_call: StreamingPostCall,
     rules: Vec<CompiledRule>,
 }
 
@@ -347,6 +370,7 @@ impl CompiledGuardrails {
         Self {
             enabled: config.enabled,
             max_scan_bytes: config.max_scan_bytes.unwrap_or(DEFAULT_MAX_SCAN_BYTES),
+            streaming_post_call: config.streaming_post_call,
             rules,
         }
     }
@@ -354,23 +378,35 @@ impl CompiledGuardrails {
     /// Whether any pre-call rule is active. The gateway uses this to skip all
     /// scanning work (JSON walk included) when guardrails add nothing.
     pub fn pre_call_active(&self) -> bool {
-        self.enabled
-            && self
-                .rules
-                .iter()
-                .any(|rule| rule.stage == GuardStage::PreCall)
+        self.stage_active_for(GuardStage::PreCall, &RuleSelection::default())
     }
 
     /// Whether any pre-call rule survives `selection`. A route that disables
     /// every rule must skip the scan entirely, not walk the JSON to find
     /// nothing.
     pub fn pre_call_active_for(&self, selection: &RuleSelection) -> bool {
+        self.stage_active_for(GuardStage::PreCall, selection)
+    }
+
+    /// Whether any post-call rule survives `selection`, i.e. whether a response
+    /// body has to be buffered and scanned at all.
+    pub fn post_call_active_for(&self, selection: &RuleSelection) -> bool {
+        self.stage_active_for(GuardStage::PostCall, selection)
+    }
+
+    /// The operator's choice for streamed responses on a route with post-call
+    /// rules.
+    pub fn streaming_post_call(&self) -> StreamingPostCall {
+        self.streaming_post_call
+    }
+
+    fn stage_active_for(&self, stage: GuardStage, selection: &RuleSelection) -> bool {
         self.enabled
             && self
                 .rules
                 .iter()
                 .enumerate()
-                .any(|(idx, rule)| rule.stage == GuardStage::PreCall && selection.allows(idx))
+                .any(|(idx, rule)| rule.stage == stage && selection.allows(idx))
     }
 
     /// Names of every configured rule, for validating route overrides.
@@ -419,6 +455,40 @@ impl CompiledGuardrails {
         report: &mut GuardrailReport,
         selection: &RuleSelection,
     ) -> ScanOutcome {
+        self.scan_stage(
+            text,
+            GuardStage::PreCall,
+            is_system,
+            budget,
+            report,
+            selection,
+        )
+    }
+
+    /// Scan one segment of a response body against the active post-call rules.
+    ///
+    /// Model output has no trusted-author distinction to make — everything here
+    /// came back from the provider — so unlike the input stage there is no
+    /// `include_system` exemption.
+    pub fn scan_output(
+        &self,
+        text: &str,
+        budget: &mut usize,
+        report: &mut GuardrailReport,
+        selection: &RuleSelection,
+    ) -> ScanOutcome {
+        self.scan_stage(text, GuardStage::PostCall, false, budget, report, selection)
+    }
+
+    fn scan_stage(
+        &self,
+        text: &str,
+        stage: GuardStage,
+        is_system: bool,
+        budget: &mut usize,
+        report: &mut GuardrailReport,
+        selection: &RuleSelection,
+    ) -> ScanOutcome {
         if !self.enabled || *budget == 0 || text.len() > *budget {
             if text.len() > *budget {
                 *budget = 0;
@@ -429,7 +499,7 @@ impl CompiledGuardrails {
 
         let mut current = std::borrow::Cow::Borrowed(text);
         for (idx, rule) in self.rules.iter().enumerate() {
-            if rule.stage != GuardStage::PreCall {
+            if rule.stage != stage {
                 continue;
             }
             if !selection.allows(idx) {
@@ -493,6 +563,7 @@ mod tests {
         CompiledGuardrails::from_config(&GuardrailsConfig {
             enabled: true,
             max_scan_bytes: None,
+            streaming_post_call: StreamingPostCall::default(),
             rules,
         })
     }
@@ -514,6 +585,75 @@ mod tests {
         );
         assert_eq!(report.redactions, 1);
         assert_eq!(report.hits, vec![("email".to_string(), 1)]);
+    }
+
+    #[test]
+    fn output_rules_run_only_at_the_output_stage() {
+        let mut out = rule("email", BuiltinRule::Email, GuardAction::Redact);
+        out.stage = GuardStage::PostCall;
+        let g = compiled(vec![out]);
+        let mut budget = g.scan_budget();
+        let mut report = GuardrailReport::default();
+
+        // the input stage must not see it...
+        assert_eq!(
+            g.scan_segment("a@b.com", false, &mut budget, &mut report),
+            ScanOutcome::Unchanged
+        );
+        assert!(!g.pre_call_active_for(&RuleSelection::default()));
+
+        // ...and the output stage must
+        assert_eq!(
+            g.scan_output(
+                "a@b.com",
+                &mut budget,
+                &mut report,
+                &RuleSelection::default()
+            ),
+            ScanOutcome::Redacted("[REDACTED:EMAIL]".to_string())
+        );
+        assert!(g.post_call_active_for(&RuleSelection::default()));
+    }
+
+    #[test]
+    fn output_scanning_ignores_the_system_exemption() {
+        // `include_system` describes operator-authored input; model output has no
+        // equivalent, so an output rule applies to everything it is given
+        let mut out = rule("email", BuiltinRule::Email, GuardAction::Redact);
+        out.stage = GuardStage::PostCall;
+        out.include_system = false;
+        let g = compiled(vec![out]);
+        let mut budget = g.scan_budget();
+        let mut report = GuardrailReport::default();
+        assert_eq!(
+            g.scan_output(
+                "a@b.com",
+                &mut budget,
+                &mut report,
+                &RuleSelection::default()
+            ),
+            ScanOutcome::Redacted("[REDACTED:EMAIL]".to_string())
+        );
+    }
+
+    #[test]
+    fn streamed_responses_fail_closed_by_default() {
+        // an operator who never writes the key must not silently lose masking
+        assert_eq!(StreamingPostCall::default(), StreamingPostCall::Reject);
+        assert_eq!(
+            compiled(vec![]).streaming_post_call(),
+            StreamingPostCall::Reject
+        );
+        let opted_out = CompiledGuardrails::from_config(&GuardrailsConfig {
+            enabled: true,
+            max_scan_bytes: None,
+            streaming_post_call: StreamingPostCall::Passthrough,
+            rules: vec![],
+        });
+        assert_eq!(
+            opted_out.streaming_post_call(),
+            StreamingPostCall::Passthrough
+        );
     }
 
     #[test]
@@ -579,6 +719,7 @@ mod tests {
         let g = CompiledGuardrails::from_config(&GuardrailsConfig {
             enabled: true,
             max_scan_bytes: Some(8),
+            streaming_post_call: StreamingPostCall::default(),
             rules: vec![rule("email", BuiltinRule::Email, GuardAction::Block)],
         });
         let mut budget = g.scan_budget();
@@ -598,6 +739,7 @@ mod tests {
         let cfg = GuardrailsConfig {
             enabled: true,
             max_scan_bytes: None,
+            streaming_post_call: StreamingPostCall::default(),
             rules: vec![GuardrailRule {
                 name: "x".to_string(),
                 builtin: Some(BuiltinRule::Email),
@@ -617,6 +759,7 @@ mod tests {
         let cfg = GuardrailsConfig {
             enabled: true,
             max_scan_bytes: None,
+            streaming_post_call: StreamingPostCall::default(),
             rules: vec![
                 rule("dup", BuiltinRule::Email, GuardAction::Block),
                 rule("dup", BuiltinRule::Phone, GuardAction::Block),
@@ -662,6 +805,7 @@ mod tests {
         let cfg = GuardrailsConfig {
             enabled: true,
             max_scan_bytes: None,
+            streaming_post_call: StreamingPostCall::default(),
             rules: vec![GuardrailRule {
                 name: "bad".to_string(),
                 builtin: None,
@@ -684,6 +828,7 @@ mod tests {
         let g = CompiledGuardrails::from_config(&GuardrailsConfig {
             enabled: false,
             max_scan_bytes: None,
+            streaming_post_call: StreamingPostCall::default(),
             rules: vec![rule("email", BuiltinRule::Email, GuardAction::Block)],
         });
         assert!(!g.pre_call_active());
