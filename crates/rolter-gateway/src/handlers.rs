@@ -962,6 +962,37 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         .get("stream")
         .and_then(|s| s.as_bool())
         .unwrap_or(false);
+
+    // post-call rules mask the response body, which means buffering it in full. a
+    // streamed response cannot have both, so the operator's `streaming_post_call`
+    // choice decides: refuse the request (the default) or serve the stream with
+    // output rules not applied. read after the webhook stage so it judges the body
+    // that will actually be sent upstream (#591)
+    let output_guard = crate::guardrails::OutputGuard::resolve(
+        &snap.guardrails,
+        &entry.guardrails,
+        &state.metrics,
+        path,
+    );
+    if output_guard.is_some()
+        && stream
+        && snap.guardrails.streaming_post_call() == rolter_core::StreamingPostCall::Reject
+    {
+        state
+            .metrics
+            .guardrail_stream_rejections_total
+            .fetch_add(1, Relaxed);
+        return crate::error::ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "this model applies output guardrails, which cannot be enforced on a streamed \
+             response; retry without \"stream\": true",
+        )
+        .with_code("guardrail_streaming_unsupported")
+        .with_param("stream")
+        .into_response();
+    }
+    // a stream that got here is one the operator opted out of masking for
+    let output_guard = if stream { None } else { output_guard };
     // the ensure_request_id middleware guarantees this header is present
     let request_id = headers
         .get(crate::trace::REQUEST_ID_HEADER)
@@ -1047,6 +1078,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                     model: model.clone(),
                     started,
                 },
+                output_guard.as_ref(),
             );
         }
         state.metrics.cache_misses_total.fetch_add(1, Relaxed);
@@ -1096,6 +1128,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                             model: model.clone(),
                             started,
                         },
+                        output_guard.as_ref(),
                     );
                 }
                 state
@@ -1463,6 +1496,20 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                             } else {
                                 state.metrics.cache_too_large_total.fetch_add(1, Relaxed);
                             }
+                            // masked on the way out, not on the way in: the
+                            // entry stored above is what the upstream said, so
+                            // later rule changes still reach it (see
+                            // `cached_response`)
+                            let bytes = match output_guard.as_ref() {
+                                Some(guard) => match guard.apply(&bytes) {
+                                    crate::guardrails::OutputDecision::Unchanged => bytes,
+                                    crate::guardrails::OutputDecision::Masked(masked) => masked,
+                                    crate::guardrails::OutputDecision::Blocked(rule) => {
+                                        return guardrail_output_blocked(&rule)
+                                    }
+                                },
+                                None => bytes,
+                            };
                             return buffered_response(
                                 bytes,
                                 status,
@@ -1497,6 +1544,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                 token_recorder,
                 inflight_guard,
                 response_observer,
+                output_guard.as_ref(),
             )
             .await
         }
@@ -1877,6 +1925,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
                 recorder,
                 token_recorder,
                 inflight_guard,
+                None,
                 None,
             )
             .await
@@ -2281,6 +2330,7 @@ async fn stream_response(
     token_recorder: TokenRecorder,
     inflight_guard: Option<crate::load::LoadGuard>,
     completion_observer: Option<crate::logging::CompletionObserver>,
+    output: Option<&crate::guardrails::OutputGuard<'_>>,
 ) -> Response {
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -2295,22 +2345,39 @@ async fn stream_response(
     // whether it was a cache hit (ROL-58). this streamed path is always a live
     // upstream response (a miss); cache hits are served by `cached_response`
     let decision = DecisionHeaders::from_log(&log);
-    if translation.is_translation() && !is_sse {
+    // a non-streamed body is buffered when something has to see all of it: a
+    // response translation, or output guardrails (#591). the guard only exists
+    // when a post-call rule applies to this route, so an unguarded route keeps
+    // streaming straight through
+    if !is_sse && (translation.is_translation() || output.is_some()) {
         return match response.bytes().await {
-            Ok(bytes) => buffered_response(
-                translation.translate_response(bytes, false),
-                status.as_u16(),
-                content_type,
-                false,
-                started,
-                sink,
-                price,
-                log,
-                recorder,
-                token_recorder,
-                inflight_guard,
-                completion_observer,
-            ),
+            Ok(bytes) => {
+                let bytes = translation.translate_response(bytes, false);
+                let bytes = match output.filter(|_| status.is_success()) {
+                    Some(guard) => match guard.apply(&bytes) {
+                        crate::guardrails::OutputDecision::Unchanged => bytes,
+                        crate::guardrails::OutputDecision::Masked(masked) => masked,
+                        crate::guardrails::OutputDecision::Blocked(rule) => {
+                            return guardrail_output_blocked(&rule)
+                        }
+                    },
+                    None => bytes,
+                };
+                buffered_response(
+                    bytes,
+                    status.as_u16(),
+                    content_type,
+                    false,
+                    started,
+                    sink,
+                    price,
+                    log,
+                    recorder,
+                    token_recorder,
+                    inflight_guard,
+                    completion_observer,
+                )
+            }
             Err(err) => error_json(StatusCode::BAD_GATEWAY, &err.to_string()),
         };
     }
@@ -2506,16 +2573,34 @@ async fn semantic_embedding(
         .collect()
 }
 
-/// Build the client reply for a cache hit: the stored body verbatim, decision
-/// headers with `x-rolter-cache: HIT`, and a log row marked `cache_hit` with
-/// zero cost/tokens (a hit spends nothing upstream, so it is not billed and
-/// records no upstream target).
+/// Build the client reply for a cache hit: the stored body, decision headers
+/// with `x-rolter-cache: HIT`, and a log row marked `cache_hit` with zero
+/// cost/tokens (a hit spends nothing upstream, so it is not billed and records
+/// no upstream target).
+///
+/// Output guardrails run here too. The cache stores what the upstream returned,
+/// and masking happens on every delivery instead of once at store time — so a
+/// rule added after an entry was cached still applies to it, and an entry shared
+/// by two routes is masked per the route serving it.
 fn cached_response(
     hit: CachedResponse,
     sink: &crate::logging::LogSink,
     ctx: CacheHitLog,
+    output: Option<&crate::guardrails::OutputGuard<'_>>,
 ) -> Response {
     let status = StatusCode::from_u16(hit.status).unwrap_or(StatusCode::OK);
+    let mut body = Bytes::from(hit.body);
+    if status.is_success() {
+        if let Some(guard) = output {
+            match guard.apply(&body) {
+                crate::guardrails::OutputDecision::Unchanged => {}
+                crate::guardrails::OutputDecision::Masked(masked) => body = masked,
+                crate::guardrails::OutputDecision::Blocked(rule) => {
+                    return guardrail_output_blocked(&rule)
+                }
+            }
+        }
+    }
     let latency_ms = ctx.started.elapsed().as_millis() as u32;
     let log = RequestLog {
         request_id: ctx.request_id,
@@ -2537,12 +2622,26 @@ fn cached_response(
         .status(status)
         .header(header::CONTENT_TYPE, hit.content_type);
     decision.apply(builder.headers_mut());
-    builder.body(Body::from(hit.body)).unwrap_or_else(|_| {
+    builder.body(Body::from(body)).unwrap_or_else(|_| {
         error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to build response",
         )
     })
+}
+
+/// The reply when a post-call rule refuses to deliver a completion.
+///
+/// 502, not 400: the request was valid and the gateway did reach an upstream —
+/// what came back is what cannot be handed on. The rule name is safe to return;
+/// it never carries the matched text.
+fn guardrail_output_blocked(rule: &str) -> Response {
+    crate::error::ApiError::new(
+        StatusCode::BAD_GATEWAY,
+        format!("response withheld by guardrail '{rule}'"),
+    )
+    .with_code("guardrail_blocked")
+    .into_response()
 }
 
 /// `x-rolter-*` response headers that expose the routing decision for a request:

@@ -195,12 +195,13 @@ Built-in, zero-dependency regex guardrails and PII redaction, evaluated inside t
 
 - `enabled` (bool, default `false`) — master switch
 - `max_scan_bytes` (usize, default `262144`) — cap on total request text scanned per request; oversized content is forwarded unscanned so work stays bounded
+- `streaming_post_call` (string, default `reject`) — what a streamed request does on a route that has `post_call` rules; see [Output masking and streaming](#output-masking-and-streaming)
 
 Each `[[guardrails.rules]]` entry:
 
 - `name` (string, required) — stable, unique; surfaced in metrics, never carries match text
 - `builtin` (string) — one of `email`, `phone`, `api_token`, `payment_card`; **or** `pattern` (string) for a custom regex. Set exactly one.
-- `stage` (string, default `pre_call`) — `pre_call` scans request content before proxying. `post_call` is validated but not yet enforced (output/SSE masking is deferred, pending the response-buffering contract).
+- `stage` (string, default `pre_call`) — `pre_call` scans request content before proxying; `post_call` masks the response body before it reaches the client
 - `action` (string, default `annotate`) — `annotate` (count only, forward unchanged), `block` (reject with an OpenAI-compatible `guardrail_blocked` error), or `redact` (replace each match with `replacement`)
 - `replacement` (string) — redaction token; defaults to the built-in entity token (e.g. `[REDACTED:EMAIL]`) or `[REDACTED]`
 - `default_on` (bool, default `false`) — apply without a client opt-in
@@ -225,7 +226,24 @@ name = "card"
 builtin = "payment_card"
 action = "block"
 default_on = true
+
+[[guardrails.rules]]
+name = "leaked-key"
+builtin = "api_token"
+stage = "post_call"
+action = "redact"
 ```
+
+#### Output masking and streaming
+
+A `post_call` rule runs on the response body after the upstream replies and before the client sees it. `redact` rewrites the matched text in place; `block` withholds the completion and returns a `502` with code `guardrail_blocked` and the rule name. Masked surfaces: `choices[].message.content` and `choices[].text` (OpenAI chat and legacy completions), the top-level `content` parts array (Anthropic `/v1/messages`), and `output[].content[].text` plus `output_text` (`/v1/responses`). Tool-call arguments are deliberately left alone — they are structured data the client parses, and rewriting a string inside them hands back arguments that no longer mean what the model intended; the `[guardrail_webhook]` path sees the whole envelope if you need that.
+
+Output masking requires the whole completion. A match can straddle any number of token boundaries, so a rule redacting `a@b.com` cannot act on a frame holding only `a@b`, and buffering the full stream would remove the only property streaming has. `streaming_post_call` therefore decides what a streamed request does on a route with `post_call` rules:
+
+- `reject` (default) — refuse with a `400` carrying code `guardrail_streaming_unsupported`, counted in `rolter_guardrail_stream_rejections_total`. The default fails closed: a masking rule that silently stops applying because the client passed `"stream": true` is the failure mode worth ruling out.
+- `passthrough` — serve the stream with output rules not applied. `pre_call` rules still run on the request.
+
+Non-streamed responses are buffered by the gateway when (and only when) a `post_call` rule applies to the route, so a route without them keeps its existing forwarding behaviour. Cached responses are stored as the upstream returned them and masked on every delivery, not once at store time — so a rule added after an entry was cached still applies to it, and an entry shared by two routes is masked per the route serving it. Output metrics: `rolter_guardrail_output_redactions_total` and `rolter_guardrail_output_blocks_total`.
 
 ### `[guardrail_webhook]`
 

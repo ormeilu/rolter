@@ -99,6 +99,12 @@ pub struct Metrics {
     pub guardrail_blocks_total: AtomicU64,
     /// individual guardrail redactions applied to request content
     pub guardrail_redactions_total: AtomicU64,
+    /// responses withheld because a post-call guardrail rule matched
+    pub guardrail_output_blocks_total: AtomicU64,
+    /// individual guardrail redactions applied to response content
+    pub guardrail_output_redactions_total: AtomicU64,
+    /// streamed requests refused because the route has post-call rules
+    pub guardrail_stream_rejections_total: AtomicU64,
     /// decorator messages injected by prompt templates at admission
     pub prompt_template_decorations_total: AtomicU64,
     /// requests rejected for invalid prompt-template variables
@@ -326,6 +332,27 @@ impl Metrics {
             "rolter_guardrail_redactions_total",
             "guardrail redactions applied to request content",
             self.guardrail_redactions_total.load(Relaxed),
+        );
+        metric(
+            &mut out,
+            "counter",
+            "rolter_guardrail_output_blocks_total",
+            "responses withheld by a post-call guardrail block rule",
+            self.guardrail_output_blocks_total.load(Relaxed),
+        );
+        metric(
+            &mut out,
+            "counter",
+            "rolter_guardrail_output_redactions_total",
+            "guardrail redactions applied to response content",
+            self.guardrail_output_redactions_total.load(Relaxed),
+        );
+        metric(
+            &mut out,
+            "counter",
+            "rolter_guardrail_stream_rejections_total",
+            "streamed requests refused because the route has post-call rules",
+            self.guardrail_stream_rejections_total.load(Relaxed),
         );
         metric(
             &mut out,

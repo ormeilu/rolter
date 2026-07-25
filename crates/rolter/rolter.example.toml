@@ -462,10 +462,19 @@ disabled = false # revoke without deleting
 # [guardrails]
 # enabled = true
 # max_scan_bytes = 262144         # cap on request text scanned per request
+# streaming_post_call = "reject"  # reject | passthrough. output masking needs the
+#                                 # whole completion, so it cannot run on an SSE
+#                                 # stream: a match can straddle any number of
+#                                 # frames. `reject` (the default) refuses a
+#                                 # streamed request on a route that has post_call
+#                                 # rules; `passthrough` serves the stream with
+#                                 # output rules not applied. only matters when a
+#                                 # post_call rule exists
 # [[guardrails.rules]]
 # name = "email"
 # builtin = "email"               # or: pattern = "<custom regex>"
-# stage = "pre_call"              # post_call is validated but not yet enforced
+# stage = "pre_call"              # pre_call scans the request, post_call masks
+#                                 # the (non-streamed) response before delivery
 # action = "redact"               # annotate | block | redact
 # replacement = "[REDACTED:EMAIL]"  # defaults to the built-in entity token
 # default_on = true               # reserved: client opt-in is not implemented,
@@ -476,6 +485,11 @@ disabled = false # revoke without deleting
 # builtin = "payment_card"        # email | phone | api_token | payment_card
 # action = "block"                # reject with an OpenAI-compatible error
 # default_on = true
+# [[guardrails.rules]]
+# name = "leaked-key"             # output stage: mask anything key-shaped the
+# builtin = "api_token"           # model echoes back, before the client sees it
+# stage = "post_call"
+# action = "redact"
 #
 # per-route overrides layer on top of the global rule set above. rules are named,
 # so adding a rule globally still reaches every route that has not opted out of
