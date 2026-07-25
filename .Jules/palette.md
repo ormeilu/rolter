@@ -4,3 +4,5 @@
 ## 2026-07-25 - Missing focus rings on generic inputs
 **Learning:** Found that custom/generic input implementations like `SearchInput` in the app can be missing the standard Shadcn/Tailwind focus rings (`focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none`) that are present on standard `Input` components, leading to broken keyboard navigation for primary page actions.
 **Action:** Always verify keyboard accessibility (`focus-visible`) and semantic HTML tags (`type="search"`) on custom input wrappers and icon-only buttons across the application.
+
+I am learning that Linear tickets are no longer used for PR titles.
