@@ -28,6 +28,9 @@ pub struct RouteEntry {
     /// from the route's strategy and the variant's target weights so selection
     /// inside a variant honours the same strategy as the classic pool
     pub variant_balancers: Vec<Box<dyn LoadBalancer>>,
+    /// which guardrail rules apply on this route, resolved once here so the
+    /// request path never re-derives it from names (#590)
+    pub guardrails: rolter_core::guardrails::RuleSelection,
 }
 
 /// A virtual key as the request path sees it: identity/scope for attribution
@@ -219,6 +222,11 @@ impl Snapshot {
                 }
             })
             .collect();
+        // compiled before the route loop so each route can resolve its
+        // guardrail override into an index mask once (#590)
+        let compiled_guardrails = Arc::new(rolter_core::CompiledGuardrails::from_config(
+            &config.guardrails,
+        ));
         let mut routes = HashMap::new();
         for route in &config.routes {
             let weights: Vec<u32> = route.targets.iter().map(|t| t.weight).collect();
@@ -282,6 +290,7 @@ impl Snapshot {
             routes.insert(
                 route.model.clone(),
                 RouteEntry {
+                    guardrails: compiled_guardrails.resolve_selection(&route.advanced.guardrails),
                     route: route.clone(),
                     balancer,
                     variant_balancers,
@@ -343,9 +352,7 @@ impl Snapshot {
             cache: config.cache.clone(),
             logging: config.logging.clone(),
             realtime: config.realtime.clone(),
-            guardrails: Arc::new(rolter_core::CompiledGuardrails::from_config(
-                &config.guardrails,
-            )),
+            guardrails: compiled_guardrails,
             guardrail_webhook: config.guardrail_webhook.clone(),
             prompt_templates: Arc::new(rolter_core::CompiledTemplates::from_config(
                 &config.prompt_templates,
@@ -431,6 +438,9 @@ impl Snapshot {
             route,
             balancer,
             variant_balancers: Vec::new(),
+            // a synthetic route has no config to override with, so it runs the
+            // full global rule set
+            guardrails: Default::default(),
         }
     }
 }

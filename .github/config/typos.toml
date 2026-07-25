@@ -7,6 +7,10 @@ extend-ignore-re = [
   "HashiCorp",
   # "mis-enforce" in comments about skipping unknown scopes
   "mis-enforce",
+  # "emial": a deliberately-typo'd guardrail rule name in the route-override
+  # tests, which assert that a name no rule defines is reported rather than
+  # silently ignored. correcting it would delete the test's subject
+  "emial",
   # "sk-abd": a deliberately-wrong virtual key in the auth verify tests
   "sk-abd",
   # "abc"/"abd": trie test fixtures exercising shared-prefix node counting

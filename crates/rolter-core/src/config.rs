@@ -834,6 +834,10 @@ pub struct AdvancedModelConfig {
     pub locked_headers: Vec<String>,
     #[serde(default)]
     pub visibility: ModelVisibility,
+    /// per-route guardrail selection, layered over the global `[guardrails]`
+    /// rule set (#590)
+    #[serde(default)]
+    pub guardrails: crate::guardrails::RouteGuardrails,
 }
 
 /// Prices whose unit is not a token. Token rates remain in [`ModelPriceConfig`]
@@ -2441,6 +2445,24 @@ impl GatewayConfig {
         // unbounded pattern fails here at startup/snapshot validation, never on
         // the request path
         problems.append(&mut self.guardrails.validate());
+
+        // a route override naming a rule that does not exist is a typo, and a
+        // typo in `disable` reads as "this rule is off here" while the rule
+        // keeps running — exactly the wrong way for a security control to fail
+        let rule_names: Vec<String> = self
+            .guardrails
+            .rules
+            .iter()
+            .map(|rule| rule.name.clone())
+            .collect();
+        for route in &self.routes {
+            for unknown in route.advanced.guardrails.unknown_rules(&rule_names) {
+                problems.push(format!(
+                    "route '{}' overrides guardrail rule '{}', which is not defined in [guardrails]",
+                    route.model, unknown
+                ));
+            }
+        }
 
         // validate the custom guardrail webhook (url/timeout/auth) at load time
         problems.append(&mut self.guardrail_webhook.validate());
