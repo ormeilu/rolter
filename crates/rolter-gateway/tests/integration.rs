@@ -2403,7 +2403,7 @@ async fn a_blocking_output_rule_withholds_the_completion() {
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), 502);
+    assert_eq!(resp.status(), 403);
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["error"]["code"], "guardrail_blocked");
     // the rule name is safe to surface; the matched text never is

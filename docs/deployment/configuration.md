@@ -236,7 +236,11 @@ action = "redact"
 
 #### Output masking and streaming
 
-A `post_call` rule runs on the response body after the upstream replies and before the client sees it. `redact` rewrites the matched text in place; `block` withholds the completion and returns a `502` with code `guardrail_blocked` and the rule name. Masked surfaces: `choices[].message.content` and `choices[].text` (OpenAI chat and legacy completions), the top-level `content` parts array (Anthropic `/v1/messages`), and `output[].content[].text` plus `output_text` (`/v1/responses`). Tool-call arguments are deliberately left alone — they are structured data the client parses, and rewriting a string inside them hands back arguments that no longer mean what the model intended; the `[guardrail_webhook]` path sees the whole envelope if you need that.
+A `post_call` rule runs on the response body after the upstream replies and before the client sees it. `redact` rewrites the matched text in place; `block` withholds the completion and returns a `403` with code `guardrail_blocked` and the rule name — nothing was malformed and no upstream failed, so it is neither a `400` nor a `5xx`, and it stays out of the range clients retry on.
+
+Masked surfaces: `choices[].message.content` and `choices[].text` (OpenAI chat and legacy completions), the top-level `content` parts array (Anthropic `/v1/messages`), and `output[].content[].text` plus `output_text` (`/v1/responses`).
+
+**Tool-call arguments are scanned too.** An address the model passes to a `send_email` tool has left the completion just as surely as one it printed. Arguments that arrive as a JSON document inside a JSON string (`choices[].message.tool_calls[].function.arguments`, the legacy `function_call.arguments`, and `/v1/responses` `output[].arguments`) are parsed, masked and re-encoded, so a replacement token containing a quote or a backslash cannot turn valid arguments into something the client fails to parse; non-string values are untouched. Anthropic `tool_use` parts are masked through their `input` object. Arguments that are not valid JSON are masked as plain text.
 
 Output masking requires the whole completion. A match can straddle any number of token boundaries, so a rule redacting `a@b.com` cannot act on a frame holding only `a@b`, and buffering the full stream would remove the only property streaming has. `streaming_post_call` therefore decides what a streamed request does on a route with `post_call` rules:
 

@@ -118,7 +118,8 @@ impl<'a> Scan<'a> {
         }
     }
 
-    /// Scan `choices[].message.content` plus the legacy `choices[].text`.
+    /// Scan `choices[].message.content`, the legacy `choices[].text`, and the
+    /// arguments of any tool call the model emitted.
     fn choices(&mut self, body: &mut Value) -> Result<(), String> {
         let Some(choices) = body.get_mut("choices").and_then(Value::as_array_mut) else {
             return Ok(());
@@ -129,6 +130,67 @@ impl<'a> Scan<'a> {
             }
             if let Some(text) = choice.get_mut("text").filter(|t| t.is_string()) {
                 self.string(text, false)?;
+            }
+            if let Some(calls) = choice
+                .pointer_mut("/message/tool_calls")
+                .and_then(Value::as_array_mut)
+            {
+                for call in calls {
+                    if let Some(arguments) = call.pointer_mut("/function/arguments") {
+                        self.encoded_arguments(arguments)?;
+                    }
+                }
+            }
+            // the pre-tool_calls spelling, still emitted by some providers
+            if let Some(arguments) = choice.pointer_mut("/message/function_call/arguments") {
+                self.encoded_arguments(arguments)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Scan every string nested anywhere in a value, keys excluded.
+    ///
+    /// Used for tool-call payloads, whose shape is the tool's own schema rather
+    /// than anything the API defines, so there is no field list to walk.
+    fn nested(&mut self, value: &mut Value) -> Result<(), String> {
+        match value {
+            Value::String(_) => self.string(value, false),
+            Value::Array(items) => {
+                for item in items {
+                    self.nested(item)?;
+                }
+                Ok(())
+            }
+            Value::Object(map) => {
+                for (_, item) in map.iter_mut() {
+                    self.nested(item)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Scan tool arguments that arrive as a JSON document inside a JSON string.
+    ///
+    /// Parsed and re-encoded rather than scanned as raw text, so a replacement
+    /// token containing a quote or a backslash cannot turn valid arguments into
+    /// a string the client fails to parse. Arguments that are not valid JSON —
+    /// a model mid-stream can emit those — are scanned as plain text instead.
+    fn encoded_arguments(&mut self, value: &mut Value) -> Result<(), String> {
+        let Some(raw) = value.as_str() else {
+            // some providers send arguments as an object rather than a string
+            return self.nested(value);
+        };
+        let Ok(mut parsed) = serde_json::from_str::<Value>(raw) else {
+            return self.string(value, false);
+        };
+        let before = self.report.redactions;
+        self.nested(&mut parsed)?;
+        if self.report.redactions > before {
+            if let Ok(encoded) = serde_json::to_string(&parsed) {
+                *value = Value::String(encoded);
             }
         }
         Ok(())
@@ -174,11 +236,10 @@ pub fn apply_input(
 /// completion must not be delivered, and a mutated `body` with
 /// `report.redactions > 0` must be re-serialized before it goes to the client.
 ///
-/// Only assistant-authored text is walked. Tool-call arguments are left alone:
-/// they are a structured payload the client parses, and rewriting a string
-/// inside them would hand back arguments that no longer mean what the model
-/// intended. An operator who needs those inspected wants the custom-webhook
-/// path, which sees the whole envelope.
+/// Assistant text and tool-call payloads are both walked. Tool arguments are a
+/// place model output routinely lands — an address the model passes to a
+/// `send_email` tool has left the completion just as surely as one it printed —
+/// so they are parsed, masked and re-encoded rather than skipped.
 pub fn apply_output(
     guardrails: &CompiledGuardrails,
     selection: &RuleSelection,
@@ -190,15 +251,31 @@ pub fn apply_output(
     match path {
         // OpenAI chat + legacy completions: one message/text per choice
         "/v1/chat/completions" | "/v1/completions" => scan.choices(body)?,
-        // Anthropic Messages replies with a top-level `content` parts array
-        "/v1/messages" => scan.field(body, "content", false)?,
-        // Responses: typed `output[].content[].text`, plus the flattened
-        // `output_text` convenience field when the provider sends it
+        // Anthropic Messages replies with a top-level `content` parts array,
+        // where a `tool_use` part carries its arguments as an `input` object
+        "/v1/messages" => {
+            scan.field(body, "content", false)?;
+            if let Some(parts) = body.get_mut("content").and_then(Value::as_array_mut) {
+                for part in parts {
+                    if part.get("type").and_then(Value::as_str) == Some("tool_use") {
+                        if let Some(input) = part.get_mut("input") {
+                            scan.nested(input)?;
+                        }
+                    }
+                }
+            }
+        }
+        // Responses: typed `output[].content[].text`, function-call arguments on
+        // the output item itself, plus the flattened `output_text` convenience
+        // field when the provider sends it
         "/v1/responses" => {
             if let Some(output) = body.get_mut("output").and_then(Value::as_array_mut) {
                 for item in output {
                     if let Some(content) = item.get_mut("content") {
                         scan.content(content, false)?;
+                    }
+                    if let Some(arguments) = item.get_mut("arguments") {
+                        scan.encoded_arguments(arguments)?;
                     }
                 }
             }
@@ -595,8 +672,97 @@ mod tests {
         });
         apply_output(&g, &RuleSelection::default(), "/v1/messages", &mut body).unwrap();
         assert_eq!(body["content"][0]["text"], json!("mail [REDACTED:EMAIL]"));
-        // tool-call payloads are structured data the client parses, left intact
-        assert_eq!(body["content"][1]["input"]["q"], json!("who@corp.com"));
+        // a `tool_use` payload is model output too: an address handed to a tool
+        // has left the completion just as surely as one the model printed
+        assert_eq!(body["content"][1]["input"]["q"], json!("[REDACTED:EMAIL]"));
+    }
+
+    #[test]
+    fn openai_tool_call_arguments_are_masked_and_stay_parseable() {
+        let g = engine(vec![out(redact("email", BuiltinRule::Email))]);
+        let mut body = json!({
+            "choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "send_email",
+                    "arguments": "{\"to\":\"ops@corp.com\",\"retries\":2}"
+                }
+            }]}}]
+        });
+        apply_output(
+            &g,
+            &RuleSelection::default(),
+            "/v1/chat/completions",
+            &mut body,
+        )
+        .unwrap();
+
+        // arguments stay a JSON string the client can parse, with non-string
+        // values untouched
+        let arguments = body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .expect("arguments must remain a string");
+        let parsed: Value = serde_json::from_str(arguments).expect("must still parse as JSON");
+        assert_eq!(parsed["to"], json!("[REDACTED:EMAIL]"));
+        assert_eq!(parsed["retries"], json!(2));
+    }
+
+    #[test]
+    fn a_blocking_rule_fires_on_tool_arguments() {
+        let g = engine(vec![out(block("card", BuiltinRule::PaymentCard))]);
+        let mut body = json!({
+            "choices": [{"message": {"tool_calls": [{
+                "function": {"name": "pay", "arguments": "{\"card\":\"4111 1111 1111 1111\"}"}
+            }]}}]
+        });
+        assert_eq!(
+            apply_output(
+                &g,
+                &RuleSelection::default(),
+                "/v1/chat/completions",
+                &mut body
+            ),
+            Err("card".to_string())
+        );
+    }
+
+    #[test]
+    fn unparseable_tool_arguments_are_scanned_as_text() {
+        // a truncated or malformed argument blob still gets masked; it just does
+        // not get re-encoded as JSON, because it never was JSON
+        let g = engine(vec![out(redact("email", BuiltinRule::Email))]);
+        let mut body = json!({
+            "choices": [{"message": {"tool_calls": [{
+                "function": {"name": "send", "arguments": "{\"to\": \"ops@corp.com\""}
+            }]}}]
+        });
+        apply_output(
+            &g,
+            &RuleSelection::default(),
+            "/v1/chat/completions",
+            &mut body,
+        )
+        .unwrap();
+        let arguments = body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap();
+        assert!(!arguments.contains("ops@corp.com"), "{arguments}");
+    }
+
+    #[test]
+    fn responses_function_call_arguments_are_masked() {
+        let g = engine(vec![out(redact("email", BuiltinRule::Email))]);
+        let mut body = json!({
+            "output": [{
+                "type": "function_call",
+                "name": "send_email",
+                "arguments": "{\"to\":\"ops@corp.com\"}"
+            }]
+        });
+        apply_output(&g, &RuleSelection::default(), "/v1/responses", &mut body).unwrap();
+        let arguments = body["output"][0]["arguments"].as_str().unwrap();
+        assert!(!arguments.contains("ops@corp.com"), "{arguments}");
     }
 
     #[test]

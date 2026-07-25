@@ -2632,12 +2632,13 @@ fn cached_response(
 
 /// The reply when a post-call rule refuses to deliver a completion.
 ///
-/// 502, not 400: the request was valid and the gateway did reach an upstream —
-/// what came back is what cannot be handed on. The rule name is safe to return;
-/// it never carries the matched text.
+/// 403, not 400 or 502: nothing was malformed and no upstream failed — the
+/// gateway is refusing to hand over content it holds. That also keeps it out of
+/// the range clients retry on, which matters because a retry would be blocked
+/// again. The rule name is safe to return; it never carries the matched text.
 fn guardrail_output_blocked(rule: &str) -> Response {
     crate::error::ApiError::new(
-        StatusCode::BAD_GATEWAY,
+        StatusCode::FORBIDDEN,
         format!("response withheld by guardrail '{rule}'"),
     )
     .with_code("guardrail_blocked")
