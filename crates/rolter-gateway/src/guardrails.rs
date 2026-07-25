@@ -728,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn unparseable_tool_arguments_are_scanned_as_text() {
+    fn unparsable_tool_arguments_are_scanned_as_text() {
         // a truncated or malformed argument blob still gets masked; it just does
         // not get re-encoded as JSON, because it never was JSON
         let g = engine(vec![out(redact("email", BuiltinRule::Email))]);
