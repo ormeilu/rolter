@@ -6,7 +6,10 @@ const config: StorybookConfig = {
   stories: ["../src/**/*.stories.@(ts|tsx)"],
   // Storybook 10 folds the former "essentials" (controls, actions, viewport,
   // backgrounds, toolbars) into core; docs is the one still-separate addon.
-  addons: ["@storybook/addon-docs"],
+  addons: ["@storybook/addon-docs", "@storybook/addon-mcp"],
+  features: {
+    experimentalComponentsManifest: true,
+  },
   framework: {
     name: "@storybook/react-vite",
     options: {},

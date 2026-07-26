@@ -43,6 +43,14 @@ existing rolter design system (DesignSync / the Claude Design project), which
 supplies the tokens and primitives the dashboard already ships: run the skill
 first, then build against the tokens. Never hard-code a hex or font the tokens
 already carry.
+When working on dashboard UI, run `bun run storybook` in `ui/` and consult the
+project MCP server (`rolter-storybook` in `.mcp.json`) before writing
+components:
+- run `list-all-documentation` first to discover available primitives
+- run `get-documentation` / `get-documentation-for-story` before using
+  component props
+- run `get-storybook-story-instructions` before creating or editing stories
+- run `run-story-tests` after generating UI or stories
 
 This applies to every state a screen has, empty/loading/error included. Assets
 stay vendored locally — the dashboard must work air-gapped, so no runtime CDN
