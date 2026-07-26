@@ -61,6 +61,20 @@ dashboard, so it has **no runtime CDN dependency** (air-gapped-safe). The Rolter
 Design System is dark-only, so `.storybook/preview.ts` renders every story on the
 design's dark surface — there is no light variant to toggle.
 
+### Storybook MCP
+
+`@storybook/addon-mcp` is installed and exposed from the Storybook dev server at
+`http://127.0.0.1:6006/mcp`.
+
+For project-scoped agent setup, this repo ships `.mcp.json` at the repo root with
+an HTTP server entry named `rolter-storybook` pointing at that endpoint.
+
+The MCP endpoint requires a running Storybook server:
+
+```bash
+bun run storybook
+```
+
 ### Add a story
 
 Add a colocated `*.stories.tsx` beside the component, export a typed `Meta`, and
