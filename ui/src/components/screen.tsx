@@ -24,7 +24,9 @@ export function SearchInput({
     <div className={cn("relative max-w-[320px] flex-1", className)}>
       <Search className="pointer-events-none absolute left-[11px] top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[color:var(--text-subtle)]" />
       <input
-        className="h-9 w-full rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] pl-[34px] pr-3 text-sm outline-none placeholder:text-[color:var(--text-subtle)]"
+        type="search"
+        aria-label={props.placeholder || "Search"}
+        className="h-9 w-full rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] pl-[34px] pr-3 text-sm outline-none placeholder:text-[color:var(--text-subtle)] transition-colors hover:border-input focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         {...props}
       />
     </div>
