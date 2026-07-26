@@ -2488,11 +2488,11 @@ fn payload_capture_enabled(
 
 fn semantic_cache_text(body: &[u8]) -> Option<String> {
     let value: Value = serde_json::from_slice(body).ok()?;
-    let mut parts = Vec::new();
+    let mut parts: Vec<&str> = Vec::new();
     if let Some(messages) = value.get("messages").and_then(Value::as_array) {
         for message in messages {
             if let Some(role) = message.get("role").and_then(Value::as_str) {
-                parts.push(role.to_string());
+                parts.push(role);
             }
             collect_semantic_text(message.get("content"), &mut parts);
         }
@@ -2519,13 +2519,13 @@ fn parse_vllm_token_ids(headers: &HeaderMap) -> Option<Vec<u32>> {
         .filter(|ids| !ids.is_empty())
 }
 
-fn collect_semantic_text(value: Option<&Value>, out: &mut Vec<String>) {
+fn collect_semantic_text<'a>(value: Option<&'a Value>, out: &mut Vec<&'a str>) {
     match value {
-        Some(Value::String(text)) => out.push(text.clone()),
+        Some(Value::String(text)) => out.push(text.as_str()),
         Some(Value::Array(items)) => {
             for item in items {
                 if let Some(text) = item.get("text").and_then(Value::as_str) {
-                    out.push(text.to_string());
+                    out.push(text);
                 }
             }
         }
