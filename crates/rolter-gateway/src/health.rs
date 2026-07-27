@@ -190,7 +190,9 @@ fn build_probe_plan(
             // native gemini authenticates its generativelanguage endpoints with
             // an api-key header, not a bearer token (unlike the openai-compat
             // `gemini` shim)
-            ProviderKind::GeminiNative => headers.push(("x-goog-api-key".to_string(), key)),
+            ProviderKind::GeminiNative | ProviderKind::GeminiInteractions => {
+                headers.push(("x-goog-api-key".to_string(), key))
+            }
             kind if kind.requires_env_api_key()
                 || kind == ProviderKind::Bedrock
                 || kind == ProviderKind::Vertex =>
@@ -821,6 +823,27 @@ mod tests {
                         "authorization".to_string(),
                         "Bearer test-cloud-key".to_string()
                     )]
+                );
+            }
+            _ => panic!("expected a free probe"),
+        }
+    }
+
+    #[test]
+    fn gemini_interactions_probe_uses_goog_api_key_header() {
+        let mut p = provider(ProviderKind::GeminiInteractions);
+        p.api_base = "https://generativelanguage.googleapis.com/v1beta".to_string();
+        p.api_key = Some("gem-secret".to_string());
+        let (plan, _) = build_probe_plan(&p, "/");
+        match plan {
+            ProbePlan::Free { url, headers } => {
+                assert_eq!(
+                    url,
+                    "https://generativelanguage.googleapis.com/v1beta/models"
+                );
+                assert_eq!(
+                    headers,
+                    vec![("x-goog-api-key".to_string(), "gem-secret".to_string())]
                 );
             }
             _ => panic!("expected a free probe"),

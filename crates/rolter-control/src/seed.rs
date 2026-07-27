@@ -166,6 +166,7 @@ async fn import_bootstrap_toml(
             ProviderKind::Vertex => "vertex",
             ProviderKind::Gemini => "gemini",
             ProviderKind::GeminiNative => "gemini_native",
+            ProviderKind::GeminiInteractions => "gemini_interactions",
             ProviderKind::Mistral => "mistral",
             ProviderKind::Groq => "groq",
             ProviderKind::Xai => "xai",

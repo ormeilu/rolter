@@ -181,6 +181,7 @@ impl ProviderKind {
                 | ProviderKind::Openrouter
                 | ProviderKind::Gemini
                 | ProviderKind::GeminiNative
+                | ProviderKind::GeminiInteractions
                 | ProviderKind::Mistral
                 | ProviderKind::Groq
                 | ProviderKind::Xai
@@ -473,6 +474,9 @@ pub enum ProviderKind {
     /// google gemini's native generateContent api (`/v1beta/models/{model}:generateContent`),
     /// reached by translating openai/anthropic requests to the gemini wire format
     GeminiNative,
+    /// google gemini's interactions api (`/v1beta/interactions`), represented as
+    /// a dedicated provider kind for stateful conversation threading
+    GeminiInteractions,
     /// mistral's hosted openai-compatible api
     Mistral,
     /// groq's hosted openai-compatible api (`/openai/v1`)
@@ -2280,6 +2284,7 @@ impl GatewayConfig {
                 let kind = match provider.kind {
                     ProviderKind::Gemini => "gemini",
                     ProviderKind::GeminiNative => "gemini_native",
+                    ProviderKind::GeminiInteractions => "gemini_interactions",
                     ProviderKind::Mistral => "mistral",
                     ProviderKind::Groq => "groq",
                     ProviderKind::Xai => "xai",

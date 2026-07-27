@@ -136,6 +136,7 @@ impl ProviderRow {
             "vertex" => ProviderKind::Vertex,
             "gemini" => ProviderKind::Gemini,
             "gemini_native" => ProviderKind::GeminiNative,
+            "gemini_interactions" => ProviderKind::GeminiInteractions,
             "mistral" => ProviderKind::Mistral,
             "groq" => ProviderKind::Groq,
             "xai" => ProviderKind::Xai,
