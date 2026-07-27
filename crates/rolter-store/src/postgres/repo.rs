@@ -13,8 +13,9 @@ use rolter_core::{Error, Result};
 
 use super::models::{
     AuditLogEntry, Budget, BusinessUnit, Customer, Membership, ModelPrice, Org, OwnedVirtualKey,
-    Project, Provider, ProviderGroup, ProviderGroupMember, RateLimit, Route, RouteTarget,
-    SecuritySettings, Session, Team, User, VirtualKey,
+    Project, PromptTemplate, PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup,
+    ProviderGroupMember, RateLimit, Route, RouteTarget, SecuritySettings, Session, Team, User,
+    VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -329,6 +330,219 @@ impl CustomerRepo<'_> {
             .map_err(store_err)?;
         if res.rows_affected() == 0 {
             return Err(Error::NotFound(format!("customer {id}")));
+        }
+        Ok(())
+    }
+}
+
+/// Prompt templates with immutable versions and explicit scope assignments.
+pub struct PromptTemplateRepo<'a>(pub &'a PgPool);
+
+impl PromptTemplateRepo<'_> {
+    pub async fn list_templates(&self, org_id: Uuid) -> Result<Vec<PromptTemplate>> {
+        sqlx::query_as(
+            "select id, org_id, name, slug, description, published_version, created_at
+             from prompt_templates where org_id = $1 order by name",
+        )
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get_template(&self, id: Uuid) -> Result<PromptTemplate> {
+        sqlx::query_as(
+            "select id, org_id, name, slug, description, published_version, created_at
+             from prompt_templates where id = $1",
+        )
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("prompt template {id}")))
+    }
+
+    pub async fn create_template(
+        &self,
+        org_id: Uuid,
+        name: &str,
+        slug: &str,
+        description: Option<&str>,
+    ) -> Result<PromptTemplate> {
+        sqlx::query_as(
+            "insert into prompt_templates (org_id, name, slug, description)
+             values ($1, $2, $3, $4)
+             returning id, org_id, name, slug, description, published_version, created_at",
+        )
+        .bind(org_id)
+        .bind(name)
+        .bind(slug)
+        .bind(description.unwrap_or(""))
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn update_template(
+        &self,
+        id: Uuid,
+        name: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<PromptTemplate> {
+        sqlx::query_as(
+            "update prompt_templates set
+                 name = coalesce($2, name),
+                 description = case when $3::bool then $4 else description end
+             where id = $1
+             returning id, org_id, name, slug, description, published_version, created_at",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(description.is_some())
+        .bind(description.unwrap_or(""))
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("prompt template {id}")))
+    }
+
+    pub async fn create_version(
+        &self,
+        template_id: Uuid,
+        variables: &serde_json::Value,
+        decorators: &serde_json::Value,
+    ) -> Result<PromptTemplateVersion> {
+        let mut tx = self.0.begin().await.map_err(store_err)?;
+        sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(template_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err)?;
+        let version = sqlx::query_as(
+            "insert into prompt_template_versions (template_id, version, variables, decorators)
+             values (
+                 $1,
+                 coalesce((select max(version) + 1 from prompt_template_versions where template_id = $1), 1),
+                 $2,
+                 $3
+             )
+             returning template_id, version, variables, decorators, created_at",
+        )
+        .bind(template_id)
+        .bind(variables)
+        .bind(decorators)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(store_err)?;
+        tx.commit().await.map_err(store_err)?;
+        Ok(version)
+    }
+
+    pub async fn list_versions(&self, template_id: Uuid) -> Result<Vec<PromptTemplateVersion>> {
+        sqlx::query_as(
+            "select template_id, version, variables, decorators, created_at
+             from prompt_template_versions where template_id = $1 order by version desc",
+        )
+        .bind(template_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn publish_version(&self, template_id: Uuid, version: i32) -> Result<PromptTemplate> {
+        let exists: Option<i32> = sqlx::query_scalar(
+            "select 1 from prompt_template_versions where template_id = $1 and version = $2",
+        )
+        .bind(template_id)
+        .bind(version)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        if exists.is_none() {
+            return Err(Error::NotFound(format!(
+                "prompt template version {template_id}:{version}"
+            )));
+        }
+        sqlx::query_as(
+            "update prompt_templates
+             set published_version = $2
+             where id = $1
+             returning id, org_id, name, slug, description, published_version, created_at",
+        )
+        .bind(template_id)
+        .bind(version)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("prompt template {template_id}")))
+    }
+
+    /// Replace all scope bindings for a template version.
+    pub async fn set_scopes(
+        &self,
+        template_id: Uuid,
+        version: i32,
+        scopes: &[(String, Uuid)],
+    ) -> Result<()> {
+        let mut tx = self.0.begin().await.map_err(store_err)?;
+        sqlx::query("delete from prompt_template_scopes where template_id = $1 and version = $2")
+            .bind(template_id)
+            .bind(version)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err)?;
+        for (scope_type, scope_id) in scopes {
+            sqlx::query(
+                "insert into prompt_template_scopes (
+                     template_id, version, scope_type, scope_id,
+                     org_id, project_id, route_id, virtual_key_id
+                 )
+                 values (
+                     $1, $2, $3, $4,
+                     case when $3 = 'org' then $4 end,
+                     case when $3 = 'project' then $4 end,
+                     case when $3 = 'route' then $4 end,
+                     case when $3 = 'virtual_key' then $4 end
+                 )",
+            )
+            .bind(template_id)
+            .bind(version)
+            .bind(scope_type)
+            .bind(scope_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err)?;
+        }
+        tx.commit().await.map_err(store_err)?;
+        Ok(())
+    }
+
+    pub async fn list_scopes(
+        &self,
+        template_id: Uuid,
+        version: i32,
+    ) -> Result<Vec<PromptTemplateScope>> {
+        sqlx::query_as(
+            "select template_id, version, scope_type, scope_id, created_at
+             from prompt_template_scopes
+             where template_id = $1 and version = $2
+             order by scope_type, scope_id",
+        )
+        .bind(template_id)
+        .bind(version)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn delete_template(&self, id: Uuid) -> Result<()> {
+        let res = sqlx::query("delete from prompt_templates where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("prompt template {id}")));
         }
         Ok(())
     }
@@ -1763,6 +1977,92 @@ mod tests {
         // deletes cascade top-down; exercise the not-found error path too
         orgs.delete(org.id).await.unwrap();
         assert!(matches!(orgs.get(org.id).await, Err(Error::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn prompt_template_versions_publish_and_scope_round_trip() {
+        let Ok(_) = std::env::var("ROLTER_TEST_DATABASE_URL") else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        let org = OrgRepo(&pool).create("acme", "acme").await.unwrap();
+
+        let repo = PromptTemplateRepo(&pool);
+        let template = repo
+            .create_template(
+                org.id,
+                "support assistant",
+                "support-assistant",
+                Some("tier 1 support guardrails"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(template.published_version, None);
+        assert_eq!(repo.list_templates(org.id).await.unwrap().len(), 1);
+
+        let v1 = repo
+            .create_version(template.id, &serde_json::json!([]), &serde_json::json!([]))
+            .await
+            .unwrap();
+        let v2 = repo
+            .create_version(
+                template.id,
+                &serde_json::json!([{"name":"tier","required":true}]),
+                &serde_json::json!([{"role":"system","position":"prepend","content":"{{ tier }} mode"}]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(v1.version, 1);
+        assert_eq!(v2.version, 2);
+        let empty_variables = serde_json::json!([]);
+        let empty_decorators = serde_json::json!([]);
+        let (v3, v4) = tokio::join!(
+            repo.create_version(template.id, &empty_variables, &empty_decorators),
+            repo.create_version(template.id, &empty_variables, &empty_decorators)
+        );
+        let mut concurrent_versions = [v3.unwrap().version, v4.unwrap().version];
+        concurrent_versions.sort();
+        assert_eq!(concurrent_versions, [3, 4]);
+        let versions = repo.list_versions(template.id).await.unwrap();
+        assert_eq!(versions.len(), 4);
+        assert_eq!(versions[0].version, 4);
+        assert_eq!(versions[3].version, 1);
+
+        let project = ProjectRepo(&pool)
+            .create(
+                TeamRepo(&pool).create(org.id, "core").await.unwrap().id,
+                "gateway",
+            )
+            .await
+            .unwrap();
+        repo.set_scopes(
+            template.id,
+            2,
+            &[
+                ("org".to_string(), org.id),
+                ("project".to_string(), project.id),
+            ],
+        )
+        .await
+        .unwrap();
+        let scopes = repo.list_scopes(template.id, 2).await.unwrap();
+        assert_eq!(scopes.len(), 2);
+        assert_eq!(scopes[0].scope_type, "org");
+        assert_eq!(scopes[1].scope_type, "project");
+
+        let published = repo.publish_version(template.id, v2.version).await.unwrap();
+        assert_eq!(published.published_version, Some(2));
+        assert!(repo
+            .set_scopes(template.id, 2, &[("org".to_string(), org.id)])
+            .await
+            .is_err());
+
+        repo.delete_template(template.id).await.unwrap();
+        assert!(matches!(
+            repo.get_template(template.id).await,
+            Err(Error::NotFound(_))
+        ));
     }
 
     #[tokio::test]
