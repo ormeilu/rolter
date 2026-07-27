@@ -270,6 +270,49 @@ pub(crate) async fn authorize(
     }
 }
 
+/// Check a resource-level access profile after ordinary org authorization.
+/// Org admins and superadmins can always inspect policy-bound resources.
+pub(crate) async fn policy_allows(
+    state: &ControlState,
+    principal: &Principal,
+    org_id: Uuid,
+    allowed_team_ids: &[Uuid],
+    minimum_role: &str,
+) -> ApiResult<bool> {
+    let user = match principal {
+        Principal::Superadmin => return Ok(true),
+        Principal::User(user) => user,
+    };
+    let memberships = MembershipRepo(pool(state)).list_for_user(user.id).await?;
+    let Some(effective_role) = resolve_role(&memberships, Some(org_id), None, None) else {
+        return Ok(false);
+    };
+    let Some(required_role) = parse_role(minimum_role) else {
+        return Ok(false);
+    };
+    if role_rank(effective_role) < role_rank(required_role) {
+        return Ok(false);
+    }
+    if effective_role == Role::Admin || allowed_team_ids.is_empty() {
+        return Ok(true);
+    }
+    for membership in &memberships {
+        if membership
+            .team_id
+            .is_some_and(|id| allowed_team_ids.contains(&id))
+        {
+            return Ok(true);
+        }
+        if let Some(project_id) = membership.project_id {
+            let project = ProjectRepo(pool(state)).get(project_id).await?;
+            if allowed_team_ids.contains(&project.team_id) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Require `principal` to be a superadmin. Used for global resources with no
 /// org/team/project scope (the model-pricing catalog, cross-project model
 /// deletion).
