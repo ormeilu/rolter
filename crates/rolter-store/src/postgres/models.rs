@@ -83,6 +83,30 @@ pub struct PromptTemplateScope {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Skill {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub description: String,
+    pub retired_at: Option<DateTime<Utc>>,
+    pub published_version: Option<i32>,
+    pub allowed_team_ids: Vec<Uuid>,
+    pub minimum_role: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SkillVersion {
+    pub skill_id: Uuid,
+    pub version: i32,
+    pub content: Option<String>,
+    pub content_ref: Option<String>,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Provider {
     pub id: Uuid,
     pub org_id: Uuid,
