@@ -854,6 +854,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prompt_template_writes_bump_version() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        let v0 = current_version(&pool).await.unwrap();
+
+        let org_id: Uuid = sqlx::query_scalar(
+            "insert into orgs (name, slug) values ('acme', 'acme') returning id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let template_id: Uuid = sqlx::query_scalar(
+            "insert into prompt_templates (org_id, name, slug, description)
+             values ($1, 'support baseline', 'support-baseline', 'desc')
+             returning id",
+        )
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(current_version(&pool).await.unwrap(), v0 + 1);
+
+        sqlx::query(
+            "insert into prompt_template_versions (template_id, version, variables, decorators)
+             values
+               ($1, 1, '[]'::jsonb, '[{\"role\":\"system\",\"position\":\"prepend\",\"content\":\"v1\"}]'::jsonb)",
+        )
+        .bind(template_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(current_version(&pool).await.unwrap(), v0 + 2);
+
+        sqlx::query(
+            "insert into prompt_template_scopes (
+                 template_id, version, scope_type, scope_id, org_id
+             )
+             values ($1, 1, 'org', $2, $2)",
+        )
+        .bind(template_id)
+        .bind(org_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(current_version(&pool).await.unwrap(), v0 + 3);
+
+        sqlx::query(
+            "update prompt_templates
+             set published_version = 1
+             where id = $1",
+        )
+        .bind(template_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(current_version(&pool).await.unwrap(), v0 + 4);
+    }
+
+    #[tokio::test]
     async fn loads_providers_and_routes_from_db() {
         let Some(_) = database_url() else {
             eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
