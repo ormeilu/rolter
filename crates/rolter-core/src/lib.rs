@@ -34,8 +34,8 @@ pub use guardrails::{
 };
 pub use prompt_templates::{
     CompiledTemplates, Decorator, DecoratorPosition, DecoratorRole, PromptTemplate,
-    PromptTemplatesConfig, RenderError, RenderedMessage, TemplateReport, TemplateVariable,
-    TEMPLATE_VARS_FIELD,
+    PromptTemplateActivationScope, PromptTemplateRequestScope, PromptTemplatesConfig, RenderError,
+    RenderedMessage, TemplateReport, TemplateVariable, TEMPLATE_VARS_FIELD,
 };
 
 /// Redis pub/sub channel the control plane publishes config-version bumps

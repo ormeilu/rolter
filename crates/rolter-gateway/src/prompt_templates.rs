@@ -14,8 +14,8 @@
 //! which is always stripped before forwarding upstream.
 
 use rolter_core::{
-    CompiledTemplates, DecoratorPosition, DecoratorRole, RenderError, RenderedMessage,
-    TemplateReport, TEMPLATE_VARS_FIELD,
+    CompiledTemplates, DecoratorPosition, DecoratorRole, PromptTemplateRequestScope, RenderError,
+    RenderedMessage, TemplateReport, TEMPLATE_VARS_FIELD,
 };
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -46,9 +46,31 @@ impl ApplyError {
 /// Returns `Ok(report)`; when `report.decorations > 0` the body was mutated and
 /// the caller should re-serialize before forwarding. The `rolter_template_vars`
 /// field is stripped from the body whenever it is present, decorated or not.
+#[cfg(test)]
 pub fn apply(
     templates: &CompiledTemplates,
     route_model: &str,
+    path: &str,
+    body: &mut Value,
+) -> Result<TemplateReport, ApplyError> {
+    apply_inner(templates, route_model, None, path, body)
+}
+
+/// Apply prompt templates using authenticated tenant identity for scoped
+/// database-backed templates.
+pub fn apply_for_scope(
+    templates: &CompiledTemplates,
+    scope: &PromptTemplateRequestScope<'_>,
+    path: &str,
+    body: &mut Value,
+) -> Result<TemplateReport, ApplyError> {
+    apply_inner(templates, scope.route_model, Some(scope), path, body)
+}
+
+fn apply_inner(
+    templates: &CompiledTemplates,
+    route_model: &str,
+    request_scope: Option<&PromptTemplateRequestScope<'_>>,
     path: &str,
     body: &mut Value,
 ) -> Result<TemplateReport, ApplyError> {
@@ -58,9 +80,11 @@ pub fn apply(
     // rolter-specific field never reaches the upstream
     let caller_vars = extract_and_strip_vars(body)?;
 
-    let rendered = templates
-        .render(route_model, &caller_vars, &mut report)
-        .map_err(ApplyError::Render)?;
+    let rendered = match request_scope {
+        Some(scope) => templates.render_for_scope(scope, &caller_vars, &mut report),
+        None => templates.render(route_model, &caller_vars, &mut report),
+    }
+    .map_err(ApplyError::Render)?;
     if rendered.is_empty() {
         return Ok(report);
     }
@@ -257,6 +281,7 @@ mod tests {
             id: "preamble".to_string(),
             version: 1,
             routes: vec![],
+            scopes: vec![],
             variables: vec![TemplateVariable {
                 name: "persona".to_string(),
                 required: false,
@@ -333,6 +358,7 @@ mod tests {
             id: "t".to_string(),
             version: 1,
             routes: vec![],
+            scopes: vec![],
             variables: vec![TemplateVariable {
                 name: "x".to_string(),
                 required: false,
@@ -390,6 +416,7 @@ mod tests {
             id: "only-4o".to_string(),
             version: 1,
             routes: vec!["gpt-4o".to_string()],
+            scopes: vec![],
             variables: vec![],
             decorators: vec![dec(DecoratorRole::System, DecoratorPosition::Prepend, "x")],
         }]);

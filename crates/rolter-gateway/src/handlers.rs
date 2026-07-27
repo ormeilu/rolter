@@ -826,10 +826,16 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
     // before guardrails so any appended user/assistant content is still scanned
     // (ROL-256).
     let mut template_applied = false;
-    if snap.prompt_templates.active_for(&entry.route.model) {
-        match crate::prompt_templates::apply(
+    let template_scope = rolter_core::PromptTemplateRequestScope {
+        route_model: &entry.route.model,
+        org_id: &scope.org,
+        project_id: &scope.project,
+        virtual_key_id: &scope.key,
+    };
+    if snap.prompt_templates.active_for_scope(&template_scope) {
+        match crate::prompt_templates::apply_for_scope(
             &snap.prompt_templates,
-            &entry.route.model,
+            &template_scope,
             path,
             &mut parsed,
         ) {

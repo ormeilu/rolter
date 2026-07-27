@@ -7,12 +7,14 @@ pub mod repo;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rolter_core::{
-    BalancingStrategy, BudgetConfig, BudgetPeriod, BudgetScope, Error, GatewayConfig, GroupMember,
-    ModelPriceConfig, ModelRoute, ProviderConfig, ProviderGroupConfig, ProviderKind,
-    RateLimitConfig, Result, Target, VirtualKeyRecord,
+    BalancingStrategy, BudgetConfig, BudgetPeriod, BudgetScope, Decorator, Error, GatewayConfig,
+    GroupMember, ModelPriceConfig, ModelRoute, PromptTemplate, PromptTemplateActivationScope,
+    PromptTemplatesConfig, ProviderConfig, ProviderGroupConfig, ProviderKind, RateLimitConfig,
+    Result, Target, TemplateVariable, VirtualKeyRecord,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::postgres::models::{Budget, ModelPrice, RateLimit};
@@ -254,6 +256,31 @@ struct VirtualKeyRow {
     org_id: Uuid,
 }
 
+#[derive(FromRow)]
+struct PublishedPromptTemplateRow {
+    template_id: Uuid,
+    org_id: Uuid,
+    slug: String,
+    version: i32,
+    variables: serde_json::Value,
+    decorators: serde_json::Value,
+}
+
+#[derive(Clone, FromRow)]
+struct PromptTemplateScopeRow {
+    template_id: Uuid,
+    version: i32,
+    scope_type: String,
+    scope_id: Uuid,
+}
+
+#[derive(FromRow)]
+struct RouteScopeRow {
+    route_id: Uuid,
+    project_id: Uuid,
+    model: String,
+}
+
 fn parse_strategy(s: &str) -> Result<BalancingStrategy> {
     Ok(match s {
         "round_robin" => BalancingStrategy::RoundRobin,
@@ -276,8 +303,8 @@ fn parse_strategy(s: &str) -> Result<BalancingStrategy> {
 }
 
 /// A [`ConfigStore`] backed by Postgres. `load` composes a [`GatewayConfig`]
-/// from the `providers`, `routes`/`route_targets`, `model_prices` and
-/// `virtual_keys` tables.
+/// from the `providers`, `routes`/`route_targets`, `model_prices`, `virtual_keys`
+/// and published `prompt_templates` tables.
 ///
 /// Virtual keys are exposed as [`rolter_core::VirtualKeyRecord`]s carrying only
 /// the one-way `key_hash` plus scope identity — never the plaintext. Since the
@@ -540,6 +567,167 @@ impl PostgresConfigStore {
             })
             .collect())
     }
+
+    /// Load published prompt templates with tenant-aware activation bindings.
+    async fn load_prompt_templates(&self) -> Result<PromptTemplatesConfig> {
+        let templates: Vec<PublishedPromptTemplateRow> = sqlx::query_as(
+            "select t.id as template_id, t.org_id, t.slug, v.version, v.variables, v.decorators
+             from prompt_templates t
+             join prompt_template_versions v
+               on v.template_id = t.id
+              and v.version = t.published_version
+             order by t.slug",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        if templates.is_empty() {
+            return Ok(PromptTemplatesConfig::default());
+        }
+
+        let scopes: Vec<PromptTemplateScopeRow> = sqlx::query_as(
+            "select s.template_id, s.version, s.scope_type, s.scope_id
+             from prompt_template_scopes s
+             join prompt_templates t on t.id = s.template_id
+             where s.version = t.published_version
+             order by s.template_id, s.version, s.scope_type, s.scope_id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+
+        let route_rows: Vec<RouteScopeRow> = sqlx::query_as(
+            "select id as route_id, project_id, model
+             from routes
+             where enabled",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        let route_identity: HashMap<Uuid, (Uuid, String)> = route_rows
+            .iter()
+            .map(|route| (route.route_id, (route.project_id, route.model.clone())))
+            .collect();
+
+        let mut scopes_by_template: HashMap<(Uuid, i32), Vec<PromptTemplateScopeRow>> =
+            HashMap::new();
+        for scope in scopes {
+            scopes_by_template
+                .entry((scope.template_id, scope.version))
+                .or_default()
+                .push(scope);
+        }
+
+        let mut compiled = Vec::new();
+        for row in templates {
+            if row.version <= 0 {
+                tracing::warn!(
+                    template_id = %row.template_id,
+                    version = row.version,
+                    "skipping prompt template with non-positive published version"
+                );
+                continue;
+            }
+            let variables: Vec<TemplateVariable> = match serde_json::from_value(row.variables) {
+                Ok(variables) => variables,
+                Err(err) => {
+                    tracing::warn!(
+                        template_id = %row.template_id,
+                        error = %err,
+                        "skipping prompt template with invalid variables json"
+                    );
+                    continue;
+                }
+            };
+            let decorators: Vec<Decorator> = match serde_json::from_value(row.decorators) {
+                Ok(decorators) => decorators,
+                Err(err) => {
+                    tracing::warn!(
+                        template_id = %row.template_id,
+                        error = %err,
+                        "skipping prompt template with invalid decorators json"
+                    );
+                    continue;
+                }
+            };
+            if decorators.is_empty() {
+                tracing::warn!(
+                    template_id = %row.template_id,
+                    "skipping prompt template with empty decorators"
+                );
+                continue;
+            }
+
+            let scope_rows = scopes_by_template
+                .get(&(row.template_id, row.version))
+                .cloned()
+                .unwrap_or_default();
+            if scope_rows.is_empty() {
+                tracing::warn!(
+                    template_id = %row.template_id,
+                    "skipping published prompt template without scope bindings"
+                );
+                continue;
+            }
+
+            let mut activations = Vec::with_capacity(scope_rows.len());
+            for scope in scope_rows {
+                match scope.scope_type.as_str() {
+                    "org" => activations.push(PromptTemplateActivationScope::Org {
+                        id: scope.scope_id.to_string(),
+                    }),
+                    "project" => activations.push(PromptTemplateActivationScope::Project {
+                        id: scope.scope_id.to_string(),
+                    }),
+                    "route" => {
+                        if let Some((project_id, model)) = route_identity.get(&scope.scope_id) {
+                            activations.push(PromptTemplateActivationScope::Route {
+                                project_id: project_id.to_string(),
+                                model: model.clone(),
+                            });
+                        }
+                    }
+                    "virtual_key" => activations.push(PromptTemplateActivationScope::VirtualKey {
+                        id: scope.scope_id.to_string(),
+                    }),
+                    other => {
+                        tracing::warn!(
+                            template_id = %row.template_id,
+                            scope_type = other,
+                            "unknown prompt-template scope type skipped"
+                        );
+                    }
+                }
+            }
+
+            if activations.is_empty() {
+                tracing::warn!(
+                    template_id = %row.template_id,
+                    "skipping prompt template because no resolvable route scopes were found"
+                );
+                continue;
+            }
+
+            compiled.push(PromptTemplate {
+                id: format!("{}:{}", row.org_id, row.slug),
+                version: row.version as u32,
+                routes: Vec::new(),
+                scopes: activations,
+                variables,
+                decorators,
+            });
+        }
+        compiled.sort_by(|left, right| {
+            left.id
+                .cmp(&right.id)
+                .then_with(|| left.version.cmp(&right.version))
+        });
+
+        Ok(PromptTemplatesConfig {
+            enabled: !compiled.is_empty(),
+            templates: compiled,
+        })
+    }
 }
 
 /// Map the free-text `budgets.period` column to a [`BudgetPeriod`]. Accepts both
@@ -573,6 +761,7 @@ impl ConfigStore for PostgresConfigStore {
         let db_virtual_keys = self.load_virtual_keys().await?;
         let budgets = self.load_budgets().await?;
         let rate_limits = self.load_rate_limits().await?;
+        let prompt_templates = self.load_prompt_templates().await?;
         Ok(GatewayConfig {
             providers,
             routes,
@@ -581,6 +770,7 @@ impl ConfigStore for PostgresConfigStore {
             db_virtual_keys,
             budgets,
             rate_limits,
+            prompt_templates,
             ..GatewayConfig::default()
         })
     }
@@ -769,6 +959,169 @@ mod tests {
         assert_eq!(config.model_prices[1].model, "gpt-4o-mini");
         assert_eq!(config.model_prices[1].input_per_mtok, 0.15);
         assert_eq!(config.model_prices[1].cached_input_per_mtok, None);
+    }
+
+    #[tokio::test]
+    async fn loads_published_prompt_templates_from_db() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+
+        let org_id: Uuid = sqlx::query_scalar(
+            "insert into orgs (name, slug) values ('acme', 'acme') returning id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let team_id: Uuid =
+            sqlx::query_scalar("insert into teams (org_id, name) values ($1, 'core') returning id")
+                .bind(org_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let project_id: Uuid = sqlx::query_scalar(
+            "insert into projects (team_id, name) values ($1, 'default') returning id",
+        )
+        .bind(team_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let route_a: Uuid = sqlx::query_scalar(
+            "insert into routes (project_id, model, strategy)
+             values ($1, 'gpt-4o-mini', 'round_robin')
+             returning id",
+        )
+        .bind(project_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into routes (project_id, model, strategy)
+             values ($1, 'gpt-4o', 'round_robin')",
+        )
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let template_id: Uuid = sqlx::query_scalar(
+            "insert into prompt_templates (org_id, name, slug, description)
+             values ($1, 'support baseline', 'support-baseline', 'desc')
+             returning id",
+        )
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into prompt_template_versions (template_id, version, variables, decorators)
+             values
+                ($1, 1, '[]'::jsonb, '[]'::jsonb),
+                ($1, 2, '[{\"name\":\"tone\",\"required\":true}]'::jsonb,
+                        '[{\"role\":\"system\",\"position\":\"prepend\",\"content\":\"tone={{ tone }}\"}]'::jsonb)",
+        )
+        .bind(template_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into prompt_template_scopes (
+                 template_id, version, scope_type, scope_id, project_id, route_id
+             )
+             values
+                ($1, 2, 'project', $2, $2, null),
+                ($1, 2, 'route', $3, null, $3)",
+        )
+        .bind(template_id)
+        .bind(project_id)
+        .bind(route_a)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("update prompt_templates set published_version = 2 where id = $1")
+            .bind(template_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let global_template_id: Uuid = sqlx::query_scalar(
+            "insert into prompt_templates (org_id, name, slug, description)
+             values ($1, 'global baseline', 'global-baseline', 'desc')
+             returning id",
+        )
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into prompt_template_versions (template_id, version, variables, decorators)
+             values
+                ($1, 1, '[]'::jsonb, '[{\"role\":\"system\",\"position\":\"prepend\",\"content\":\"always on\"}]'::jsonb)",
+        )
+        .bind(global_template_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into prompt_template_scopes (
+                 template_id, version, scope_type, scope_id, org_id
+             )
+             values ($1, 1, 'org', $2, $2)",
+        )
+        .bind(global_template_id)
+        .bind(org_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("update prompt_templates set published_version = 1 where id = $1")
+            .bind(global_template_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let store = PostgresConfigStore::new(pool);
+        let config = store.load().await.unwrap();
+        assert!(config.prompt_templates.enabled);
+        assert_eq!(config.prompt_templates.templates.len(), 2);
+
+        let global = config
+            .prompt_templates
+            .templates
+            .iter()
+            .find(|template| template.id == format!("{org_id}:global-baseline"))
+            .unwrap();
+        assert_eq!(global.version, 1);
+        assert!(global.routes.is_empty());
+        assert_eq!(
+            global.scopes,
+            vec![PromptTemplateActivationScope::Org {
+                id: org_id.to_string()
+            }]
+        );
+
+        let scoped = config
+            .prompt_templates
+            .templates
+            .iter()
+            .find(|template| template.id == format!("{org_id}:support-baseline"))
+            .unwrap();
+        assert_eq!(scoped.version, 2);
+        assert_eq!(
+            scoped.scopes,
+            vec![
+                PromptTemplateActivationScope::Project {
+                    id: project_id.to_string()
+                },
+                PromptTemplateActivationScope::Route {
+                    project_id: project_id.to_string(),
+                    model: "gpt-4o-mini".to_string()
+                }
+            ]
+        );
+        assert_eq!(scoped.variables.len(), 1);
+        assert_eq!(scoped.decorators.len(), 1);
     }
 
     // regression: like model_prices, the snapshot query must cast budgets.limit_usd
