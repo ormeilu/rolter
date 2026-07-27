@@ -33,6 +33,27 @@ pub struct Project {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct BusinessUnit {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub retired_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Customer {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub business_unit_id: Option<Uuid>,
+    pub name: String,
+    pub slug: String,
+    pub retired_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Provider {
     pub id: Uuid,
     pub org_id: Uuid,

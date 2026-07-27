@@ -21,13 +21,14 @@ use rolter_auth::Role;
 use rolter_core::slug::{is_valid_slug, slugify};
 use rolter_core::{AdvancedModelConfig, Error};
 use rolter_store::postgres::models::{
-    AuditLogEntry, Budget, Membership, ModelPrice, Org, Project, Provider, ProviderGroup,
-    ProviderGroupMember, RateLimit, Route, RouteTarget, Team, User, VirtualKey,
+    AuditLogEntry, Budget, BusinessUnit, Customer, Membership, ModelPrice, Org, Project, Provider,
+    ProviderGroup, ProviderGroupMember, RateLimit, Route, RouteTarget, Team, User, VirtualKey,
 };
 use rolter_store::postgres::repo::{
-    AuditLogCursor, AuditLogDirection, AuditLogFilter, AuditLogRepo, BudgetRepo, MembershipRepo,
-    ModelPriceRepo, OrgRepo, ProjectRepo, ProviderGroupRepo, ProviderKeyRepo, ProviderRepo,
-    RateLimitRepo, RouteRepo, RouteTargetRepo, SessionRepo, TeamRepo, UserRepo, VirtualKeyRepo,
+    AuditLogCursor, AuditLogDirection, AuditLogFilter, AuditLogRepo, BudgetRepo, BusinessUnitRepo,
+    CustomerRepo, MembershipRepo, ModelPriceRepo, OrgRepo, ProjectRepo, ProviderGroupRepo,
+    ProviderKeyRepo, ProviderRepo, RateLimitRepo, RouteRepo, RouteTargetRepo, SessionRepo,
+    TeamRepo, UserRepo, VirtualKeyRepo,
 };
 
 use crate::rbac::{authorize, require_superadmin, Principal, ScopeChain};
@@ -47,6 +48,22 @@ pub fn router() -> Router<ControlState> {
             get(list_projects).post(create_project),
         )
         .route("/api/v1/projects/{id}", delete(delete_project))
+        .route(
+            "/api/v1/orgs/{org_id}/business-units",
+            get(list_business_units).post(create_business_unit),
+        )
+        .route(
+            "/api/v1/business-units/{id}",
+            put(update_business_unit).delete(delete_business_unit),
+        )
+        .route(
+            "/api/v1/orgs/{org_id}/customers",
+            get(list_customers).post(create_customer),
+        )
+        .route(
+            "/api/v1/customers/{id}",
+            put(update_customer).delete(delete_customer),
+        )
         .route(
             "/api/v1/orgs/{org_id}/providers",
             get(list_providers).post(create_provider),
@@ -579,6 +596,295 @@ async fn delete_org(
         "org",
         id,
         serde_json::json!({}),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+// --- business units ---
+
+async fn list_business_units(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(org_id): Path<Uuid>,
+) -> ApiResult<Json<Vec<BusinessUnit>>> {
+    authorize(&state, &principal, ScopeChain::org(org_id), Role::Viewer).await?;
+    Ok(Json(BusinessUnitRepo(pool(&state)).list(org_id).await?))
+}
+
+#[derive(Deserialize)]
+struct CreateBusinessUnit {
+    name: String,
+    /// Stable URL-safe identity; derived from `name` when omitted.
+    slug: Option<String>,
+}
+
+async fn create_business_unit(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(org_id): Path<Uuid>,
+    SafeJson(body): SafeJson<CreateBusinessUnit>,
+) -> ApiResult<Json<BusinessUnit>> {
+    authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
+    require_non_empty(&body.name, "name")?;
+    let slug = resolve_new_slug(&body.name, body.slug.as_deref())?;
+    let unit = BusinessUnitRepo(pool(&state))
+        .create(org_id, &body.name, &slug)
+        .await?;
+    log_audit(
+        &state,
+        &principal,
+        Some(org_id),
+        "business_unit.create",
+        "business_unit",
+        unit.id,
+        serde_json::json!({"name": unit.name, "slug": unit.slug}),
+    )
+    .await;
+    Ok(Json(unit))
+}
+
+#[derive(Deserialize)]
+struct UpdateBusinessUnit {
+    name: Option<String>,
+    slug: Option<String>,
+    #[serde(default)]
+    allow_slug_change: bool,
+    retired: Option<bool>,
+}
+
+async fn update_business_unit(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+    SafeJson(body): SafeJson<UpdateBusinessUnit>,
+) -> ApiResult<Json<BusinessUnit>> {
+    let repo = BusinessUnitRepo(pool(&state));
+    let existing = repo.get(id).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(existing.org_id),
+        Role::Admin,
+    )
+    .await?;
+    if let Some(name) = &body.name {
+        require_non_empty(name, "name")?;
+    }
+    let slug_change =
+        resolve_slug_change(body.slug.as_deref(), &existing.slug, body.allow_slug_change)?;
+    let unit = repo
+        .update(
+            id,
+            body.name.as_deref(),
+            slug_change.as_deref(),
+            body.retired,
+        )
+        .await?;
+    log_audit(
+        &state,
+        &principal,
+        Some(existing.org_id),
+        "business_unit.update",
+        "business_unit",
+        id,
+        serde_json::json!({"slug": unit.slug, "retired": unit.retired_at.is_some()}),
+    )
+    .await;
+    Ok(Json(unit))
+}
+
+async fn delete_business_unit(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let repo = BusinessUnitRepo(pool(&state));
+    let existing = repo.get(id).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(existing.org_id),
+        Role::Admin,
+    )
+    .await?;
+    repo.delete(id).await?;
+    log_audit(
+        &state,
+        &principal,
+        Some(existing.org_id),
+        "business_unit.delete",
+        "business_unit",
+        id,
+        serde_json::json!({"name": existing.name, "slug": existing.slug}),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- customers ---
+
+async fn list_customers(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(org_id): Path<Uuid>,
+) -> ApiResult<Json<Vec<Customer>>> {
+    authorize(&state, &principal, ScopeChain::org(org_id), Role::Viewer).await?;
+    Ok(Json(CustomerRepo(pool(&state)).list(org_id).await?))
+}
+
+#[derive(Deserialize)]
+struct CreateCustomer {
+    name: String,
+    /// Stable URL-safe identity; derived from `name` when omitted.
+    slug: Option<String>,
+    business_unit_id: Option<Uuid>,
+}
+
+async fn create_customer(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(org_id): Path<Uuid>,
+    SafeJson(body): SafeJson<CreateCustomer>,
+) -> ApiResult<Json<Customer>> {
+    authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
+    require_non_empty(&body.name, "name")?;
+    let slug = resolve_new_slug(&body.name, body.slug.as_deref())?;
+    if let Some(business_unit_id) = body.business_unit_id {
+        let unit = BusinessUnitRepo(pool(&state)).get(business_unit_id).await?;
+        if unit.org_id != org_id {
+            return Err(ApiError::Core(Error::Config(
+                "business_unit_id must belong to the same org".to_string(),
+            )));
+        }
+    }
+    let customer = CustomerRepo(pool(&state))
+        .create(org_id, body.business_unit_id, &body.name, &slug)
+        .await?;
+    log_audit(
+        &state,
+        &principal,
+        Some(org_id),
+        "customer.create",
+        "customer",
+        customer.id,
+        serde_json::json!({"name": customer.name, "slug": customer.slug, "business_unit_id": customer.business_unit_id}),
+    )
+    .await;
+    Ok(Json(customer))
+}
+
+#[derive(Deserialize)]
+struct UpdateCustomer {
+    name: Option<String>,
+    slug: Option<String>,
+    #[serde(default)]
+    allow_slug_change: bool,
+    /// Omit to leave unchanged, null to clear, UUID to set.
+    #[serde(default)]
+    business_unit_id: NullableUuid,
+    retired: Option<bool>,
+}
+
+#[derive(Default)]
+enum NullableUuid {
+    #[default]
+    Missing,
+    Null,
+    Value(Uuid),
+}
+
+impl<'de> Deserialize<'de> for NullableUuid {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(match Option::<Uuid>::deserialize(deserializer)? {
+            Some(value) => Self::Value(value),
+            None => Self::Null,
+        })
+    }
+}
+
+async fn update_customer(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+    SafeJson(body): SafeJson<UpdateCustomer>,
+) -> ApiResult<Json<Customer>> {
+    let repo = CustomerRepo(pool(&state));
+    let existing = repo.get(id).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(existing.org_id),
+        Role::Admin,
+    )
+    .await?;
+    if let Some(name) = &body.name {
+        require_non_empty(name, "name")?;
+    }
+    let slug_change =
+        resolve_slug_change(body.slug.as_deref(), &existing.slug, body.allow_slug_change)?;
+    if let NullableUuid::Value(business_unit_id) = &body.business_unit_id {
+        let unit = BusinessUnitRepo(pool(&state))
+            .get(*business_unit_id)
+            .await?;
+        if unit.org_id != existing.org_id {
+            return Err(ApiError::Core(Error::Config(
+                "business_unit_id must belong to the same org".to_string(),
+            )));
+        }
+    }
+    let business_unit_id = match body.business_unit_id {
+        NullableUuid::Missing => None,
+        NullableUuid::Null => Some(None),
+        NullableUuid::Value(id) => Some(Some(id)),
+    };
+    let customer = repo
+        .update(
+            id,
+            business_unit_id,
+            body.name.as_deref(),
+            slug_change.as_deref(),
+            body.retired,
+        )
+        .await?;
+    log_audit(
+        &state,
+        &principal,
+        Some(existing.org_id),
+        "customer.update",
+        "customer",
+        id,
+        serde_json::json!({"slug": customer.slug, "retired": customer.retired_at.is_some(), "business_unit_id": customer.business_unit_id}),
+    )
+    .await;
+    Ok(Json(customer))
+}
+
+async fn delete_customer(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let repo = CustomerRepo(pool(&state));
+    let existing = repo.get(id).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(existing.org_id),
+        Role::Admin,
+    )
+    .await?;
+    repo.delete(id).await?;
+    log_audit(
+        &state,
+        &principal,
+        Some(existing.org_id),
+        "customer.delete",
+        "customer",
+        id,
+        serde_json::json!({"name": existing.name, "slug": existing.slug}),
     )
     .await;
     Ok(StatusCode::NO_CONTENT)

@@ -249,6 +249,132 @@ async fn crud_create_round_trip_reflects_in_snapshot() {
     assert_eq!(route["advanced"]["headers"]["x-model-region"], "eu");
 }
 
+#[tokio::test]
+async fn business_unit_and_customer_crud_round_trip() {
+    skip_without_db!();
+    let addr = serve(fresh_app().await).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    async fn post(client: &reqwest::Client, url: String, body: Value) -> Value {
+        let resp = client.post(&url).json(&body).send().await.unwrap();
+        let status = resp.status();
+        let json: Value = resp.json().await.unwrap();
+        assert!(status.is_success(), "POST {url} failed ({status}): {json}");
+        json
+    }
+
+    let org = post(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Acme", "slug": "acme"}),
+    )
+    .await;
+    let org_id = org["id"].as_str().expect("org id");
+
+    let other_org = post(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Other", "slug": "other"}),
+    )
+    .await;
+    let other_org_id = other_org["id"].as_str().expect("other org id");
+
+    let business_unit = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/business-units"),
+        json!({"name": "Payments"}),
+    )
+    .await;
+    let business_unit_id = business_unit["id"].as_str().expect("business unit id");
+    assert_eq!(business_unit["slug"], "payments");
+
+    let customer = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/customers"),
+        json!({"name": "Acme EU", "business_unit_id": business_unit_id}),
+    )
+    .await;
+    let customer_id = customer["id"].as_str().expect("customer id");
+    assert_eq!(customer["slug"], "acme-eu");
+    assert_eq!(customer["business_unit_id"], business_unit_id);
+
+    let mismatch_unit = post(
+        &client,
+        format!("{base}/api/v1/orgs/{other_org_id}/business-units"),
+        json!({"name": "Other Unit"}),
+    )
+    .await;
+    let mismatch_unit_id = mismatch_unit["id"].as_str().expect("mismatch unit id");
+    let invalid_customer = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/customers"))
+        .json(&json!({"name": "Broken Link", "business_unit_id": mismatch_unit_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid_customer.status(), 400);
+
+    let update_customer = client
+        .put(format!("{base}/api/v1/customers/{customer_id}"))
+        .json(&json!({
+            "slug": "acme-emea",
+            "allow_slug_change": true,
+            "retired": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(update_customer.status().is_success());
+    let updated_customer: Value = update_customer.json().await.unwrap();
+    assert_eq!(updated_customer["slug"], "acme-emea");
+    assert!(updated_customer["retired_at"].is_string());
+
+    let list_customers: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/customers"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(list_customers.as_array().unwrap().len(), 1);
+
+    let clear_business_unit = client
+        .put(format!("{base}/api/v1/customers/{customer_id}"))
+        .json(&json!({ "business_unit_id": null, "retired": false }))
+        .send()
+        .await
+        .unwrap();
+    assert!(clear_business_unit.status().is_success());
+    let cleared_customer: Value = clear_business_unit.json().await.unwrap();
+    assert!(cleared_customer["business_unit_id"].is_null());
+    assert!(cleared_customer["retired_at"].is_null());
+
+    let retire_business_unit = client
+        .put(format!("{base}/api/v1/business-units/{business_unit_id}"))
+        .json(&json!({"retired": true}))
+        .send()
+        .await
+        .unwrap();
+    assert!(retire_business_unit.status().is_success());
+    let updated_unit: Value = retire_business_unit.json().await.unwrap();
+    assert!(updated_unit["retired_at"].is_string());
+
+    let delete_customer = client
+        .delete(format!("{base}/api/v1/customers/{customer_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delete_customer.status(), 204);
+
+    let delete_business_unit = client
+        .delete(format!("{base}/api/v1/business-units/{business_unit_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delete_business_unit.status(), 204);
+}
+
 /// Provider credentials posted to the API must be sealed at rest, decrypted
 /// into the gateway snapshot, and never leak through the dashboard config
 /// endpoint. Runs in its own process (nextest), so setting the KEK env var
