@@ -39,6 +39,22 @@ impl Default for UsageBufferPool {
     }
 }
 
+fn should_sample_request(request_id: &str, sample_rate: f64) -> bool {
+    if sample_rate >= 1.0 {
+        return true;
+    }
+    if sample_rate <= 0.0 {
+        return false;
+    }
+    let mut hash = 1469598103934665603u64;
+    for byte in request_id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    let bucket = (hash % 10_000) as f64 / 10_000.0;
+    bucket < sample_rate
+}
+
 impl UsageBufferPool {
     const MAX_RETAINED_BYTES: usize = 1024 * 1024;
 
@@ -103,6 +119,8 @@ pub struct RequestLog {
     pub payload_max_bytes: usize,
     #[serde(skip)]
     pub payload_redact_fields: Vec<String>,
+    #[serde(skip)]
+    pub sample_rate: f64,
 }
 
 impl Default for RequestLog {
@@ -135,6 +153,7 @@ impl Default for RequestLog {
             capture_payloads: false,
             payload_max_bytes: 0,
             payload_redact_fields: Vec::new(),
+            sample_rate: 1.0,
         }
     }
 }
@@ -548,6 +567,9 @@ impl LogSink {
         if !record.provider.is_empty() && !record.target.is_empty() {
             self.health_events.emit(passive_health_event(&record));
         }
+        if !should_sample_request(&record.request_id, record.sample_rate) {
+            return;
+        }
         let Some(tx) = &self.tx else {
             return;
         };
@@ -861,6 +883,14 @@ data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":25}}\n\n";
         // no queue, nothing written or dropped
         assert_eq!(metrics.logs_dropped_total.load(Relaxed), 0);
         assert_eq!(metrics.logs_written_total.load(Relaxed), 0);
+    }
+
+    #[test]
+    fn sampling_rate_boundaries_are_respected() {
+        assert!(should_sample_request("req-1", 1.0));
+        assert!(should_sample_request("req-1", 2.0));
+        assert!(!should_sample_request("req-1", 0.0));
+        assert!(!should_sample_request("req-1", -0.1));
     }
 
     #[tokio::test]

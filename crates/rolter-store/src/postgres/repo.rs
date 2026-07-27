@@ -12,10 +12,11 @@ use uuid::Uuid;
 use rolter_core::{Error, Result};
 
 use super::models::{
-    AuditLogEntry, Budget, BusinessUnit, Customer, Membership, ModelPrice, Org, OwnedVirtualKey,
-    Project, PromptTemplate, PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup,
-    ProviderGroupMember, RateLimit, Route, RouteTarget, SecuritySettings, Session, Skill,
-    SkillVersion, Team, User, VirtualKey,
+    AuditLogEntry, Budget, BusinessUnit, Customer, FeatureFlags, LoggingSettings, Membership,
+    ModelPrice, Org, OwnedVirtualKey, Project, PromptTemplate, PromptTemplateScope,
+    PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember, RateLimit, Route,
+    RouteTarget, RuntimePolicy, SecuritySettings, Session, Skill, SkillVersion, Team, User,
+    VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -64,6 +65,60 @@ impl OrgRepo<'_> {
             return Err(Error::NotFound(format!("org {id}")));
         }
         Ok(())
+    }
+}
+
+impl RuntimePolicyRepo<'_> {
+    pub async fn get(&self) -> Result<RuntimePolicy> {
+        sqlx::query_as(
+            "select retry_max_retries, retry_base_ms, retry_max_ms, timeout_connect_s, \
+                    timeout_request_s, queue_enabled, queue_capacity, queue_workers, \
+                    queue_backpressure, queue_block_ms, updated_at \
+             from runtime_policy where id = true",
+        )
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update(
+        &self,
+        retry_max_retries: i32,
+        retry_base_ms: i32,
+        retry_max_ms: i32,
+        timeout_connect_s: i32,
+        timeout_request_s: i32,
+        queue_enabled: bool,
+        queue_capacity: i32,
+        queue_workers: i32,
+        queue_backpressure: &str,
+        queue_block_ms: i32,
+    ) -> Result<RuntimePolicy> {
+        sqlx::query_as(
+            "update runtime_policy set \
+                retry_max_retries = $1, retry_base_ms = $2, retry_max_ms = $3, \
+                timeout_connect_s = $4, timeout_request_s = $5, queue_enabled = $6, \
+                queue_capacity = $7, queue_workers = $8, queue_backpressure = $9, \
+                queue_block_ms = $10, updated_at = now() \
+             where id = true \
+             returning retry_max_retries, retry_base_ms, retry_max_ms, timeout_connect_s, \
+                       timeout_request_s, queue_enabled, queue_capacity, queue_workers, \
+                       queue_backpressure, queue_block_ms, updated_at",
+        )
+        .bind(retry_max_retries)
+        .bind(retry_base_ms)
+        .bind(retry_max_ms)
+        .bind(timeout_connect_s)
+        .bind(timeout_request_s)
+        .bind(queue_enabled)
+        .bind(queue_capacity)
+        .bind(queue_workers)
+        .bind(queue_backpressure)
+        .bind(queue_block_ms)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
     }
 }
 
@@ -1735,6 +1790,9 @@ pub struct AuditLogPage {
 /// Global ingress policy. The encrypted secret remains write-only; callers
 /// receive only whether a managed dashboard credential is configured.
 pub struct SecuritySettingsRepo<'a>(pub &'a PgPool);
+pub struct FeatureFlagsRepo<'a>(pub &'a PgPool);
+pub struct LoggingSettingsRepo<'a>(pub &'a PgPool);
+pub struct RuntimePolicyRepo<'a>(pub &'a PgPool);
 
 impl SecuritySettingsRepo<'_> {
     pub async fn get(&self) -> Result<SecuritySettings> {
@@ -1788,6 +1846,91 @@ impl SecuritySettingsRepo<'_> {
         .bind(dashboard_credential_ref)
         .bind(ciphertext)
         .bind(nonce)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+}
+
+impl FeatureFlagsRepo<'_> {
+    pub async fn get(&self) -> Result<FeatureFlags> {
+        sqlx::query_as(
+            "select response_cache, cache_aware_routing, circuit_breaker, active_health_checks, \
+                    complexity_routing, guardrails, updated_at \
+             from feature_flags where id = true",
+        )
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn update(
+        &self,
+        response_cache: bool,
+        cache_aware_routing: bool,
+        circuit_breaker: bool,
+        active_health_checks: bool,
+        complexity_routing: bool,
+        guardrails: bool,
+    ) -> Result<FeatureFlags> {
+        sqlx::query_as(
+            "update feature_flags set \
+                response_cache = $1, cache_aware_routing = $2, circuit_breaker = $3, \
+                active_health_checks = $4, complexity_routing = $5, guardrails = $6, updated_at = now() \
+             where id = true \
+             returning response_cache, cache_aware_routing, circuit_breaker, active_health_checks, \
+                       complexity_routing, guardrails, updated_at",
+        )
+        .bind(response_cache)
+        .bind(cache_aware_routing)
+        .bind(circuit_breaker)
+        .bind(active_health_checks)
+        .bind(complexity_routing)
+        .bind(guardrails)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+}
+
+impl LoggingSettingsRepo<'_> {
+    pub async fn get(&self) -> Result<LoggingSettings> {
+        sqlx::query_as(
+            "select sample_rate, payload_capture_enabled, payload_capture_max_bytes, \
+                    payload_capture_redact_fields, payload_capture_models, payload_capture_virtual_key_ids, updated_at \
+             from logging_settings where id = true",
+        )
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update(
+        &self,
+        sample_rate: f64,
+        payload_capture_enabled: bool,
+        payload_capture_max_bytes: i32,
+        payload_capture_redact_fields: &[String],
+        payload_capture_models: &[String],
+        payload_capture_virtual_key_ids: &[String],
+    ) -> Result<LoggingSettings> {
+        sqlx::query_as(
+            "update logging_settings set \
+                sample_rate = $1, payload_capture_enabled = $2, payload_capture_max_bytes = $3, \
+                payload_capture_redact_fields = $4, payload_capture_models = $5, \
+                payload_capture_virtual_key_ids = $6, updated_at = now() \
+             where id = true \
+             returning sample_rate, payload_capture_enabled, payload_capture_max_bytes, \
+                       payload_capture_redact_fields, payload_capture_models, \
+                       payload_capture_virtual_key_ids, updated_at",
+        )
+        .bind(sample_rate)
+        .bind(payload_capture_enabled)
+        .bind(payload_capture_max_bytes)
+        .bind(payload_capture_redact_fields)
+        .bind(payload_capture_models)
+        .bind(payload_capture_virtual_key_ids)
         .fetch_one(self.0)
         .await
         .map_err(store_err)

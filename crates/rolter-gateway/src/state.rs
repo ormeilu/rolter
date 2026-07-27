@@ -679,7 +679,7 @@ impl AppState {
         self.response_registry.reconfigure(&config.responses);
         // configured clients capture CA roots at construction time; clearing
         // them makes bundle rotation take effect on the next request
-        self.forwarder.reload();
+        self.forwarder.reload(&config.timeouts);
         // the resolver reads this on every lookup, so a policy change takes
         // effect on the next connect without rebuilding a single client
         self.egress.store(Arc::new(config.egress.clone()));

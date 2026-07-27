@@ -1082,6 +1082,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                     team_id: team_id.clone(),
                     project_id: project_id.clone(),
                     model: model.clone(),
+                    sample_rate: snap.logging.sample_rate,
                     started,
                 },
                 output_guard.as_ref(),
@@ -1132,6 +1133,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                             team_id: team_id.clone(),
                             project_id: project_id.clone(),
                             model: model.clone(),
+                            sample_rate: snap.logging.sample_rate,
                             started,
                         },
                         output_guard.as_ref(),
@@ -1450,6 +1452,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                 } else {
                     String::new()
                 },
+                sample_rate: snap.logging.sample_rate,
                 ..Default::default()
             };
             // on a cache-eligible route, buffer a successful response (JSON or a
@@ -1576,6 +1579,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                 stream: stream as u8,
                 latency_ms: started.elapsed().as_millis() as u32,
                 error: message.clone(),
+                sample_rate: snap.logging.sample_rate,
                 ..Default::default()
             });
             upstream_error_response(&message)
@@ -1918,6 +1922,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
                 } else {
                     String::new()
                 },
+                sample_rate: snap.logging.sample_rate,
                 ..Default::default()
             };
             stream_response(
@@ -1957,6 +1962,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
                 stream: 0,
                 latency_ms: started.elapsed().as_millis() as u32,
                 error: message.clone(),
+                sample_rate: snap.logging.sample_rate,
                 ..Default::default()
             });
             upstream_error_response(&message)
@@ -2478,6 +2484,7 @@ struct CacheHitLog {
     team_id: String,
     project_id: String,
     model: String,
+    sample_rate: f64,
     started: Instant,
 }
 
@@ -2625,6 +2632,7 @@ fn cached_response(
         cache_hit: 1,
         latency_ms,
         ttft_ms: latency_ms,
+        sample_rate: ctx.sample_rate,
         ..Default::default()
     };
     let decision = DecisionHeaders::from_log(&log);

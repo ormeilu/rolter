@@ -937,6 +937,233 @@ async fn admin_token_guards_crud_and_snapshot() {
     assert!(allowed.status().is_success(), "{}", allowed.status());
 }
 
+/// Persisted feature flags are superadmin-only, survive reads, and write an
+/// audit entry for each update.
+#[tokio::test]
+async fn feature_flags_are_superadmin_only_and_audited() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let denied = client
+        .get(format!("{base}/api/v1/feature-flags"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    let baseline: Value = client
+        .get(format!("{base}/api/v1/feature-flags"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(baseline["response_cache"], true);
+    assert_eq!(baseline["cache_aware_routing"], true);
+    assert_eq!(baseline["circuit_breaker"], true);
+    assert_eq!(baseline["active_health_checks"], true);
+    assert_eq!(baseline["complexity_routing"], true);
+    assert_eq!(baseline["guardrails"], true);
+
+    let updated: Value = client
+        .put(format!("{base}/api/v1/feature-flags"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "response_cache": false,
+            "cache_aware_routing": false,
+            "circuit_breaker": false,
+            "active_health_checks": false,
+            "complexity_routing": false,
+            "guardrails": false
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["response_cache"], false);
+    assert_eq!(updated["cache_aware_routing"], false);
+    assert_eq!(updated["circuit_breaker"], false);
+    assert_eq!(updated["active_health_checks"], false);
+    assert_eq!(updated["complexity_routing"], false);
+    assert_eq!(updated["guardrails"], false);
+
+    let reloaded: Value = client
+        .get(format!("{base}/api/v1/feature-flags"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reloaded["response_cache"], false);
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'feature_flags.update' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("feature_flags.update"));
+}
+
+#[tokio::test]
+async fn logging_settings_are_superadmin_only_and_audited() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let denied = client
+        .get(format!("{base}/api/v1/logging-settings"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    let baseline: Value = client
+        .get(format!("{base}/api/v1/logging-settings"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(baseline["sample_rate"], 1.0);
+
+    let updated: Value = client
+        .put(format!("{base}/api/v1/logging-settings"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "sample_rate": 0.25,
+            "payload_capture_enabled": true,
+            "payload_capture_max_bytes": 4096,
+            "payload_capture_redact_fields": ["token", "authorization"],
+            "payload_capture_models": ["gpt-4o"],
+            "payload_capture_virtual_key_ids": ["00000000-0000-0000-0000-000000000001"]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["sample_rate"], 0.25);
+    assert_eq!(updated["payload_capture_enabled"], true);
+    assert_eq!(updated["payload_capture_max_bytes"], 4096);
+
+    let reloaded: Value = client
+        .get(format!("{base}/api/v1/logging-settings"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reloaded["sample_rate"], 0.25);
+    assert_eq!(reloaded["payload_capture_enabled"], true);
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'logging_settings.update' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("logging_settings.update"));
+}
+
+#[tokio::test]
+async fn runtime_policy_is_superadmin_only_and_audited() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let denied = client
+        .get(format!("{base}/api/v1/runtime-policy"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    let baseline: Value = client
+        .get(format!("{base}/api/v1/runtime-policy"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(baseline["retry_max_retries"], 2);
+    assert_eq!(baseline["queue_backpressure"], "error");
+
+    let updated: Value = client
+        .put(format!("{base}/api/v1/runtime-policy"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "retry_max_retries": 4,
+            "retry_base_ms": 150,
+            "retry_max_ms": 1500,
+            "timeout_connect_s": 20,
+            "timeout_request_s": 180,
+            "queue_enabled": true,
+            "queue_capacity": 1024,
+            "queue_workers": 16,
+            "queue_backpressure": "block",
+            "queue_block_ms": 5000
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["retry_max_retries"], 4);
+    assert_eq!(updated["timeout_connect_s"], 20);
+    assert_eq!(updated["queue_backpressure"], "block");
+
+    let reloaded: Value = client
+        .get(format!("{base}/api/v1/runtime-policy"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reloaded["retry_max_retries"], 4);
+    assert_eq!(reloaded["queue_backpressure"], "block");
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'runtime_policy.update' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("runtime_policy.update"));
+}
+
 /// End-to-end local-account login (ROL-32): seed a user with an argon2id hash
 /// directly (no signup flow exists yet), then exercise login → `/auth/me` →
 /// logout → the now-revoked token is rejected.

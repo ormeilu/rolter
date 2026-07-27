@@ -7,17 +7,20 @@ pub mod repo;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rolter_core::{
-    BalancingStrategy, BudgetConfig, BudgetPeriod, BudgetScope, Decorator, Error, GatewayConfig,
-    GroupMember, ModelPriceConfig, ModelRoute, PromptTemplate, PromptTemplateActivationScope,
-    PromptTemplatesConfig, ProviderConfig, ProviderGroupConfig, ProviderKind, RateLimitConfig,
-    Result, Target, TemplateVariable, VirtualKeyRecord,
+    BackpressurePolicy, BalancingStrategy, BudgetConfig, BudgetPeriod, BudgetScope, Decorator,
+    Error, FeatureFlagsConfig, GatewayConfig, GroupMember, ModelPriceConfig, ModelRoute,
+    PromptTemplate, PromptTemplateActivationScope, PromptTemplatesConfig, ProviderConfig,
+    ProviderGroupConfig, ProviderKind, RateLimitConfig, Result, Target, TemplateVariable,
+    VirtualKeyRecord,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::postgres::models::{Budget, ModelPrice, RateLimit};
+use crate::postgres::models::{
+    Budget, FeatureFlags, LoggingSettings, ModelPrice, RateLimit, RuntimePolicy,
+};
 use crate::ConfigStore;
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -346,6 +349,40 @@ impl PostgresConfigStore {
         rows.into_iter()
             .map(|row| row.into_config(self.kek.as_ref()))
             .collect()
+    }
+
+    async fn load_feature_flags(&self) -> Result<FeatureFlags> {
+        sqlx::query_as(
+            "select response_cache, cache_aware_routing, circuit_breaker, active_health_checks, \
+                    complexity_routing, guardrails, updated_at \
+             from feature_flags where id = true",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(store_err)
+    }
+
+    async fn load_runtime_policy(&self) -> Result<RuntimePolicy> {
+        sqlx::query_as(
+            "select retry_max_retries, retry_base_ms, retry_max_ms, timeout_connect_s, \
+                    timeout_request_s, queue_enabled, queue_capacity, queue_workers, \
+                    queue_backpressure, queue_block_ms, updated_at \
+             from runtime_policy where id = true",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(store_err)
+    }
+
+    async fn load_logging_settings(&self) -> Result<LoggingSettings> {
+        sqlx::query_as(
+            "select sample_rate, payload_capture_enabled, payload_capture_max_bytes, \
+                    payload_capture_redact_fields, payload_capture_models, payload_capture_virtual_key_ids, updated_at \
+             from logging_settings where id = true",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(store_err)
     }
 
     async fn load_routes(&self) -> Result<Vec<ModelRoute>> {
@@ -754,6 +791,9 @@ pub async fn current_version(pool: &PgPool) -> Result<i64> {
 #[async_trait]
 impl ConfigStore for PostgresConfigStore {
     async fn load(&self) -> Result<GatewayConfig> {
+        let flags = self.load_feature_flags().await?;
+        let runtime_policy = self.load_runtime_policy().await?;
+        let logging = self.load_logging_settings().await?;
         let providers = self.load_providers().await?;
         let routes = self.load_routes().await?;
         let provider_groups = self.load_provider_groups().await?;
@@ -762,7 +802,7 @@ impl ConfigStore for PostgresConfigStore {
         let budgets = self.load_budgets().await?;
         let rate_limits = self.load_rate_limits().await?;
         let prompt_templates = self.load_prompt_templates().await?;
-        Ok(GatewayConfig {
+        let mut config = GatewayConfig {
             providers,
             routes,
             provider_groups,
@@ -771,8 +811,39 @@ impl ConfigStore for PostgresConfigStore {
             budgets,
             rate_limits,
             prompt_templates,
+            feature_flags: FeatureFlagsConfig {
+                response_cache: flags.response_cache,
+                cache_aware_routing: flags.cache_aware_routing,
+                circuit_breaker: flags.circuit_breaker,
+                active_health_checks: flags.active_health_checks,
+                complexity_routing: flags.complexity_routing,
+                guardrails: flags.guardrails,
+            },
             ..GatewayConfig::default()
-        })
+        };
+        config.apply_feature_flags();
+        config.logging.sample_rate = logging.sample_rate;
+        config.logging.payload_capture.enabled = logging.payload_capture_enabled;
+        config.logging.payload_capture.max_bytes =
+            logging.payload_capture_max_bytes.max(0) as usize;
+        config.logging.payload_capture.redact_fields = logging.payload_capture_redact_fields;
+        config.logging.payload_capture.models = logging.payload_capture_models;
+        config.logging.payload_capture.virtual_key_ids = logging.payload_capture_virtual_key_ids;
+        config.retry.max_retries = runtime_policy.retry_max_retries.max(0) as u32;
+        config.retry.base_backoff_ms = runtime_policy.retry_base_ms.max(0) as u64;
+        config.retry.max_backoff_ms = runtime_policy.retry_max_ms.max(0) as u64;
+        config.timeouts.connect_secs = runtime_policy.timeout_connect_s.max(0) as u64;
+        config.timeouts.request_secs = runtime_policy.timeout_request_s.max(0) as u64;
+        config.queue.enabled = runtime_policy.queue_enabled;
+        config.queue.capacity = runtime_policy.queue_capacity.max(1) as usize;
+        config.queue.workers = runtime_policy.queue_workers.max(1) as usize;
+        config.queue.backpressure = match runtime_policy.queue_backpressure.as_str() {
+            "drop" => BackpressurePolicy::Drop,
+            "block" => BackpressurePolicy::Block,
+            _ => BackpressurePolicy::Error,
+        };
+        config.queue.block_timeout_ms = runtime_policy.queue_block_ms.max(0) as u64;
+        Ok(config)
     }
 
     async fn save(&self, _config: GatewayConfig) -> Result<()> {
@@ -1035,6 +1106,168 @@ mod tests {
             Some("gpt-4o-2024-08-06")
         );
         assert_eq!(config.routes[0].targets[0].weight, 2);
+    }
+
+    #[tokio::test]
+    async fn feature_flags_gate_supported_snapshot_subsystems() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+
+        let org_id: Uuid = sqlx::query_scalar(
+            "insert into orgs (name, slug) values ('acme', 'acme') returning id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let team_id: Uuid =
+            sqlx::query_scalar("insert into teams (org_id, name) values ($1, 'core') returning id")
+                .bind(org_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let project_id: Uuid = sqlx::query_scalar(
+            "insert into projects (team_id, name) values ($1, 'default') returning id",
+        )
+        .bind(team_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let provider_id: Uuid = sqlx::query_scalar(
+            "insert into providers (org_id, name, slug, kind, api_base, api_key_env)
+             values ($1, 'openai', 'openai', 'openai', 'https://api.openai.com', 'OPENAI_API_KEY')
+             returning id",
+        )
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let route_id: Uuid = sqlx::query_scalar(
+            "insert into routes (project_id, model, strategy, params)
+             values ($1, 'gpt-4o', 'cache_aware', $2) returning id",
+        )
+        .bind(project_id)
+        .bind(serde_json::json!({
+            "_rolter_complexity": {
+                "tiers": [{"name":"simple","max_input_bytes":256,"route":"gpt-4o"}]
+            }
+        }))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into route_targets (route_id, provider_id, upstream_model, weight)
+             values ($1, $2, 'gpt-4o-2024-08-06', 1)",
+        )
+        .bind(route_id)
+        .bind(provider_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "update feature_flags set
+                response_cache = false,
+                cache_aware_routing = false,
+                circuit_breaker = false,
+                active_health_checks = false,
+                complexity_routing = false,
+                guardrails = false
+             where id = true",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let store = PostgresConfigStore::new(pool);
+        let config = store.load().await.unwrap();
+        assert!(!config.cache.enabled);
+        assert!(!config.breaker.enabled);
+        assert!(!config.health.enabled);
+        assert!(!config.guardrails.enabled);
+        assert_eq!(config.routes.len(), 1);
+        assert_eq!(config.routes[0].strategy, BalancingStrategy::PowerOfTwo);
+        assert!(!config.routes[0].params.contains_key("_rolter_complexity"));
+    }
+
+    #[tokio::test]
+    async fn logging_settings_project_into_snapshot_logging_policy() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        sqlx::query(
+            "update logging_settings set
+                sample_rate = 0.4,
+                payload_capture_enabled = true,
+                payload_capture_max_bytes = 2048,
+                payload_capture_redact_fields = array['token','secret'],
+                payload_capture_models = array['gpt-4o'],
+                payload_capture_virtual_key_ids = array['vk-1']
+             where id = true",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let store = PostgresConfigStore::new(pool);
+        let config = store.load().await.unwrap();
+        assert_eq!(config.logging.sample_rate, 0.4);
+        assert!(config.logging.payload_capture.enabled);
+        assert_eq!(config.logging.payload_capture.max_bytes, 2048);
+        assert_eq!(
+            config.logging.payload_capture.redact_fields,
+            vec!["token".to_string(), "secret".to_string()]
+        );
+        assert_eq!(
+            config.logging.payload_capture.models,
+            vec!["gpt-4o".to_string()]
+        );
+        assert_eq!(
+            config.logging.payload_capture.virtual_key_ids,
+            vec!["vk-1".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_policy_projects_into_snapshot_runtime_controls() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        sqlx::query(
+            "update runtime_policy set
+                retry_max_retries = 5,
+                retry_base_ms = 250,
+                retry_max_ms = 4000,
+                timeout_connect_s = 15,
+                timeout_request_s = 120,
+                queue_enabled = false,
+                queue_capacity = 512,
+                queue_workers = 32,
+                queue_backpressure = 'drop',
+                queue_block_ms = 750
+             where id = true",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let store = PostgresConfigStore::new(pool);
+        let config = store.load().await.unwrap();
+        assert_eq!(config.retry.max_retries, 5);
+        assert_eq!(config.retry.base_backoff_ms, 250);
+        assert_eq!(config.retry.max_backoff_ms, 4000);
+        assert_eq!(config.timeouts.connect_secs, 15);
+        assert_eq!(config.timeouts.request_secs, 120);
+        assert!(!config.queue.enabled);
+        assert_eq!(config.queue.capacity, 512);
+        assert_eq!(config.queue.workers, 32);
+        assert_eq!(config.queue.backpressure, BackpressurePolicy::Drop);
+        assert_eq!(config.queue.block_timeout_ms, 750);
     }
 
     // regression: the snapshot query must cast numeric price columns to text,
