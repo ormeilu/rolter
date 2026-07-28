@@ -327,6 +327,21 @@ A caller then supplies variables per request:
 }
 ```
 
+When the control plane uses PostgreSQL, prompt templates can also be authored
+through the org-scoped `/api/v1/orgs/{org_id}/prompt-templates` endpoints. Draft
+versions are immutable once published, publication and rollback update the
+reload-free snapshot, and activation can be limited to an organization, project,
+route, or virtual key. Seed import creates missing versions idempotently and
+refuses to overwrite an existing immutable version with different content.
+
+Organization skills use the adjacent
+`/api/v1/orgs/{org_id}/skills` endpoints. A skill has mutable metadata and access
+policy, immutable inline or reference-backed versions, explicit
+publish/rollback/retire lifecycle, and a deterministic
+`/resolve/{slug}` endpoint. Reference-backed versions accept `https`, `git+https`,
+`oci`, and `s3` references without embedded credentials; secret-bearing metadata
+keys are rejected.
+
 ## Environment variables
 
 - `ROLTER_CONFIG`, `ROLTER_HOST`, `ROLTER_PORT` — gateway

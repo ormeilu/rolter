@@ -917,6 +917,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn skills_writes_bump_version() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        let v0 = current_version(&pool).await.unwrap();
+
+        let org_id: Uuid = sqlx::query_scalar(
+            "insert into orgs (name, slug) values ('acme', 'acme') returning id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let skill_id: Uuid = sqlx::query_scalar(
+            "insert into skills (org_id, name, slug, description)
+             values ($1, 'classification baseline', 'classification-baseline', 'desc')
+             returning id",
+        )
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(current_version(&pool).await.unwrap(), v0 + 1);
+
+        sqlx::query(
+            "insert into skill_versions (skill_id, version, content, metadata)
+             values ($1, 1, 'alpha', '{}'::jsonb)",
+        )
+        .bind(skill_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(current_version(&pool).await.unwrap(), v0 + 2);
+
+        sqlx::query("update skills set published_version = 1 where id = $1")
+            .bind(skill_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(current_version(&pool).await.unwrap(), v0 + 3);
+    }
+
+    #[tokio::test]
     async fn loads_providers_and_routes_from_db() {
         let Some(_) = database_url() else {
             eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
