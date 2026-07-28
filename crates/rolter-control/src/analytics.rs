@@ -58,6 +58,40 @@ impl ClickHouseClient {
             .unwrap_or_default())
     }
 
+    /// Apply the admin-configured retention clocks to the log tables. Both
+    /// bounds are integers validated by the caller and formatted into the DDL —
+    /// ClickHouse does not accept query parameters in an `alter table` — so the
+    /// only values that ever reach this SQL are in-range numbers (#537).
+    // only reachable via the postgres-gated logging-settings router
+    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
+    pub(crate) async fn apply_log_retention(
+        &self,
+        retention_days: u32,
+        payload_retention_hours: u32,
+    ) -> anyhow::Result<()> {
+        for statement in [
+            format!(
+                "alter table request_logs modify ttl toDateTime(ts) + interval {retention_days} day"
+            ),
+            format!(
+                "alter table request_payloads modify ttl toDateTime(ts) + interval {payload_retention_hours} hour"
+            ),
+        ] {
+            let response = self
+                .client
+                .post(format!("{}/", self.base))
+                .body(statement.clone())
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                anyhow::bail!("clickhouse retention change failed ({status}): {body}");
+            }
+        }
+        Ok(())
+    }
+
     /// Persist one already-sanitized MCP tool-call event. The table and insert
     /// statement are fixed here rather than supplied by a caller, so event
     /// metadata can never alter ClickHouse SQL.

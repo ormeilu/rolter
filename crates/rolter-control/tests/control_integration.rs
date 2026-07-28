@@ -1403,7 +1403,9 @@ async fn logging_settings_are_superadmin_only_and_audited() {
             "payload_capture_max_bytes": 4096,
             "payload_capture_redact_fields": ["token", "authorization"],
             "payload_capture_models": ["gpt-4o"],
-            "payload_capture_virtual_key_ids": ["00000000-0000-0000-0000-000000000001"]
+            "payload_capture_virtual_key_ids": ["00000000-0000-0000-0000-000000000001"],
+            "retention_days": 30,
+            "payload_retention_hours": 24
         }))
         .send()
         .await
@@ -1414,6 +1416,27 @@ async fn logging_settings_are_superadmin_only_and_audited() {
     assert_eq!(updated["sample_rate"], 0.25);
     assert_eq!(updated["payload_capture_enabled"], true);
     assert_eq!(updated["payload_capture_max_bytes"], 4096);
+    assert_eq!(updated["retention_days"], 30);
+    assert_eq!(updated["payload_retention_hours"], 24);
+
+    // raw bodies may never outlive the metadata row they belong to
+    let rejected = client
+        .put(format!("{base}/api/v1/logging-settings"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "sample_rate": 0.25,
+            "payload_capture_enabled": true,
+            "payload_capture_max_bytes": 4096,
+            "payload_capture_redact_fields": ["token"],
+            "payload_capture_models": [],
+            "payload_capture_virtual_key_ids": [],
+            "retention_days": 1,
+            "payload_retention_hours": 720
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 400);
 
     let reloaded: Value = client
         .get(format!("{base}/api/v1/logging-settings"))
@@ -1426,6 +1449,7 @@ async fn logging_settings_are_superadmin_only_and_audited() {
         .unwrap();
     assert_eq!(reloaded["sample_rate"], 0.25);
     assert_eq!(reloaded["payload_capture_enabled"], true);
+    assert_eq!(reloaded["retention_days"], 30);
 
     let action: Option<String> = sqlx::query_scalar(
         "select action from audit_log where action = 'logging_settings.update' order by at desc limit 1",

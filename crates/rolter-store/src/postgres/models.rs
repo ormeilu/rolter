@@ -299,6 +299,10 @@ pub struct LoggingSettings {
     pub payload_capture_redact_fields: Vec<String>,
     pub payload_capture_models: Vec<String>,
     pub payload_capture_virtual_key_ids: Vec<String>,
+    /// how long request-log metadata is kept in clickhouse
+    pub retention_days: i32,
+    /// how long captured raw payloads are kept; always the shorter clock
+    pub payload_retention_hours: i32,
     pub updated_at: DateTime<Utc>,
 }
 

@@ -391,7 +391,8 @@ impl PostgresConfigStore {
     async fn load_logging_settings(&self) -> Result<LoggingSettings> {
         sqlx::query_as(
             "select sample_rate, payload_capture_enabled, payload_capture_max_bytes, \
-                    payload_capture_redact_fields, payload_capture_models, payload_capture_virtual_key_ids, updated_at \
+                    payload_capture_redact_fields, payload_capture_models, payload_capture_virtual_key_ids, \
+                    retention_days, payload_retention_hours, updated_at \
              from logging_settings where id = true",
         )
         .fetch_one(&self.pool)
