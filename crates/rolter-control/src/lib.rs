@@ -40,6 +40,8 @@ mod rbac_matrix;
 #[cfg(feature = "postgres")]
 mod runtime_policy;
 #[cfg(feature = "postgres")]
+mod scim;
+#[cfg(feature = "postgres")]
 mod security;
 #[cfg(feature = "postgres")]
 pub mod seed;
@@ -375,6 +377,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(compatibility_policy::router())
             .merge(adaptive_policy::router())
             .merge(rbac_matrix::router())
+            .merge(scim::router())
             .merge(cluster::router())
             .merge(security::router());
     }

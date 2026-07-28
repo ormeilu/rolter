@@ -2247,6 +2247,281 @@ async fn skill_access_policy_filters_list_history_and_resolution() {
     assert_eq!(denied_resolution.status(), 403);
 }
 
+/// SCIM 2.0 Users provisioning (#540): an IdP token scopes every call to one
+/// org, create/deactivate/reconcile are idempotent, no local password is ever
+/// involved, and a revoked token stops working immediately.
+#[tokio::test]
+async fn scim_users_are_provisioned_scoped_and_idempotent() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "ScimOrg", "slug": "scim-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+
+    let other: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "OtherScimOrg", "slug": "other-scim-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_id = other["id"].as_str().unwrap().to_string();
+
+    // minting a token returns the secret exactly once
+    let minted: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/scim-tokens"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "okta"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = minted["secret"].as_str().unwrap().to_string();
+    assert!(secret.starts_with("rolter_scim_"));
+    let token_id = minted["id"].as_str().unwrap().to_string();
+
+    let listed: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/scim-tokens"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let listed_text = listed.to_string();
+    assert!(
+        !listed_text.contains(&secret) && !listed_text.contains("token_hash"),
+        "token material leaked into the listing: {listed_text}"
+    );
+
+    // an unauthenticated SCIM call is a SCIM-shaped 401, not an axum rejection
+    let unauth = client
+        .get(format!("{base}/scim/v2/Users"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth.status(), 401);
+    let body: Value = unauth.json().await.unwrap();
+    assert_eq!(
+        body["schemas"][0],
+        "urn:ietf:params:scim:api:messages:2.0:Error"
+    );
+
+    // provision a user
+    let created = client
+        .post(format!("{base}/scim/v2/Users"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            "userName": "ada@example.com",
+            "externalId": "idp-1",
+            "displayName": "Ada Lovelace",
+            "emails": [{"value": "ada@example.com", "primary": true}],
+            "password": "hunter2"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 201);
+    let created: Value = created.json().await.unwrap();
+    assert_eq!(created["userName"], "ada@example.com");
+    assert_eq!(created["active"], true);
+    assert_eq!(created["externalId"], "idp-1");
+    let scim_id = created["id"].as_str().unwrap().to_string();
+    // the supplied password is ignored, never stored
+    let hash: Option<String> = sqlx::query_scalar("select password_hash from users where id = $1")
+        .bind(scim_id.parse::<uuid::Uuid>().unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(hash.is_none(), "provisioning must not store a password");
+
+    // a replayed create is a SCIM uniqueness conflict, not a second account
+    let replay = client
+        .post(format!("{base}/scim/v2/Users"))
+        .bearer_auth(&secret)
+        .json(&json!({"userName": "ada@example.com", "emails": [{"value": "ada@example.com"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 409);
+    let replay: Value = replay.json().await.unwrap();
+    assert_eq!(replay["scimType"], "uniqueness");
+
+    // the filter IdPs reconcile with
+    let found: Value = client
+        .get(format!(
+            "{base}/scim/v2/Users?filter=userName%20eq%20%22ada@example.com%22"
+        ))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(found["totalResults"], 1);
+    assert_eq!(found["Resources"][0]["id"], scim_id);
+
+    // an unsupported filter is refused rather than answered with everything
+    let bad_filter = client
+        .get(format!(
+            "{base}/scim/v2/Users?filter=displayName%20eq%20%22Ada%22"
+        ))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_filter.status(), 400);
+
+    // a live session exists, then the IdP deactivates the leaver
+    let user_uuid: uuid::Uuid = scim_id.parse().unwrap();
+    let session_token = seed_session(&pool, user_uuid, "scimuser").await;
+    let me_before = client
+        .get(format!("{base}/api/v1/auth/me"))
+        .bearer_auth(&session_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(me_before.status(), 200);
+
+    let patched: Value = client
+        .patch(format!("{base}/scim/v2/Users/{scim_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{"op": "replace", "path": "active", "value": false}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(patched["active"], false);
+    // deactivation logs the leaver out rather than only blocking future logins
+    let me_after = client
+        .get(format!("{base}/api/v1/auth/me"))
+        .bearer_auth(&session_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(me_after.status(), 401);
+
+    // re-enabling is the same call with the other value
+    let reenabled: Value = client
+        .patch(format!("{base}/scim/v2/Users/{scim_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({"Operations": [{"op": "replace", "value": {"active": true}}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reenabled["active"], true);
+
+    // another org's token cannot see or touch this resource
+    let other_minted: Value = client
+        .post(format!("{base}/api/v1/orgs/{other_id}/scim-tokens"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "entra"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_secret = other_minted["secret"].as_str().unwrap().to_string();
+    let cross = client
+        .get(format!("{base}/scim/v2/Users/{scim_id}"))
+        .bearer_auth(&other_secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross.status(), 404, "a token must not reach another tenant");
+    let cross_list: Value = client
+        .get(format!("{base}/scim/v2/Users"))
+        .bearer_auth(&other_secret)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cross_list["totalResults"], 0);
+
+    // delete deprovisions: the mapping goes, the account survives deactivated
+    let deleted = client
+        .delete(format!("{base}/scim/v2/Users/{scim_id}"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 204);
+    let gone = client
+        .get(format!("{base}/scim/v2/Users/{scim_id}"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 404);
+    let still_there: Option<uuid::Uuid> = sqlx::query_scalar("select id from users where id = $1")
+        .bind(user_uuid)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    assert!(
+        still_there.is_some(),
+        "the account row must outlive the IdP"
+    );
+
+    // revoking the token stops provisioning immediately
+    let revoked = client
+        .delete(format!("{base}/api/v1/scim-tokens/{token_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), 200);
+    let after_revoke = client
+        .get(format!("{base}/scim/v2/Users"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(after_revoke.status(), 401);
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'scim.user.deprovision' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("scim.user.deprovision"));
+}
+
 /// MCP OAuth grants and sessions (#541): admins see the whole org, a member
 /// sees only what they own, revoking a grant kills its sessions, and no token
 /// material ever appears in a response.

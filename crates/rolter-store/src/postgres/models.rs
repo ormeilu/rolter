@@ -306,6 +306,34 @@ pub struct CompatibilityPolicy {
     pub updated_at: DateTime<Utc>,
 }
 
+/// a SCIM provisioning token. `token_hash` is peppered sha-256; the plaintext
+/// is returned once at creation and never stored.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ScimToken {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    #[serde(skip_serializing)]
+    pub token_hash: String,
+    pub created_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// the SCIM view of a local user within one org: what the IdP calls them and
+/// the stable id it knows them by.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ScimIdentity {
+    pub user_id: Uuid,
+    pub org_id: Uuid,
+    pub external_id: Option<String>,
+    pub user_name: String,
+    pub display_name: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// an MCP server an org has registered; the anchor OAuth grants hang off
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct McpServer {
