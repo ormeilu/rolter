@@ -1,5 +1,7 @@
 import { RefreshCw } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useIsFetching } from "@tanstack/react-query";
+
+import { cn } from "@/lib/utils";
 
 // per-screen header from the design prototype: title + subtitle on the left,
 // gateway-healthy pill + refresh on the right, over the вышивка rule that
@@ -7,6 +9,8 @@ import { useQueryClient } from "@tanstack/react-query";
 // in the sidebar user menu, not here.
 export function ScreenHeader({ title, subtitle }: { title: string; subtitle: string }) {
   const queryClient = useQueryClient();
+  const isFetching = useIsFetching();
+
   return (
     <>
       <header className="flex flex-none items-center gap-4 px-[22px] py-4">
@@ -22,10 +26,11 @@ export function ScreenHeader({ title, subtitle }: { title: string; subtitle: str
           <button
             type="button"
             title="Refresh"
+            aria-label="Refresh data"
             onClick={() => queryClient.invalidateQueries()}
-            className="flex h-[34px] w-[34px] items-center justify-center rounded-md border border-[color:var(--border-subtle)] text-muted-foreground transition-colors hover:bg-[color:var(--surface-hover)] hover:text-foreground"
+            className="flex h-[34px] w-[34px] items-center justify-center rounded-md border border-[color:var(--border-subtle)] text-muted-foreground transition-colors hover:bg-[color:var(--surface-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
-            <RefreshCw className="h-4 w-4" />
+            <RefreshCw className={cn("h-4 w-4", isFetching > 0 && "animate-spin")} />
           </button>
         </div>
       </header>
