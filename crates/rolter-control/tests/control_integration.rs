@@ -1441,6 +1441,86 @@ async fn runtime_policy_is_superadmin_only_and_audited() {
     assert_eq!(action.as_deref(), Some("runtime_policy.update"));
 }
 
+#[tokio::test]
+async fn compatibility_policy_is_superadmin_only_validated_and_audited() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let denied = client
+        .get(format!("{base}/api/v1/compatibility-policy"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    let baseline: Value = client
+        .get(format!("{base}/api/v1/compatibility-policy"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // defaults preserve the previously compiled-in behavior
+    assert_eq!(baseline["anthropic_version"], "2023-06-01");
+    assert_eq!(baseline["default_max_tokens"], 1024);
+    assert_eq!(baseline["restart_required"].as_array().unwrap().len(), 0);
+
+    // a free-form version would fail every anthropic call at the edge
+    let rejected = client
+        .put(format!("{base}/api/v1/compatibility-policy"))
+        .bearer_auth("sekrit")
+        .json(&json!({"anthropic_version": "latest", "default_max_tokens": 1024}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 400);
+
+    let updated: Value = client
+        .put(format!("{base}/api/v1/compatibility-policy"))
+        .bearer_auth("sekrit")
+        .json(&json!({"anthropic_version": "2024-10-22", "default_max_tokens": 4096}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["anthropic_version"], "2024-10-22");
+    assert_eq!(updated["default_max_tokens"], 4096);
+
+    // the gateway snapshot carries the new policy without a restart
+    let snap: Value = client
+        .get(format!("{base}/internal/snapshot"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        snap["config"]["compatibility"]["anthropic_version"],
+        "2024-10-22"
+    );
+    assert_eq!(snap["config"]["compatibility"]["default_max_tokens"], 4096);
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'compatibility_policy.update' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("compatibility_policy.update"));
+}
+
 /// End-to-end local-account login (ROL-32): seed a user with an argon2id hash
 /// directly (no signup flow exists yet), then exercise login → `/auth/me` →
 /// logout → the now-revoked token is rejected.

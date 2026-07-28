@@ -14,6 +14,8 @@ mod analytics;
 #[cfg(feature = "postgres")]
 mod auth;
 #[cfg(feature = "postgres")]
+mod compatibility_policy;
+#[cfg(feature = "postgres")]
 mod crud;
 #[cfg(feature = "postgres")]
 mod feature_flags;
@@ -361,6 +363,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(feature_flags::router())
             .merge(logging_settings::router())
             .merge(runtime_policy::router())
+            .merge(compatibility_policy::router())
             .merge(security::router());
     }
 

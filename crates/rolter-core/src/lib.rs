@@ -14,9 +14,9 @@ pub mod telemetry;
 
 pub use config::{
     AdvancedModelConfig, ApiKeyConfig, BackpressurePolicy, BalancingStrategy, BreakerConfig,
-    BudgetConfig, BudgetPeriod, BudgetScope, CacheConfig, CooldownConfig, EgressPolicy,
-    FeatureFlagsConfig, GatewayConfig, GroupMember, HealthConfig, KvEventsConfig, LmCacheConfig,
-    LoggingConfig, MetricsScrapeConfig, ModelLimits, ModelPriceConfig, ModelRoute,
+    BudgetConfig, BudgetPeriod, BudgetScope, CacheConfig, CompatibilityConfig, CooldownConfig,
+    EgressPolicy, FeatureFlagsConfig, GatewayConfig, GroupMember, HealthConfig, KvEventsConfig,
+    LmCacheConfig, LoggingConfig, MetricsScrapeConfig, ModelLimits, ModelPriceConfig, ModelRoute,
     ModelUsagePricing, ModelVisibility, OverrideMode, ParamPolicy, PayloadCaptureConfig,
     ProviderConfig, ProviderGroupConfig, ProviderKind, QueueConfig, RateLimitConfig,
     RealtimeConfig, ResponsesConfig, RetryConfig, RoleProfile, RouteCache, SemanticCacheConfig,

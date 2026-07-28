@@ -74,6 +74,9 @@ pub struct GatewayConfig {
     /// upstream connect/response timeouts
     #[serde(default)]
     pub timeouts: TimeoutConfig,
+    /// cross-dialect translation behavior (anthropic version, default max tokens)
+    #[serde(default)]
+    pub compatibility: CompatibilityConfig,
     /// bounded per-provider dispatch queues and overload behaviour
     #[serde(default)]
     pub queue: QueueConfig,
@@ -1621,6 +1624,39 @@ impl Default for TimeoutConfig {
             request_secs: default_request_secs(),
         }
     }
+}
+
+/// Cross-dialect compatibility behavior applied when a request is translated
+/// between the OpenAI and Anthropic wire formats. Both values were compiled-in
+/// constants before the control plane could own them (#546); the defaults keep
+/// the previous behavior.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct CompatibilityConfig {
+    /// `anthropic-version` header sent to Anthropic upstreams
+    #[serde(default = "default_anthropic_version")]
+    pub anthropic_version: String,
+    /// `max_tokens` injected when translating an OpenAI request that set
+    /// neither `max_tokens` nor `max_completion_tokens` — the Anthropic
+    /// Messages API rejects a request without it
+    #[serde(default = "default_translation_max_tokens")]
+    pub default_max_tokens: u32,
+}
+
+impl Default for CompatibilityConfig {
+    fn default() -> Self {
+        Self {
+            anthropic_version: default_anthropic_version(),
+            default_max_tokens: default_translation_max_tokens(),
+        }
+    }
+}
+
+fn default_anthropic_version() -> String {
+    "2023-06-01".to_string()
+}
+
+fn default_translation_max_tokens() -> u32 {
+    1024
 }
 
 fn default_connect_secs() -> u64 {

@@ -12,11 +12,11 @@ use uuid::Uuid;
 use rolter_core::{Error, Result};
 
 use super::models::{
-    AuditLogEntry, Budget, BusinessUnit, Customer, FeatureFlags, LoggingSettings, Membership,
-    ModelPrice, Org, OwnedVirtualKey, Project, PromptTemplate, PromptTemplateScope,
-    PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember, RateLimit, Route,
-    RouteTarget, RuntimePolicy, SecuritySettings, Session, Skill, SkillVersion, Team, User,
-    VirtualKey,
+    AuditLogEntry, Budget, BusinessUnit, CompatibilityPolicy, Customer, FeatureFlags,
+    LoggingSettings, Membership, ModelPrice, Org, OwnedVirtualKey, Project, PromptTemplate,
+    PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember,
+    RateLimit, Route, RouteTarget, RuntimePolicy, SecuritySettings, Session, Skill, SkillVersion,
+    Team, User, VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -65,6 +65,37 @@ impl OrgRepo<'_> {
             return Err(Error::NotFound(format!("org {id}")));
         }
         Ok(())
+    }
+}
+
+impl CompatibilityPolicyRepo<'_> {
+    pub async fn get(&self) -> Result<CompatibilityPolicy> {
+        sqlx::query_as(
+            "select anthropic_version, default_max_tokens, updated_at \
+             from compatibility_policy where id = true",
+        )
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn update(
+        &self,
+        anthropic_version: &str,
+        default_max_tokens: i32,
+    ) -> Result<CompatibilityPolicy> {
+        sqlx::query_as(
+            "update compatibility_policy set \
+                anthropic_version = $1, default_max_tokens = $2, updated_at = now() \
+             where id = true \
+             returning anthropic_version, default_max_tokens, updated_at",
+        )
+        .bind(anthropic_version)
+        .bind(default_max_tokens)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound("compatibility policy".to_string()))
     }
 }
 
@@ -1815,6 +1846,7 @@ pub struct SecuritySettingsRepo<'a>(pub &'a PgPool);
 pub struct FeatureFlagsRepo<'a>(pub &'a PgPool);
 pub struct LoggingSettingsRepo<'a>(pub &'a PgPool);
 pub struct RuntimePolicyRepo<'a>(pub &'a PgPool);
+pub struct CompatibilityPolicyRepo<'a>(pub &'a PgPool);
 
 impl SecuritySettingsRepo<'_> {
     pub async fn get(&self) -> Result<SecuritySettings> {
