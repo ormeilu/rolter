@@ -48,6 +48,17 @@ flowchart LR
   Caps --> Action{allowed?}
 ```
 
+### The capability matrix is server-owned
+
+Two read-only endpoints publish the rules the guard enforces, so a dashboard never assembles a permission matrix of its own:
+
+- `GET /api/v1/rbac/matrix` — every role and, per resource, the minimum role each action takes (or that the action is superadmin-only, or unsupported entirely). Any authenticated caller may read it; it describes rules, not anyone's access.
+- `GET /api/v1/rbac/effective?org_id=&team_id=&project_id=` — the calling principal's resolved role at that scope chain and the concrete `resource:action` pairs they may perform, evaluated from their memberships.
+
+`effective` is advisory to the client and authoritative only on the server: a caller that ignores it and issues the request anyway gets the same `403`. Scope precedence is unchanged — a project-scoped grant authorizes that project, not the whole org.
+
+Read access is a viewer's, mutations are an admin's, and deployment-wide policy objects (feature flags, runtime/compatibility/adaptive policy, logging settings, cluster nodes, security settings) have no tenancy scope to be a member of, so they stay superadmin-only.
+
 ## Roadmap
 
 - **OAuth2 / OIDC SSO** — pluggable `IdentityProvider`; map IdP groups → roles.

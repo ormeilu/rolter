@@ -34,6 +34,8 @@ mod proxy;
 #[cfg(feature = "postgres")]
 mod rbac;
 #[cfg(feature = "postgres")]
+mod rbac_matrix;
+#[cfg(feature = "postgres")]
 mod runtime_policy;
 #[cfg(feature = "postgres")]
 mod security;
@@ -369,6 +371,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(runtime_policy::router())
             .merge(compatibility_policy::router())
             .merge(adaptive_policy::router())
+            .merge(rbac_matrix::router())
             .merge(cluster::router())
             .merge(security::router());
     }

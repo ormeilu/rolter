@@ -2247,6 +2247,195 @@ async fn skill_access_policy_filters_list_history_and_resolution() {
     assert_eq!(denied_resolution.status(), 403);
 }
 
+/// The capability matrix and the caller's effective permissions are served by
+/// the control plane rather than assembled in the browser (#534): the matrix
+/// describes the rules, `effective` answers for the caller at a scope, and the
+/// answer matches what the CRUD guard actually does.
+#[tokio::test]
+async fn rbac_matrix_and_effective_permissions_are_api_backed() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // the matrix needs authentication but no particular role
+    let unauth = client
+        .get(format!("{base}/api/v1/rbac/matrix"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth.status(), 401);
+
+    let matrix: Value = client
+        .get(format!("{base}/api/v1/rbac/matrix"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(matrix["roles"].as_array().unwrap().len(), 3);
+    let provider = matrix["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["resource"] == "provider")
+        .expect("provider in the matrix");
+    let create = provider["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["action"] == "create")
+        .unwrap();
+    assert_eq!(create["minimum_role"], "admin");
+    assert_eq!(create["superadmin_only"], false);
+    // deployment-wide policy is not something an org admin can reach
+    let flags = matrix["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["resource"] == "feature_flags")
+        .expect("feature_flags in the matrix");
+    assert_eq!(flags["actions"][0]["superadmin_only"], true);
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "MatrixOrg", "slug": "matrix-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let org_uuid: uuid::Uuid = org_id.parse().unwrap();
+
+    let viewer = seed_user(&pool, "matrix-viewer@example.com", false).await;
+    seed_membership(&pool, viewer, Some(org_uuid), None, None, "viewer").await;
+    let viewer_token = seed_session(&pool, viewer, "matrixviewer").await;
+
+    let effective: Value = client
+        .get(format!("{base}/api/v1/rbac/effective?org_id={org_id}"))
+        .bearer_auth(&viewer_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(effective["superadmin"], false);
+    assert_eq!(effective["role"], "viewer");
+    let allowed: Vec<String> = serde_json::from_value(effective["allowed"].clone()).unwrap();
+    assert!(allowed.contains(&"provider:read".to_string()));
+    assert!(!allowed.contains(&"provider:create".to_string()));
+
+    // and the guard agrees with what `effective` reported
+    let denied = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/teams"))
+        .bearer_auth(&viewer_token)
+        .json(&json!({"name": "T"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 403);
+
+    // an org the caller has no membership in yields no permissions at all
+    let other: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "OtherOrg", "slug": "other-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_id = other["id"].as_str().unwrap();
+    let elsewhere: Value = client
+        .get(format!("{base}/api/v1/rbac/effective?org_id={other_id}"))
+        .bearer_auth(&viewer_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(elsewhere["role"].is_null());
+    assert_eq!(elsewhere["allowed"].as_array().unwrap().len(), 0);
+
+    // a project-scoped admin inherits nothing upward: the same user is only an
+    // admin inside the project chain they were granted
+    let team: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/teams"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "MatrixTeam"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let team_id = team["id"].as_str().unwrap().to_string();
+    let team_uuid: uuid::Uuid = team_id.parse().unwrap();
+    let project: Value = client
+        .post(format!("{base}/api/v1/teams/{team_id}/projects"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "MatrixProject"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let project_id = project["id"].as_str().unwrap().to_string();
+    let project_uuid: uuid::Uuid = project_id.parse().unwrap();
+
+    let scoped = seed_user(&pool, "matrix-project-admin@example.com", false).await;
+    seed_membership(
+        &pool,
+        scoped,
+        Some(org_uuid),
+        Some(team_uuid),
+        Some(project_uuid),
+        "admin",
+    )
+    .await;
+    let scoped_token = seed_session(&pool, scoped, "matrixscoped").await;
+
+    let in_project: Value = client
+        .get(format!(
+            "{base}/api/v1/rbac/effective?org_id={org_id}&team_id={team_id}&project_id={project_id}"
+        ))
+        .bearer_auth(&scoped_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(in_project["role"], "admin");
+
+    let at_org: Value = client
+        .get(format!("{base}/api/v1/rbac/effective?org_id={org_id}"))
+        .bearer_auth(&scoped_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        at_org["role"].is_null(),
+        "a project-scoped grant must not authorize the whole org"
+    );
+}
+
 /// With an admin token configured (RBAC enforcement active), every control
 /// mutation is checked against the caller's role at the resource's scope:
 /// viewers are denied, scoped admins are allowed only within their scope,

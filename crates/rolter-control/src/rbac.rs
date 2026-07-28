@@ -171,8 +171,12 @@ impl ScopeChain {
     }
 }
 
+/// every built-in role, weakest first. The one place the set is enumerated, so
+/// the capability matrix and the guard cannot disagree about what exists.
+pub(crate) const ROLES: [Role; 3] = [Role::Viewer, Role::Member, Role::Admin];
+
 /// total order over roles: viewer < member < admin
-fn role_rank(role: Role) -> u8 {
+pub(crate) fn role_rank(role: Role) -> u8 {
     match role {
         Role::Viewer => 0,
         Role::Member => 1,
