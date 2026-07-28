@@ -1633,6 +1633,40 @@ async fn metrics_served_on_configured_path() {
 }
 
 #[tokio::test]
+async fn adaptive_routing_decisions_are_exported() {
+    let upstream = serve(Router::new().route("/v1/chat/completions", post(mock_openai))).await;
+    let mut config = config_for("test-model", vec![("up", upstream)]);
+    config.routes[0].strategy = rolter_core::BalancingStrategy::Adaptive;
+    // the policy stays off: the point is that a disabled kill switch is still
+    // observable, so an operator can see the fallback carrying every pick
+    let gw = serve_gateway(&config).await;
+    let client = reqwest::Client::new();
+
+    client
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+
+    let body = client
+        .get(format!("http://{gw}/metrics"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        body.contains(
+            "rolter_adaptive_routing_decisions_total{model=\"test-model\",mode=\"fallback\"} 1"
+        ),
+        "fallback pick not exported: {body}"
+    );
+    assert!(body.contains("rolter_adaptive_routing_engaged{model=\"test-model\"} 0"));
+}
+
+#[tokio::test]
 async fn builtin_fake_llm_serves_embeddings() {
     // no routes configured: the built-in fake-llm answers /v1/embeddings locally
     let gw = serve_gateway(&GatewayConfig::default()).await;

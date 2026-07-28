@@ -16,7 +16,7 @@
 //! share of picks is made uniformly at random so a target the blend has learned
 //! to avoid keeps producing fresh latency samples instead of going dark.
 
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 
 use rand::RngExt;
@@ -25,7 +25,7 @@ use rolter_core::AdaptiveRoutingConfig;
 use crate::scorer::{
     CheapestScorer, FastestScorer, LatencySource, LeastLoadScorer, Pipeline, Scorer,
 };
-use crate::{LoadBalancer, RouteContext};
+use crate::{DecisionCounts, LoadBalancer, RouteContext};
 
 /// Latency samples needed before the blend is trusted to rank targets: ranking
 /// is relative, so a single sampled target says nothing about the others.
@@ -43,6 +43,14 @@ pub struct Adaptive {
     latency: Option<Arc<dyn LatencySource>>,
     /// requests this route has observed since the balancer was built
     served: AtomicU64,
+    /// picks routed by the blend, by exploration, and by the fallback stack,
+    /// exported as routing telemetry so an operator can see what adaptive
+    /// routing is actually doing before and after they enable it
+    blend_picks: AtomicU64,
+    exploration_picks: AtomicU64,
+    fallback_picks: AtomicU64,
+    /// whether the last pick found the blend engaged
+    engaged_now: AtomicBool,
 }
 
 impl Adaptive {
@@ -78,6 +86,10 @@ impl Adaptive {
             fallback: Pipeline::default_stack(weights),
             latency,
             served: AtomicU64::new(0),
+            blend_picks: AtomicU64::new(0),
+            exploration_picks: AtomicU64::new(0),
+            fallback_picks: AtomicU64::new(0),
+            engaged_now: AtomicBool::new(false),
         }
     }
 
@@ -121,13 +133,27 @@ impl LoadBalancer for Adaptive {
     }
 
     fn pick(&self, ctx: &RouteContext, loads: &[u64]) -> Option<usize> {
-        if !self.engaged() {
+        let engaged = self.engaged();
+        self.engaged_now.store(engaged, Relaxed);
+        if !engaged {
+            self.fallback_picks.fetch_add(1, Relaxed);
             return self.fallback.pick(ctx, loads);
         }
         if self.explore() {
+            self.exploration_picks.fetch_add(1, Relaxed);
             return Some(rand::rng().random_range(0..self.n));
         }
+        self.blend_picks.fetch_add(1, Relaxed);
         self.blend.pick(ctx, loads)
+    }
+
+    fn decisions(&self) -> Option<DecisionCounts> {
+        Some(DecisionCounts {
+            blend: self.blend_picks.load(Relaxed),
+            exploration: self.exploration_picks.load(Relaxed),
+            fallback: self.fallback_picks.load(Relaxed),
+            engaged: self.engaged_now.load(Relaxed),
+        })
     }
 
     fn observe(&self, target: usize, ctx: &RouteContext) {
@@ -271,6 +297,53 @@ mod tests {
             }
         }
         assert!(best > 250, "exploration swamped exploitation: {best}/400");
+    }
+
+    #[test]
+    fn decision_counters_split_fallback_from_blend_and_exploration() {
+        let lb = lopsided(&cfg(true, 5));
+        // below min_samples every pick is served by the fallback stack
+        for _ in 0..3 {
+            lb.pick(&RouteContext::default(), &[]);
+        }
+        let counts = lb.decisions().unwrap();
+        assert_eq!(
+            (counts.blend, counts.exploration, counts.fallback),
+            (0, 0, 3)
+        );
+        assert!(!counts.engaged);
+
+        warm(&lb, 5);
+        for _ in 0..10 {
+            lb.pick(&RouteContext::default(), &[]);
+        }
+        let counts = lb.decisions().unwrap();
+        assert!(counts.engaged);
+        // exploration is off in this config, so every engaged pick is a blend one
+        assert_eq!(counts.blend, 10);
+        assert_eq!(counts.exploration, 0);
+        assert_eq!(counts.fallback, 3);
+    }
+
+    #[test]
+    fn exploration_picks_are_counted_separately() {
+        let policy = AdaptiveRoutingConfig {
+            enabled: true,
+            exploration_ratio: rolter_core::MAX_EXPLORATION_RATIO,
+            min_samples: 0,
+            ..Default::default()
+        };
+        let lb = lopsided(&policy);
+        for _ in 0..400 {
+            lb.pick(&RouteContext::default(), &[]);
+        }
+        let counts = lb.decisions().unwrap();
+        assert_eq!(counts.fallback, 0);
+        assert_eq!(counts.blend + counts.exploration, 400);
+        assert!(
+            counts.exploration > 0 && counts.blend > 0,
+            "expected both modes to be exercised: {counts:?}"
+        );
     }
 
     #[test]
