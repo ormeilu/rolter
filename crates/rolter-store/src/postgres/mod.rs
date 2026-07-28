@@ -19,7 +19,8 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::postgres::models::{
-    Budget, FeatureFlags, LoggingSettings, ModelPrice, RateLimit, RuntimePolicy,
+    Budget, CompatibilityPolicy, FeatureFlags, LoggingSettings, ModelPrice, RateLimit,
+    RuntimePolicy,
 };
 use crate::ConfigStore;
 
@@ -371,6 +372,16 @@ impl PostgresConfigStore {
                     timeout_request_s, queue_enabled, queue_capacity, queue_workers, \
                     queue_backpressure, queue_block_ms, updated_at \
              from runtime_policy where id = true",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(store_err)
+    }
+
+    async fn load_compatibility_policy(&self) -> Result<CompatibilityPolicy> {
+        sqlx::query_as(
+            "select anthropic_version, default_max_tokens, updated_at \
+             from compatibility_policy where id = true",
         )
         .fetch_one(&self.pool)
         .await
@@ -807,6 +818,7 @@ impl ConfigStore for PostgresConfigStore {
         let flags = self.load_feature_flags().await?;
         let runtime_policy = self.load_runtime_policy().await?;
         let logging = self.load_logging_settings().await?;
+        let compatibility = self.load_compatibility_policy().await?;
         let providers = self.load_providers().await?;
         let routes = self.load_routes().await?;
         let provider_groups = self.load_provider_groups().await?;
@@ -856,6 +868,8 @@ impl ConfigStore for PostgresConfigStore {
             _ => BackpressurePolicy::Error,
         };
         config.queue.block_timeout_ms = runtime_policy.queue_block_ms.max(0) as u64;
+        config.compatibility.anthropic_version = compatibility.anthropic_version;
+        config.compatibility.default_max_tokens = compatibility.default_max_tokens.max(1) as u32;
         Ok(config)
     }
 
@@ -1576,6 +1590,34 @@ mod tests {
             .expect("customer rate limit in snapshot");
         assert_eq!(limit.id, customer_id.to_string());
         assert_eq!(limit.rpm, Some(60));
+    }
+
+    // compiled-in translation constants are control-plane owned now, so the
+    // persisted policy must reach the snapshot the gateway polls (#546)
+    #[tokio::test]
+    async fn compatibility_policy_projects_into_snapshot() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+
+        // defaults preserve the previous hardcoded behavior
+        let config = PostgresConfigStore::new(pool.clone()).load().await.unwrap();
+        assert_eq!(config.compatibility.anthropic_version, "2023-06-01");
+        assert_eq!(config.compatibility.default_max_tokens, 1024);
+
+        sqlx::query(
+            "update compatibility_policy set anthropic_version = '2024-10-22', \
+                    default_max_tokens = 4096 where id = true",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let config = PostgresConfigStore::new(pool).load().await.unwrap();
+        assert_eq!(config.compatibility.anthropic_version, "2024-10-22");
+        assert_eq!(config.compatibility.default_max_tokens, 4096);
     }
 
     #[tokio::test]

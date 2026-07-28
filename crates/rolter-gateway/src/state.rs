@@ -631,6 +631,7 @@ impl AppState {
             &config.timeouts,
             egress.clone(),
         ));
+        forwarder.set_compatibility(&config.compatibility);
         let provider_queues = ProviderQueues::new(forwarder.clone(), metrics.clone());
         let cache_telemetry = crate::cache_telemetry::CacheTelemetry::new(metrics.clone());
         cache_telemetry.configure(&config.providers);
@@ -686,6 +687,9 @@ impl AppState {
         // configured clients capture CA roots at construction time; clearing
         // them makes bundle rotation take effect on the next request
         self.forwarder.reload(&config.timeouts);
+        // cross-dialect translation behavior is hot-swappable: the next request
+        // reads the new policy, in-flight ones keep the one they started with
+        self.forwarder.set_compatibility(&config.compatibility);
         // the resolver reads this on every lookup, so a policy change takes
         // effect on the next connect without rebuilding a single client
         self.egress.store(Arc::new(config.egress.clone()));

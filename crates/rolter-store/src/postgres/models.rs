@@ -281,6 +281,15 @@ pub struct RuntimePolicy {
     pub updated_at: DateTime<Utc>,
 }
 
+/// singleton persisted cross-dialect compatibility policy projected into
+/// snapshots
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct CompatibilityPolicy {
+    pub anthropic_version: String,
+    pub default_max_tokens: i32,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// singleton persisted request-log policy projected into snapshots
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct LoggingSettings {
