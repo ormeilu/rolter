@@ -1868,7 +1868,8 @@ impl ClusterNodeRepo<'_> {
              on conflict (id) do update set \
                 role = excluded.role, build_version = excluded.build_version, \
                 config_version = excluded.config_version, last_seen_at = now() \
-             returning id, role, build_version, config_version, first_seen_at, last_seen_at",
+             returning id, role, build_version, config_version, desired_state, \
+                state_changed_at, first_seen_at, last_seen_at",
         )
         .bind(id)
         .bind(role)
@@ -1881,12 +1882,40 @@ impl ClusterNodeRepo<'_> {
 
     pub async fn list(&self) -> Result<Vec<ClusterNode>> {
         sqlx::query_as(
-            "select id, role, build_version, config_version, first_seen_at, last_seen_at \
+            "select id, role, build_version, config_version, desired_state, \
+                    state_changed_at, first_seen_at, last_seen_at \
              from cluster_nodes order by role, id",
         )
         .fetch_all(self.0)
         .await
         .map_err(store_err)
+    }
+
+    /// Set the operator-requested state for a node. Returns the updated row so
+    /// the caller can audit what actually changed.
+    pub async fn set_desired_state(&self, id: &str, desired_state: &str) -> Result<ClusterNode> {
+        sqlx::query_as(
+            "update cluster_nodes set desired_state = $2, state_changed_at = now() \
+             where id = $1 \
+             returning id, role, build_version, config_version, desired_state, \
+                       state_changed_at, first_seen_at, last_seen_at",
+        )
+        .bind(id)
+        .bind(desired_state)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("cluster node {id}")))
+    }
+
+    /// The state a node should move to, read on its snapshot poll. `None` when
+    /// the node is not in the inventory yet.
+    pub async fn desired_state(&self, id: &str) -> Result<Option<String>> {
+        sqlx::query_scalar("select desired_state from cluster_nodes where id = $1")
+            .bind(id)
+            .fetch_optional(self.0)
+            .await
+            .map_err(store_err)
     }
 
     /// Forget a node an operator has decommissioned. A node that is still

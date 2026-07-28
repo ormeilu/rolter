@@ -24,9 +24,20 @@ use crate::logging::RequestLog;
 use crate::rate_limits::TokenRecorder;
 use crate::state::{AppState, KeyMeta, Snapshot};
 
-/// Liveness probe.
+/// Liveness probe. Stays `200` while draining: the process is healthy, it is
+/// just no longer taking new traffic.
 pub async fn healthz() -> &'static str {
     "ok"
+}
+
+/// Readiness probe. Reports `503` once the control plane has marked this node
+/// as draining, so a load balancer stops routing to it while in-flight
+/// requests finish (#543).
+pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
+    if state.draining.load(std::sync::atomic::Ordering::Relaxed) {
+        return (StatusCode::SERVICE_UNAVAILABLE, "draining");
+    }
+    (StatusCode::OK, "ok")
 }
 
 /// Prometheus metrics endpoint.

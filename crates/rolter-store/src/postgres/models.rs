@@ -290,6 +290,9 @@ pub struct ClusterNode {
     pub build_version: String,
     /// config snapshot version the node reported running
     pub config_version: i64,
+    /// operator-requested state: `active` or `draining`
+    pub desired_state: String,
+    pub state_changed_at: DateTime<Utc>,
     pub first_seen_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
 }

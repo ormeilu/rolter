@@ -816,6 +816,27 @@ struct SnapshotQuery {
     version: Option<i64>,
 }
 
+/// Attach the polling node's operator-requested state, so a drain reaches it on
+/// the channel it already polls. Absent when the caller is not a known node.
+#[cfg(feature = "postgres")]
+fn with_node_state(mut response: Response, desired_state: &Option<String>) -> Response {
+    if let Some(value) = desired_state
+        .as_deref()
+        .and_then(|state| axum::http::HeaderValue::from_str(state).ok())
+    {
+        response
+            .headers_mut()
+            .insert(cluster::NODE_STATE_HEADER, value);
+    }
+    response
+}
+
+/// Without the store there is no inventory, so nothing is attached.
+#[cfg(not(feature = "postgres"))]
+fn with_node_state(response: Response, _desired_state: &Option<String>) -> Response {
+    response
+}
+
 /// Runtime snapshot endpoint gateways poll to pick up config changes without
 /// a restart. Returns `{"version": N, "config": GatewayConfig}`, or `304` if
 /// the caller's `version` is already current.
@@ -827,7 +848,9 @@ async fn get_snapshot(
     // a node that identifies itself is recorded in the cluster inventory; the
     // poll it already makes is the heartbeat, so there is no second channel
     #[cfg(feature = "postgres")]
-    cluster::record_heartbeat(&state, &headers, query.version).await;
+    let desired_state = cluster::record_heartbeat(&state, &headers, query.version).await;
+    #[cfg(not(feature = "postgres"))]
+    let desired_state: Option<String> = None;
     let _ = &headers;
     let version = match state.store.current_version().await {
         Ok(v) => v,
@@ -840,7 +863,7 @@ async fn get_snapshot(
         }
     };
     if query.version.is_some_and(|requested| requested >= version) {
-        return StatusCode::NOT_MODIFIED.into_response();
+        return with_node_state(StatusCode::NOT_MODIFIED.into_response(), &desired_state);
     }
     match state.store.load().await {
         Ok(mut config) => {
@@ -867,7 +890,10 @@ async fn get_snapshot(
                 )
                     .into_response();
             }
-            Json(json!({"version": version, "config": config})).into_response()
+            with_node_state(
+                Json(json!({"version": version, "config": config})).into_response(),
+                &desired_state,
+            )
         }
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,

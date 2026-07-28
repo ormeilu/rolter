@@ -1360,6 +1360,85 @@ async fn cluster_inventory_tracks_polling_nodes() {
         .unwrap();
     assert_eq!(denied.status(), 401);
 
+    // the only live gateway may not be drained: it would take the data plane down
+    let refused = client
+        .put(format!("{base}/api/v1/cluster/nodes/gw-1/drain"))
+        .bearer_auth("sekrit")
+        .json(&json!({"draining": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 400);
+
+    // with a second live gateway the drain is safe, and the draining node
+    // learns about it on its next poll
+    let second = client
+        .get(format!("{base}/internal/snapshot?version=0"))
+        .bearer_auth("sekrit")
+        .header("x-rolter-node-id", "gw-2")
+        .header("x-rolter-node-role", "gateway")
+        .send()
+        .await
+        .unwrap();
+    assert!(second.status().is_success());
+
+    let drained: Value = client
+        .put(format!("{base}/api/v1/cluster/nodes/gw-1/drain"))
+        .bearer_auth("sekrit")
+        .json(&json!({"draining": true}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(drained["desired_state"], "draining");
+
+    let polled = client
+        .get(format!("{base}/internal/snapshot?version=0"))
+        .bearer_auth("sekrit")
+        .header("x-rolter-node-id", "gw-1")
+        .header("x-rolter-node-role", "gateway")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        polled
+            .headers()
+            .get("x-rolter-node-state")
+            .and_then(|v| v.to_str().ok()),
+        Some("draining")
+    );
+
+    let drain_action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'cluster_node.set_drain' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(drain_action.as_deref(), Some("cluster_node.set_drain"));
+
+    // returning it to service is the same call with draining=false
+    let restored: Value = client
+        .put(format!("{base}/api/v1/cluster/nodes/gw-1/drain"))
+        .bearer_auth("sekrit")
+        .json(&json!({"draining": false}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(restored["desired_state"], "active");
+
+    let forgotten_second = client
+        .delete(format!("{base}/api/v1/cluster/nodes/gw-2"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forgotten_second.status(), 204);
+
     // a decommissioned node can be forgotten, and the action is audited
     let forgotten = client
         .delete(format!("{base}/api/v1/cluster/nodes/gw-1"))
