@@ -678,6 +678,8 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
             team: v.team_id.clone(),
             project: v.project_id.clone(),
             key: v.id.clone(),
+            business_unit: v.business_unit_id.clone(),
+            customer: v.customer_id.clone(),
         })
         .unwrap_or_default();
 
@@ -1662,6 +1664,8 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
             team: v.team_id.clone(),
             project: v.project_id.clone(),
             key: v.id.clone(),
+            business_unit: v.business_unit_id.clone(),
+            customer: v.customer_id.clone(),
         })
         .unwrap_or_default();
 

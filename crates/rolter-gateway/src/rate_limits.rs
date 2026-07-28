@@ -61,6 +61,8 @@ fn scope_str(scope: BudgetScope) -> &'static str {
         BudgetScope::Team => "team",
         BudgetScope::Project => "project",
         BudgetScope::Key => "key",
+        BudgetScope::BusinessUnit => "business_unit",
+        BudgetScope::Customer => "customer",
     }
 }
 
@@ -287,6 +289,8 @@ mod tests {
             team: "team-1".to_string(),
             project: String::new(),
             key: "vk-1".to_string(),
+            business_unit: "bu-1".to_string(),
+            customer: String::new(),
         };
         let all = vec![
             limit(BudgetScope::Org, "org-1", Some(60), None),
@@ -294,8 +298,10 @@ mod tests {
             limit(BudgetScope::Team, "team-1", None, Some(1000)),
             limit(BudgetScope::Project, "p-1", Some(10), None), // scope empty
             limit(BudgetScope::Key, "vk-1", Some(5), Some(500)),
+            limit(BudgetScope::BusinessUnit, "bu-1", Some(30), None),
+            limit(BudgetScope::Customer, "cust-1", Some(30), None), // key unattributed
         ];
-        assert_eq!(scope.applicable_limits(&all).len(), 3);
+        assert_eq!(scope.applicable_limits(&all).len(), 4);
     }
 
     #[test]
