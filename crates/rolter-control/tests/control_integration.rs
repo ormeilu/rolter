@@ -1295,6 +1295,77 @@ async fn feature_flags_are_superadmin_only_and_audited() {
 }
 
 #[tokio::test]
+async fn unavailable_feature_flags_are_reported_and_cannot_be_enabled() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // this deployment has no redis and no cache-publishing provider
+    let view: Value = client
+        .get(format!("{base}/api/v1/feature-flags"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let unavailable = view["unavailable"].as_array().expect("unavailable list");
+    let names: Vec<&str> = unavailable
+        .iter()
+        .map(|u| u["flag"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"response_cache"), "{view}");
+    assert!(names.contains(&"cache_aware_routing"), "{view}");
+    assert!(unavailable
+        .iter()
+        .all(|u| !u["reason"].as_str().unwrap_or_default().is_empty()));
+
+    // turning one on would persist a policy the gateway silently ignores
+    let rejected = client
+        .put(format!("{base}/api/v1/feature-flags"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "response_cache": true,
+            "cache_aware_routing": false,
+            "circuit_breaker": true,
+            "active_health_checks": true,
+            "complexity_routing": true,
+            "guardrails": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 400);
+
+    // the available flags stay editable
+    let updated: Value = client
+        .put(format!("{base}/api/v1/feature-flags"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "response_cache": false,
+            "cache_aware_routing": false,
+            "circuit_breaker": false,
+            "active_health_checks": true,
+            "complexity_routing": true,
+            "guardrails": true
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["circuit_breaker"], false);
+    assert_eq!(updated["unavailable"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn logging_settings_are_superadmin_only_and_audited() {
     skip_without_db!();
     let pool = fresh_pool().await;
