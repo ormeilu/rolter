@@ -1295,6 +1295,100 @@ async fn feature_flags_are_superadmin_only_and_audited() {
 }
 
 #[tokio::test]
+async fn cluster_inventory_tracks_polling_nodes() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // an anonymous poll stays out of the inventory: single-node deployments
+    // need no cluster setup
+    let anonymous = client
+        .get(format!("{base}/internal/snapshot"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap();
+    assert!(anonymous.status().is_success());
+    let nodes: Value = client
+        .get(format!("{base}/api/v1/cluster/nodes"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(nodes.as_array().unwrap().len(), 0);
+
+    // an identified poll registers the node and its applied config version
+    let identified = client
+        .get(format!("{base}/internal/snapshot?version=0"))
+        .bearer_auth("sekrit")
+        .header("x-rolter-node-id", "gw-1")
+        .header("x-rolter-node-role", "gateway")
+        .header("x-rolter-node-build", "0.0.10")
+        .send()
+        .await
+        .unwrap();
+    assert!(identified.status().is_success());
+
+    let nodes: Value = client
+        .get(format!("{base}/api/v1/cluster/nodes"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let node = &nodes.as_array().expect("nodes")[0];
+    assert_eq!(node["id"], "gw-1");
+    assert_eq!(node["role"], "gateway");
+    assert_eq!(node["build_version"], "0.0.10");
+    assert_eq!(node["live"], true);
+
+    // the inventory is superadmin-only
+    let denied = client
+        .get(format!("{base}/api/v1/cluster/nodes"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    // a decommissioned node can be forgotten, and the action is audited
+    let forgotten = client
+        .delete(format!("{base}/api/v1/cluster/nodes/gw-1"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forgotten.status(), 204);
+    let nodes: Value = client
+        .get(format!("{base}/api/v1/cluster/nodes"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(nodes.as_array().unwrap().len(), 0);
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'cluster_node.forget' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("cluster_node.forget"));
+}
+
+#[tokio::test]
 async fn unavailable_feature_flags_are_reported_and_cannot_be_enabled() {
     skip_without_db!();
     let pool = fresh_pool().await;

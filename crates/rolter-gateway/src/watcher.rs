@@ -123,6 +123,28 @@ async fn subscribe(redis_url: String, wakeup: Arc<Notify>) {
     }
 }
 
+/// Header names this node identifies itself with on each poll, so the control
+/// plane can keep a cluster inventory without a second channel (#543).
+const NODE_ID_HEADER: &str = "x-rolter-node-id";
+const NODE_ROLE_HEADER: &str = "x-rolter-node-role";
+const NODE_BUILD_HEADER: &str = "x-rolter-node-build";
+
+/// Stable identity for this gateway process. `ROLTER_NODE_ID` when set (the
+/// deployment's own name for the replica), otherwise the hostname, otherwise
+/// nothing — an unidentified node polls exactly as before and stays out of the
+/// inventory rather than churning it with a per-restart id.
+fn node_id() -> Option<String> {
+    for key in ["ROLTER_NODE_ID", "HOSTNAME"] {
+        if let Ok(value) = std::env::var(key) {
+            let value = value.trim().to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
 /// Fetch the snapshot once and apply it if newer. Returns `Ok(Some(version))`
 /// when a reload happened, `Ok(None)` on `304`/no-change, `Err` on transport
 /// or decode failure.
@@ -138,6 +160,12 @@ async fn poll_once(
         .query(&[("version", current.to_string())]);
     if let Some(token) = admin_token {
         request = request.bearer_auth(token);
+    }
+    if let Some(id) = node_id() {
+        request = request
+            .header(NODE_ID_HEADER, id)
+            .header(NODE_ROLE_HEADER, "gateway")
+            .header(NODE_BUILD_HEADER, env!("CARGO_PKG_VERSION"));
     }
     let resp = request.send().await?;
 
