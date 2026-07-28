@@ -2995,6 +2995,8 @@ mod tests {
             disabled: false,
             expires_at: None,
             cache: None,
+            business_unit_id: String::new(),
+            customer_id: String::new(),
         });
         let state = AppState::new(&config);
 

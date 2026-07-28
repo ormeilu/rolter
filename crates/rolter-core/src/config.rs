@@ -1227,6 +1227,12 @@ pub struct VirtualKeyRecord {
     /// per-key response-cache override; see [`VirtualKeyConfig::cache`]
     #[serde(default)]
     pub cache: Option<bool>,
+    /// business unit this key's spend is attributed to; empty when unattributed
+    #[serde(default)]
+    pub business_unit_id: String,
+    /// customer this key's spend is attributed to; empty when unattributed
+    #[serde(default)]
+    pub customer_id: String,
 }
 
 impl VirtualKeyRecord {

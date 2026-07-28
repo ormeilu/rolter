@@ -159,6 +159,10 @@ pub fn router() -> Router<ControlState> {
             "/api/v1/virtual-keys/{id}/providers",
             put(set_virtual_key_providers),
         )
+        .route(
+            "/api/v1/virtual-keys/{id}/attribution",
+            put(set_virtual_key_attribution),
+        )
         .route("/api/v1/budgets", get(list_budgets).post(create_budget))
         .route("/api/v1/budgets/{id}", delete(delete_budget))
         .route(
@@ -2927,6 +2931,85 @@ async fn set_virtual_key_providers(
         "virtual_key",
         id,
         serde_json::json!({"providers": body.providers}),
+    )
+    .await;
+    Ok(Json(row))
+}
+
+#[derive(Deserialize)]
+struct SetVirtualKeyAttribution {
+    /// Omit to leave unchanged, null to clear, UUID to set.
+    #[serde(default)]
+    business_unit_id: NullableUuid,
+    /// Omit to leave unchanged, null to clear, UUID to set.
+    #[serde(default)]
+    customer_id: NullableUuid,
+}
+
+/// Point a key's spend at a business unit and/or customer. Both dimensions must
+/// live in the key's own org, and a customer already owned by a business unit
+/// may not be paired with a different one.
+async fn set_virtual_key_attribution(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+    SafeJson(body): SafeJson<SetVirtualKeyAttribution>,
+) -> ApiResult<Json<VirtualKey>> {
+    let repo = VirtualKeyRepo(pool(&state));
+    let existing = repo.get(id).await?;
+    let org_id = authorize_virtual_key(&state, &principal, id).await?;
+    let business_unit_id = match body.business_unit_id {
+        NullableUuid::Missing => existing.business_unit_id,
+        NullableUuid::Null => None,
+        NullableUuid::Value(unit_id) => {
+            let unit = BusinessUnitRepo(pool(&state)).get(unit_id).await?;
+            if Some(unit.org_id) != org_id {
+                return Err(ApiError::Core(Error::Config(
+                    "business_unit_id must belong to the same org".to_string(),
+                )));
+            }
+            Some(unit_id)
+        }
+    };
+    let customer_id = match body.customer_id {
+        NullableUuid::Missing => existing.customer_id,
+        NullableUuid::Null => None,
+        NullableUuid::Value(customer_id) => {
+            let customer = CustomerRepo(pool(&state)).get(customer_id).await?;
+            if Some(customer.org_id) != org_id {
+                return Err(ApiError::Core(Error::Config(
+                    "customer_id must belong to the same org".to_string(),
+                )));
+            }
+            Some(customer_id)
+        }
+    };
+    if let (Some(unit_id), Some(customer_id)) = (business_unit_id, customer_id) {
+        let customer = CustomerRepo(pool(&state)).get(customer_id).await?;
+        if customer
+            .business_unit_id
+            .is_some_and(|owner| owner != unit_id)
+        {
+            return Err(ApiError::Core(Error::Config(
+                "customer_id belongs to a different business unit".to_string(),
+            )));
+        }
+    }
+    let row = repo
+        .set_attribution(id, business_unit_id, customer_id)
+        .await?;
+    publish_config_change(&state).await?;
+    log_audit(
+        &state,
+        &principal,
+        org_id,
+        "virtual_key.set_attribution",
+        "virtual_key",
+        id,
+        serde_json::json!({
+            "business_unit_id": row.business_unit_id,
+            "customer_id": row.customer_id,
+        }),
     )
     .await;
     Ok(Json(row))

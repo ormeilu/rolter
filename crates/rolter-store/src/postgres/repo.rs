@@ -1154,7 +1154,7 @@ pub struct VirtualKeyRepo<'a>(pub &'a PgPool);
 impl VirtualKeyRepo<'_> {
     pub async fn list(&self, project_id: Uuid) -> Result<Vec<VirtualKey>> {
         sqlx::query_as(
-            "select id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, created_at
+            "select id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, business_unit_id, customer_id, created_at
              from virtual_keys where project_id = $1 order by created_at",
         )
         .bind(project_id)
@@ -1165,7 +1165,7 @@ impl VirtualKeyRepo<'_> {
 
     pub async fn find_by_hash(&self, key_hash: &str) -> Result<Option<VirtualKey>> {
         sqlx::query_as(
-            "select id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, created_at
+            "select id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, business_unit_id, customer_id, created_at
              from virtual_keys where key_hash = $1",
         )
         .bind(key_hash)
@@ -1176,7 +1176,7 @@ impl VirtualKeyRepo<'_> {
 
     pub async fn get(&self, id: Uuid) -> Result<VirtualKey> {
         sqlx::query_as(
-            "select id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, created_at
+            "select id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, business_unit_id, customer_id, created_at
              from virtual_keys where id = $1",
         )
         .bind(id)
@@ -1201,7 +1201,7 @@ impl VirtualKeyRepo<'_> {
         sqlx::query_as(
             "insert into virtual_keys (project_id, key_hash, key_prefix, name, models, providers, cache_enabled, created_by)
              values ($1, $2, $3, $4, $5, $6, $7, $8)
-             returning id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, created_at",
+             returning id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, business_unit_id, customer_id, created_at",
         )
         .bind(project_id)
         .bind(key_hash)
@@ -1238,7 +1238,7 @@ impl VirtualKeyRepo<'_> {
     pub async fn set_disabled(&self, id: Uuid, disabled: bool) -> Result<VirtualKey> {
         sqlx::query_as(
             "update virtual_keys set disabled = $2 where id = $1
-             returning id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, created_at",
+             returning id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, business_unit_id, customer_id, created_at",
         )
         .bind(id)
         .bind(disabled)
@@ -1253,7 +1253,7 @@ impl VirtualKeyRepo<'_> {
     pub async fn set_cache(&self, id: Uuid, cache_enabled: Option<bool>) -> Result<VirtualKey> {
         sqlx::query_as(
             "update virtual_keys set cache_enabled = $2 where id = $1
-             returning id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, created_at",
+             returning id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, business_unit_id, customer_id, created_at",
         )
         .bind(id)
         .bind(cache_enabled)
@@ -1268,10 +1268,32 @@ impl VirtualKeyRepo<'_> {
     pub async fn set_providers(&self, id: Uuid, providers: &[String]) -> Result<VirtualKey> {
         sqlx::query_as(
             "update virtual_keys set providers = $2 where id = $1
-             returning id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, created_at",
+             returning id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, business_unit_id, customer_id, created_at",
         )
         .bind(id)
         .bind(providers)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("virtual key {id}")))
+    }
+
+    /// Point the key's spend at a business unit and/or customer. `None` clears
+    /// the dimension, leaving the key attributed to its tenancy chain only.
+    /// Callers must verify both ids belong to the key's org.
+    pub async fn set_attribution(
+        &self,
+        id: Uuid,
+        business_unit_id: Option<Uuid>,
+        customer_id: Option<Uuid>,
+    ) -> Result<VirtualKey> {
+        sqlx::query_as(
+            "update virtual_keys set business_unit_id = $2, customer_id = $3 where id = $1
+             returning id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, business_unit_id, customer_id, created_at",
+        )
+        .bind(id)
+        .bind(business_unit_id)
+        .bind(customer_id)
         .fetch_optional(self.0)
         .await
         .map_err(store_err)?
