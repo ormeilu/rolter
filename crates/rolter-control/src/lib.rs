@@ -9,6 +9,8 @@
 //! reuses the same entrypoint as its `control` subcommand.
 
 #[cfg(feature = "postgres")]
+mod adaptive_policy;
+#[cfg(feature = "postgres")]
 mod alerting;
 mod analytics;
 #[cfg(feature = "postgres")]
@@ -366,6 +368,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(logging_settings::router())
             .merge(runtime_policy::router())
             .merge(compatibility_policy::router())
+            .merge(adaptive_policy::router())
             .merge(cluster::router())
             .merge(security::router());
     }

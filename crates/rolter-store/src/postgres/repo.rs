@@ -12,11 +12,11 @@ use uuid::Uuid;
 use rolter_core::{Error, Result};
 
 use super::models::{
-    AuditLogEntry, Budget, BusinessUnit, ClusterNode, CompatibilityPolicy, Customer, FeatureFlags,
-    LoggingSettings, Membership, ModelPrice, Org, OwnedVirtualKey, Project, PromptTemplate,
-    PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember,
-    RateLimit, Route, RouteTarget, RuntimePolicy, SecuritySettings, Session, Skill, SkillVersion,
-    Team, User, VirtualKey,
+    AdaptiveRoutingPolicy, AuditLogEntry, Budget, BusinessUnit, ClusterNode, CompatibilityPolicy,
+    Customer, FeatureFlags, LoggingSettings, Membership, ModelPrice, Org, OwnedVirtualKey, Project,
+    PromptTemplate, PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup,
+    ProviderGroupMember, RateLimit, Route, RouteTarget, RuntimePolicy, SecuritySettings, Session,
+    Skill, SkillVersion, Team, User, VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -96,6 +96,48 @@ impl CompatibilityPolicyRepo<'_> {
         .await
         .map_err(store_err)?
         .ok_or_else(|| Error::NotFound("compatibility policy".to_string()))
+    }
+}
+
+const ADAPTIVE_POLICY_COLUMNS: &str = "enabled, latency_weight, cost_weight, load_weight, \
+     exploration_ratio, min_samples, updated_at";
+
+impl AdaptiveRoutingPolicyRepo<'_> {
+    pub async fn get(&self) -> Result<AdaptiveRoutingPolicy> {
+        sqlx::query_as(&format!(
+            "select {ADAPTIVE_POLICY_COLUMNS} from adaptive_routing_policy where id = true"
+        ))
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update(
+        &self,
+        enabled: bool,
+        latency_weight: f32,
+        cost_weight: f32,
+        load_weight: f32,
+        exploration_ratio: f32,
+        min_samples: i32,
+    ) -> Result<AdaptiveRoutingPolicy> {
+        sqlx::query_as(&format!(
+            "update adaptive_routing_policy set \
+                enabled = $1, latency_weight = $2, cost_weight = $3, load_weight = $4, \
+                exploration_ratio = $5, min_samples = $6, updated_at = now() \
+             where id = true returning {ADAPTIVE_POLICY_COLUMNS}"
+        ))
+        .bind(enabled)
+        .bind(latency_weight)
+        .bind(cost_weight)
+        .bind(load_weight)
+        .bind(exploration_ratio)
+        .bind(min_samples)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound("adaptive routing policy".to_string()))
     }
 }
 
@@ -1016,6 +1058,19 @@ impl RouteRepo<'_> {
         .map_err(store_err)
     }
 
+    /// Every enabled route on `strategy`, across projects. Used by the global
+    /// routing policies to report which routes a change actually affects.
+    pub async fn list_by_strategy(&self, strategy: &str) -> Result<Vec<Route>> {
+        sqlx::query_as(
+            "select id, project_id, model, strategy, enabled, params, param_policy, advanced, created_at
+             from routes where strategy = $1 and enabled order by model",
+        )
+        .bind(strategy)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
     pub async fn get(&self, id: Uuid) -> Result<Route> {
         sqlx::query_as(
             "select id, project_id, model, strategy, enabled, params, param_policy, advanced, created_at from routes where id = $1",
@@ -1847,6 +1902,7 @@ pub struct FeatureFlagsRepo<'a>(pub &'a PgPool);
 pub struct LoggingSettingsRepo<'a>(pub &'a PgPool);
 pub struct RuntimePolicyRepo<'a>(pub &'a PgPool);
 pub struct CompatibilityPolicyRepo<'a>(pub &'a PgPool);
+pub struct AdaptiveRoutingPolicyRepo<'a>(pub &'a PgPool);
 
 /// Cluster inventory: one row per gateway/control node, upserted from the
 /// snapshot poll each node already performs.

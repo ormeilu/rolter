@@ -1789,6 +1789,116 @@ async fn compatibility_policy_is_superadmin_only_validated_and_audited() {
     assert_eq!(action.as_deref(), Some("compatibility_policy.update"));
 }
 
+#[tokio::test]
+async fn adaptive_routing_policy_is_superadmin_only_validated_and_audited() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let denied = client
+        .get(format!("{base}/api/v1/adaptive-routing-policy"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    let baseline: Value = client
+        .get(format!("{base}/api/v1/adaptive-routing-policy"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // shipped off, so enabling it is always a deliberate action
+    assert_eq!(baseline["enabled"], false);
+    assert_eq!(baseline["min_samples"], 50);
+    assert_eq!(baseline["affected_routes"].as_array().unwrap().len(), 0);
+
+    // an all-zero blend would make `adaptive` a random balancer
+    let rejected = client
+        .put(format!("{base}/api/v1/adaptive-routing-policy"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "enabled": true,
+            "latency_weight": 0.0,
+            "cost_weight": 0.0,
+            "load_weight": 0.0,
+            "exploration_ratio": 0.05,
+            "min_samples": 50
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 400);
+
+    // and exploration is capped well below "route at random"
+    let too_much_exploration = client
+        .put(format!("{base}/api/v1/adaptive-routing-policy"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "enabled": true,
+            "latency_weight": 1.0,
+            "cost_weight": 0.5,
+            "load_weight": 0.25,
+            "exploration_ratio": 0.9,
+            "min_samples": 50
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(too_much_exploration.status(), 400);
+
+    let updated: Value = client
+        .put(format!("{base}/api/v1/adaptive-routing-policy"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "enabled": true,
+            "latency_weight": 2.0,
+            "cost_weight": 0.0,
+            "load_weight": 0.5,
+            "exploration_ratio": 0.1,
+            "min_samples": 10
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["enabled"], true);
+    assert_eq!(updated["latency_weight"], 2.0);
+    assert_eq!(updated["min_samples"], 10);
+
+    // the gateway snapshot carries the new policy without a restart
+    let snap: Value = client
+        .get(format!("{base}/internal/snapshot"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(snap["config"]["adaptive_routing"]["enabled"], true);
+    assert_eq!(snap["config"]["adaptive_routing"]["latency_weight"], 2.0);
+    assert_eq!(snap["config"]["adaptive_routing"]["min_samples"], 10);
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'adaptive_routing_policy.update' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("adaptive_routing_policy.update"));
+}
+
 /// End-to-end local-account login (ROL-32): seed a user with an argon2id hash
 /// directly (no signup flow exists yet), then exercise login → `/auth/me` →
 /// logout → the now-revoked token is rejected.
