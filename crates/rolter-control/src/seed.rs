@@ -11,13 +11,12 @@ use std::path::{Path, PathBuf};
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHasher, SaltString};
 use argon2::Argon2;
-use sqlx::PgPool;
-use uuid::Uuid;
-
-use rolter_core::{BalancingStrategy, GatewayConfig, ProviderKind};
+use rolter_core::{BalancingStrategy, GatewayConfig, PromptTemplate, ProviderKind};
 use rolter_store::postgres::repo::{
     OrgRepo, ProjectRepo, ProviderRepo, RouteRepo, RouteTargetRepo, TeamRepo,
 };
+use sqlx::PgPool;
+use uuid::Uuid;
 
 /// Options controlling what [`seed`] creates. `org` defaults to `default` when
 /// left empty; `org_slug` defaults to a slugified `org`.
@@ -295,18 +294,242 @@ async fn import_bootstrap_toml(
         }
         tracing::info!(model = %r.model, "imported route");
     }
+    import_prompt_templates(pool, org_id, project_id, &config).await?;
 
+    Ok(())
+}
+
+async fn import_prompt_templates(
+    pool: &PgPool,
+    org_id: Uuid,
+    project_id: Uuid,
+    config: &GatewayConfig,
+) -> anyhow::Result<()> {
+    if config.prompt_templates.templates.is_empty() {
+        return Ok(());
+    }
+
+    let routes = RouteRepo(pool);
+    let route_rows = routes.list(project_id).await?;
+    let mut route_ids_by_model: HashMap<String, Vec<Uuid>> = HashMap::new();
+    for route in route_rows {
+        route_ids_by_model
+            .entry(route.model.clone())
+            .or_default()
+            .push(route.id);
+    }
+
+    for template in &config.prompt_templates.templates {
+        import_prompt_template(pool, org_id, template, &route_ids_by_model).await?;
+    }
+    Ok(())
+}
+
+async fn import_prompt_template(
+    pool: &PgPool,
+    org_id: Uuid,
+    template: &PromptTemplate,
+    route_ids_by_model: &HashMap<String, Vec<Uuid>>,
+) -> anyhow::Result<()> {
+    let variables = serde_json::to_value(&template.variables)?;
+    let decorators = serde_json::to_value(&template.decorators)?;
+    let version = i32::try_from(template.version)
+        .map_err(|_| anyhow::anyhow!("prompt template version out of range"))?;
+
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "insert into prompt_templates (org_id, name, slug, description)
+         values ($1, $2, $3, '')
+         on conflict (org_id, slug) do nothing",
+    )
+    .bind(org_id)
+    .bind(&template.id)
+    .bind(&template.id)
+    .execute(&mut *tx)
+    .await?;
+    let template_id: Uuid =
+        sqlx::query_scalar("select id from prompt_templates where org_id = $1 and slug = $2")
+            .bind(org_id)
+            .bind(&template.id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    let existing_version: Option<(serde_json::Value, serde_json::Value)> = sqlx::query_as(
+        "select variables, decorators
+         from prompt_template_versions
+         where template_id = $1 and version = $2",
+    )
+    .bind(template_id)
+    .bind(version)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match existing_version {
+        Some((stored_variables, stored_decorators))
+            if stored_variables != variables || stored_decorators != decorators =>
+        {
+            anyhow::bail!(
+                "prompt template '{}' version {} differs from the immutable stored version",
+                template.id,
+                template.version
+            );
+        }
+        Some(_) => {}
+        None => {
+            sqlx::query(
+                "insert into prompt_template_versions (
+                     template_id, version, variables, decorators
+                 )
+                 values ($1, $2, $3, $4)",
+            )
+            .bind(template_id)
+            .bind(version)
+            .bind(&variables)
+            .bind(&decorators)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    let published_version: Option<i32> =
+        sqlx::query_scalar("select published_version from prompt_templates where id = $1")
+            .bind(template_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if published_version.is_none() {
+        if template.routes.is_empty() {
+            sqlx::query(
+                "insert into prompt_template_scopes (
+                     template_id, version, scope_type, scope_id, org_id
+                 )
+                 values ($1, $2, 'org', $3, $3)
+                 on conflict (template_id, version, scope_type, scope_id) do nothing",
+            )
+            .bind(template_id)
+            .bind(version)
+            .bind(org_id)
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            for model in &template.routes {
+                let Some(route_ids) = route_ids_by_model.get(model) else {
+                    tracing::warn!(template = %template.id, model, "skipping prompt-template route scope: route model not imported");
+                    continue;
+                };
+                for route_id in route_ids {
+                    sqlx::query(
+                        "insert into prompt_template_scopes (
+                             template_id, version, scope_type, scope_id, route_id
+                         )
+                         values ($1, $2, 'route', $3, $3)
+                         on conflict (template_id, version, scope_type, scope_id) do nothing",
+                    )
+                    .bind(template_id)
+                    .bind(version)
+                    .bind(route_id)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+            }
+        }
+
+        sqlx::query(
+            "update prompt_templates
+             set published_version = $2
+             where id = $1",
+        )
+        .bind(template_id)
+        .bind(version)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    tracing::info!(template = %template.id, version = template.version, "imported prompt template");
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::slugify;
+    use super::{import_prompt_template, slugify};
+    use rolter_core::{
+        Decorator, DecoratorPosition, DecoratorRole, PromptTemplate, TemplateVariable,
+    };
+    use std::collections::HashMap;
+    use uuid::Uuid;
 
     #[test]
     fn slugify_normalizes() {
         assert_eq!(slugify("Default"), "default");
         assert_eq!(slugify("Acme Corp!"), "acme-corp");
         assert_eq!(slugify("  multi  space "), "multi-space");
+    }
+
+    #[tokio::test]
+    async fn prompt_template_seed_is_idempotent_and_rejects_version_drift() {
+        let Ok(url) = std::env::var("ROLTER_TEST_DATABASE_URL") else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let schema = format!("seed_test_{}", Uuid::new_v4().simple());
+        let admin = rolter_store::postgres::connect(&url).await.unwrap();
+        sqlx::query(&format!("create schema {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let separator = if url.contains('?') { '&' } else { '?' };
+        let scoped_url = format!("{url}{separator}options=-c%20search_path%3D{schema}");
+        let pool = rolter_store::postgres::connect(&scoped_url).await.unwrap();
+        rolter_store::postgres::run_migrations(&pool).await.unwrap();
+        let org_id: Uuid = sqlx::query_scalar(
+            "insert into orgs (name, slug) values ('acme', 'acme') returning id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let template = PromptTemplate {
+            id: "support-baseline".to_string(),
+            version: 1,
+            routes: Vec::new(),
+            scopes: Vec::new(),
+            variables: vec![TemplateVariable {
+                name: "tone".to_string(),
+                required: false,
+                default: Some("calm".to_string()),
+            }],
+            decorators: vec![Decorator {
+                role: DecoratorRole::System,
+                position: DecoratorPosition::Prepend,
+                content: "tone={{ tone }}".to_string(),
+            }],
+        };
+        let route_ids = HashMap::new();
+        import_prompt_template(&pool, org_id, &template, &route_ids)
+            .await
+            .unwrap();
+        import_prompt_template(&pool, org_id, &template, &route_ids)
+            .await
+            .unwrap();
+
+        let template_count: i64 = sqlx::query_scalar("select count(*) from prompt_templates")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let version_count: i64 =
+            sqlx::query_scalar("select count(*) from prompt_template_versions")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let scope_count: i64 = sqlx::query_scalar("select count(*) from prompt_template_scopes")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!((template_count, version_count, scope_count), (1, 1, 1));
+
+        let mut drifted = template;
+        drifted.decorators[0].content = "different".to_string();
+        assert!(import_prompt_template(&pool, org_id, &drifted, &route_ids)
+            .await
+            .is_err());
     }
 }
