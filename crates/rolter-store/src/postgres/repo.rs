@@ -12,9 +12,9 @@ use uuid::Uuid;
 use rolter_core::{Error, Result};
 
 use super::models::{
-    AuditLogEntry, Budget, Membership, ModelPrice, Org, OwnedVirtualKey, Project, Provider,
-    ProviderGroup, ProviderGroupMember, RateLimit, Route, RouteTarget, SecuritySettings, Session,
-    Team, User, VirtualKey,
+    AuditLogEntry, Budget, BusinessUnit, Customer, Membership, ModelPrice, Org, OwnedVirtualKey,
+    Project, Provider, ProviderGroup, ProviderGroupMember, RateLimit, Route, RouteTarget,
+    SecuritySettings, Session, Team, User, VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -116,6 +116,8 @@ impl TeamRepo<'_> {
 
 /// Projects, scoped to a team.
 pub struct ProjectRepo<'a>(pub &'a PgPool);
+pub struct BusinessUnitRepo<'a>(pub &'a PgPool);
+pub struct CustomerRepo<'a>(pub &'a PgPool);
 
 impl ProjectRepo<'_> {
     pub async fn list(&self, team_id: Uuid) -> Result<Vec<Project>> {
@@ -157,6 +159,176 @@ impl ProjectRepo<'_> {
             .map_err(store_err)?;
         if res.rows_affected() == 0 {
             return Err(Error::NotFound(format!("project {id}")));
+        }
+        Ok(())
+    }
+}
+
+impl BusinessUnitRepo<'_> {
+    pub async fn list(&self, org_id: Uuid) -> Result<Vec<BusinessUnit>> {
+        sqlx::query_as(
+            "select id, org_id, name, slug, retired_at, created_at
+             from business_units where org_id = $1 order by name",
+        )
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get(&self, id: Uuid) -> Result<BusinessUnit> {
+        sqlx::query_as(
+            "select id, org_id, name, slug, retired_at, created_at
+             from business_units where id = $1",
+        )
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("business unit {id}")))
+    }
+
+    pub async fn create(&self, org_id: Uuid, name: &str, slug: &str) -> Result<BusinessUnit> {
+        sqlx::query_as(
+            "insert into business_units (org_id, name, slug) values ($1, $2, $3)
+             returning id, org_id, name, slug, retired_at, created_at",
+        )
+        .bind(org_id)
+        .bind(name)
+        .bind(slug)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn update(
+        &self,
+        id: Uuid,
+        name: Option<&str>,
+        slug: Option<&str>,
+        retired: Option<bool>,
+    ) -> Result<BusinessUnit> {
+        sqlx::query_as(
+            "update business_units set
+                 name = coalesce($2, name),
+                 slug = coalesce($3, slug),
+                 retired_at = case
+                    when $4::bool is null then retired_at
+                    when $4 then coalesce(retired_at, now())
+                    else null
+                 end
+             where id = $1
+             returning id, org_id, name, slug, retired_at, created_at",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(slug)
+        .bind(retired)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("business unit {id}")))
+    }
+
+    pub async fn delete(&self, id: Uuid) -> Result<()> {
+        let res = sqlx::query("delete from business_units where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("business unit {id}")));
+        }
+        Ok(())
+    }
+}
+
+impl CustomerRepo<'_> {
+    pub async fn list(&self, org_id: Uuid) -> Result<Vec<Customer>> {
+        sqlx::query_as(
+            "select id, org_id, business_unit_id, name, slug, retired_at, created_at
+             from customers where org_id = $1 order by name",
+        )
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get(&self, id: Uuid) -> Result<Customer> {
+        sqlx::query_as(
+            "select id, org_id, business_unit_id, name, slug, retired_at, created_at
+             from customers where id = $1",
+        )
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("customer {id}")))
+    }
+
+    pub async fn create(
+        &self,
+        org_id: Uuid,
+        business_unit_id: Option<Uuid>,
+        name: &str,
+        slug: &str,
+    ) -> Result<Customer> {
+        sqlx::query_as(
+            "insert into customers (org_id, business_unit_id, name, slug)
+             values ($1, $2, $3, $4)
+             returning id, org_id, business_unit_id, name, slug, retired_at, created_at",
+        )
+        .bind(org_id)
+        .bind(business_unit_id)
+        .bind(name)
+        .bind(slug)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn update(
+        &self,
+        id: Uuid,
+        business_unit_id: Option<Option<Uuid>>,
+        name: Option<&str>,
+        slug: Option<&str>,
+        retired: Option<bool>,
+    ) -> Result<Customer> {
+        sqlx::query_as(
+            "update customers set
+                 business_unit_id = case when $2 then $3 else business_unit_id end,
+                 name = coalesce($4, name),
+                 slug = coalesce($5, slug),
+                 retired_at = case
+                    when $6::bool is null then retired_at
+                    when $6 then coalesce(retired_at, now())
+                    else null
+                 end
+             where id = $1
+             returning id, org_id, business_unit_id, name, slug, retired_at, created_at",
+        )
+        .bind(id)
+        .bind(business_unit_id.is_some())
+        .bind(business_unit_id.flatten())
+        .bind(name)
+        .bind(slug)
+        .bind(retired)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("customer {id}")))
+    }
+
+    pub async fn delete(&self, id: Uuid) -> Result<()> {
+        let res = sqlx::query("delete from customers where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("customer {id}")));
         }
         Ok(())
     }
