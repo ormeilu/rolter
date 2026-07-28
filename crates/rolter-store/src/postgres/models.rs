@@ -306,6 +306,18 @@ pub struct CompatibilityPolicy {
     pub updated_at: DateTime<Utc>,
 }
 
+/// singleton persisted adaptive-routing policy projected into snapshots
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AdaptiveRoutingPolicy {
+    pub enabled: bool,
+    pub latency_weight: f32,
+    pub cost_weight: f32,
+    pub load_weight: f32,
+    pub exploration_ratio: f32,
+    pub min_samples: i32,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// singleton persisted request-log policy projected into snapshots
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct LoggingSettings {

@@ -41,6 +41,8 @@ min_samples = 50
 
 Three conditions must all hold before the blend routes a single request: the kill switch is on, at least one weight is non-zero, and the route has both served `min_samples` requests and gathered latency samples for at least two targets. Until then — and immediately again if the policy is switched off — every pick goes to the same `pipeline` stack the route would have used otherwise, so moving a route to `adaptive` shifts no traffic on its own. The fallback stack keeps learning while the blend is engaged, so disengaging lands on a warm session/prefix cache.
 
+The policy is also owned by the control plane: `GET`/`PUT /api/v1/adaptive-routing-policy` (superadmin only) persists it, audits the change as `adaptive_routing_policy.update`, and returns the `affected_routes` the change reaches. It travels to the data plane in the normal snapshot, so a change applies without a restart. The API refuses an all-zero blend outright — stopping adaptive routing is what `enabled = false` is for.
+
 Once engaged, an `exploration_ratio` share of picks is made uniformly at random so a target the blend has learned to avoid keeps producing fresh latency samples instead of going dark. Operator input is clamped on the way in: negative weights become zero and exploration never exceeds half the traffic.
 
 ## Choosing a strategy

@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::postgres::models::{
-    Budget, CompatibilityPolicy, FeatureFlags, LoggingSettings, ModelPrice, RateLimit,
-    RuntimePolicy,
+    AdaptiveRoutingPolicy, Budget, CompatibilityPolicy, FeatureFlags, LoggingSettings, ModelPrice,
+    RateLimit, RuntimePolicy,
 };
 use crate::ConfigStore;
 
@@ -383,6 +383,17 @@ impl PostgresConfigStore {
         sqlx::query_as(
             "select anthropic_version, default_max_tokens, updated_at \
              from compatibility_policy where id = true",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(store_err)
+    }
+
+    async fn load_adaptive_routing_policy(&self) -> Result<AdaptiveRoutingPolicy> {
+        sqlx::query_as(
+            "select enabled, latency_weight, cost_weight, load_weight, exploration_ratio, \
+                    min_samples, updated_at \
+             from adaptive_routing_policy where id = true",
         )
         .fetch_one(&self.pool)
         .await
@@ -821,6 +832,7 @@ impl ConfigStore for PostgresConfigStore {
         let runtime_policy = self.load_runtime_policy().await?;
         let logging = self.load_logging_settings().await?;
         let compatibility = self.load_compatibility_policy().await?;
+        let adaptive = self.load_adaptive_routing_policy().await?;
         let providers = self.load_providers().await?;
         let routes = self.load_routes().await?;
         let provider_groups = self.load_provider_groups().await?;
@@ -872,6 +884,15 @@ impl ConfigStore for PostgresConfigStore {
         config.queue.block_timeout_ms = runtime_policy.queue_block_ms.max(0) as u64;
         config.compatibility.anthropic_version = compatibility.anthropic_version;
         config.compatibility.default_max_tokens = compatibility.default_max_tokens.max(1) as u32;
+        config.adaptive_routing = rolter_core::AdaptiveRoutingConfig {
+            enabled: adaptive.enabled,
+            latency_weight: adaptive.latency_weight,
+            cost_weight: adaptive.cost_weight,
+            load_weight: adaptive.load_weight,
+            exploration_ratio: adaptive.exploration_ratio,
+            min_samples: adaptive.min_samples.max(0) as u32,
+        }
+        .sanitized();
         Ok(config)
     }
 
@@ -1592,6 +1613,38 @@ mod tests {
             .expect("customer rate limit in snapshot");
         assert_eq!(limit.id, customer_id.to_string());
         assert_eq!(limit.rpm, Some(60));
+    }
+
+    // the adaptive-routing kill switch and blend weights are control-plane
+    // owned, so an operator change must reach the polling gateway (#544)
+    #[tokio::test]
+    async fn adaptive_routing_policy_projects_into_snapshot() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+
+        // the shipped defaults leave adaptive routing off
+        let config = PostgresConfigStore::new(pool.clone()).load().await.unwrap();
+        assert!(!config.adaptive_routing.enabled);
+        assert_eq!(config.adaptive_routing.min_samples, 50);
+
+        sqlx::query(
+            "update adaptive_routing_policy set enabled = true, latency_weight = 2.0, \
+                    cost_weight = 0, load_weight = 0.5, exploration_ratio = 0.1, \
+                    min_samples = 10 where id = true",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let config = PostgresConfigStore::new(pool).load().await.unwrap();
+        assert!(config.adaptive_routing.enabled);
+        assert_eq!(config.adaptive_routing.latency_weight, 2.0);
+        assert_eq!(config.adaptive_routing.cost_weight, 0.0);
+        assert_eq!(config.adaptive_routing.exploration_ratio, 0.1);
+        assert_eq!(config.adaptive_routing.min_samples, 10);
     }
 
     // compiled-in translation constants are control-plane owned now, so the
