@@ -3104,7 +3104,14 @@ struct ScopeQuery {
     scope_id: Uuid,
 }
 
-const SCOPE_TYPES: [&str; 4] = ["org", "team", "project", "virtual_key"];
+const SCOPE_TYPES: [&str; 6] = [
+    "org",
+    "team",
+    "project",
+    "virtual_key",
+    "business_unit",
+    "customer",
+];
 
 fn validate_scope(scope_type: &str) -> ApiResult<()> {
     if !SCOPE_TYPES.contains(&scope_type) {

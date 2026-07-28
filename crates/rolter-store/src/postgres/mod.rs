@@ -570,6 +570,8 @@ impl PostgresConfigStore {
                     "team" => BudgetScope::Team,
                     "project" => BudgetScope::Project,
                     "virtual_key" => BudgetScope::Key,
+                    "business_unit" => BudgetScope::BusinessUnit,
+                    "customer" => BudgetScope::Customer,
                     // unknown scope: skip rather than mis-enforce
                     _ => return None,
                 };
@@ -600,6 +602,8 @@ impl PostgresConfigStore {
                     "team" => BudgetScope::Team,
                     "project" => BudgetScope::Project,
                     "virtual_key" => BudgetScope::Key,
+                    "business_unit" => BudgetScope::BusinessUnit,
+                    "customer" => BudgetScope::Customer,
                     // unknown scope: skip rather than mis-enforce
                     _ => return None,
                 };
@@ -1506,6 +1510,72 @@ mod tests {
 
         assert_eq!(config.budgets.len(), 1);
         assert_eq!(config.budgets[0].limit_usd, 100.5);
+    }
+
+    // governance dimensions carry their own caps, so a business-unit budget and
+    // a customer rate limit must survive the snapshot projection (#539)
+    #[tokio::test]
+    async fn loads_governance_scoped_budgets_and_limits() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+
+        let org_id: Uuid = sqlx::query_scalar(
+            "insert into orgs (name, slug) values ('acme', 'acme') returning id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let unit_id: Uuid = sqlx::query_scalar(
+            "insert into business_units (org_id, name, slug) values ($1, 'Payments', 'payments') returning id",
+        )
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let customer_id: Uuid = sqlx::query_scalar(
+            "insert into customers (org_id, name, slug) values ($1, 'Acme EU', 'acme-eu') returning id",
+        )
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into budgets (scope_type, scope_id, limit_usd, period)
+             values ('business_unit', $1, 250.0, '30d')",
+        )
+        .bind(unit_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into rate_limits (scope_type, scope_id, rpm, tpm)
+             values ('customer', $1, 60, 90000)",
+        )
+        .bind(customer_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let config = PostgresConfigStore::new(pool).load().await.unwrap();
+
+        let budget = config
+            .budgets
+            .iter()
+            .find(|b| b.scope == BudgetScope::BusinessUnit)
+            .expect("business-unit budget in snapshot");
+        assert_eq!(budget.id, unit_id.to_string());
+        assert_eq!(budget.limit_usd, 250.0);
+
+        let limit = config
+            .rate_limits
+            .iter()
+            .find(|l| l.scope == BudgetScope::Customer)
+            .expect("customer rate limit in snapshot");
+        assert_eq!(limit.id, customer_id.to_string());
+        assert_eq!(limit.rpm, Some(60));
     }
 
     #[tokio::test]

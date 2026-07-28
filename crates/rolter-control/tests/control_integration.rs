@@ -376,6 +376,101 @@ async fn business_unit_and_customer_crud_round_trip() {
 }
 
 #[tokio::test]
+async fn governance_scoped_budgets_and_rate_limits() {
+    skip_without_db!();
+    let addr = serve(fresh_app().await).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    async fn post(client: &reqwest::Client, url: String, body: Value) -> Value {
+        let resp = client.post(&url).json(&body).send().await.unwrap();
+        let status = resp.status();
+        let json: Value = resp.json().await.unwrap();
+        assert!(status.is_success(), "POST {url} failed ({status}): {json}");
+        json
+    }
+
+    let org = post(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Acme", "slug": "acme"}),
+    )
+    .await;
+    let org_id = org["id"].as_str().expect("org id");
+
+    let unit = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/business-units"),
+        json!({"name": "Payments"}),
+    )
+    .await;
+    let unit_id = unit["id"].as_str().expect("business unit id");
+
+    let customer = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/customers"),
+        json!({"name": "Acme EU"}),
+    )
+    .await;
+    let customer_id = customer["id"].as_str().expect("customer id");
+
+    let budget = post(
+        &client,
+        format!("{base}/api/v1/budgets"),
+        json!({"scope_type": "business_unit", "scope_id": unit_id, "limit_usd": "250.0"}),
+    )
+    .await;
+    assert_eq!(budget["scope_type"], "business_unit");
+
+    let limit = post(
+        &client,
+        format!("{base}/api/v1/rate-limits"),
+        json!({"scope_type": "customer", "scope_id": customer_id, "rpm": 60}),
+    )
+    .await;
+    assert_eq!(limit["scope_type"], "customer");
+
+    let listed: Value = client
+        .get(format!(
+            "{base}/api/v1/budgets?scope_type=business_unit&scope_id={unit_id}"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+
+    // an unknown scope type is rejected before it reaches the store
+    let bad = client
+        .post(format!("{base}/api/v1/budgets"))
+        .json(&json!({"scope_type": "division", "scope_id": unit_id, "limit_usd": "1.0"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
+
+    // the gateway snapshot carries both caps with their governance scopes
+    let snap: Value = client
+        .get(format!("{base}/internal/snapshot"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let budgets = snap["config"]["budgets"].as_array().expect("budgets");
+    assert!(budgets
+        .iter()
+        .any(|b| b["scope"] == "business_unit" && b["id"] == unit_id));
+    let limits = snap["config"]["rate_limits"].as_array().expect("limits");
+    assert!(limits
+        .iter()
+        .any(|l| l["scope"] == "customer" && l["id"] == customer_id));
+}
+
+#[tokio::test]
 async fn virtual_key_cost_attribution_round_trip() {
     skip_without_db!();
     let addr = serve(fresh_app().await).await;

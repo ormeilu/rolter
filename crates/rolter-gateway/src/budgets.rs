@@ -1,7 +1,7 @@
 //! Spend-cap enforcement backed by Redis-tracked cumulative cost.
 //!
 //! Each configured [`BudgetConfig`] caps the spend of a scope (org/team/project/
-//! virtual-key) over a rolling [`BudgetPeriod`]. Before forwarding, the gateway
+//! virtual-key, or the business unit / customer the key is attributed to) over a rolling [`BudgetPeriod`]. Before forwarding, the gateway
 //! sums the request's applicable budgets and blocks when any one has reached its
 //! limit — most-restrictive-wins across the scope chain. After the response, the
 //! request's `cost_usd` is added to every applicable counter.
@@ -26,6 +26,9 @@ pub struct ScopeIds {
     pub team: String,
     pub project: String,
     pub key: String,
+    /// governance dimensions the key is attributed to; empty when unattributed
+    pub business_unit: String,
+    pub customer: String,
 }
 
 impl ScopeIds {
@@ -35,6 +38,8 @@ impl ScopeIds {
             BudgetScope::Team => &self.team,
             BudgetScope::Project => &self.project,
             BudgetScope::Key => &self.key,
+            BudgetScope::BusinessUnit => &self.business_unit,
+            BudgetScope::Customer => &self.customer,
         }
     }
 
@@ -55,6 +60,8 @@ fn scope_str(scope: BudgetScope) -> &'static str {
         BudgetScope::Team => "team",
         BudgetScope::Project => "project",
         BudgetScope::Key => "key",
+        BudgetScope::BusinessUnit => "business_unit",
+        BudgetScope::Customer => "customer",
     }
 }
 
@@ -226,16 +233,20 @@ mod tests {
             team: "team-1".to_string(),
             project: String::new(),
             key: "vk-1".to_string(),
+            business_unit: "bu-1".to_string(),
+            customer: String::new(),
         };
         let all = vec![
-            budget(BudgetScope::Org, "org-1"),   // matches
-            budget(BudgetScope::Org, "org-2"),   // wrong id
-            budget(BudgetScope::Team, "team-1"), // matches
-            budget(BudgetScope::Project, "p-1"), // scope empty on request
-            budget(BudgetScope::Key, "vk-1"),    // matches
+            budget(BudgetScope::Org, "org-1"),         // matches
+            budget(BudgetScope::Org, "org-2"),         // wrong id
+            budget(BudgetScope::BusinessUnit, "bu-1"), // matches
+            budget(BudgetScope::Customer, "cust-1"),   // key is unattributed here
+            budget(BudgetScope::Team, "team-1"),       // matches
+            budget(BudgetScope::Project, "p-1"),       // scope empty on request
+            budget(BudgetScope::Key, "vk-1"),          // matches
         ];
         let got = scope.applicable(&all);
-        assert_eq!(got.len(), 3);
+        assert_eq!(got.len(), 4);
     }
 
     #[tokio::test]

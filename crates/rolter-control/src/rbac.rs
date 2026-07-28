@@ -40,7 +40,8 @@ use subtle::ConstantTimeEq;
 use rolter_auth::Role;
 use rolter_store::postgres::models::{Membership, User};
 use rolter_store::postgres::repo::{
-    MembershipRepo, ProjectRepo, SessionRepo, TeamRepo, UserRepo, VirtualKeyRepo,
+    BusinessUnitRepo, CustomerRepo, MembershipRepo, ProjectRepo, SessionRepo, TeamRepo, UserRepo,
+    VirtualKeyRepo,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -154,6 +155,14 @@ impl ScopeChain {
             "virtual_key" => {
                 let vk = VirtualKeyRepo(pool).get(scope_id).await?;
                 Self::from_project(pool, vk.project_id).await
+            }
+            "business_unit" => {
+                let unit = BusinessUnitRepo(pool).get(scope_id).await?;
+                Ok(Self::org(unit.org_id))
+            }
+            "customer" => {
+                let customer = CustomerRepo(pool).get(scope_id).await?;
+                Ok(Self::org(customer.org_id))
             }
             other => Err(ApiError::Core(rolter_core::Error::Config(format!(
                 "unknown scope_type '{other}'"

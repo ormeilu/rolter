@@ -1286,14 +1286,19 @@ impl ModelPriceConfig {
 }
 
 /// The scope level a [`BudgetConfig`] applies to. Matched against the request's
-/// virtual-key scope chain (org → team → project → key).
+/// virtual-key scope chain (org → team → project → key) or the governance
+/// dimensions the key is attributed to (business unit, customer).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum BudgetScope {
     Org,
     Team,
     Project,
     Key,
+    /// business unit the key's spend rolls up to (#539)
+    BusinessUnit,
+    /// customer the key's spend rolls up to (#539)
+    Customer,
 }
 
 /// The rolling window a budget resets on.
