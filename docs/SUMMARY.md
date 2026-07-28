@@ -10,6 +10,7 @@
 - [Config & hot reload](architecture/config-and-hot-reload.md)
 - [Data model](architecture/data-model.md)
 - [RBAC & auth](architecture/rbac-and-auth.md)
+- [MCP OAuth](architecture/mcp-oauth.md)
 - [Security](architecture/security.md)
 - [Observability](architecture/observability.md)
 - [Performance](architecture/performance.md)

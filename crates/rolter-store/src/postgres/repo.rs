@@ -13,10 +13,11 @@ use rolter_core::{Error, Result};
 
 use super::models::{
     AdaptiveRoutingPolicy, AuditLogEntry, Budget, BusinessUnit, ClusterNode, CompatibilityPolicy,
-    Customer, FeatureFlags, LoggingSettings, Membership, ModelPrice, Org, OwnedVirtualKey, Project,
-    PromptTemplate, PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup,
-    ProviderGroupMember, RateLimit, Route, RouteTarget, RuntimePolicy, SecuritySettings, Session,
-    Skill, SkillVersion, Team, User, VirtualKey,
+    Customer, FeatureFlags, LoggingSettings, McpOAuthGrant, McpOAuthSession, McpServer, Membership,
+    ModelPrice, Org, OwnedVirtualKey, Project, PromptTemplate, PromptTemplateScope,
+    PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember, RateLimit, Route,
+    RouteTarget, RuntimePolicy, SecuritySettings, Session, Skill, SkillVersion, Team, User,
+    VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -997,6 +998,315 @@ impl ProviderRepo<'_> {
         }
         Ok(())
     }
+}
+
+/// MCP servers an org has registered.
+pub struct McpServerRepo<'a>(pub &'a PgPool);
+
+const MCP_SERVER_COLUMNS: &str = "id, org_id, name, slug, url, transport, created_at";
+
+impl McpServerRepo<'_> {
+    pub async fn list(&self, org_id: Uuid) -> Result<Vec<McpServer>> {
+        sqlx::query_as(&format!(
+            "select {MCP_SERVER_COLUMNS} from mcp_servers where org_id = $1 order by name"
+        ))
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get(&self, id: Uuid) -> Result<McpServer> {
+        sqlx::query_as(&format!(
+            "select {MCP_SERVER_COLUMNS} from mcp_servers where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("mcp server {id}")))
+    }
+
+    pub async fn create(
+        &self,
+        org_id: Uuid,
+        name: &str,
+        slug: &str,
+        url: &str,
+        transport: &str,
+    ) -> Result<McpServer> {
+        sqlx::query_as(&format!(
+            "insert into mcp_servers (org_id, name, slug, url, transport) \
+             values ($1, $2, $3, $4, $5) returning {MCP_SERVER_COLUMNS}"
+        ))
+        .bind(org_id)
+        .bind(name)
+        .bind(slug)
+        .bind(url)
+        .bind(transport)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Delete a server. Its grants and sessions cascade, which is the intended
+    /// blast radius: removing the server withdraws access to it entirely.
+    pub async fn delete(&self, id: Uuid) -> Result<()> {
+        let res = sqlx::query("delete from mcp_servers where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("mcp server {id}")));
+        }
+        Ok(())
+    }
+}
+
+/// Sealed columns of one session row: `(access ciphertext, access nonce,
+/// refresh ciphertext, refresh nonce, scopes)`.
+type SealedSessionRow = (
+    Vec<u8>,
+    Vec<u8>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    Vec<String>,
+);
+
+/// OAuth consent grants and token sessions for MCP servers.
+///
+/// Token material is sealed with the deployment KEK ([`super::crypto::Kek`])
+/// before it is written and is only ever returned by [`Self::open_session`],
+/// which the future MCP proxy calls on the request path. Every other method
+/// returns metadata only, so an API handler cannot leak a token by reaching
+/// for the wrong function.
+pub struct McpOAuthRepo<'a>(pub &'a PgPool);
+
+const GRANT_COLUMNS: &str = "id, server_id, user_id, scopes, granted_at, revoked_at, revoked_by";
+const SESSION_COLUMNS: &str = "id, grant_id, scopes, expires_at, refresh_expires_at, revoked_at, \
+     created_at, last_used_at, (refresh_ciphertext is not null) as has_refresh_token";
+
+impl McpOAuthRepo<'_> {
+    /// Record (or refresh) a user's consent for a server. Re-consenting
+    /// updates the scope set on the live grant rather than accumulating rows.
+    pub async fn upsert_grant(
+        &self,
+        server_id: Uuid,
+        user_id: Uuid,
+        scopes: &[String],
+    ) -> Result<McpOAuthGrant> {
+        sqlx::query_as(&format!(
+            "insert into mcp_oauth_grants (server_id, user_id, scopes) values ($1, $2, $3) \
+             on conflict (server_id, user_id) where revoked_at is null \
+             do update set scopes = excluded.scopes, granted_at = now() \
+             returning {GRANT_COLUMNS}"
+        ))
+        .bind(server_id)
+        .bind(user_id)
+        .bind(scopes)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get_grant(&self, id: Uuid) -> Result<McpOAuthGrant> {
+        sqlx::query_as(&format!(
+            "select {GRANT_COLUMNS} from mcp_oauth_grants where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("mcp oauth grant {id}")))
+    }
+
+    /// Grants across an org, newest first. `user_id` narrows the listing to one
+    /// owner, which is how a non-admin caller sees only their own.
+    pub async fn list_grants(
+        &self,
+        org_id: Uuid,
+        user_id: Option<Uuid>,
+    ) -> Result<Vec<McpOAuthGrant>> {
+        sqlx::query_as(
+            "select g.id, g.server_id, g.user_id, g.scopes, g.granted_at, g.revoked_at, \
+                    g.revoked_by \
+             from mcp_oauth_grants g join mcp_servers s on s.id = g.server_id \
+             where s.org_id = $1 and ($2::uuid is null or g.user_id = $2) \
+             order by g.granted_at desc",
+        )
+        .bind(org_id)
+        .bind(user_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Revoke a grant and every session under it in one transaction, so a
+    /// revoked consent can never leave a live token behind.
+    pub async fn revoke_grant(&self, id: Uuid, revoked_by: Option<Uuid>) -> Result<McpOAuthGrant> {
+        let mut tx = self.0.begin().await.map_err(store_err)?;
+        let grant: Option<McpOAuthGrant> = sqlx::query_as(&format!(
+            "update mcp_oauth_grants set revoked_at = coalesce(revoked_at, now()), \
+                    revoked_by = coalesce(revoked_by, $2) \
+             where id = $1 returning {GRANT_COLUMNS}"
+        ))
+        .bind(id)
+        .bind(revoked_by)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(store_err)?;
+        let grant = grant.ok_or_else(|| Error::NotFound(format!("mcp oauth grant {id}")))?;
+        sqlx::query(
+            "update mcp_oauth_sessions set revoked_at = coalesce(revoked_at, now()) \
+             where grant_id = $1",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(store_err)?;
+        tx.commit().await.map_err(store_err)?;
+        Ok(grant)
+    }
+
+    /// Seal and store a token session for a live grant.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn store_session(
+        &self,
+        kek: &super::crypto::Kek,
+        grant_id: Uuid,
+        access_token: &str,
+        refresh_token: Option<&str>,
+        scopes: &[String],
+        expires_at: DateTime<Utc>,
+        refresh_expires_at: Option<DateTime<Utc>>,
+    ) -> Result<McpOAuthSession> {
+        let (access_ciphertext, access_nonce) = kek.encrypt(access_token)?;
+        let refresh = refresh_token.map(|t| kek.encrypt(t)).transpose()?;
+        let (refresh_ciphertext, refresh_nonce) = match refresh {
+            Some((c, n)) => (Some(c), Some(n)),
+            None => (None, None),
+        };
+        sqlx::query_as(&format!(
+            "insert into mcp_oauth_sessions (grant_id, access_ciphertext, access_nonce, \
+                    refresh_ciphertext, refresh_nonce, scopes, expires_at, refresh_expires_at) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8) returning {SESSION_COLUMNS}"
+        ))
+        .bind(grant_id)
+        .bind(access_ciphertext)
+        .bind(access_nonce)
+        .bind(refresh_ciphertext)
+        .bind(refresh_nonce)
+        .bind(scopes)
+        .bind(expires_at)
+        .bind(refresh_expires_at)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Sessions across an org, newest first; `user_id` narrows to one owner.
+    pub async fn list_sessions(
+        &self,
+        org_id: Uuid,
+        user_id: Option<Uuid>,
+    ) -> Result<Vec<McpOAuthSession>> {
+        sqlx::query_as(
+            "select s.id, s.grant_id, s.scopes, s.expires_at, s.refresh_expires_at, \
+                    s.revoked_at, s.created_at, s.last_used_at, \
+                    (s.refresh_ciphertext is not null) as has_refresh_token \
+             from mcp_oauth_sessions s \
+             join mcp_oauth_grants g on g.id = s.grant_id \
+             join mcp_servers srv on srv.id = g.server_id \
+             where srv.org_id = $1 and ($2::uuid is null or g.user_id = $2) \
+             order by s.created_at desc",
+        )
+        .bind(org_id)
+        .bind(user_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get_session(&self, id: Uuid) -> Result<McpOAuthSession> {
+        sqlx::query_as(&format!(
+            "select {SESSION_COLUMNS} from mcp_oauth_sessions where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("mcp oauth session {id}")))
+    }
+
+    pub async fn revoke_session(&self, id: Uuid) -> Result<McpOAuthSession> {
+        sqlx::query_as(&format!(
+            "update mcp_oauth_sessions set revoked_at = coalesce(revoked_at, now()) \
+             where id = $1 returning {SESSION_COLUMNS}"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("mcp oauth session {id}")))
+    }
+
+    /// Open the sealed tokens for a session that is live *and* whose grant is
+    /// live. Returns `None` for a revoked or expired session, or one whose
+    /// consent was withdrawn — the caller cannot accidentally use a token the
+    /// user has taken back.
+    pub async fn open_session(
+        &self,
+        kek: &super::crypto::Kek,
+        id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<Option<McpSessionTokens>> {
+        let row: Option<SealedSessionRow> = sqlx::query_as(
+            "select s.access_ciphertext, s.access_nonce, s.refresh_ciphertext, \
+                        s.refresh_nonce, s.scopes \
+                 from mcp_oauth_sessions s join mcp_oauth_grants g on g.id = s.grant_id \
+                 where s.id = $1 and s.revoked_at is null and g.revoked_at is null \
+                   and s.expires_at > $2",
+        )
+        .bind(id)
+        .bind(now)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        let Some((access_c, access_n, refresh_c, refresh_n, scopes)) = row else {
+            return Ok(None);
+        };
+        let access_token = kek.decrypt(&access_c, &access_n)?;
+        let refresh_token = match (refresh_c, refresh_n) {
+            (Some(c), Some(n)) => Some(kek.decrypt(&c, &n)?),
+            _ => None,
+        };
+        Ok(Some(McpSessionTokens {
+            access_token,
+            refresh_token,
+            scopes,
+        }))
+    }
+
+    /// Stamp a session as used. Best-effort bookkeeping for the sessions
+    /// screen; a failure must never fail the MCP call it belongs to.
+    pub async fn touch_session(&self, id: Uuid) -> Result<()> {
+        sqlx::query("update mcp_oauth_sessions set last_used_at = now() where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        Ok(())
+    }
+}
+
+/// Opened token material. Deliberately not `Serialize`: nothing in this struct
+/// may reach an API response or a log line.
+#[derive(Debug, Clone)]
+pub struct McpSessionTokens {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub scopes: Vec<String>,
 }
 
 /// Runtime provider credentials, sealed with AES-256-GCM (see

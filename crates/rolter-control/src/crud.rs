@@ -320,7 +320,7 @@ where
 }
 
 /// Reject a required field that's empty after trimming.
-fn require_non_empty(value: &str, field: &str) -> ApiResult<()> {
+pub(crate) fn require_non_empty(value: &str, field: &str) -> ApiResult<()> {
     if value.trim().is_empty() {
         return Err(ApiError::Core(Error::Config(format!(
             "{field} must not be empty"
@@ -370,7 +370,7 @@ pub(crate) async fn publish_config_change(state: &ControlState) -> ApiResult<()>
 
 /// Record an admin/CRUD/auth action to the audit log. Best-effort: a logging
 /// failure is warned about but never fails the request it's attached to.
-async fn log_audit(
+pub(crate) async fn log_audit(
     state: &ControlState,
     principal: &Principal,
     org_id: Option<Uuid>,

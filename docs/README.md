@@ -12,6 +12,7 @@ Start here. rolter is a high-performance OpenAI/Anthropic-compatible AI gateway 
 - [Config & hot reload](architecture/config-and-hot-reload.md) — reload-free updates
 - [Data model](architecture/data-model.md) — tenancy, keys, pricing, budgets
 - [RBAC & auth](architecture/rbac-and-auth.md) — roles, virtual keys, SSO/LDAP roadmap
+- [MCP OAuth](architecture/mcp-oauth.md) — MCP servers, consent grants, sealed token sessions
 - [Security](architecture/security.md) — secret handling, threat model
 - [Observability](architecture/observability.md) — metrics, tracing, logs
 - [Performance](architecture/performance.md) — hot-path principles and targets

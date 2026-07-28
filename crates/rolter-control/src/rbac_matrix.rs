@@ -193,6 +193,30 @@ const CAPABILITIES: &[Capability] = &[
         unsupported: &[Action::Update],
     },
     Capability {
+        resource: "mcp_server",
+        scope: "org",
+        read: R,
+        write: W,
+        unsupported: &[Action::Update],
+    },
+    // a grant or session belongs to a user: an org admin sees and revokes any,
+    // a member only their own, and nobody creates one through the API — they
+    // are minted by the OAuth exchange
+    Capability {
+        resource: "mcp_oauth_grant",
+        scope: "org",
+        read: R,
+        write: W,
+        unsupported: &[Action::Create, Action::Update],
+    },
+    Capability {
+        resource: "mcp_oauth_session",
+        scope: "org",
+        read: R,
+        write: W,
+        unsupported: &[Action::Create, Action::Update],
+    },
+    Capability {
         resource: "audit_log",
         scope: "org",
         read: Requirement::Role(Role::Admin),

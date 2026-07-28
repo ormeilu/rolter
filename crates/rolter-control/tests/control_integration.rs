@@ -2247,6 +2247,266 @@ async fn skill_access_policy_filters_list_history_and_resolution() {
     assert_eq!(denied_resolution.status(), 403);
 }
 
+/// MCP OAuth grants and sessions (#541): admins see the whole org, a member
+/// sees only what they own, revoking a grant kills its sessions, and no token
+/// material ever appears in a response.
+#[tokio::test]
+async fn mcp_oauth_grants_and_sessions_are_owner_scoped_and_revocable() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "McpOrg", "slug": "mcp-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let org_uuid: uuid::Uuid = org_id.parse().unwrap();
+
+    // a bad transport or a non-http url is refused before anything is stored
+    for bad in [
+        json!({"name": "S", "slug": "s", "url": "https://mcp.example.com", "transport": "carrier-pigeon"}),
+        json!({"name": "S", "slug": "s", "url": "file:///etc/passwd"}),
+    ] {
+        let resp = client
+            .post(format!("{base}/api/v1/orgs/{org_id}/mcp-servers"))
+            .bearer_auth("admintok")
+            .json(&bad)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "accepted {bad}");
+    }
+
+    let server: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/mcp-servers"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Docs", "slug": "docs", "url": "https://mcp.example.com"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(server["transport"], "streamable_http");
+    let server_uuid: uuid::Uuid = server["id"].as_str().unwrap().parse().unwrap();
+
+    // two members of the same org, each with their own grant and session
+    let alice = seed_user(&pool, "alice@example.com", false).await;
+    seed_membership(&pool, alice, Some(org_uuid), None, None, "member").await;
+    let alice_token = seed_session(&pool, alice, "alice").await;
+    let bob = seed_user(&pool, "bob@example.com", false).await;
+    seed_membership(&pool, bob, Some(org_uuid), None, None, "member").await;
+    let bob_token = seed_session(&pool, bob, "bob").await;
+
+    let kek = rolter_store::postgres::crypto::Kek::from_secret("test-kek");
+    let repo = rolter_store::postgres::repo::McpOAuthRepo(&pool);
+    let alice_grant = repo
+        .upsert_grant(server_uuid, alice, &["tools:read".to_string()])
+        .await
+        .unwrap();
+    let bob_grant = repo
+        .upsert_grant(server_uuid, bob, &["tools:read".to_string()])
+        .await
+        .unwrap();
+    let alice_session = repo
+        .store_session(
+            &kek,
+            alice_grant.id,
+            "at-alice-secret",
+            Some("rt-alice-secret"),
+            &["tools:read".to_string()],
+            chrono::Utc::now() + chrono::Duration::hours(1),
+            Some(chrono::Utc::now() + chrono::Duration::days(30)),
+        )
+        .await
+        .unwrap();
+    repo.store_session(
+        &kek,
+        bob_grant.id,
+        "at-bob-secret",
+        None,
+        &["tools:read".to_string()],
+        chrono::Utc::now() + chrono::Duration::hours(1),
+        None,
+    )
+    .await
+    .unwrap();
+
+    // the admin token sees both owners
+    let all: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/grants"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(all.as_array().unwrap().len(), 2);
+
+    // a member sees only their own grant and session
+    let mine: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/grants"))
+        .bearer_auth(&alice_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mine = mine.as_array().unwrap();
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0]["user_id"], alice.to_string());
+    assert_eq!(mine[0]["active"], true);
+
+    let sessions: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/sessions"))
+        .bearer_auth(&alice_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let sessions_text = sessions.to_string();
+    assert_eq!(sessions.as_array().unwrap().len(), 1);
+    assert_eq!(sessions[0]["has_refresh_token"], true);
+    // the response describes the session without ever carrying its tokens
+    assert!(
+        !sessions_text.contains("at-alice-secret") && !sessions_text.contains("rt-alice-secret"),
+        "token material leaked into the sessions response: {sessions_text}"
+    );
+
+    // one member may not revoke another's session
+    let denied = client
+        .delete(format!("{base}/api/v1/mcp/sessions/{}", alice_session.id))
+        .bearer_auth(&bob_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 403);
+
+    // a member of a different org cannot even see it
+    let other_org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "OtherMcpOrg", "slug": "other-mcp-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_uuid: uuid::Uuid = other_org["id"].as_str().unwrap().parse().unwrap();
+    let outsider = seed_user(&pool, "outsider@example.com", false).await;
+    seed_membership(&pool, outsider, Some(other_uuid), None, None, "admin").await;
+    let outsider_token = seed_session(&pool, outsider, "outsider").await;
+    let cross_tenant = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/grants"))
+        .bearer_auth(&outsider_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_tenant.status(), 403);
+    let cross_revoke = client
+        .delete(format!("{base}/api/v1/mcp/grants/{}", alice_grant.id))
+        .bearer_auth(&outsider_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_revoke.status(), 403);
+
+    // the sealed tokens open while the grant is live
+    let opened = repo
+        .open_session(&kek, alice_session.id, chrono::Utc::now())
+        .await
+        .unwrap()
+        .expect("live session opens");
+    assert_eq!(opened.access_token, "at-alice-secret");
+    assert_eq!(opened.refresh_token.as_deref(), Some("rt-alice-secret"));
+
+    // revoking the grant revokes its sessions in the same breath
+    let revoked: Value = client
+        .delete(format!("{base}/api/v1/mcp/grants/{}", alice_grant.id))
+        .bearer_auth(&alice_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(revoked["active"], false);
+    let after: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/sessions"))
+        .bearer_auth(&alice_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(after[0]["revoked_at"].is_string());
+    // and the tokens stop opening, so withdrawn consent cannot be spent
+    assert!(repo
+        .open_session(&kek, alice_session.id, chrono::Utc::now())
+        .await
+        .unwrap()
+        .is_none());
+
+    // an expired session is dead even though nobody revoked it
+    let expired = repo
+        .store_session(
+            &kek,
+            bob_grant.id,
+            "at-bob-expired",
+            None,
+            &["tools:read".to_string()],
+            chrono::Utc::now() - chrono::Duration::minutes(1),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(repo
+        .open_session(&kek, expired.id, chrono::Utc::now())
+        .await
+        .unwrap()
+        .is_none());
+
+    // and a KEK that did not seal the token cannot open it
+    let wrong = rolter_store::postgres::crypto::Kek::from_secret("not-the-kek");
+    let bob_live = repo
+        .list_sessions(org_uuid, Some(bob))
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.id != expired.id)
+        .unwrap();
+    assert!(repo
+        .open_session(&wrong, bob_live.id, chrono::Utc::now())
+        .await
+        .is_err());
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'mcp_oauth_grant.revoke' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("mcp_oauth_grant.revoke"));
+}
+
 /// The capability matrix and the caller's effective permissions are served by
 /// the control plane rather than assembled in the browser (#534): the matrix
 /// describes the rules, `effective` answers for the caller at a scope, and the
