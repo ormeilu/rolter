@@ -458,7 +458,7 @@ fn apply_provider_auth(
             }
             request
         }
-        ProviderKind::GeminiNative => {
+        ProviderKind::GeminiNative | ProviderKind::GeminiInteractions => {
             if let Some(key) = api_key {
                 request = request.header("x-goog-api-key", key);
             }
@@ -949,6 +949,29 @@ mod tests {
             .await
             .unwrap()
             .contains("authorization: bearer cloud-secret"));
+    }
+
+    #[test]
+    fn gemini_interactions_uses_goog_api_key_auth() {
+        let provider = provider(
+            ProviderKind::GeminiInteractions,
+            "https://example.com".to_string(),
+        );
+        let request = apply_provider_auth(
+            Client::new().post("https://example.com/interactions"),
+            &provider,
+            Some("gem-secret"),
+        )
+        .build()
+        .unwrap();
+        assert_eq!(
+            request
+                .headers()
+                .get("x-goog-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("gem-secret")
+        );
+        assert!(!request.headers().contains_key("authorization"));
     }
 
     #[tokio::test]

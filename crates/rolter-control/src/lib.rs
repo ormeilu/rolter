@@ -603,6 +603,7 @@ fn provider_kind_str(kind: &rolter_core::ProviderKind) -> &'static str {
         Vertex => "vertex",
         Gemini => "gemini",
         GeminiNative => "gemini_native",
+        GeminiInteractions => "gemini_interactions",
         Mistral => "mistral",
         Groq => "groq",
         Xai => "xai",

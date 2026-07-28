@@ -21,6 +21,8 @@ pub enum Protocol {
     AnthropicMessages,
     /// google gemini native `generateContent` / `streamGenerateContent`
     GeminiGenerate,
+    /// google gemini Interactions, reserved until #599 implements translation
+    GeminiInteractions,
     Passthrough,
 }
 
@@ -133,6 +135,7 @@ impl TranslationPlan {
             (Protocol::OpenAiChat, ProviderKind::GeminiNative) => Protocol::GeminiGenerate,
             (Protocol::AnthropicMessages, ProviderKind::GeminiNative) => Protocol::GeminiGenerate,
             (Protocol::OpenAiResponses, ProviderKind::GeminiNative) => Protocol::GeminiGenerate,
+            (_, ProviderKind::GeminiInteractions) => Protocol::GeminiInteractions,
             (Protocol::OpenAiChat, ProviderKind::Anthropic) => Protocol::AnthropicMessages,
             (Protocol::AnthropicMessages, ProviderKind::Anthropic) => Protocol::AnthropicMessages,
             (Protocol::AnthropicMessages, _) => Protocol::OpenAiChat,
@@ -160,6 +163,7 @@ impl TranslationPlan {
             // gemini builds its URL from the model + method in the forwarder;
             // the fixed path is unused for this upstream
             Protocol::GeminiGenerate => original,
+            Protocol::GeminiInteractions => original,
             Protocol::Passthrough => original,
         }
     }
@@ -171,6 +175,12 @@ impl TranslationPlan {
     }
 
     pub fn translate_request(self, body: Bytes) -> Result<Bytes> {
+        if self.upstream == Protocol::GeminiInteractions {
+            return Err(Error::Config(
+                "gemini_interactions_unsupported: request translation is not implemented; see #599"
+                    .to_string(),
+            ));
+        }
         let Ok(mut value) = serde_json::from_slice::<Value>(&body) else {
             return Ok(body);
         };
@@ -1887,6 +1897,35 @@ mod tests {
         );
         assert_eq!(plan.upstream, Protocol::GeminiGenerate);
         assert!(plan.is_gemini_generate());
+    }
+
+    #[test]
+    fn gemini_interactions_fails_closed_until_translation_is_implemented() {
+        let plan = TranslationPlan::resolve(
+            "/v1/responses",
+            ProviderKind::GeminiInteractions,
+            RoleProfile::Openai,
+        );
+        assert_eq!(plan.upstream, Protocol::GeminiInteractions);
+        assert!(!plan.is_gemini_generate());
+        let error = plan
+            .translate_request(Bytes::from_static(
+                br#"{"model":"gemini-2.5-flash","input":"ping"}"#,
+            ))
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("gemini_interactions_unsupported"));
+
+        let passthrough = TranslationPlan::resolve(
+            "/v1/embeddings",
+            ProviderKind::GeminiInteractions,
+            RoleProfile::Openai,
+        );
+        assert_eq!(passthrough.upstream, Protocol::GeminiInteractions);
+        assert!(passthrough
+            .translate_request(Bytes::from_static(br#"{"input":"ping"}"#))
+            .is_err());
     }
 
     #[test]
