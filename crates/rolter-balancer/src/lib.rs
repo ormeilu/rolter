@@ -5,6 +5,7 @@
 //! (precise KV-cache aware, lmcache aware, latency based, ...) only need to
 //! implement the trait and be wired into [`build`].
 
+use std::fmt::{self, Write as _};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 
 use ahash::RandomState;
@@ -284,15 +285,51 @@ pub struct ConsistentHash {
     rr: AtomicUsize,
 }
 
+struct VnodeKey {
+    bytes: [u8; 48],
+    len: usize,
+}
+
+impl VnodeKey {
+    fn new() -> Self {
+        Self {
+            bytes: [0; 48],
+            len: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len]).expect("fmt::Write only appends valid UTF-8")
+    }
+}
+
+impl fmt::Write for VnodeKey {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        let end = self.len.checked_add(value.len()).ok_or(fmt::Error)?;
+        let target = self.bytes.get_mut(self.len..end).ok_or(fmt::Error)?;
+        target.copy_from_slice(value.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
 impl ConsistentHash {
     pub fn new(n: usize) -> Self {
         // fixed seeds keep the ring and key hashing deterministic in-process
         let hasher = RandomState::with_seeds(0x1234, 0x5678, 0x9abc, 0xdef0);
-        let mut ring = Vec::new();
         const VIRTUAL_NODES: usize = 100;
+        let mut ring = Vec::with_capacity(n.saturating_mul(VIRTUAL_NODES));
+        let mut vnode_key = VnodeKey::new();
         for i in 0..n {
             for v in 0..VIRTUAL_NODES {
-                ring.push((hasher.hash_one(format!("{i}#{v}")), i));
+                vnode_key.clear();
+                write!(&mut vnode_key, "{i}#{v}")
+                    .expect("vnode key capacity covers two usize values");
+                ring.push((hasher.hash_one(vnode_key.as_str()), i));
             }
         }
         ring.sort_by_key(|(h, _)| *h);
@@ -492,6 +529,20 @@ mod tests {
         let b = lb.pick(&ctx, &[]).unwrap();
         assert_eq!(a, b);
         assert!(a < 4);
+    }
+
+    #[test]
+    fn consistent_hash_ring_preserves_legacy_vnode_positions() {
+        const VIRTUAL_NODES: usize = 100;
+        let lb = ConsistentHash::new(4);
+        let mut legacy = Vec::with_capacity(4 * VIRTUAL_NODES);
+        for i in 0..4 {
+            for v in 0..VIRTUAL_NODES {
+                legacy.push((lb.hasher.hash_one(format!("{i}#{v}")), i));
+            }
+        }
+        legacy.sort_by_key(|(hash, _)| *hash);
+        assert_eq!(lb.ring, legacy);
     }
 
     #[test]
