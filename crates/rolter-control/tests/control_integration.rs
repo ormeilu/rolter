@@ -376,6 +376,188 @@ async fn business_unit_and_customer_crud_round_trip() {
 }
 
 #[tokio::test]
+async fn virtual_key_cost_attribution_round_trip() {
+    skip_without_db!();
+    let addr = serve(fresh_app().await).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    async fn post(client: &reqwest::Client, url: String, body: Value) -> Value {
+        let resp = client.post(&url).json(&body).send().await.unwrap();
+        let status = resp.status();
+        let json: Value = resp.json().await.unwrap();
+        assert!(status.is_success(), "POST {url} failed ({status}): {json}");
+        json
+    }
+
+    let org = post(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Acme", "slug": "acme"}),
+    )
+    .await;
+    let org_id = org["id"].as_str().expect("org id");
+
+    let team = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/teams"),
+        json!({"name": "Platform"}),
+    )
+    .await;
+    let team_id = team["id"].as_str().expect("team id");
+
+    let project = post(
+        &client,
+        format!("{base}/api/v1/teams/{team_id}/projects"),
+        json!({"name": "Gateway"}),
+    )
+    .await;
+    let project_id = project["id"].as_str().expect("project id");
+
+    let virtual_key = post(
+        &client,
+        format!("{base}/api/v1/projects/{project_id}/virtual-keys"),
+        json!({"name": "billing-key"}),
+    )
+    .await;
+    let virtual_key_id = virtual_key["id"].as_str().expect("virtual key id");
+    assert!(virtual_key["business_unit_id"].is_null());
+    assert!(virtual_key["customer_id"].is_null());
+
+    let unit = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/business-units"),
+        json!({"name": "Payments"}),
+    )
+    .await;
+    let unit_id = unit["id"].as_str().expect("business unit id");
+
+    let customer = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/customers"),
+        json!({"name": "Acme EU", "business_unit_id": unit_id}),
+    )
+    .await;
+    let customer_id = customer["id"].as_str().expect("customer id");
+
+    let attributed: Value = client
+        .put(format!(
+            "{base}/api/v1/virtual-keys/{virtual_key_id}/attribution"
+        ))
+        .json(&json!({"business_unit_id": unit_id, "customer_id": customer_id}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(attributed["business_unit_id"], unit_id);
+    assert_eq!(attributed["customer_id"], customer_id);
+
+    // the gateway snapshot carries the attribution so usage can be tagged
+    let snap: Value = client
+        .get(format!("{base}/internal/snapshot"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let keys = snap["config"]["db_virtual_keys"]
+        .as_array()
+        .expect("db_virtual_keys");
+    let key = keys
+        .iter()
+        .find(|k| k["id"] == virtual_key_id)
+        .expect("virtual key in snapshot");
+    assert_eq!(key["business_unit_id"], unit_id);
+    assert_eq!(key["customer_id"], customer_id);
+
+    // a customer from another org may not be attached
+    let other_org = post(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Other", "slug": "other"}),
+    )
+    .await;
+    let other_org_id = other_org["id"].as_str().expect("other org id");
+    let foreign_customer = post(
+        &client,
+        format!("{base}/api/v1/orgs/{other_org_id}/customers"),
+        json!({"name": "Foreign"}),
+    )
+    .await;
+    let foreign_customer_id = foreign_customer["id"]
+        .as_str()
+        .expect("foreign customer id");
+    let cross_org = client
+        .put(format!(
+            "{base}/api/v1/virtual-keys/{virtual_key_id}/attribution"
+        ))
+        .json(&json!({"customer_id": foreign_customer_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_org.status(), 400);
+
+    // pairing a customer with a business unit that does not own it is rejected
+    let other_unit = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/business-units"),
+        json!({"name": "Growth"}),
+    )
+    .await;
+    let other_unit_id = other_unit["id"].as_str().expect("other unit id");
+    let mismatched = client
+        .put(format!(
+            "{base}/api/v1/virtual-keys/{virtual_key_id}/attribution"
+        ))
+        .json(&json!({"business_unit_id": other_unit_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mismatched.status(), 400);
+
+    // omitted fields stay put; explicit nulls clear the dimension
+    let cleared: Value = client
+        .put(format!(
+            "{base}/api/v1/virtual-keys/{virtual_key_id}/attribution"
+        ))
+        .json(&json!({"customer_id": null}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cleared["business_unit_id"], unit_id);
+    assert!(cleared["customer_id"].is_null());
+
+    // deleting the unit detaches the keys that pointed at it
+    let delete_customer = client
+        .delete(format!("{base}/api/v1/customers/{customer_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delete_customer.status(), 204);
+    let delete_unit = client
+        .delete(format!("{base}/api/v1/business-units/{unit_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delete_unit.status(), 204);
+    let orphaned: Value = client
+        .get(format!("{base}/api/v1/projects/{project_id}/virtual-keys"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(orphaned[0]["business_unit_id"].is_null());
+}
+
+#[tokio::test]
 async fn prompt_template_crud_publish_and_scope_round_trip() {
     skip_without_db!();
     let addr = serve(fresh_app().await).await;

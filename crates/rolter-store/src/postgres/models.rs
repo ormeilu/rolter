@@ -195,6 +195,11 @@ pub struct VirtualKey {
     /// local account that minted this key via the self-service panel; `NULL`
     /// for admin-created or bootstrap-config keys (ROL-224)
     pub created_by: Option<Uuid>,
+    /// business unit this key's spend rolls up to; `NULL` leaves the key
+    /// attributed to its tenancy chain only
+    pub business_unit_id: Option<Uuid>,
+    /// customer this key's spend rolls up to; `NULL` when unattributed
+    pub customer_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
 
