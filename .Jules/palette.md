@@ -6,7 +6,3 @@
 **Action:** Always verify keyboard accessibility (`focus-visible`) and semantic HTML tags (`type="search"`) on custom input wrappers and icon-only buttons across the application.
 
 I am learning that Linear tickets are no longer used for PR titles.
-
-## 2025-03-01 - Add visual feedback to manual refresh operations
-**Learning:** When using `@tanstack/react-query` to fetch data across the app, standalone refresh buttons should use the `useIsFetching()` hook to apply an `animate-spin` visual feedback state, as network calls are frequently unnoticeable by default to screenreader and regular users.
-**Action:** Always include a visual loading indicator (e.g. `animate-spin` on a reload icon) and ensure an `aria-label` is present on manual refetch buttons, particularly those that trigger global data fetches.

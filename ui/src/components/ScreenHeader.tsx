@@ -1,5 +1,6 @@
 import { RefreshCw } from "lucide-react";
-import { useQueryClient, useIsFetching } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -9,7 +10,16 @@ import { cn } from "@/lib/utils";
 // in the sidebar user menu, not here.
 export function ScreenHeader({ title, subtitle }: { title: string; subtitle: string }) {
   const queryClient = useQueryClient();
-  const isFetching = useIsFetching();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  async function refresh() {
+    setIsRefreshing(true);
+    try {
+      await queryClient.invalidateQueries();
+    } finally {
+      setIsRefreshing(false);
+    }
+  }
 
   return (
     <>
@@ -25,12 +35,17 @@ export function ScreenHeader({ title, subtitle }: { title: string; subtitle: str
           </span>
           <button
             type="button"
-            title="Refresh"
-            aria-label="Refresh data"
-            onClick={() => queryClient.invalidateQueries()}
-            className="flex h-[34px] w-[34px] items-center justify-center rounded-md border border-[color:var(--border-subtle)] text-muted-foreground transition-colors hover:bg-[color:var(--surface-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            title={isRefreshing ? "Refreshing…" : "Refresh"}
+            aria-label={isRefreshing ? "Refreshing data" : "Refresh data"}
+            aria-busy={isRefreshing}
+            disabled={isRefreshing}
+            onClick={() => void refresh()}
+            className="flex h-[34px] w-[34px] items-center justify-center rounded-md border border-[color:var(--border-subtle)] text-muted-foreground transition-colors hover:bg-[color:var(--surface-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
           >
-            <RefreshCw className={cn("h-4 w-4", isFetching > 0 && "animate-spin")} />
+            <RefreshCw
+              aria-hidden
+              className={cn("h-4 w-4", isRefreshing && "motion-safe:animate-spin")}
+            />
           </button>
         </div>
       </header>
