@@ -86,7 +86,7 @@ docs(architecture): document reload-free config propagation
   that agent's own name and email (for example,
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`).
 
-Commit hygiene is enforced by `commitlint` (PR titles) and the `conventional-pre-commit` hook in `.pre-commit-config.yaml`.
+Commit hygiene is enforced by `commitlint` (PR titles) and the `conventional-pre-commit` hook in `prek.toml`.
 
 ## Testing & quality
 

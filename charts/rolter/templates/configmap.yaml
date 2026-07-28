@@ -9,4 +9,3 @@ data:
   rolter.toml: |
     {{- .Values.config.file | nindent 4 }}
 {{- end }}
-

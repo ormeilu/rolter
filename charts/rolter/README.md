@@ -20,4 +20,3 @@ secretEnv:
 ```
 
 Use `config.existingConfigMap` to manage `rolter.toml` outside the release. The gateway runs with a read-only root filesystem, no Linux capabilities, no service-account token, health probes, resource defaults, and a disruption budget. Enable `gateway.autoscaling` and `ingress` when the cluster provides metrics-server and an ingress controller.
-
