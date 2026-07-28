@@ -43,6 +43,28 @@ pub trait LoadBalancer: Send + Sync {
     /// Record that `target` served the given context. Strategies that learn from
     /// traffic (cache aware) override this; others ignore it.
     fn observe(&self, _target: usize, _ctx: &RouteContext) {}
+
+    /// Decision counters for strategies that choose *how* to pick, not just
+    /// what to pick. Only [`adaptive::Adaptive`] reports today; every other
+    /// strategy makes one kind of decision and returns `None`.
+    fn decisions(&self) -> Option<DecisionCounts> {
+        None
+    }
+}
+
+/// How a route's picks were split between the strategy's modes, cumulative
+/// since the balancer was built (a config reload rebuilds it, so a Prometheus
+/// counter reset lines up with a config-version bump).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DecisionCounts {
+    /// picks made by the adaptive blend
+    pub blend: u64,
+    /// picks spent exploring so starved targets keep producing samples
+    pub exploration: u64,
+    /// picks served by the deterministic fallback stack
+    pub fallback: u64,
+    /// whether the blend was engaged at the last pick
+    pub engaged: bool,
 }
 
 /// Build-time, per-target signals for strategies that rank on more than

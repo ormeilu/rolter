@@ -76,6 +76,39 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
             "rolter_cache_telemetry_age_seconds{{provider=\"{provider}\",source=\"{source}\"}} {age}"
         );
     }
+    // adaptive-routing telemetry (#544): one series per route on the adaptive
+    // strategy. counters reset when a config reload rebuilds the balancer,
+    // which lines up with a rolter_config_version bump.
+    body.push_str(
+        "# HELP rolter_adaptive_routing_decisions_total routing picks by adaptive-routing mode\n",
+    );
+    body.push_str("# TYPE rolter_adaptive_routing_decisions_total counter\n");
+    body.push_str(
+        "# HELP rolter_adaptive_routing_engaged whether the adaptive blend is currently routing\n",
+    );
+    body.push_str("# TYPE rolter_adaptive_routing_engaged gauge\n");
+    let snap = state.snapshot.load();
+    for (model, entry) in snap.routes.iter() {
+        let Some(counts) = entry.balancer.decisions() else {
+            continue;
+        };
+        let label = model.replace('\\', "\\\\").replace('"', "\\\"");
+        for (mode, value) in [
+            ("blend", counts.blend),
+            ("exploration", counts.exploration),
+            ("fallback", counts.fallback),
+        ] {
+            let _ = writeln!(
+                body,
+                "rolter_adaptive_routing_decisions_total{{model=\"{label}\",mode=\"{mode}\"}} {value}"
+            );
+        }
+        let _ = writeln!(
+            body,
+            "rolter_adaptive_routing_engaged{{model=\"{label}\"}} {}",
+            u8::from(counts.engaged)
+        );
+    }
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body)
 }
 
