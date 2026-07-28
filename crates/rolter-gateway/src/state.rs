@@ -505,6 +505,10 @@ pub struct AppState {
     /// `server.require_auth` overrides this either way. process-level rather
     /// than snapshot-level so a control-plane reload can never clear it
     pub managed_auth: bool,
+    /// set by the config watcher when the control plane marks this node as
+    /// draining; `/readyz` then reports not-ready so a load balancer stops
+    /// sending new traffic while in-flight requests finish (#543)
+    pub draining: Arc<std::sync::atomic::AtomicBool>,
     /// live egress policy every upstream client's resolver consults at connect
     /// time; swapped on reload so hostname/rebinding enforcement re-tunes
     /// without rebuilding pooled clients (#656)
@@ -643,6 +647,7 @@ impl AppState {
             ))),
             // opted into by the binary when a snapshot url is configured
             managed_auth: false,
+            draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             egress,
             forwarder,
             provider_queues,

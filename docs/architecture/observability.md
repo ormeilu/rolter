@@ -62,4 +62,5 @@ Read-only, window-bounded rollups over `provider_health_events`, served by the c
 
 ## Health
 
-- `GET /healthz` on both binaries for liveness/readiness probes.
+- `GET /healthz` on both binaries for liveness probes.
+- `GET /readyz` on the gateway for readiness. It returns `503 draining` once the control plane marks the node as draining (`PUT /api/v1/cluster/nodes/{id}/drain`), so a load balancer stops sending new traffic while in-flight requests finish; `/healthz` stays `200` because the process is healthy. The drain reaches the node on the snapshot poll it already makes, and the control plane refuses to drain the last live gateway.
