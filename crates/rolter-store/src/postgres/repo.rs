@@ -14,8 +14,8 @@ use rolter_core::{Error, Result};
 use super::models::{
     AuditLogEntry, Budget, BusinessUnit, Customer, Membership, ModelPrice, Org, OwnedVirtualKey,
     Project, PromptTemplate, PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup,
-    ProviderGroupMember, RateLimit, Route, RouteTarget, SecuritySettings, Session, Team, User,
-    VirtualKey,
+    ProviderGroupMember, RateLimit, Route, RouteTarget, SecuritySettings, Session, Skill,
+    SkillVersion, Team, User, VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -543,6 +543,216 @@ impl PromptTemplateRepo<'_> {
             .map_err(store_err)?;
         if res.rows_affected() == 0 {
             return Err(Error::NotFound(format!("prompt template {id}")));
+        }
+        Ok(())
+    }
+}
+
+pub struct SkillRepo<'a>(pub &'a PgPool);
+
+impl SkillRepo<'_> {
+    pub async fn list_skills(&self, org_id: Uuid) -> Result<Vec<Skill>> {
+        sqlx::query_as(
+            "select id, org_id, name, slug, description, retired_at, published_version,
+                    allowed_team_ids, minimum_role, created_at
+             from skills where org_id = $1 order by name",
+        )
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get_skill(&self, id: Uuid) -> Result<Skill> {
+        sqlx::query_as(
+            "select id, org_id, name, slug, description, retired_at, published_version,
+                    allowed_team_ids, minimum_role, created_at
+             from skills where id = $1",
+        )
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("skill {id}")))
+    }
+
+    pub async fn get_by_slug(&self, org_id: Uuid, slug: &str) -> Result<Skill> {
+        sqlx::query_as(
+            "select id, org_id, name, slug, description, retired_at, published_version,
+                    allowed_team_ids, minimum_role, created_at
+             from skills where org_id = $1 and slug = $2",
+        )
+        .bind(org_id)
+        .bind(slug)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("skill {org_id}:{slug}")))
+    }
+
+    pub async fn create_skill(
+        &self,
+        org_id: Uuid,
+        name: &str,
+        slug: &str,
+        description: Option<&str>,
+        allowed_team_ids: &[Uuid],
+        minimum_role: &str,
+    ) -> Result<Skill> {
+        sqlx::query_as(
+            "insert into skills (
+                 org_id, name, slug, description, allowed_team_ids, minimum_role
+             )
+             values ($1, $2, $3, $4, $5, $6)
+             returning id, org_id, name, slug, description, retired_at, published_version,
+                       allowed_team_ids, minimum_role, created_at",
+        )
+        .bind(org_id)
+        .bind(name)
+        .bind(slug)
+        .bind(description.unwrap_or(""))
+        .bind(allowed_team_ids)
+        .bind(minimum_role)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn update_skill(
+        &self,
+        id: Uuid,
+        name: Option<&str>,
+        description: Option<&str>,
+        retired: Option<bool>,
+        allowed_team_ids: Option<&[Uuid]>,
+        minimum_role: Option<&str>,
+    ) -> Result<Skill> {
+        sqlx::query_as(
+            "update skills set
+                 name = coalesce($2, name),
+                 description = case when $3::bool then $4 else description end,
+                 retired_at = case
+                    when $5::bool is null then retired_at
+                    when $5 then coalesce(retired_at, now())
+                    else null
+                 end,
+                 allowed_team_ids = coalesce($6, allowed_team_ids),
+                 minimum_role = coalesce($7, minimum_role)
+             where id = $1
+             returning id, org_id, name, slug, description, retired_at, published_version,
+                       allowed_team_ids, minimum_role, created_at",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(description.is_some())
+        .bind(description.unwrap_or(""))
+        .bind(retired)
+        .bind(allowed_team_ids)
+        .bind(minimum_role)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("skill {id}")))
+    }
+
+    pub async fn create_version(
+        &self,
+        skill_id: Uuid,
+        content: Option<&str>,
+        content_ref: Option<&str>,
+        metadata: &serde_json::Value,
+    ) -> Result<SkillVersion> {
+        let mut tx = self.0.begin().await.map_err(store_err)?;
+        sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(skill_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err)?;
+        let version = sqlx::query_as(
+            "insert into skill_versions (skill_id, version, content, content_ref, metadata)
+             values (
+                 $1,
+                 coalesce((select max(version) + 1 from skill_versions where skill_id = $1), 1),
+                 $2,
+                 $3,
+                 $4
+             )
+             returning skill_id, version, content, content_ref, metadata, created_at",
+        )
+        .bind(skill_id)
+        .bind(content)
+        .bind(content_ref)
+        .bind(metadata)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(store_err)?;
+        tx.commit().await.map_err(store_err)?;
+        Ok(version)
+    }
+
+    pub async fn list_versions(&self, skill_id: Uuid) -> Result<Vec<SkillVersion>> {
+        sqlx::query_as(
+            "select skill_id, version, content, content_ref, metadata, created_at
+             from skill_versions where skill_id = $1 order by version desc",
+        )
+        .bind(skill_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn resolve_published(&self, skill_id: Uuid) -> Result<SkillVersion> {
+        sqlx::query_as(
+            "select v.skill_id, v.version, v.content, v.content_ref, v.metadata, v.created_at
+             from skill_versions v
+             join skills s
+               on s.id = v.skill_id
+              and s.published_version = v.version
+             where s.id = $1 and s.retired_at is null",
+        )
+        .bind(skill_id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("published skill {skill_id}")))
+    }
+
+    pub async fn publish_version(&self, skill_id: Uuid, version: i32) -> Result<Skill> {
+        let exists: Option<i32> =
+            sqlx::query_scalar("select 1 from skill_versions where skill_id = $1 and version = $2")
+                .bind(skill_id)
+                .bind(version)
+                .fetch_optional(self.0)
+                .await
+                .map_err(store_err)?;
+        if exists.is_none() {
+            return Err(Error::NotFound(format!(
+                "skill version {skill_id}:{version}"
+            )));
+        }
+        sqlx::query_as(
+            "update skills
+             set published_version = $2
+             where id = $1
+             returning id, org_id, name, slug, description, retired_at, published_version,
+                       allowed_team_ids, minimum_role, created_at",
+        )
+        .bind(skill_id)
+        .bind(version)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("skill {skill_id}")))
+    }
+
+    pub async fn delete_skill(&self, id: Uuid) -> Result<()> {
+        let res = sqlx::query("delete from skills where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("skill {id}")));
         }
         Ok(())
     }
@@ -2061,6 +2271,94 @@ mod tests {
         repo.delete_template(template.id).await.unwrap();
         assert!(matches!(
             repo.get_template(template.id).await,
+            Err(Error::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn skill_versions_publish_and_retire_round_trip() {
+        let Ok(_) = std::env::var("ROLTER_TEST_DATABASE_URL") else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        let org = OrgRepo(&pool).create("acme", "acme").await.unwrap();
+
+        let repo = SkillRepo(&pool);
+        let skill = repo
+            .create_skill(
+                org.id,
+                "classification baseline",
+                "classification-baseline",
+                Some("first skill"),
+                &[],
+                "viewer",
+            )
+            .await
+            .unwrap();
+        assert_eq!(skill.published_version, None);
+        assert_eq!(repo.list_skills(org.id).await.unwrap().len(), 1);
+
+        let v1 = repo
+            .create_version(
+                skill.id,
+                Some("content-v1"),
+                None,
+                &serde_json::json!({"author":"ops"}),
+            )
+            .await
+            .unwrap();
+        let v2 = repo
+            .create_version(
+                skill.id,
+                None,
+                Some("oci://registry.example/skills/classification@sha256:abc"),
+                &serde_json::json!({"author":"ops"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(v1.version, 1);
+        assert_eq!(v2.version, 2);
+        let metadata = serde_json::json!({"author":"ops"});
+        let (v3, v4) = tokio::join!(
+            repo.create_version(skill.id, Some("content-v3"), None, &metadata),
+            repo.create_version(skill.id, Some("content-v4"), None, &metadata)
+        );
+        let mut concurrent_versions = [v3.unwrap().version, v4.unwrap().version];
+        concurrent_versions.sort();
+        assert_eq!(concurrent_versions, [3, 4]);
+        let versions = repo.list_versions(skill.id).await.unwrap();
+        assert_eq!(versions.len(), 4);
+        assert_eq!(versions[0].version, 4);
+        assert_eq!(versions[3].version, 1);
+
+        let published = repo.publish_version(skill.id, 2).await.unwrap();
+        assert_eq!(published.published_version, Some(2));
+        let resolved = repo.resolve_published(skill.id).await.unwrap();
+        assert_eq!(resolved.version, 2);
+        assert!(resolved.content.is_none());
+        assert_eq!(
+            resolved.content_ref.as_deref(),
+            Some("oci://registry.example/skills/classification@sha256:abc")
+        );
+
+        let retired = repo
+            .update_skill(
+                skill.id,
+                Some("classification baseline"),
+                None,
+                Some(true),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(retired.retired_at.is_some());
+        assert!(repo.resolve_published(skill.id).await.is_err());
+
+        repo.delete_skill(skill.id).await.unwrap();
+        assert!(matches!(
+            repo.get_skill(skill.id).await,
             Err(Error::NotFound(_))
         ));
     }
