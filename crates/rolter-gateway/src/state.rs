@@ -127,6 +127,9 @@ pub struct Snapshot {
     /// versioned prompt templates / route decorators, compiled once per snapshot
     /// and shared across requests; inert unless enabled (ROL-256)
     pub prompt_templates: Arc<rolter_core::CompiledTemplates>,
+    /// deployment-wide adaptive-routing policy, read when a route's balancer is
+    /// built; inert unless enabled (#544)
+    pub adaptive_routing: rolter_core::AdaptiveRoutingConfig,
 }
 
 /// Live per-target latency handle for the `fastest` strategy, backed by the
@@ -258,6 +261,7 @@ impl Snapshot {
                             .collect(),
                     )
                 }),
+                adaptive: config.adaptive_routing.clone(),
             };
             let balancer = build_with_stats(route.strategy, &weights, &stats);
             let variant_balancers = route
@@ -287,6 +291,7 @@ impl Snapshot {
                                     .collect(),
                             )
                         }),
+                        adaptive: config.adaptive_routing.clone(),
                     };
                     build_with_stats(route.strategy, &w, &s)
                 })
@@ -363,6 +368,7 @@ impl Snapshot {
             prompt_templates: Arc::new(rolter_core::CompiledTemplates::from_config(
                 &config.prompt_templates,
             )),
+            adaptive_routing: config.adaptive_routing.clone(),
         }
     }
 
@@ -427,6 +433,7 @@ impl Snapshot {
         let stats = TargetStats {
             cost_per_mtok: target_costs(&targets, model, &self.prices),
             latency: None,
+            adaptive: self.adaptive_routing.clone(),
             ..Default::default()
         };
         let balancer = build_with_stats(strategy, &weights, &stats);

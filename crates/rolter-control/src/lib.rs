@@ -546,6 +546,7 @@ async fn seed_default_models(pool: &sqlx::PgPool, config: &GatewayConfig) -> any
             rolter_core::BalancingStrategy::Fastest => "fastest",
             rolter_core::BalancingStrategy::PreciseCacheAware => "precise_cache_aware",
             rolter_core::BalancingStrategy::LmcacheAware => "lmcache_aware",
+            rolter_core::BalancingStrategy::Adaptive => "adaptive",
         };
         let created = routes.create(project_id, &route.model, strategy).await?;
         let params = serde_json::to_value(&route.params)?;
@@ -779,6 +780,7 @@ fn balancing_strategy_str(strategy: rolter_core::BalancingStrategy) -> &'static 
         Fastest => "fastest",
         PreciseCacheAware => "precise_cache_aware",
         LmcacheAware => "lmcache_aware",
+        Adaptive => "adaptive",
     }
 }
 

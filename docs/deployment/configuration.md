@@ -145,7 +145,7 @@ See [Custom CA bundles](custom-ca-bundles.md) for rotation behavior and Docker/K
 
 ### `[[routes]]`
 - `model` (string) — public model name clients request
-- `strategy` (`round_robin` | `random` | `power_of_two` | `consistent_hash` | `cache_aware` | `weighted` | `pipeline` | `cheapest` | `fastest` | `precise_cache_aware` | `lmcache_aware`, default `round_robin`)
+- `strategy` (`round_robin` | `random` | `power_of_two` | `consistent_hash` | `cache_aware` | `weighted` | `pipeline` | `cheapest` | `fastest` | `precise_cache_aware` | `lmcache_aware` | `adaptive`, default `round_robin`)
 - `[[routes.targets]]`
   - `provider` (string) — a provider `name`
   - `model` (string, optional) — upstream model id; defaults to the requested model
@@ -166,6 +166,13 @@ See [Custom CA bundles](custom-ca-bundles.md) for rotation behavior and Docker/K
 - `key` (string) — the bearer token clients present
 - `name` (string, optional)
 - `models` (string[], default `[]`) — allow-list; empty = all
+
+### `[adaptive_routing]`
+Deployment-wide policy for routes using the `adaptive` strategy. See [load balancing](../architecture/load-balancing.md#adaptive-routing).
+- `enabled` (bool, default `false`) — kill switch; while off, every `adaptive` route serves the `pipeline` stack
+- `latency_weight` (f32, default `1.0`), `cost_weight` (f32, default `0.5`), `load_weight` (f32, default `0.25`) — blend weights; negatives are clamped to `0`, and all-zero disables the blend
+- `exploration_ratio` (f32, default `0.05`) — share of picks made at random to keep latency samples fresh; clamped to `[0, 0.5]`
+- `min_samples` (u32, default `50`) — requests a route must serve before the blend engages
 
 ### `[logging]`
 - `clickhouse_url` (string, optional)

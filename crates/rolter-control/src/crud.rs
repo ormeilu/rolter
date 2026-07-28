@@ -2392,7 +2392,7 @@ fn default_strategy() -> String {
     "round_robin".to_string()
 }
 
-const STRATEGIES: [&str; 11] = [
+const STRATEGIES: [&str; 12] = [
     "round_robin",
     "random",
     "power_of_two",
@@ -2404,6 +2404,7 @@ const STRATEGIES: [&str; 11] = [
     "fastest",
     "precise_cache_aware",
     "lmcache_aware",
+    "adaptive",
 ];
 
 async fn create_route(
