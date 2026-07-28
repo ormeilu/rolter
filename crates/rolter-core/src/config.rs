@@ -77,6 +77,9 @@ pub struct GatewayConfig {
     /// cross-dialect translation behavior (anthropic version, default max tokens)
     #[serde(default)]
     pub compatibility: CompatibilityConfig,
+    /// deployment-wide adaptive-routing policy for `adaptive` routes
+    #[serde(default)]
+    pub adaptive_routing: AdaptiveRoutingConfig,
     /// bounded per-provider dispatch queues and overload behaviour
     #[serde(default)]
     pub queue: QueueConfig,
@@ -820,6 +823,10 @@ pub enum BalancingStrategy {
     PreciseCacheAware,
     /// LMCache controller occupancy and cache-availability routing
     LmcacheAware,
+    /// self-tuning blend of observed latency, catalog cost and in-flight load,
+    /// governed by [`AdaptiveRoutingConfig`]; falls back to the `pipeline`
+    /// stack whenever it is disabled or the evidence is too thin
+    Adaptive,
 }
 
 /// A named set of providers addressable as `group-slug/model` (ADR-0017
@@ -1649,6 +1656,97 @@ impl Default for CompatibilityConfig {
             default_max_tokens: default_translation_max_tokens(),
         }
     }
+}
+
+/// Adaptive routing: a blend of observed latency, catalog cost and in-flight
+/// load applied by the `adaptive` strategy (#544).
+///
+/// The whole feature is off by default. `enabled` is the kill switch: with it
+/// off — or before a route has gathered enough evidence to rank its targets —
+/// the `adaptive` strategy behaves exactly like the `pipeline` stack, so a
+/// route can be moved onto it without shifting any traffic until an operator
+/// says so.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct AdaptiveRoutingConfig {
+    /// master kill switch; when false every `adaptive` route serves the
+    /// deterministic fallback stack
+    #[serde(default)]
+    pub enabled: bool,
+    /// weight of the observed-latency signal
+    #[serde(default = "default_adaptive_latency_weight")]
+    pub latency_weight: f32,
+    /// weight of the catalog-cost signal
+    #[serde(default = "default_adaptive_cost_weight")]
+    pub cost_weight: f32,
+    /// weight of the in-flight-load signal
+    #[serde(default = "default_adaptive_load_weight")]
+    pub load_weight: f32,
+    /// share of picks made uniformly at random so a target the blend would
+    /// otherwise starve keeps producing fresh latency samples
+    #[serde(default = "default_adaptive_exploration_ratio")]
+    pub exploration_ratio: f32,
+    /// picks a route must have served before adaptive scoring engages
+    #[serde(default = "default_adaptive_min_samples")]
+    pub min_samples: u32,
+}
+
+impl Default for AdaptiveRoutingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            latency_weight: default_adaptive_latency_weight(),
+            cost_weight: default_adaptive_cost_weight(),
+            load_weight: default_adaptive_load_weight(),
+            exploration_ratio: default_adaptive_exploration_ratio(),
+            min_samples: default_adaptive_min_samples(),
+        }
+    }
+}
+
+impl AdaptiveRoutingConfig {
+    /// Clamp operator input into the ranges the balancer assumes: weights are
+    /// non-negative and exploration never takes more than half the traffic, so
+    /// a typo cannot turn the route into a random balancer.
+    pub fn sanitized(&self) -> Self {
+        Self {
+            enabled: self.enabled,
+            latency_weight: self.latency_weight.max(0.0),
+            cost_weight: self.cost_weight.max(0.0),
+            load_weight: self.load_weight.max(0.0),
+            exploration_ratio: self.exploration_ratio.clamp(0.0, MAX_EXPLORATION_RATIO),
+            min_samples: self.min_samples,
+        }
+    }
+
+    /// Whether the blend can rank anything at all. All-zero weights would make
+    /// every candidate score identically, which is a random balancer wearing an
+    /// adaptive name — treat it as "not configured" instead.
+    pub fn has_signal(&self) -> bool {
+        self.latency_weight > 0.0 || self.cost_weight > 0.0 || self.load_weight > 0.0
+    }
+}
+
+/// Upper bound on [`AdaptiveRoutingConfig::exploration_ratio`].
+pub const MAX_EXPLORATION_RATIO: f32 = 0.5;
+
+fn default_adaptive_latency_weight() -> f32 {
+    1.0
+}
+
+fn default_adaptive_cost_weight() -> f32 {
+    0.5
+}
+
+fn default_adaptive_load_weight() -> f32 {
+    0.25
+}
+
+fn default_adaptive_exploration_ratio() -> f32 {
+    0.05
+}
+
+fn default_adaptive_min_samples() -> u32 {
+    50
 }
 
 fn default_anthropic_version() -> String {

@@ -23,6 +23,25 @@ pub trait LoadBalancer: Send + Sync {
 - **pipeline** — composable **filter → weighted-score → argmax** selection: eligibility filtering drops ineligible targets, then a stack of `Scorer`s (session affinity + static weight + in-flight load + prefix-cache affinity) is combined as a weighted sum and the argmax wins (ties broken randomly). Session affinity pins repeat requests from the same `x-session-id` to their last-served target (TTL-bounded) for warm-cache reuse. The extension point every future cost/latency/KV-cache scorer plugs into.
 - **precise_cache_aware** — consumes each target's vLLM ZMQ KV-event stream and scores the exact leading fraction of caller-supplied token blocks resident on that target. Missing token ids and stale, malformed, disconnected, or sequence-gapped streams stay neutral; least-load routing remains the fallback.
 - **lmcache_aware** — polls each target's configured LMCache controller signal and prefers available caches with free capacity (`1 - occupancy`). Empty, saturated, failed, and stale controllers stay neutral and fall back to least load.
+- **adaptive** — a weighted blend of observed latency, catalog cost and in-flight load, governed by the deployment-wide `[adaptive_routing]` policy. See below.
+
+## Adaptive routing
+
+`adaptive` is the only strategy whose behavior is owned by a global policy rather than the route:
+
+```toml
+[adaptive_routing]
+enabled = false           # kill switch; the whole feature is off by default
+latency_weight = 1.0
+cost_weight = 0.5
+load_weight = 0.25
+exploration_ratio = 0.05  # clamped to [0, 0.5]
+min_samples = 50
+```
+
+Three conditions must all hold before the blend routes a single request: the kill switch is on, at least one weight is non-zero, and the route has both served `min_samples` requests and gathered latency samples for at least two targets. Until then — and immediately again if the policy is switched off — every pick goes to the same `pipeline` stack the route would have used otherwise, so moving a route to `adaptive` shifts no traffic on its own. The fallback stack keeps learning while the blend is engaged, so disengaging lands on a warm session/prefix cache.
+
+Once engaged, an `exploration_ratio` share of picks is made uniformly at random so a target the blend has learned to avoid keeps producing fresh latency samples instead of going dark. Operator input is clamped on the way in: negative weights become zero and exploration never exceeds half the traffic.
 
 ## Choosing a strategy
 
@@ -37,5 +56,6 @@ pub trait LoadBalancer: Send + Sync {
 | LMCache fleet with occupancy controller | `lmcache_aware` |
 | Mixed-price providers, minimize spend | `cheapest` |
 | Heterogeneous pool, minimize latency | `fastest` |
+| Mixed price *and* latency, let the gateway tune | `adaptive` |
 
 Both external strategies perform network I/O only in background tasks. The request hot path reads bounded in-process state and atomics.

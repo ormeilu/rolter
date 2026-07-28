@@ -13,6 +13,7 @@ use parking_lot::Mutex;
 use rand::RngExt;
 use rolter_core::BalancingStrategy;
 
+pub mod adaptive;
 pub mod complexity;
 pub mod scorer;
 pub mod trie;
@@ -60,6 +61,9 @@ pub struct TargetStats {
     pub kv_cache: Option<std::sync::Arc<dyn scorer::KvCacheSource>>,
     /// live LMCache occupancy/availability source
     pub lmcache: Option<std::sync::Arc<dyn scorer::LmCacheSource>>,
+    /// deployment-wide adaptive-routing policy, read once at build time by the
+    /// `adaptive` strategy and ignored by every other one
+    pub adaptive: rolter_core::AdaptiveRoutingConfig,
 }
 
 impl std::fmt::Debug for TargetStats {
@@ -69,6 +73,7 @@ impl std::fmt::Debug for TargetStats {
             .field("latency", &self.latency.as_ref().map(|_| "<live>"))
             .field("kv_cache", &self.kv_cache.as_ref().map(|_| "<live>"))
             .field("lmcache", &self.lmcache.as_ref().map(|_| "<live>"))
+            .field("adaptive", &self.adaptive)
             .finish()
     }
 }
@@ -128,6 +133,12 @@ pub fn build_with_stats(
                     .with(Box::new(scorer::LeastLoadScorer::new(n)), 1.0),
             ),
         },
+        BalancingStrategy::Adaptive => Box::new(adaptive::Adaptive::new(
+            weights,
+            &stats.cost_per_mtok,
+            stats.latency.clone(),
+            &stats.adaptive,
+        )),
         BalancingStrategy::LmcacheAware => match &stats.lmcache {
             Some(source) => Box::new(
                 scorer::Pipeline::new(n)

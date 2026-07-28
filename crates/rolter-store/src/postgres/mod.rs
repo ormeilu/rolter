@@ -301,6 +301,7 @@ fn parse_strategy(s: &str) -> Result<BalancingStrategy> {
         "fastest" => BalancingStrategy::Fastest,
         "precise_cache_aware" => BalancingStrategy::PreciseCacheAware,
         "lmcache_aware" => BalancingStrategy::LmcacheAware,
+        "adaptive" => BalancingStrategy::Adaptive,
         other => {
             return Err(Error::Store(format!(
                 "unknown balancing strategy '{other}'"
