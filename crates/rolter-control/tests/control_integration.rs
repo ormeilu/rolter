@@ -375,6 +375,235 @@ async fn business_unit_and_customer_crud_round_trip() {
     assert_eq!(delete_business_unit.status(), 204);
 }
 
+#[tokio::test]
+async fn prompt_template_crud_publish_and_scope_round_trip() {
+    skip_without_db!();
+    let addr = serve(fresh_app().await).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    async fn post(client: &reqwest::Client, url: String, body: Value) -> Value {
+        let resp = client.post(&url).json(&body).send().await.unwrap();
+        let status = resp.status();
+        let json: Value = resp.json().await.unwrap();
+        assert!(status.is_success(), "POST {url} failed ({status}): {json}");
+        json
+    }
+
+    let org = post(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Acme", "slug": "acme"}),
+    )
+    .await;
+    let org_id = org["id"].as_str().expect("org id");
+
+    let team = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/teams"),
+        json!({"name": "Platform"}),
+    )
+    .await;
+    let team_id = team["id"].as_str().expect("team id");
+
+    let project = post(
+        &client,
+        format!("{base}/api/v1/teams/{team_id}/projects"),
+        json!({"name": "Gateway"}),
+    )
+    .await;
+    let project_id = project["id"].as_str().expect("project id");
+
+    let provider = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/providers"),
+        json!({"name": "openai", "kind": "openai", "api_base": "https://api.openai.com"}),
+    )
+    .await;
+    let provider_id = provider["id"].as_str().expect("provider id");
+
+    let route = post(
+        &client,
+        format!("{base}/api/v1/projects/{project_id}/routes"),
+        json!({"model": "gpt-4o-mini", "strategy": "round_robin"}),
+    )
+    .await;
+    let route_id = route["id"].as_str().expect("route id");
+
+    let virtual_key = post(
+        &client,
+        format!("{base}/api/v1/projects/{project_id}/virtual-keys"),
+        json!({"name": "template-key", "models": ["gpt-4o-mini"], "providers": [provider_id]}),
+    )
+    .await;
+    let virtual_key_id = virtual_key["id"].as_str().expect("virtual key id");
+
+    let template = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/prompt-templates"),
+        json!({"name": "support baseline", "description": "v1"}),
+    )
+    .await;
+    let template_id = template["id"].as_str().expect("template id");
+    assert_eq!(template["slug"], "support-baseline");
+
+    let templates: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/prompt-templates"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(templates.as_array().unwrap().len(), 1);
+
+    let version1 = post(
+        &client,
+        format!("{base}/api/v1/prompt-templates/{template_id}/versions"),
+        json!({
+            "variables": [{"name": "tone", "required": true}],
+            "decorators": [{"role": "system", "position": "prepend", "content": "tone={{ tone }}"}]
+        }),
+    )
+    .await;
+    assert_eq!(version1["version"], 1);
+
+    let version2 = post(
+        &client,
+        format!("{base}/api/v1/prompt-templates/{template_id}/versions"),
+        json!({"variables": [], "decorators": []}),
+    )
+    .await;
+    assert_eq!(version2["version"], 2);
+
+    let set_scopes = client
+        .put(format!(
+            "{base}/api/v1/prompt-templates/{template_id}/versions/2/scopes"
+        ))
+        .json(&json!({
+            "scopes": [
+                {"scope_type": "org", "scope_id": org_id},
+                {"scope_type": "project", "scope_id": project_id},
+                {"scope_type": "route", "scope_id": route_id},
+                {"scope_type": "virtual_key", "scope_id": virtual_key_id}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(set_scopes.status(), 204);
+
+    let version1_scopes = client
+        .put(format!(
+            "{base}/api/v1/prompt-templates/{template_id}/versions/1/scopes"
+        ))
+        .json(&json!({
+            "scopes": [{"scope_type": "org", "scope_id": org_id}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(version1_scopes.status(), 204);
+
+    let publish = client
+        .put(format!(
+            "{base}/api/v1/prompt-templates/{template_id}/publish"
+        ))
+        .json(&json!({"version": 2}))
+        .send()
+        .await
+        .unwrap();
+    let publish_status = publish.status();
+    let published: Value = publish.json().await.unwrap();
+    assert!(
+        publish_status.is_success(),
+        "publish failed ({publish_status}): {published}"
+    );
+    assert_eq!(published["published_version"], 2);
+
+    let mutate_published = client
+        .put(format!(
+            "{base}/api/v1/prompt-templates/{template_id}/versions/2/scopes"
+        ))
+        .json(&json!({
+            "scopes": [{"scope_type": "org", "scope_id": org_id}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mutate_published.status(), 400);
+
+    let scopes: Value = client
+        .get(format!(
+            "{base}/api/v1/prompt-templates/{template_id}/versions/2/scopes"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(scopes.as_array().unwrap().len(), 4);
+
+    let other_org = post(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Other", "slug": "other"}),
+    )
+    .await;
+    let other_org_id = other_org["id"].as_str().expect("other org id");
+    let other_team = post(
+        &client,
+        format!("{base}/api/v1/orgs/{other_org_id}/teams"),
+        json!({"name": "Other Team"}),
+    )
+    .await;
+    let other_team_id = other_team["id"].as_str().expect("other team id");
+    let other_project = post(
+        &client,
+        format!("{base}/api/v1/teams/{other_team_id}/projects"),
+        json!({"name": "Other Project"}),
+    )
+    .await;
+    let other_project_id = other_project["id"].as_str().expect("other project id");
+    let bad_scope = client
+        .put(format!(
+            "{base}/api/v1/prompt-templates/{template_id}/versions/2/scopes"
+        ))
+        .json(&json!({
+            "scopes": [
+                {"scope_type": "project", "scope_id": other_project_id}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_scope.status(), 400);
+
+    let rollback = client
+        .put(format!(
+            "{base}/api/v1/prompt-templates/{template_id}/rollback"
+        ))
+        .json(&json!({"version": 1}))
+        .send()
+        .await
+        .unwrap();
+    let rollback_status = rollback.status();
+    let rolled_back: Value = rollback.json().await.unwrap();
+    assert!(
+        rollback_status.is_success(),
+        "rollback failed ({rollback_status}): {rolled_back}"
+    );
+    assert_eq!(rolled_back["published_version"], 1);
+
+    let delete_template = client
+        .delete(format!("{base}/api/v1/prompt-templates/{template_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delete_template.status(), 204);
+}
+
 /// Provider credentials posted to the API must be sealed at rest, decrypted
 /// into the gateway snapshot, and never leak through the dashboard config
 /// endpoint. Runs in its own process (nextest), so setting the KEK env var

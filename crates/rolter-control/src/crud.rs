@@ -21,14 +21,15 @@ use rolter_auth::Role;
 use rolter_core::slug::{is_valid_slug, slugify};
 use rolter_core::{AdvancedModelConfig, Error};
 use rolter_store::postgres::models::{
-    AuditLogEntry, Budget, BusinessUnit, Customer, Membership, ModelPrice, Org, Project, Provider,
-    ProviderGroup, ProviderGroupMember, RateLimit, Route, RouteTarget, Team, User, VirtualKey,
+    AuditLogEntry, Budget, BusinessUnit, Customer, Membership, ModelPrice, Org, Project,
+    PromptTemplate, PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup,
+    ProviderGroupMember, RateLimit, Route, RouteTarget, Team, User, VirtualKey,
 };
 use rolter_store::postgres::repo::{
     AuditLogCursor, AuditLogDirection, AuditLogFilter, AuditLogRepo, BudgetRepo, BusinessUnitRepo,
     CustomerRepo, MembershipRepo, ModelPriceRepo, OrgRepo, ProjectRepo, ProviderGroupRepo,
-    ProviderKeyRepo, ProviderRepo, RateLimitRepo, RouteRepo, RouteTargetRepo, SessionRepo,
-    TeamRepo, UserRepo, VirtualKeyRepo,
+    PromptTemplateRepo, ProviderKeyRepo, ProviderRepo, RateLimitRepo, RouteRepo, RouteTargetRepo,
+    SessionRepo, TeamRepo, UserRepo, VirtualKeyRepo,
 };
 
 use crate::rbac::{authorize, require_superadmin, Principal, ScopeChain};
@@ -63,6 +64,30 @@ pub fn router() -> Router<ControlState> {
         .route(
             "/api/v1/customers/{id}",
             put(update_customer).delete(delete_customer),
+        )
+        .route(
+            "/api/v1/orgs/{org_id}/prompt-templates",
+            get(list_prompt_templates).post(create_prompt_template),
+        )
+        .route(
+            "/api/v1/prompt-templates/{id}",
+            put(update_prompt_template).delete(delete_prompt_template),
+        )
+        .route(
+            "/api/v1/prompt-templates/{id}/versions",
+            get(list_prompt_template_versions).post(create_prompt_template_version),
+        )
+        .route(
+            "/api/v1/prompt-templates/{id}/publish",
+            put(publish_prompt_template_version),
+        )
+        .route(
+            "/api/v1/prompt-templates/{id}/rollback",
+            put(rollback_prompt_template_version),
+        )
+        .route(
+            "/api/v1/prompt-templates/{id}/versions/{version}/scopes",
+            get(list_prompt_template_scopes).put(set_prompt_template_scopes),
         )
         .route(
             "/api/v1/orgs/{org_id}/providers",
@@ -885,6 +910,392 @@ async fn delete_customer(
         "customer",
         id,
         serde_json::json!({"name": existing.name, "slug": existing.slug}),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- prompt templates ---
+
+async fn list_prompt_templates(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(org_id): Path<Uuid>,
+) -> ApiResult<Json<Vec<PromptTemplate>>> {
+    authorize(&state, &principal, ScopeChain::org(org_id), Role::Viewer).await?;
+    Ok(Json(
+        PromptTemplateRepo(pool(&state))
+            .list_templates(org_id)
+            .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+struct CreatePromptTemplate {
+    name: String,
+    /// Stable URL-safe identity; derived from `name` when omitted.
+    slug: Option<String>,
+    description: Option<String>,
+}
+
+async fn create_prompt_template(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(org_id): Path<Uuid>,
+    SafeJson(body): SafeJson<CreatePromptTemplate>,
+) -> ApiResult<Json<PromptTemplate>> {
+    authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
+    require_non_empty(&body.name, "name")?;
+    let slug = resolve_new_slug(&body.name, body.slug.as_deref())?;
+    let description = body.description.as_deref().map(str::trim);
+    let template = PromptTemplateRepo(pool(&state))
+        .create_template(org_id, &body.name, &slug, description)
+        .await?;
+    log_audit(
+        &state,
+        &principal,
+        Some(org_id),
+        "prompt_template.create",
+        "prompt_template",
+        template.id,
+        serde_json::json!({"name": template.name, "slug": template.slug}),
+    )
+    .await;
+    Ok(Json(template))
+}
+
+#[derive(Deserialize)]
+struct UpdatePromptTemplate {
+    name: Option<String>,
+    /// Omit to leave unchanged; otherwise set to the trimmed value.
+    description: Option<String>,
+}
+
+async fn update_prompt_template(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+    SafeJson(body): SafeJson<UpdatePromptTemplate>,
+) -> ApiResult<Json<PromptTemplate>> {
+    let repo = PromptTemplateRepo(pool(&state));
+    let existing = repo.get_template(id).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(existing.org_id),
+        Role::Admin,
+    )
+    .await?;
+    if let Some(name) = &body.name {
+        require_non_empty(name, "name")?;
+    }
+    let template = repo
+        .update_template(
+            id,
+            body.name.as_deref(),
+            body.description.as_deref().map(str::trim),
+        )
+        .await?;
+    log_audit(
+        &state,
+        &principal,
+        Some(existing.org_id),
+        "prompt_template.update",
+        "prompt_template",
+        id,
+        serde_json::json!({"name": template.name}),
+    )
+    .await;
+    Ok(Json(template))
+}
+
+async fn delete_prompt_template(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let repo = PromptTemplateRepo(pool(&state));
+    let existing = repo.get_template(id).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(existing.org_id),
+        Role::Admin,
+    )
+    .await?;
+    repo.delete_template(id).await?;
+    log_audit(
+        &state,
+        &principal,
+        Some(existing.org_id),
+        "prompt_template.delete",
+        "prompt_template",
+        id,
+        serde_json::json!({"name": existing.name, "slug": existing.slug}),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_prompt_template_versions(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<Vec<PromptTemplateVersion>>> {
+    let repo = PromptTemplateRepo(pool(&state));
+    let template = repo.get_template(id).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(template.org_id),
+        Role::Viewer,
+    )
+    .await?;
+    Ok(Json(repo.list_versions(id).await?))
+}
+
+#[derive(Deserialize)]
+struct CreatePromptTemplateVersion {
+    #[serde(default)]
+    variables: serde_json::Value,
+    #[serde(default)]
+    decorators: serde_json::Value,
+}
+
+async fn create_prompt_template_version(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+    SafeJson(body): SafeJson<CreatePromptTemplateVersion>,
+) -> ApiResult<Json<PromptTemplateVersion>> {
+    if !body.variables.is_array() {
+        return Err(ApiError::Core(Error::Config(
+            "variables must be a JSON array".to_string(),
+        )));
+    }
+    if !body.decorators.is_array() {
+        return Err(ApiError::Core(Error::Config(
+            "decorators must be a JSON array".to_string(),
+        )));
+    }
+    let repo = PromptTemplateRepo(pool(&state));
+    let template = repo.get_template(id).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(template.org_id),
+        Role::Admin,
+    )
+    .await?;
+    let version = repo
+        .create_version(id, &body.variables, &body.decorators)
+        .await?;
+    log_audit(
+        &state,
+        &principal,
+        Some(template.org_id),
+        "prompt_template.version.create",
+        "prompt_template",
+        id,
+        serde_json::json!({"version": version.version}),
+    )
+    .await;
+    Ok(Json(version))
+}
+
+#[derive(Deserialize)]
+struct PublishPromptTemplateVersion {
+    version: i32,
+}
+
+async fn publish_prompt_template_version(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+    SafeJson(body): SafeJson<PublishPromptTemplateVersion>,
+) -> ApiResult<Json<PromptTemplate>> {
+    set_prompt_template_version(&principal, &state, id, body.version, "publish").await
+}
+
+async fn rollback_prompt_template_version(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+    SafeJson(body): SafeJson<PublishPromptTemplateVersion>,
+) -> ApiResult<Json<PromptTemplate>> {
+    set_prompt_template_version(&principal, &state, id, body.version, "rollback").await
+}
+
+async fn set_prompt_template_version(
+    principal: &Principal,
+    state: &ControlState,
+    id: Uuid,
+    version: i32,
+    action: &str,
+) -> ApiResult<Json<PromptTemplate>> {
+    if version <= 0 {
+        return Err(ApiError::Core(Error::Config(
+            "version must be greater than zero".to_string(),
+        )));
+    }
+    let repo = PromptTemplateRepo(pool(state));
+    let existing = repo.get_template(id).await?;
+    authorize(
+        state,
+        principal,
+        ScopeChain::org(existing.org_id),
+        Role::Admin,
+    )
+    .await?;
+    let template = repo.publish_version(id, version).await?;
+    log_audit(
+        state,
+        principal,
+        Some(existing.org_id),
+        &format!("prompt_template.{action}"),
+        "prompt_template",
+        id,
+        serde_json::json!({"version": version}),
+    )
+    .await;
+    Ok(Json(template))
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PromptTemplateScopeKind {
+    Org,
+    Project,
+    Route,
+    VirtualKey,
+}
+
+impl PromptTemplateScopeKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Org => "org",
+            Self::Project => "project",
+            Self::Route => "route",
+            Self::VirtualKey => "virtual_key",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct PromptTemplateScopeInput {
+    scope_type: PromptTemplateScopeKind,
+    scope_id: Uuid,
+}
+
+#[derive(Deserialize)]
+struct SetPromptTemplateScopes {
+    scopes: Vec<PromptTemplateScopeInput>,
+}
+
+async fn ensure_scope_belongs_to_org(
+    state: &ControlState,
+    scope_type: PromptTemplateScopeKind,
+    scope_id: Uuid,
+    org_id: Uuid,
+) -> ApiResult<()> {
+    match scope_type {
+        PromptTemplateScopeKind::Org => {
+            if scope_id != org_id {
+                return Err(ApiError::Core(Error::Config(
+                    "org scope_id must match the template org".to_string(),
+                )));
+            }
+        }
+        PromptTemplateScopeKind::Project => {
+            let chain = ScopeChain::from_project(pool(state), scope_id).await?;
+            if chain.org != Some(org_id) {
+                return Err(ApiError::Core(Error::Config(
+                    "project scope_id must belong to the template org".to_string(),
+                )));
+            }
+        }
+        PromptTemplateScopeKind::Route => {
+            let route = RouteRepo(pool(state)).get(scope_id).await?;
+            let chain = ScopeChain::from_project(pool(state), route.project_id).await?;
+            if chain.org != Some(org_id) {
+                return Err(ApiError::Core(Error::Config(
+                    "route scope_id must belong to the template org".to_string(),
+                )));
+            }
+        }
+        PromptTemplateScopeKind::VirtualKey => {
+            let key = VirtualKeyRepo(pool(state)).get(scope_id).await?;
+            let chain = ScopeChain::from_project(pool(state), key.project_id).await?;
+            if chain.org != Some(org_id) {
+                return Err(ApiError::Core(Error::Config(
+                    "virtual_key scope_id must belong to the template org".to_string(),
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn list_prompt_template_scopes(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path((id, version)): Path<(Uuid, i32)>,
+) -> ApiResult<Json<Vec<PromptTemplateScope>>> {
+    let repo = PromptTemplateRepo(pool(&state));
+    let template = repo.get_template(id).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(template.org_id),
+        Role::Viewer,
+    )
+    .await?;
+    Ok(Json(repo.list_scopes(id, version).await?))
+}
+
+async fn set_prompt_template_scopes(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path((id, version)): Path<(Uuid, i32)>,
+    SafeJson(body): SafeJson<SetPromptTemplateScopes>,
+) -> ApiResult<StatusCode> {
+    if version <= 0 {
+        return Err(ApiError::Core(Error::Config(
+            "version must be greater than zero".to_string(),
+        )));
+    }
+    let repo = PromptTemplateRepo(pool(&state));
+    let template = repo.get_template(id).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(template.org_id),
+        Role::Admin,
+    )
+    .await?;
+    if template.published_version == Some(version) {
+        return Err(ApiError::Core(Error::Config(
+            "published prompt template scopes are immutable; create a new version".to_string(),
+        )));
+    }
+    for scope in &body.scopes {
+        ensure_scope_belongs_to_org(&state, scope.scope_type, scope.scope_id, template.org_id)
+            .await?;
+    }
+    let scopes: Vec<(String, Uuid)> = body
+        .scopes
+        .into_iter()
+        .map(|scope| (scope.scope_type.as_str().to_string(), scope.scope_id))
+        .collect();
+    repo.set_scopes(id, version, &scopes).await?;
+    log_audit(
+        &state,
+        &principal,
+        Some(template.org_id),
+        "prompt_template.scopes.update",
+        "prompt_template",
+        id,
+        serde_json::json!({"version": version, "scope_count": scopes.len()}),
     )
     .await;
     Ok(StatusCode::NO_CONTENT)
