@@ -14,6 +14,8 @@ mod analytics;
 #[cfg(feature = "postgres")]
 mod auth;
 #[cfg(feature = "postgres")]
+mod cluster;
+#[cfg(feature = "postgres")]
 mod compatibility_policy;
 #[cfg(feature = "postgres")]
 mod crud;
@@ -364,6 +366,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(logging_settings::router())
             .merge(runtime_policy::router())
             .merge(compatibility_policy::router())
+            .merge(cluster::router())
             .merge(security::router());
     }
 
@@ -818,8 +821,14 @@ struct SnapshotQuery {
 /// the caller's `version` is already current.
 async fn get_snapshot(
     State(state): State<ControlState>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<SnapshotQuery>,
 ) -> Response {
+    // a node that identifies itself is recorded in the cluster inventory; the
+    // poll it already makes is the heartbeat, so there is no second channel
+    #[cfg(feature = "postgres")]
+    cluster::record_heartbeat(&state, &headers, query.version).await;
+    let _ = &headers;
     let version = match state.store.current_version().await {
         Ok(v) => v,
         Err(err) => {

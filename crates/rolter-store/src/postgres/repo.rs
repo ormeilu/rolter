@@ -12,7 +12,7 @@ use uuid::Uuid;
 use rolter_core::{Error, Result};
 
 use super::models::{
-    AuditLogEntry, Budget, BusinessUnit, CompatibilityPolicy, Customer, FeatureFlags,
+    AuditLogEntry, Budget, BusinessUnit, ClusterNode, CompatibilityPolicy, Customer, FeatureFlags,
     LoggingSettings, Membership, ModelPrice, Org, OwnedVirtualKey, Project, PromptTemplate,
     PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember,
     RateLimit, Route, RouteTarget, RuntimePolicy, SecuritySettings, Session, Skill, SkillVersion,
@@ -1847,6 +1847,62 @@ pub struct FeatureFlagsRepo<'a>(pub &'a PgPool);
 pub struct LoggingSettingsRepo<'a>(pub &'a PgPool);
 pub struct RuntimePolicyRepo<'a>(pub &'a PgPool);
 pub struct CompatibilityPolicyRepo<'a>(pub &'a PgPool);
+
+/// Cluster inventory: one row per gateway/control node, upserted from the
+/// snapshot poll each node already performs.
+pub struct ClusterNodeRepo<'a>(pub &'a PgPool);
+
+impl ClusterNodeRepo<'_> {
+    /// Record a node sighting. `first_seen_at` is preserved across restarts of
+    /// the same node id so an operator can tell a flapping node from a new one.
+    pub async fn heartbeat(
+        &self,
+        id: &str,
+        role: &str,
+        build_version: &str,
+        config_version: i64,
+    ) -> Result<ClusterNode> {
+        sqlx::query_as(
+            "insert into cluster_nodes (id, role, build_version, config_version) \
+             values ($1, $2, $3, $4) \
+             on conflict (id) do update set \
+                role = excluded.role, build_version = excluded.build_version, \
+                config_version = excluded.config_version, last_seen_at = now() \
+             returning id, role, build_version, config_version, first_seen_at, last_seen_at",
+        )
+        .bind(id)
+        .bind(role)
+        .bind(build_version)
+        .bind(config_version)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn list(&self) -> Result<Vec<ClusterNode>> {
+        sqlx::query_as(
+            "select id, role, build_version, config_version, first_seen_at, last_seen_at \
+             from cluster_nodes order by role, id",
+        )
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Forget a node an operator has decommissioned. A node that is still
+    /// running reappears on its next poll.
+    pub async fn delete(&self, id: &str) -> Result<()> {
+        let res = sqlx::query("delete from cluster_nodes where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("cluster node {id}")));
+        }
+        Ok(())
+    }
+}
 
 impl SecuritySettingsRepo<'_> {
     pub async fn get(&self) -> Result<SecuritySettings> {

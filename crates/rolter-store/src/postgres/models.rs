@@ -281,6 +281,19 @@ pub struct RuntimePolicy {
     pub updated_at: DateTime<Utc>,
 }
 
+/// a gateway or control node seen by the control plane, refreshed on every
+/// snapshot poll it makes
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ClusterNode {
+    pub id: String,
+    pub role: String,
+    pub build_version: String,
+    /// config snapshot version the node reported running
+    pub config_version: i64,
+    pub first_seen_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+}
+
 /// singleton persisted cross-dialect compatibility policy projected into
 /// snapshots
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
