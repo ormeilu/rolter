@@ -1951,7 +1951,8 @@ impl LoggingSettingsRepo<'_> {
     pub async fn get(&self) -> Result<LoggingSettings> {
         sqlx::query_as(
             "select sample_rate, payload_capture_enabled, payload_capture_max_bytes, \
-                    payload_capture_redact_fields, payload_capture_models, payload_capture_virtual_key_ids, updated_at \
+                    payload_capture_redact_fields, payload_capture_models, payload_capture_virtual_key_ids, \
+                    retention_days, payload_retention_hours, updated_at \
              from logging_settings where id = true",
         )
         .fetch_one(self.0)
@@ -1968,16 +1969,20 @@ impl LoggingSettingsRepo<'_> {
         payload_capture_redact_fields: &[String],
         payload_capture_models: &[String],
         payload_capture_virtual_key_ids: &[String],
+        retention_days: i32,
+        payload_retention_hours: i32,
     ) -> Result<LoggingSettings> {
         sqlx::query_as(
             "update logging_settings set \
                 sample_rate = $1, payload_capture_enabled = $2, payload_capture_max_bytes = $3, \
                 payload_capture_redact_fields = $4, payload_capture_models = $5, \
-                payload_capture_virtual_key_ids = $6, updated_at = now() \
+                payload_capture_virtual_key_ids = $6, retention_days = $7, \
+                payload_retention_hours = $8, updated_at = now() \
              where id = true \
              returning sample_rate, payload_capture_enabled, payload_capture_max_bytes, \
                        payload_capture_redact_fields, payload_capture_models, \
-                       payload_capture_virtual_key_ids, updated_at",
+                       payload_capture_virtual_key_ids, retention_days, \
+                       payload_retention_hours, updated_at",
         )
         .bind(sample_rate)
         .bind(payload_capture_enabled)
@@ -1985,6 +1990,8 @@ impl LoggingSettingsRepo<'_> {
         .bind(payload_capture_redact_fields)
         .bind(payload_capture_models)
         .bind(payload_capture_virtual_key_ids)
+        .bind(retention_days)
+        .bind(payload_retention_hours)
         .fetch_one(self.0)
         .await
         .map_err(store_err)
