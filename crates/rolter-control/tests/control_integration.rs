@@ -604,6 +604,174 @@ async fn prompt_template_crud_publish_and_scope_round_trip() {
     assert_eq!(delete_template.status(), 204);
 }
 
+#[tokio::test]
+async fn skills_crud_and_publish_round_trip() {
+    skip_without_db!();
+    let addr = serve(fresh_app().await).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    async fn post(client: &reqwest::Client, url: String, body: Value) -> Value {
+        let resp = client.post(&url).json(&body).send().await.unwrap();
+        let status = resp.status();
+        let json: Value = resp.json().await.unwrap();
+        assert!(status.is_success(), "POST {url} failed ({status}): {json}");
+        json
+    }
+
+    let org = post(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Acme", "slug": "acme"}),
+    )
+    .await;
+    let org_id = org["id"].as_str().expect("org id");
+    let team = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/teams"),
+        json!({"name": "Skills Team"}),
+    )
+    .await;
+    let team_id = team["id"].as_str().expect("team id");
+
+    let skill = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/skills"),
+        json!({
+            "name": "classification baseline",
+            "description": "v1",
+            "allowed_team_ids": [team_id],
+            "minimum_role": "viewer"
+        }),
+    )
+    .await;
+    let skill_id = skill["id"].as_str().expect("skill id");
+    assert_eq!(skill["slug"], "classification-baseline");
+
+    let skills: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/skills"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(skills.as_array().unwrap().len(), 1);
+
+    let v1 = post(
+        &client,
+        format!("{base}/api/v1/skills/{skill_id}/versions"),
+        json!({"content": "alpha", "metadata": {"author": "ops"}}),
+    )
+    .await;
+    assert_eq!(v1["version"], 1);
+
+    let v2 = post(
+        &client,
+        format!("{base}/api/v1/skills/{skill_id}/versions"),
+        json!({
+            "content_ref": "oci://registry.example/skills/classification@sha256:abc",
+            "metadata": {"author": "ops"}
+        }),
+    )
+    .await;
+    assert_eq!(v2["version"], 2);
+    assert!(v2["content"].is_null());
+    assert!(v2["content_ref"].is_string());
+
+    let rejected_secret_metadata = client
+        .post(format!("{base}/api/v1/skills/{skill_id}/versions"))
+        .json(&json!({
+            "content": "gamma",
+            "metadata": {"api_token": "must-not-be-stored"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected_secret_metadata.status(), 400);
+
+    let versions: Value = client
+        .get(format!("{base}/api/v1/skills/{skill_id}/versions"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(versions.as_array().unwrap().len(), 2);
+
+    let publish = client
+        .put(format!("{base}/api/v1/skills/{skill_id}/publish"))
+        .json(&json!({"version": 2}))
+        .send()
+        .await
+        .unwrap();
+    let publish_status = publish.status();
+    let published: Value = publish.json().await.unwrap();
+    assert!(
+        publish_status.is_success(),
+        "publish failed ({publish_status}): {published}"
+    );
+    assert_eq!(published["published_version"], 2);
+
+    let resolved: Value = client
+        .get(format!(
+            "{base}/api/v1/orgs/{org_id}/skills/resolve/classification-baseline"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resolved["version"], 2);
+    assert!(resolved["content"].is_null());
+    assert_eq!(
+        resolved["content_ref"],
+        "oci://registry.example/skills/classification@sha256:abc"
+    );
+
+    let rollback = client
+        .put(format!("{base}/api/v1/skills/{skill_id}/rollback"))
+        .json(&json!({"version": 1}))
+        .send()
+        .await
+        .unwrap();
+    let rollback_status = rollback.status();
+    let rolled_back: Value = rollback.json().await.unwrap();
+    assert!(
+        rollback_status.is_success(),
+        "rollback failed ({rollback_status}): {rolled_back}"
+    );
+    assert_eq!(rolled_back["published_version"], 1);
+
+    let retire = client
+        .put(format!("{base}/api/v1/skills/{skill_id}"))
+        .json(&json!({"retired": true}))
+        .send()
+        .await
+        .unwrap();
+    assert!(retire.status().is_success());
+    let retired: Value = retire.json().await.unwrap();
+    assert!(retired["retired_at"].is_string());
+
+    let retired_resolution = client
+        .get(format!(
+            "{base}/api/v1/orgs/{org_id}/skills/resolve/classification-baseline"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(retired_resolution.status(), 404);
+
+    let delete_skill = client
+        .delete(format!("{base}/api/v1/skills/{skill_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delete_skill.status(), 204);
+}
+
 /// Provider credentials posted to the API must be sealed at rest, decrypted
 /// into the gateway snapshot, and never leak through the dashboard config
 /// endpoint. Runs in its own process (nextest), so setting the KEK env var
@@ -968,6 +1136,153 @@ async fn seed_session(pool: &sqlx::PgPool, user_id: uuid::Uuid, suffix: &str) ->
     .await
     .unwrap();
     token
+}
+
+#[tokio::test]
+async fn skill_access_policy_filters_list_history_and_resolution() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    async fn post_as(client: &reqwest::Client, url: String, body: Value) -> Value {
+        let response = client
+            .post(url)
+            .bearer_auth("admintok")
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let json: Value = response.json().await.unwrap();
+        assert!(status.is_success(), "{status}: {json}");
+        json
+    }
+
+    let org = post_as(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Acme", "slug": "acme"}),
+    )
+    .await;
+    let org_id = org["id"].as_str().unwrap();
+    let org_uuid: uuid::Uuid = org_id.parse().unwrap();
+    let team_a = post_as(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/teams"),
+        json!({"name": "Allowed"}),
+    )
+    .await;
+    let team_b = post_as(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/teams"),
+        json!({"name": "Denied"}),
+    )
+    .await;
+    let team_a_uuid: uuid::Uuid = team_a["id"].as_str().unwrap().parse().unwrap();
+    let team_b_uuid: uuid::Uuid = team_b["id"].as_str().unwrap().parse().unwrap();
+    let skill = post_as(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/skills"),
+        json!({
+            "name": "classification",
+            "allowed_team_ids": [team_a_uuid],
+            "minimum_role": "member"
+        }),
+    )
+    .await;
+    let skill_id = skill["id"].as_str().unwrap();
+    post_as(
+        &client,
+        format!("{base}/api/v1/skills/{skill_id}/versions"),
+        json!({"content": "approved content"}),
+    )
+    .await;
+    let publish = client
+        .put(format!("{base}/api/v1/skills/{skill_id}/publish"))
+        .bearer_auth("admintok")
+        .json(&json!({"version": 1}))
+        .send()
+        .await
+        .unwrap();
+    assert!(publish.status().is_success());
+
+    let allowed_user = seed_user(&pool, "allowed@example.com", false).await;
+    seed_membership(&pool, allowed_user, Some(org_uuid), None, None, "member").await;
+    seed_membership(
+        &pool,
+        allowed_user,
+        Some(org_uuid),
+        Some(team_a_uuid),
+        None,
+        "viewer",
+    )
+    .await;
+    let allowed_token = seed_session(&pool, allowed_user, "skill-allowed").await;
+
+    let denied_user = seed_user(&pool, "denied@example.com", false).await;
+    seed_membership(&pool, denied_user, Some(org_uuid), None, None, "member").await;
+    seed_membership(
+        &pool,
+        denied_user,
+        Some(org_uuid),
+        Some(team_b_uuid),
+        None,
+        "viewer",
+    )
+    .await;
+    let denied_token = seed_session(&pool, denied_user, "skill-denied").await;
+
+    let allowed_list: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/skills"))
+        .bearer_auth(&allowed_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(allowed_list.as_array().unwrap().len(), 1);
+    let denied_list: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/skills"))
+        .bearer_auth(&denied_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(denied_list.as_array().unwrap().is_empty());
+
+    let allowed_resolution = client
+        .get(format!(
+            "{base}/api/v1/orgs/{org_id}/skills/resolve/classification"
+        ))
+        .bearer_auth(&allowed_token)
+        .send()
+        .await
+        .unwrap();
+    assert!(allowed_resolution.status().is_success());
+    let denied_history = client
+        .get(format!("{base}/api/v1/skills/{skill_id}/versions"))
+        .bearer_auth(&denied_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied_history.status(), 403);
+    let denied_resolution = client
+        .get(format!(
+            "{base}/api/v1/orgs/{org_id}/skills/resolve/classification"
+        ))
+        .bearer_auth(&denied_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied_resolution.status(), 403);
 }
 
 /// With an admin token configured (RBAC enforcement active), every control
