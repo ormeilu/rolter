@@ -54,6 +54,35 @@ pub struct Customer {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct PromptTemplate {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub description: String,
+    pub published_version: Option<i32>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct PromptTemplateVersion {
+    pub template_id: Uuid,
+    pub version: i32,
+    pub variables: serde_json::Value,
+    pub decorators: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct PromptTemplateScope {
+    pub template_id: Uuid,
+    pub version: i32,
+    pub scope_type: String,
+    pub scope_id: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Provider {
     pub id: Uuid,
     pub org_id: Uuid,
