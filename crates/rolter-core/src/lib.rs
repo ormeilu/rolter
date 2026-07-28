@@ -15,12 +15,13 @@ pub mod telemetry;
 pub use config::{
     AdvancedModelConfig, ApiKeyConfig, BackpressurePolicy, BalancingStrategy, BreakerConfig,
     BudgetConfig, BudgetPeriod, BudgetScope, CacheConfig, CooldownConfig, EgressPolicy,
-    GatewayConfig, GroupMember, HealthConfig, KvEventsConfig, LmCacheConfig, LoggingConfig,
-    MetricsScrapeConfig, ModelLimits, ModelPriceConfig, ModelRoute, ModelUsagePricing,
-    ModelVisibility, OverrideMode, ParamPolicy, PayloadCaptureConfig, ProviderConfig,
-    ProviderGroupConfig, ProviderKind, QueueConfig, RateLimitConfig, RealtimeConfig,
-    ResponsesConfig, RetryConfig, RoleProfile, RouteCache, SemanticCacheConfig, ServerConfig,
-    Target, TimeoutConfig, TlsConfig, Variant, VirtualKeyConfig, VirtualKeyRecord, RESERVED_PATHS,
+    FeatureFlagsConfig, GatewayConfig, GroupMember, HealthConfig, KvEventsConfig, LmCacheConfig,
+    LoggingConfig, MetricsScrapeConfig, ModelLimits, ModelPriceConfig, ModelRoute,
+    ModelUsagePricing, ModelVisibility, OverrideMode, ParamPolicy, PayloadCaptureConfig,
+    ProviderConfig, ProviderGroupConfig, ProviderKind, QueueConfig, RateLimitConfig,
+    RealtimeConfig, ResponsesConfig, RetryConfig, RoleProfile, RouteCache, SemanticCacheConfig,
+    ServerConfig, Target, TimeoutConfig, TlsConfig, Variant, VirtualKeyConfig, VirtualKeyRecord,
+    RESERVED_PATHS,
 };
 pub use currency::{CurrencyConfig, CurrencyConverter, StaticRates, DEFAULT_BASE_CURRENCY};
 pub use error::{Error, Result};

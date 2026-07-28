@@ -152,6 +152,15 @@ impl ConfigStore for MergedConfigStore {
                 .into_iter()
                 .filter(|r| !self.bootstrap.rate_limits.iter().any(|c| c.id == r.id)),
         );
+        // runtime policies are database-owned and hot reloadable. Carry them
+        // through even when a bootstrap file supplies immutable providers and
+        // routes, then apply the global gates to the complete effective route set.
+        merged.retry = db.retry;
+        merged.timeouts = db.timeouts;
+        merged.queue = db.queue;
+        merged.logging = db.logging;
+        merged.feature_flags = db.feature_flags;
+        merged.apply_feature_flags();
         Ok(merged)
     }
 
@@ -343,6 +352,35 @@ mod tests {
         assert_eq!(merged.model_prices.len(), 1, "db model price dropped");
         assert_eq!(merged.budgets.len(), 1, "db budget dropped");
         assert_eq!(merged.rate_limits.len(), 1, "db rate limit dropped");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn merged_store_applies_db_runtime_policies_and_feature_gates() {
+        let mut bootstrap = GatewayConfig::default();
+        bootstrap.cache.enabled = true;
+        bootstrap.routes.push(route("cached"));
+        bootstrap.routes[0].strategy = rolter_core::BalancingStrategy::CacheAware;
+
+        let mut db = GatewayConfig::default();
+        db.retry.max_retries = 7;
+        db.timeouts.request_secs = 123;
+        db.queue.capacity = 999;
+        db.logging.sample_rate = 0.25;
+        db.feature_flags.response_cache = false;
+        db.feature_flags.cache_aware_routing = false;
+
+        let store = MergedConfigStore::new(bootstrap, Arc::new(InMemoryConfigStore::new(db)));
+        let merged = store.load().await.unwrap();
+
+        assert_eq!(merged.retry.max_retries, 7);
+        assert_eq!(merged.timeouts.request_secs, 123);
+        assert_eq!(merged.queue.capacity, 999);
+        assert_eq!(merged.logging.sample_rate, 0.25);
+        assert!(!merged.cache.enabled);
+        assert_eq!(
+            merged.routes[0].strategy,
+            rolter_core::BalancingStrategy::PowerOfTwo
+        );
     }
 
     // the db-only fields follow the same "bootstrap wins a collision, db

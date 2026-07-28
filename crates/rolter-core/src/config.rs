@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 
+const COMPLEXITY_POLICY_PARAM: &str = "_rolter_complexity";
+
 /// Root bootstrap configuration loaded from a TOML file or the database.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct GatewayConfig {
@@ -89,6 +91,9 @@ pub struct GatewayConfig {
     pub realtime: RealtimeConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    /// deployment-wide gates managed by the control plane
+    #[serde(default)]
+    pub feature_flags: FeatureFlagsConfig,
     /// built-in regex guardrails and PII redaction, evaluated in the gateway with
     /// no external service; disabled by default (ROL-261)
     #[serde(default)]
@@ -107,6 +112,64 @@ pub struct GatewayConfig {
     /// default (ROL-256)
     #[serde(default)]
     pub prompt_templates: crate::prompt_templates::PromptTemplatesConfig,
+}
+
+/// Deployment-wide gates for runtime subsystems.
+///
+/// These are separate from subsystem tuning so the control plane can disable
+/// configured behavior without discarding its parameters.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FeatureFlagsConfig {
+    #[serde(default = "default_true")]
+    pub response_cache: bool,
+    #[serde(default = "default_true")]
+    pub cache_aware_routing: bool,
+    #[serde(default = "default_true")]
+    pub circuit_breaker: bool,
+    #[serde(default = "default_true")]
+    pub active_health_checks: bool,
+    #[serde(default = "default_true")]
+    pub complexity_routing: bool,
+    #[serde(default = "default_true")]
+    pub guardrails: bool,
+}
+
+impl Default for FeatureFlagsConfig {
+    fn default() -> Self {
+        Self {
+            response_cache: true,
+            cache_aware_routing: true,
+            circuit_breaker: true,
+            active_health_checks: true,
+            complexity_routing: true,
+            guardrails: true,
+        }
+    }
+}
+
+impl GatewayConfig {
+    /// Apply control-plane feature gates to the effective snapshot.
+    pub fn apply_feature_flags(&mut self) {
+        self.cache.enabled = self.feature_flags.response_cache;
+        self.breaker.enabled = self.feature_flags.circuit_breaker;
+        self.health.enabled = self.feature_flags.active_health_checks;
+        self.guardrails.enabled = self.feature_flags.guardrails;
+        for route in &mut self.routes {
+            if !self.feature_flags.cache_aware_routing
+                && matches!(
+                    route.strategy,
+                    BalancingStrategy::CacheAware
+                        | BalancingStrategy::PreciseCacheAware
+                        | BalancingStrategy::LmcacheAware
+                )
+            {
+                route.strategy = BalancingStrategy::PowerOfTwo;
+            }
+            if !self.feature_flags.complexity_routing {
+                route.params.remove(COMPLEXITY_POLICY_PARAM);
+            }
+        }
+    }
 }
 
 impl ProviderKind {
@@ -1806,6 +1869,10 @@ pub struct LoggingConfig {
     /// the request hot path never blocks on the log writer
     #[serde(default = "default_log_queue_capacity")]
     pub queue_capacity: usize,
+    /// request-log sampling rate in `[0, 1]` applied before write. `1` keeps
+    /// every record, `0` disables request-log rows entirely.
+    #[serde(default = "default_log_sample_rate")]
+    pub sample_rate: f64,
     /// optional raw request/response capture. Disabled by default because
     /// payloads can contain prompts, completions, and other sensitive data.
     #[serde(default)]
@@ -1819,6 +1886,7 @@ impl Default for LoggingConfig {
             batch_max: default_log_batch_max(),
             flush_ms: default_log_flush_ms(),
             queue_capacity: default_log_queue_capacity(),
+            sample_rate: default_log_sample_rate(),
             payload_capture: PayloadCaptureConfig::default(),
         }
     }
@@ -1883,6 +1951,10 @@ fn default_log_flush_ms() -> u64 {
 
 fn default_log_queue_capacity() -> usize {
     10_000
+}
+
+fn default_log_sample_rate() -> f64 {
+    1.0
 }
 
 /// Effective slug for a provider: an explicit slug wins, else derive from name.
@@ -2422,6 +2494,10 @@ impl GatewayConfig {
                 ));
             }
         }
+        if !self.logging.sample_rate.is_finite() || !(0.0..=1.0).contains(&self.logging.sample_rate)
+        {
+            problems.push("logging.sample_rate must be in [0, 1]".to_string());
+        }
 
         if self.queue.enabled && self.queue.capacity == 0 {
             problems.push(
@@ -2776,6 +2852,16 @@ mod tests {
         assert!(problems
             .iter()
             .any(|p| p.contains("queue.block_timeout_ms")));
+    }
+
+    #[test]
+    fn validate_rejects_invalid_logging_sample_rate() {
+        let mut cfg = GatewayConfig::default();
+        cfg.logging.sample_rate = 1.5;
+        let problems = cfg.validate().unwrap_err();
+        assert!(problems
+            .iter()
+            .any(|p| p.contains("logging.sample_rate must be in [0, 1]")));
     }
 
     #[test]

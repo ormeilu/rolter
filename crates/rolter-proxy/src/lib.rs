@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use bytes::Bytes;
 use dashmap::DashMap;
 use reqwest::{Client, Method, Proxy, RequestBuilder, Response};
@@ -26,15 +27,15 @@ use crate::egress_resolver::{EgressResolver, SharedEgressPolicy};
 
 /// Forwards requests to upstream providers using pooled, reused HTTP clients.
 pub struct Forwarder {
-    default: Client,
+    default: ArcSwap<Client>,
     configured: DashMap<ClientKey, Client>,
     /// live egress policy consulted by every client's resolver; swapping it
     /// re-tunes enforcement without rebuilding the pooled clients
     egress: SharedEgressPolicy,
     /// connect-establishment timeout baked into every client
-    connect_timeout: Option<Duration>,
+    connect_timeout_secs: AtomicU64,
     /// time-to-response-headers bound applied around each `send()` (0 disables)
-    request_timeout: Option<Duration>,
+    request_timeout_secs: AtomicU64,
     next_proxy: AtomicUsize,
     proxy_health: DashMap<String, ProxyHealth>,
 }
@@ -90,15 +91,14 @@ impl Forwarder {
     pub fn with_timeouts_and_egress(timeouts: &TimeoutConfig, egress: SharedEgressPolicy) -> Self {
         let connect_timeout =
             (timeouts.connect_secs > 0).then(|| Duration::from_secs(timeouts.connect_secs));
-        let request_timeout =
-            (timeouts.request_secs > 0).then(|| Duration::from_secs(timeouts.request_secs));
         Self {
-            default: build_client(None, &[], connect_timeout, &egress)
-                .unwrap_or_else(|_| Client::new()),
+            default: ArcSwap::from_pointee(
+                build_client(None, &[], connect_timeout, &egress).unwrap_or_else(|_| Client::new()),
+            ),
             configured: DashMap::new(),
             egress,
-            connect_timeout,
-            request_timeout,
+            connect_timeout_secs: AtomicU64::new(timeouts.connect_secs),
+            request_timeout_secs: AtomicU64::new(timeouts.request_secs),
             next_proxy: AtomicUsize::new(0),
             proxy_health: DashMap::new(),
         }
@@ -116,7 +116,7 @@ impl Forwarder {
     fn client_for_proxy(&self, provider: &ProviderConfig, proxy: Option<&str>) -> Result<Client> {
         let ca_bundles = provider.ca_bundles.clone().unwrap_or_default();
         if proxy.is_none() && ca_bundles.is_empty() {
-            return Ok(self.default.clone());
+            return Ok(self.default.load().as_ref().clone());
         }
         let key = ClientKey {
             proxy: proxy.map(str::to_string),
@@ -128,7 +128,7 @@ impl Forwarder {
         let client = build_client(
             key.proxy.as_deref(),
             &key.ca_bundles,
-            self.connect_timeout,
+            timeout_duration(self.connect_timeout_secs.load(Relaxed)),
             &self.egress,
         )?;
         Ok(self.configured.entry(key).or_insert(client).clone())
@@ -204,7 +204,7 @@ impl Forwarder {
                 continue;
             }
             let client = self.client_for_proxy(provider, Some(&url))?;
-            let result = match self.request_timeout {
+            let result = match timeout_duration(self.request_timeout_secs.load(Relaxed)) {
                 Some(limit) => match tokio::time::timeout(limit, build(client).send()).await {
                     Ok(result) => result,
                     Err(_) => {
@@ -255,7 +255,15 @@ impl Forwarder {
     /// Drop configured pools after a validated snapshot reload. The next
     /// request rereads CA files, so certificate rotation takes effect without
     /// restarting the gateway.
-    pub fn reload(&self) {
+    pub fn reload(&self, timeouts: &TimeoutConfig) {
+        self.connect_timeout_secs
+            .store(timeouts.connect_secs, Relaxed);
+        self.request_timeout_secs
+            .store(timeouts.request_secs, Relaxed);
+        let connect_timeout = timeout_duration(timeouts.connect_secs);
+        let default = build_client(None, &[], connect_timeout, &self.egress)
+            .unwrap_or_else(|_| Client::new());
+        self.default.store(Arc::new(default));
         self.configured.clear();
     }
 
@@ -411,7 +419,7 @@ impl Forwarder {
         &self,
         send: impl std::future::Future<Output = std::result::Result<Response, reqwest::Error>>,
     ) -> Result<Response> {
-        match self.request_timeout {
+        match timeout_duration(self.request_timeout_secs.load(Relaxed)) {
             Some(limit) => match tokio::time::timeout(limit, send).await {
                 Ok(res) => res.map_err(|e| Error::Upstream(e.to_string())),
                 Err(_) => Err(Error::Upstream(format!(
@@ -537,6 +545,10 @@ fn build_client(
     builder
         .build()
         .map_err(|error| Error::Config(format!("failed to build upstream TLS client: {error}")))
+}
+
+fn timeout_duration(seconds: u64) -> Option<Duration> {
+    (seconds > 0).then(|| Duration::from_secs(seconds))
 }
 
 fn load_ca_bundle(path: &Path) -> Result<Vec<reqwest::Certificate>> {
@@ -892,6 +904,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reload_updates_runtime_timeouts() {
+        let fwd = Forwarder::new();
+        fwd.reload(&TimeoutConfig {
+            connect_secs: 7,
+            request_secs: 11,
+        });
+        assert_eq!(fwd.connect_timeout_secs.load(Relaxed), 7);
+        assert_eq!(fwd.request_timeout_secs.load(Relaxed), 11);
+    }
+
     #[tokio::test]
     async fn ollama_cloud_requires_and_sends_bearer_auth() {
         let fwd = Forwarder::new();
@@ -1192,7 +1215,7 @@ mod tests {
 
         let second = spawn_tls_server(&TWO).await;
         std::fs::copy(&second.ca_path, &first.ca_path).unwrap();
-        fwd.reload();
+        fwd.reload(&TimeoutConfig::default());
         let mut provider = provider(
             ProviderKind::OpenaiCompatible,
             format!("https://127.0.0.1:{}", second.addr.port()),

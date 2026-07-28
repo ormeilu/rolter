@@ -248,6 +248,45 @@ pub struct ModelPrice {
     pub currency: String,
     pub created_at: DateTime<Utc>,
 }
+/// singleton persisted feature flags that gate supported subsystems
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct FeatureFlags {
+    pub response_cache: bool,
+    pub cache_aware_routing: bool,
+    pub circuit_breaker: bool,
+    pub active_health_checks: bool,
+    pub complexity_routing: bool,
+    pub guardrails: bool,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// singleton persisted runtime policy projected into snapshots
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct RuntimePolicy {
+    pub retry_max_retries: i32,
+    pub retry_base_ms: i32,
+    pub retry_max_ms: i32,
+    pub timeout_connect_s: i32,
+    pub timeout_request_s: i32,
+    pub queue_enabled: bool,
+    pub queue_capacity: i32,
+    pub queue_workers: i32,
+    pub queue_backpressure: String,
+    pub queue_block_ms: i32,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// singleton persisted request-log policy projected into snapshots
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct LoggingSettings {
+    pub sample_rate: f64,
+    pub payload_capture_enabled: bool,
+    pub payload_capture_max_bytes: i32,
+    pub payload_capture_redact_fields: Vec<String>,
+    pub payload_capture_models: Vec<String>,
+    pub payload_capture_virtual_key_ids: Vec<String>,
+    pub updated_at: DateTime<Utc>,
+}
 
 /// a local account. `password_hash` is `None` for sso-only users (a later
 /// phase) and is never serialized back to a client
