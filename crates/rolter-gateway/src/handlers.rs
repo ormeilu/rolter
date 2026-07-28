@@ -2494,24 +2494,20 @@ fn payload_capture_enabled(
 
 fn semantic_cache_text(body: &[u8]) -> Option<String> {
     let value: Value = serde_json::from_slice(body).ok()?;
-    let mut parts = Vec::new();
+    let mut result = String::with_capacity(body.len().min(1024));
     if let Some(messages) = value.get("messages").and_then(Value::as_array) {
         for message in messages {
             if let Some(role) = message.get("role").and_then(Value::as_str) {
-                parts.push(role.to_string());
+                append_normalized(role, &mut result);
             }
-            collect_semantic_text(message.get("content"), &mut parts);
+            append_semantic_text(message.get("content"), &mut result);
         }
     } else {
-        collect_semantic_text(value.get("input"), &mut parts);
-        collect_semantic_text(value.get("prompt"), &mut parts);
+        append_semantic_text(value.get("input"), &mut result);
+        append_semantic_text(value.get("prompt"), &mut result);
     }
-    let normalized = parts
-        .join("\n")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    (!normalized.is_empty()).then_some(normalized)
+
+    (!result.is_empty()).then_some(result)
 }
 
 fn parse_vllm_token_ids(headers: &HeaderMap) -> Option<Vec<u32>> {
@@ -2525,17 +2521,26 @@ fn parse_vllm_token_ids(headers: &HeaderMap) -> Option<Vec<u32>> {
         .filter(|ids| !ids.is_empty())
 }
 
-fn collect_semantic_text(value: Option<&Value>, out: &mut Vec<String>) {
+fn append_semantic_text(value: Option<&Value>, out: &mut String) {
     match value {
-        Some(Value::String(text)) => out.push(text.clone()),
+        Some(Value::String(text)) => append_normalized(text, out),
         Some(Value::Array(items)) => {
             for item in items {
                 if let Some(text) = item.get("text").and_then(Value::as_str) {
-                    out.push(text.to_string());
+                    append_normalized(text, out);
                 }
             }
         }
         _ => {}
+    }
+}
+
+fn append_normalized(text: &str, out: &mut String) {
+    for word in text.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
     }
 }
 
@@ -2738,6 +2743,20 @@ mod tests {
             semantic_cache_text(body).as_deref(),
             Some("system You are helpful. user hello world")
         );
+    }
+
+    #[test]
+    fn semantic_text_normalizes_responses_input_and_prompt() {
+        let body = br#"{
+            "input":[{"type":"input_text","text":"  first\nvalue "}],
+            "prompt":" second\tvalue "
+        }"#;
+        assert_eq!(
+            semantic_cache_text(body).as_deref(),
+            Some("first value second value")
+        );
+        assert_eq!(semantic_cache_text(br#"{"input":[]}"#), None);
+        assert_eq!(semantic_cache_text(b"not json"), None);
     }
 
     fn config_with_keys() -> GatewayConfig {
