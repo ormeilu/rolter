@@ -128,7 +128,18 @@ pub fn router() -> Router<crate::ControlState> {
         .route("/api/v1/analytics/summary", get(summary))
         .route("/api/v1/analytics/timeseries", get(timeseries))
         .route("/api/v1/analytics/by-model", get(by_model))
+        .route("/api/v1/analytics/by-attribution", get(by_attribution))
         .route("/api/v1/analytics/invocations", get(invocations))
+}
+
+/// Map a cost-attribution dimension name to its whitelisted column. Anything
+/// else is rejected so it can never be spliced into SQL.
+pub(crate) fn attribution_column(dimension: &str) -> Option<&'static str> {
+    match dimension {
+        "business_unit" => Some("business_unit_id"),
+        "customer" => Some("customer_id"),
+        _ => None,
+    }
 }
 
 /// Map a status filter name to a whitelisted SQL predicate. Anything else is
@@ -245,6 +256,66 @@ async fn by_model(
     run(ch.query(&sql, &window_params(&q)).await)
 }
 
+/// Query params for the cost-attribution rollup: the shared time window plus
+/// the governance dimension to group by.
+#[derive(Debug, Deserialize)]
+pub struct AttributionQuery {
+    pub(crate) since: Option<String>,
+    pub(crate) until: Option<String>,
+    /// business_unit|customer (defaults to business_unit)
+    pub(crate) dimension: Option<String>,
+    /// include rows the key left unattributed (defaults to false)
+    #[serde(default)]
+    pub(crate) include_unattributed: bool,
+}
+
+/// Spend and usage grouped by a governance dimension. Rows the key left
+/// unattributed are excluded unless `include_unattributed=true`, so a
+/// business-unit chargeback report is not skewed by an empty bucket.
+async fn by_attribution(
+    State(state): State<crate::ControlState>,
+    Query(q): Query<AttributionQuery>,
+) -> Response {
+    let ch = match client_or_503(&state) {
+        Ok(ch) => ch,
+        Err(resp) => return resp,
+    };
+    let dimension = q.dimension.as_deref().unwrap_or("business_unit");
+    let Some(column) = attribution_column(dimension) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"message": "dimension must be one of business_unit|customer"}})),
+        )
+            .into_response();
+    };
+    let attributed = if q.include_unattributed {
+        "1"
+    } else {
+        "notEmpty(id)"
+    };
+    let sql = format!(
+        "select {column} as id, \
+                count() as requests, \
+                sum(total_tokens) as tokens, \
+                sum(prompt_tokens) as prompt_tokens, \
+                sum(completion_tokens) as completion_tokens, \
+                round(sum(cost_usd), 6) as cost_usd, \
+                countIf(status >= 400) as errors \
+         from request_logs where {WHERE_WINDOW} \
+         group by id having {attributed} order by cost_usd desc format JSON"
+    );
+    run(ch
+        .query(
+            &sql,
+            &window_params(&WindowQuery {
+                since: q.since.clone(),
+                until: q.until.clone(),
+                bucket: None,
+            }),
+        )
+        .await)
+}
+
 /// Query params for the per-invocation log list: the shared time window plus
 /// optional model/key/status filters and pagination.
 #[derive(Debug, Deserialize)]
@@ -288,6 +359,7 @@ async fn invocations(
     // text is the status predicate, which is whitelisted above.
     let sql = format!(
         "select ts, request_id, trace_id, org_id, team_id, project_id, virtual_key_id, \
+                business_unit_id, customer_id, \
                 model, provider, target, variant, status, stream, cache_hit, cache_read_tokens, cache_write_tokens, \
                 prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, ttft_ms, error, \
                 payload.request_payload, payload.response_payload \
@@ -369,6 +441,21 @@ mod tests {
         // anything else is rejected, so it can never be spliced into SQL
         assert_eq!(status_predicate("error; drop table request_logs"), None);
         assert_eq!(status_predicate(""), None);
+    }
+
+    #[test]
+    fn attribution_column_whitelists() {
+        assert_eq!(
+            attribution_column("business_unit"),
+            Some("business_unit_id")
+        );
+        assert_eq!(attribution_column("customer"), Some("customer_id"));
+        // anything else is rejected, so it can never be spliced into SQL
+        assert_eq!(
+            attribution_column("business_unit_id; drop table request_logs"),
+            None
+        );
+        assert_eq!(attribution_column(""), None);
     }
 
     #[test]

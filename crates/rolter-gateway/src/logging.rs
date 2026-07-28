@@ -86,6 +86,9 @@ pub struct RequestLog {
     pub team_id: String,
     pub project_id: String,
     pub virtual_key_id: String,
+    /// governance attribution carried by the key; empty when unattributed (#539)
+    pub business_unit_id: String,
+    pub customer_id: String,
     pub model: String,
     pub provider: String,
     pub target: String,
@@ -132,6 +135,8 @@ impl Default for RequestLog {
             team_id: String::new(),
             project_id: String::new(),
             virtual_key_id: String::new(),
+            business_unit_id: String::new(),
+            customer_id: String::new(),
             model: String::new(),
             provider: String::new(),
             target: String::new(),

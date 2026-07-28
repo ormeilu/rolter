@@ -53,6 +53,10 @@ pub struct KeyMeta {
     /// `Some(false)` bypasses the cache for this key, `Some(true)` caches even
     /// on a non-opted-in route (the global switch is still required)
     pub cache_override: Option<bool>,
+    /// governance dimensions this key's spend rolls up to; empty when the key
+    /// is attributed by tenancy alone (#539)
+    pub business_unit_id: String,
+    pub customer_id: String,
 }
 
 impl KeyMeta {
@@ -330,6 +334,8 @@ impl Snapshot {
                     disabled: k.disabled,
                     expires_at: k.expires_at,
                     cache_override: k.cache,
+                    business_unit_id: k.business_unit_id.clone(),
+                    customer_id: k.customer_id.clone(),
                 },
             );
         }

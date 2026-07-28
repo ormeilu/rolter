@@ -1014,6 +1014,8 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         scope.team.clone(),
         scope.project.clone(),
     );
+    // governance dimensions the key's spend rolls up to (#539)
+    let (business_unit_id, customer_id) = key_attribution(vk.as_ref());
     // records this request's tokens against its rate limits once usage is known
     let token_recorder = TokenRecorder::new(
         state.rate_limiter.clone(),
@@ -1081,6 +1083,8 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                     org_id: org_id.clone(),
                     team_id: team_id.clone(),
                     project_id: project_id.clone(),
+                    business_unit_id: business_unit_id.clone(),
+                    customer_id: customer_id.clone(),
                     model: model.clone(),
                     sample_rate: snap.logging.sample_rate,
                     started,
@@ -1132,6 +1136,8 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                             org_id: org_id.clone(),
                             team_id: team_id.clone(),
                             project_id: project_id.clone(),
+                            business_unit_id: business_unit_id.clone(),
+                            customer_id: customer_id.clone(),
                             model: model.clone(),
                             sample_rate: snap.logging.sample_rate,
                             started,
@@ -1434,6 +1440,8 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                 org_id,
                 team_id,
                 project_id,
+                business_unit_id,
+                customer_id,
                 model,
                 provider: last_provider,
                 target: last_target,
@@ -1571,6 +1579,8 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                 org_id,
                 team_id,
                 project_id,
+                business_unit_id,
+                customer_id,
                 model,
                 provider: last_provider,
                 target: last_target,
@@ -1726,6 +1736,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
         scope.team.clone(),
         scope.project.clone(),
     );
+    let (business_unit_id, customer_id) = key_attribution(vk.as_ref());
     let token_recorder = TokenRecorder::new(
         state.rate_limiter.clone(),
         snap.rate_limits.clone(),
@@ -1904,6 +1915,8 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
                 org_id,
                 team_id,
                 project_id,
+                business_unit_id,
+                customer_id,
                 model,
                 provider: last_provider,
                 target: last_target,
@@ -1954,6 +1967,8 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
                 org_id,
                 team_id,
                 project_id,
+                business_unit_id,
+                customer_id,
                 model,
                 provider: last_provider,
                 target: last_target,
@@ -2483,9 +2498,19 @@ struct CacheHitLog {
     org_id: String,
     team_id: String,
     project_id: String,
+    business_unit_id: String,
+    customer_id: String,
     model: String,
     sample_rate: f64,
     started: Instant,
+}
+
+/// Governance attribution (`business_unit_id`, `customer_id`) carried by the
+/// authenticated key. Config-defined and anonymous keys report neither, so the
+/// log row falls back to tenancy attribution alone (#539).
+fn key_attribution(vk: Option<&crate::state::KeyMeta>) -> (String, String) {
+    vk.map(|v| (v.business_unit_id.clone(), v.customer_id.clone()))
+        .unwrap_or_default()
 }
 
 fn payload_capture_enabled(
@@ -2627,6 +2652,8 @@ fn cached_response(
         org_id: ctx.org_id,
         team_id: ctx.team_id,
         project_id: ctx.project_id,
+        business_unit_id: ctx.business_unit_id,
+        customer_id: ctx.customer_id,
         model: ctx.model,
         status: hit.status,
         cache_hit: 1,
@@ -3017,6 +3044,40 @@ mod tests {
         assert_eq!(meta.id, "vk-1");
         assert_eq!(meta.org_id, "org-1");
         assert_eq!(meta.project_id, "proj-1");
+    }
+
+    #[tokio::test]
+    async fn db_virtual_key_carries_cost_attribution_into_logs() {
+        let mut config = GatewayConfig::default();
+        let pepper = config.server.resolve_key_pepper();
+        config.db_virtual_keys.push(VirtualKeyRecord {
+            key_hash: rolter_auth::hash_key(&pepper, "sk-attributed"),
+            id: "vk-1".to_string(),
+            org_id: "org-1".to_string(),
+            team_id: "team-1".to_string(),
+            project_id: "proj-1".to_string(),
+            models: vec![],
+            providers: vec![],
+            disabled: false,
+            expires_at: None,
+            cache: None,
+            business_unit_id: "bu-1".to_string(),
+            customer_id: "cust-1".to_string(),
+        });
+        let state = AppState::new(&config);
+        let snap = state.snapshot.load();
+        let meta = snap
+            .keys
+            .get(&rolter_auth::hash_key(&snap.pepper, "sk-attributed"))
+            .expect("db key present by digest");
+        assert_eq!(meta.business_unit_id, "bu-1");
+        assert_eq!(meta.customer_id, "cust-1");
+        assert_eq!(
+            key_attribution(Some(meta)),
+            ("bu-1".to_string(), "cust-1".to_string())
+        );
+        // config-defined and anonymous keys stay unattributed
+        assert_eq!(key_attribution(None), (String::new(), String::new()));
     }
 
     #[tokio::test]
