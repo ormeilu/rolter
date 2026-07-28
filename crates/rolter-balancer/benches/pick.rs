@@ -6,7 +6,7 @@
 //! their real work rather than hitting an empty fast path.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use rolter_balancer::{build, RouteContext};
+use rolter_balancer::{build, ConsistentHash, RouteContext};
 use rolter_core::BalancingStrategy;
 use std::hint::black_box;
 
@@ -52,5 +52,15 @@ fn bench_pick(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_pick);
+fn bench_consistent_hash_construction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("construct_consistent_hash");
+    for n in [4, 24, 128] {
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+            b.iter(|| black_box(ConsistentHash::new(black_box(n))));
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_pick, bench_consistent_hash_construction);
 criterion_main!(benches);
