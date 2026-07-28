@@ -62,6 +62,8 @@ impl ClickHouseClient {
     /// bounds are integers validated by the caller and formatted into the DDL —
     /// ClickHouse does not accept query parameters in an `alter table` — so the
     /// only values that ever reach this SQL are in-range numbers (#537).
+    // only reachable via the postgres-gated logging-settings router
+    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
     pub(crate) async fn apply_log_retention(
         &self,
         retention_days: u32,
