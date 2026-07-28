@@ -4,6 +4,7 @@
 
 - **Rust** (stable) via [rustup](https://rustup.rs) — the workspace pins the toolchain in `rust-toolchain.toml`.
 - **Bun** for the UI — `curl -fsSL https://bun.sh/install | bash`.
+- **prek** for repository Git hooks — install with `uv tool install prek` or `brew install prek`.
 - **Docker** + Compose for Postgres/Redis/ClickHouse.
 - **uv** (optional) for the PyPI-wheel install path and tooling.
 
@@ -53,5 +54,21 @@ just gateway | just control | just ui-dev | just up
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace && cargo test --doc --workspace   # or `just test`
-# optional hooks: prek install   (conventional commit msg + fmt/clippy)
+prek install --prepare-hooks
+prek run --all-files
+prek run --all-files --hook-stage pre-push
 ```
+
+The hooks add staged-file hygiene and secret scanning, Conventional Commit
+validation, Rust/workflow/TOML/spelling checks, workspace tests, dependency
+policy checks, and UI lint/build checks. Install the system tools used by the
+project-specific hooks:
+
+```bash
+brew install actionlint taplo typos-cli
+cargo install cargo-nextest cargo-deny
+```
+
+`cargo-nextest` is recommended but optional for the push hook; it falls back to
+`cargo test`. CI remains authoritative for database-backed tests that need
+`ROLTER_TEST_DATABASE_URL`.

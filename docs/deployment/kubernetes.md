@@ -11,4 +11,3 @@ helm upgrade --install rolter ./charts/rolter --namespace rolter --create-namesp
 PostgreSQL, Redis, and ClickHouse are external by design. Supply provider credentials through Kubernetes Secrets using `secretEnv`; do not place credentials in `config.file` or Helm values committed to source control. For GitOps-managed configuration, create a ConfigMap containing `rolter.toml` and set `config.existingConfigMap`.
 
 The gateway defaults to two replicas. The control plane defaults to one replica; scale it only after validating the database migration and UI-hosting behavior for your deployment. Configure TLS at the ingress or service-mesh boundary.
-
