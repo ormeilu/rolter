@@ -100,10 +100,33 @@ pub struct PromptTemplate {
     /// routes this template applies to by public model name; empty means all
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<String>,
+    /// Tenant-aware activation scopes for database-backed templates. An empty
+    /// list preserves the config-defined `routes` behavior above.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scopes: Vec<PromptTemplateActivationScope>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variables: Vec<TemplateVariable>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decorators: Vec<Decorator>,
+}
+
+/// One tenant-aware activation binding for a database-backed template.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PromptTemplateActivationScope {
+    Org { id: String },
+    Project { id: String },
+    Route { project_id: String, model: String },
+    VirtualKey { id: String },
+}
+
+/// Request identity used to evaluate tenant-aware template scopes.
+#[derive(Debug, Clone, Copy)]
+pub struct PromptTemplateRequestScope<'a> {
+    pub route_model: &'a str,
+    pub org_id: &'a str,
+    pub project_id: &'a str,
+    pub virtual_key_id: &'a str,
 }
 
 /// Prompt-templates configuration block (`[prompt_templates]`). Disabled by
@@ -253,6 +276,7 @@ struct CompiledTemplate {
     id: String,
     version: u32,
     routes: Vec<String>,
+    scopes: Vec<PromptTemplateActivationScope>,
     variables: Vec<TemplateVariable>,
     decorators: Vec<CompiledDecorator>,
 }
@@ -272,14 +296,32 @@ impl CompiledTemplate {
             id: template.id.trim().to_string(),
             version: template.version,
             routes: template.routes.clone(),
+            scopes: template.scopes.clone(),
             variables: template.variables.clone(),
             decorators,
         })
     }
 
     /// Whether this template applies to the given public model name.
-    fn applies_to(&self, route_model: &str) -> bool {
-        self.routes.is_empty() || self.routes.iter().any(|r| r == route_model)
+    fn applies_to(
+        &self,
+        route_model: &str,
+        request_scope: Option<&PromptTemplateRequestScope<'_>>,
+    ) -> bool {
+        if self.scopes.is_empty() {
+            return self.routes.is_empty() || self.routes.iter().any(|r| r == route_model);
+        }
+        let Some(scope) = request_scope else {
+            return false;
+        };
+        self.scopes.iter().any(|binding| match binding {
+            PromptTemplateActivationScope::Org { id } => id == scope.org_id,
+            PromptTemplateActivationScope::Project { id } => id == scope.project_id,
+            PromptTemplateActivationScope::Route { project_id, model } => {
+                project_id == scope.project_id && model == scope.route_model
+            }
+            PromptTemplateActivationScope::VirtualKey { id } => id == scope.virtual_key_id,
+        })
     }
 }
 
@@ -366,7 +408,20 @@ impl CompiledTemplates {
     /// to skip all rendering work (JSON rewrite included) when templates add
     /// nothing for this request.
     pub fn active_for(&self, route_model: &str) -> bool {
-        self.enabled && self.templates.iter().any(|t| t.applies_to(route_model))
+        self.enabled
+            && self
+                .templates
+                .iter()
+                .any(|t| t.applies_to(route_model, None))
+    }
+
+    /// Whether any template applies to the route and authenticated tenant scope.
+    pub fn active_for_scope(&self, scope: &PromptTemplateRequestScope<'_>) -> bool {
+        self.enabled
+            && self
+                .templates
+                .iter()
+                .any(|t| t.applies_to(scope.route_model, Some(scope)))
     }
 
     /// Render every template active for `route_model`, resolving variables from
@@ -382,10 +437,30 @@ impl CompiledTemplates {
         caller_vars: &HashMap<String, String>,
         report: &mut TemplateReport,
     ) -> Result<Vec<RenderedMessage>, RenderError> {
+        self.render_inner(route_model, None, caller_vars, report)
+    }
+
+    /// Render templates using both the route and authenticated tenant scope.
+    pub fn render_for_scope(
+        &self,
+        scope: &PromptTemplateRequestScope<'_>,
+        caller_vars: &HashMap<String, String>,
+        report: &mut TemplateReport,
+    ) -> Result<Vec<RenderedMessage>, RenderError> {
+        self.render_inner(scope.route_model, Some(scope), caller_vars, report)
+    }
+
+    fn render_inner(
+        &self,
+        route_model: &str,
+        request_scope: Option<&PromptTemplateRequestScope<'_>>,
+        caller_vars: &HashMap<String, String>,
+        report: &mut TemplateReport,
+    ) -> Result<Vec<RenderedMessage>, RenderError> {
         let active: Vec<&CompiledTemplate> = self
             .templates
             .iter()
-            .filter(|t| t.applies_to(route_model))
+            .filter(|t| t.applies_to(route_model, request_scope))
             .collect();
         if active.is_empty() {
             return Ok(Vec::new());
@@ -488,6 +563,7 @@ mod tests {
             id: id.to_string(),
             version,
             routes: routes.iter().map(|s| s.to_string()).collect(),
+            scopes: Vec::new(),
             variables,
             decorators,
         }
@@ -601,6 +677,52 @@ mod tests {
         let mut report = TemplateReport::default();
         assert!(ct
             .render("claude", &vars(&[]), &mut report)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn tenant_scopes_do_not_leak_across_orgs_or_same_model_routes() {
+        let ct = compiled(vec![PromptTemplate {
+            id: "org-a:support".to_string(),
+            version: 1,
+            routes: vec![],
+            scopes: vec![
+                PromptTemplateActivationScope::Org {
+                    id: "org-a".to_string(),
+                },
+                PromptTemplateActivationScope::Route {
+                    project_id: "project-a".to_string(),
+                    model: "shared-model".to_string(),
+                },
+                PromptTemplateActivationScope::VirtualKey {
+                    id: "key-a".to_string(),
+                },
+            ],
+            variables: vec![],
+            decorators: vec![decorator(
+                DecoratorRole::System,
+                DecoratorPosition::Prepend,
+                "tenant scoped",
+            )],
+        }]);
+        let allowed = PromptTemplateRequestScope {
+            route_model: "shared-model",
+            org_id: "org-a",
+            project_id: "project-a",
+            virtual_key_id: "key-a",
+        };
+        let other_tenant = PromptTemplateRequestScope {
+            route_model: "shared-model",
+            org_id: "org-b",
+            project_id: "project-b",
+            virtual_key_id: "key-b",
+        };
+        assert!(ct.active_for_scope(&allowed));
+        assert!(!ct.active_for_scope(&other_tenant));
+        let mut report = TemplateReport::default();
+        assert!(ct
+            .render_for_scope(&other_tenant, &vars(&[]), &mut report)
             .unwrap()
             .is_empty());
     }
