@@ -132,41 +132,60 @@ async fn login(
 ) -> AuthResult<Json<LoginResponse>> {
     let email = body.email.trim();
     let pool = pool(&state);
-    let user = UserRepo(pool)
-        .find_by_email(email)
-        .await?
-        .ok_or(AuthError::InvalidCredentials)?;
 
-    if user.deactivated_at.is_some() {
-        // deactivated accounts keep their row but cannot authenticate; reject
-        // like a bad credential rather than revealing the account is disabled
-        return Err(AuthError::InvalidCredentials);
-    }
+    // Mitigate timing attacks by parsing a dummy hash when we don't have a user or hash.
+    const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$csPSM0eDz1Mw8vSYmpUZtA$B00EO0lHN1rK85A5RyDcvLIhc+7tTs0vVoBL4I0MOe0";
 
-    let Some(hash) = &user.password_hash else {
-        // sso-only account (no local password set); reject like a wrong
-        // password rather than leaking which accounts exist
-        return Err(AuthError::InvalidCredentials);
+    let user_opt = UserRepo(pool).find_by_email(email).await?;
+
+    let mut auth_error: Option<AuthError> = None;
+    let hash_to_check = match &user_opt {
+        Some(user) => {
+            if user.deactivated_at.is_some() {
+                auth_error = Some(AuthError::InvalidCredentials);
+                DUMMY_HASH
+            } else if let Some(hash) = &user.password_hash {
+                if !user.is_superadmin
+                    && OrgAuthPolicyRepo(pool)
+                        .password_login_blocked_for_user(user.id)
+                        .await?
+                {
+                    auth_error = Some(AuthError::PasswordLoginDisabled);
+                    hash
+                } else {
+                    hash
+                }
+            } else {
+                auth_error = Some(AuthError::InvalidCredentials);
+                DUMMY_HASH
+            }
+        }
+        None => {
+            auth_error = Some(AuthError::InvalidCredentials);
+            DUMMY_HASH
+        }
     };
-    // an org may require its members to come through the IdP. superadmins are
-    // exempt on purpose: that is the break-glass path back in when the IdP is
-    // misconfigured or down, and without it turning the flag on would be an
-    // irreversible mistake
-    if !user.is_superadmin
-        && OrgAuthPolicyRepo(pool)
-            .password_login_blocked_for_user(user.id)
-            .await?
-    {
-        return Err(AuthError::PasswordLoginDisabled);
+
+    let parsed =
+        PasswordHash::new(hash_to_check).map_err(|e| AuthError::Internal(e.to_string()))?;
+    let password_verified = Argon2::default()
+        .verify_password(body.password.as_bytes(), &parsed)
+        .is_ok();
+
+    if !password_verified {
+        // If password fails but there was already another policy error, maybe we should just return InvalidCredentials anyway
+        // or return the specific policy error. The original code only checked policy if password wasn't rejected yet.
+        // Wait, original code: if deactivated -> Invalid. if no password -> Invalid. if policy blocked -> PasswordLoginDisabled.
+        // THEN it verified password. So policy check fails before password check.
+        // If password fails and we had no error yet, return InvalidCredentials.
+        auth_error = auth_error.or(Some(AuthError::InvalidCredentials));
     }
 
-    let parsed = PasswordHash::new(hash).map_err(|e| AuthError::Internal(e.to_string()))?;
-    if Argon2::default()
-        .verify_password(body.password.as_bytes(), &parsed)
-        .is_err()
-    {
-        return Err(AuthError::InvalidCredentials);
+    if let Some(err) = auth_error {
+        return Err(err);
     }
+
+    let user = user_opt.unwrap();
 
     let (token, token_hash) = generate_session_token(&session_pepper());
     let expires_at = Utc::now() + Duration::hours(SESSION_TTL_HOURS);
