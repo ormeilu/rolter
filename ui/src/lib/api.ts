@@ -879,6 +879,78 @@ export function logout(): Promise<void> {
   return sendJson<void>("POST", "/api/v1/auth/logout");
 }
 
+// --- invitations (crates/rolter-control/src/invitations.rs, #712) ---
+
+export interface Invitation {
+  id: string;
+  org_id: string;
+  email: string;
+  role: Role;
+  team_id: string | null;
+  project_id: string | null;
+  invited_by: string | null;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export interface CreatedInvitation {
+  invitation: Invitation;
+  /** shown once; the server keeps only its digest */
+  token: string;
+  accept_url: string;
+}
+
+export function listInvitations(orgId: string): Promise<Invitation[]> {
+  return getJson<Invitation[]>(`/api/v1/orgs/${orgId}/invitations`);
+}
+
+export function createInvitation(
+  orgId: string,
+  body: {
+    email: string;
+    role: Role;
+    scope_type?: "org" | "team" | "project";
+    scope_id?: string;
+  },
+): Promise<CreatedInvitation> {
+  return sendJson<CreatedInvitation>(
+    "POST",
+    `/api/v1/orgs/${orgId}/invitations`,
+    body,
+  );
+}
+
+export function revokeInvitation(id: string): Promise<Invitation> {
+  return sendJson<Invitation>("DELETE", `/api/v1/invitations/${id}`);
+}
+
+export interface InvitationPreview {
+  org_name: string;
+  email: string;
+  role: Role;
+  expires_at: string;
+}
+
+// unauthenticated: the invitee has no account yet, the token is the credential
+export function previewInvitation(token: string): Promise<InvitationPreview> {
+  return getJson<InvitationPreview>(
+    `/api/v1/invitations/accept/${encodeURIComponent(token)}`,
+  );
+}
+
+export function acceptInvitation(
+  token: string,
+  password: string,
+): Promise<LoginResponse> {
+  return sendJson<LoginResponse>(
+    "POST",
+    `/api/v1/invitations/accept/${encodeURIComponent(token)}/accept`,
+    { password },
+  );
+}
+
 // --- users + memberships (crates/rolter-control/src/crud.rs, ROL-223) ---
 
 export const ROLES = ["admin", "member", "viewer"] as const;

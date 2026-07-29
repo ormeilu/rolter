@@ -13,11 +13,12 @@ use rolter_core::{Error, Result};
 
 use super::models::{
     AdaptiveRoutingPolicy, AuditLogEntry, Budget, BusinessUnit, ClusterNode, CompatibilityPolicy,
-    Customer, FeatureFlags, LoggingSettings, McpOAuthGrant, McpOAuthSession, McpServer, Membership,
-    ModelPrice, Org, OrgAuthPolicy, OwnedVirtualKey, Project, PromptTemplate, PromptTemplateScope,
-    PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember, RateLimit, Route,
-    RouteTarget, RuntimePolicy, ScimIdentity, ScimToken, SecuritySettings, Session, Skill,
-    SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider, Team, User, VirtualKey,
+    Customer, FeatureFlags, Invitation, LoggingSettings, McpOAuthGrant, McpOAuthSession, McpServer,
+    Membership, ModelPrice, Org, OrgAuthPolicy, OwnedVirtualKey, Project, PromptTemplate,
+    PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember,
+    RateLimit, Route, RouteTarget, RuntimePolicy, ScimIdentity, ScimToken, SecuritySettings,
+    Session, Skill, SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider, Team, User,
+    VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -2518,6 +2519,110 @@ impl MembershipRepo<'_> {
             return Err(Error::NotFound(format!("membership {id}")));
         }
         Ok(())
+    }
+}
+
+/// invitations: one-time links that let an invitee create their own account.
+pub struct InvitationRepo<'a>(pub &'a PgPool);
+
+const INVITATION_COLUMNS: &str = "id, org_id, email, role, team_id, project_id, token_hash, \
+     invited_by, expires_at, accepted_at, revoked_at, created_at";
+
+impl InvitationRepo<'_> {
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create(
+        &self,
+        org_id: Uuid,
+        email: &str,
+        role: &str,
+        team_id: Option<Uuid>,
+        project_id: Option<Uuid>,
+        token_hash: &str,
+        invited_by: Option<Uuid>,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Invitation> {
+        sqlx::query_as(&format!(
+            "insert into invitations (org_id, email, role, team_id, project_id, token_hash, \
+                    invited_by, expires_at) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8) \
+             returning {INVITATION_COLUMNS}"
+        ))
+        .bind(org_id)
+        .bind(email)
+        .bind(role)
+        .bind(team_id)
+        .bind(project_id)
+        .bind(token_hash)
+        .bind(invited_by)
+        .bind(expires_at)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn list(&self, org_id: Uuid) -> Result<Vec<Invitation>> {
+        sqlx::query_as(&format!(
+            "select {INVITATION_COLUMNS} from invitations \
+             where org_id = $1 order by created_at desc"
+        ))
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Look an invitation up by token digest, but only while it is live:
+    /// unaccepted, unrevoked and unexpired. Spent invitations are
+    /// indistinguishable from wrong ones to the caller, which is the point.
+    pub async fn find_live_by_hash(&self, token_hash: &str) -> Result<Option<Invitation>> {
+        sqlx::query_as(&format!(
+            "select {INVITATION_COLUMNS} from invitations \
+             where token_hash = $1 and accepted_at is null and revoked_at is null \
+               and expires_at > now()"
+        ))
+        .bind(token_hash)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Mark an invitation accepted, but only if it is still live. Returns
+    /// `false` when another request got there first, so acceptance is
+    /// single-use even under a race.
+    pub async fn mark_accepted(&self, id: Uuid) -> Result<bool> {
+        let res = sqlx::query(
+            "update invitations set accepted_at = now() \
+             where id = $1 and accepted_at is null and revoked_at is null and expires_at > now()",
+        )
+        .bind(id)
+        .execute(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(res.rows_affected() == 1)
+    }
+
+    pub async fn revoke(&self, id: Uuid) -> Result<Invitation> {
+        sqlx::query_as(&format!(
+            "update invitations set revoked_at = now() \
+             where id = $1 and accepted_at is null \
+             returning {INVITATION_COLUMNS}"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("pending invitation {id}")))
+    }
+
+    pub async fn get(&self, id: Uuid) -> Result<Invitation> {
+        sqlx::query_as(&format!(
+            "select {INVITATION_COLUMNS} from invitations where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("invitation {id}")))
     }
 }
 
