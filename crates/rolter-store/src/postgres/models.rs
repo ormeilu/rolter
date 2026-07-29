@@ -487,6 +487,26 @@ pub struct Membership {
     pub created_at: DateTime<Utc>,
 }
 
+/// a pending (or spent) invitation to join an org at a scope
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Invitation {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub email: String,
+    pub role: String,
+    pub team_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    /// peppered digest of the one-time token; never serialized, and never
+    /// compared outside [`super::repo::InvitationRepo::find_live_by_hash`]
+    #[serde(skip_serializing)]
+    pub token_hash: String,
+    pub invited_by: Option<Uuid>,
+    pub expires_at: DateTime<Utc>,
+    pub accepted_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// how one org's members are allowed to authenticate
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct OrgAuthPolicy {

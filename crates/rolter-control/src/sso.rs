@@ -95,7 +95,7 @@ fn invalid(message: impl Into<String>) -> ApiError {
 /// Public base URL of this control plane, used to build the redirect URI the
 /// provider will send the code back to. Derived from configuration rather than
 /// the request so a spoofed `Host` header cannot redirect a code elsewhere.
-fn public_base_url() -> String {
+pub(crate) fn public_base_url() -> String {
     std::env::var("ROLTER_PUBLIC_URL")
         .ok()
         .filter(|u| !u.trim().is_empty())

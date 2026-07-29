@@ -232,6 +232,13 @@ const CAPABILITIES: &[Capability] = &[
         write: S,
         unsupported: &[Action::Create, Action::Update, Action::Delete],
     },
+    Capability {
+        resource: "invitation",
+        scope: "org",
+        read: Requirement::Role(Role::Admin),
+        write: Requirement::Role(Role::Admin),
+        unsupported: &[Action::Update],
+    },
     // single sign-on: registering an identity provider or mapping its groups to
     // roles is a way to grant roles, so it needs the same admin bar as granting
     // one directly

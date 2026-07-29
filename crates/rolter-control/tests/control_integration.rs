@@ -4189,3 +4189,240 @@ async fn sso_login(
     let body: Value = response.json().await.unwrap();
     Some(body["token"].as_str().unwrap().to_string())
 }
+
+/// Invitation onboarding (#712): an admin mints a one-time link, the invitee
+/// sets their own password, and every way the link can be misused fails.
+#[tokio::test]
+async fn invitations_onboard_accounts_once_and_expire_closed() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "InviteOrg", "slug": "invite-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let team: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/teams"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Platform"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let team_id = team["id"].as_str().unwrap().to_string();
+
+    // a role rolter does not have is refused before anything is stored
+    let bad_role = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/invitations"))
+        .bearer_auth("admintok")
+        .json(&json!({"email": "ada@example.com", "role": "root"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_role.status(), 400);
+
+    let created: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/invitations"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "email": "ada@example.com", "role": "admin",
+            "scope_type": "team", "scope_id": team_id
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = created["token"].as_str().unwrap().to_string();
+    assert!(token.starts_with("rolter_invite_"));
+    assert!(created["accept_url"].as_str().unwrap().ends_with(&token));
+    // the token is handed over once and only its digest is kept
+    let stored: String = sqlx::query_scalar("select token_hash from invitations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_ne!(stored, token, "the raw token must not be stored");
+    let listed: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/invitations"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert!(
+        !listed.to_string().contains("token_hash"),
+        "the digest must not be serialized back out: {listed}"
+    );
+
+    // the accept screen can render without a session, and learns nothing about
+    // the org beyond what it must show
+    let preview: Value = client
+        .get(format!("{base}/api/v1/invitations/accept/{token}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(preview["org_name"], "InviteOrg");
+    assert_eq!(preview["email"], "ada@example.com");
+    assert_eq!(preview["role"], "admin");
+
+    // a made-up token is refused, and so is a short password
+    let unknown = client
+        .get(format!(
+            "{base}/api/v1/invitations/accept/rolter_invite_nope"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), 401);
+    let too_short = client
+        .post(format!("{base}/api/v1/invitations/accept/{token}/accept"))
+        .json(&json!({"password": "short"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(too_short.status(), 400);
+
+    // accepting creates the account with the invitee's own password and hands
+    // back a live session
+    let accepted: Value = client
+        .post(format!("{base}/api/v1/invitations/accept/{token}/accept"))
+        .json(&json!({"password": "chosen by ada"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(accepted["user"]["email"], "ada@example.com");
+    let session = accepted["token"].as_str().unwrap().to_string();
+
+    // the granted membership is real and tagged manual, so a later sso login
+    // cannot reconcile it away
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("select role, source from memberships where user_id = $1")
+            .bind(uuid::Uuid::parse_str(accepted["user"]["id"].as_str().unwrap()).unwrap())
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, vec![("admin".to_string(), "manual".to_string())]);
+    let project = client
+        .post(format!("{base}/api/v1/teams/{team_id}/projects"))
+        .bearer_auth(&session)
+        .json(&json!({"name": "FromInvite"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(project.status(), 200);
+
+    // the password the invitee chose is the one that works
+    let login = client
+        .post(format!("{base}/api/v1/auth/login"))
+        .json(&json!({"email": "ada@example.com", "password": "chosen by ada"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 200);
+
+    // the link is single-use: the second accept is refused, and no second
+    // membership appears
+    let replay = client
+        .post(format!("{base}/api/v1/invitations/accept/{token}/accept"))
+        .json(&json!({"password": "someone else's"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 401);
+    let memberships: i64 = sqlx::query_scalar("select count(*) from memberships")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(memberships, 1);
+
+    // a revoked invitation stops working immediately
+    let second: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/invitations"))
+        .bearer_auth("admintok")
+        .json(&json!({"email": "grace@example.com", "role": "viewer"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let second_token = second["token"].as_str().unwrap().to_string();
+    let second_id = second["invitation"]["id"].as_str().unwrap().to_string();
+    let revoked = client
+        .delete(format!("{base}/api/v1/invitations/{second_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), 200);
+    let after_revoke = client
+        .post(format!(
+            "{base}/api/v1/invitations/accept/{second_token}/accept"
+        ))
+        .json(&json!({"password": "too late now"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(after_revoke.status(), 401);
+
+    // an expired invitation is refused as firmly as a wrong one
+    let third: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/invitations"))
+        .bearer_auth("admintok")
+        .json(&json!({"email": "hopper@example.com", "role": "member"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let third_token = third["token"].as_str().unwrap().to_string();
+    sqlx::query("update invitations set expires_at = now() - interval '1 hour' where email = $1")
+        .bind("hopper@example.com")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let expired = client
+        .post(format!(
+            "{base}/api/v1/invitations/accept/{third_token}/accept"
+        ))
+        .json(&json!({"password": "way too late"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(expired.status(), 401);
+
+    let actions: Vec<String> =
+        sqlx::query_scalar("select action from audit_log where action like 'invitation.%'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert!(actions.iter().any(|a| a == "invitation.create"));
+    assert!(actions.iter().any(|a| a == "invitation.accept"));
+    assert!(actions.iter().any(|a| a == "invitation.revoke"));
+}

@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
+  createInvitation,
   createMembership,
   deleteUser,
   fetchMemberships,
@@ -32,6 +33,7 @@ import {
   ROLES,
   updateUser,
   type MembershipRow,
+  type Role,
   type TeamRow,
   type UserRow,
 } from "@/lib/api";
@@ -282,25 +284,45 @@ function InviteUserDialog({
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [role, setRole] = React.useState<string>("member");
+  // default to a link: it is the only method where nobody but the invitee ever
+  // knows their password
+  const [method, setMethod] = React.useState<"link" | "password">("link");
+  const [link, setLink] = React.useState<string | null>(null);
+  const [copied, setCopied] = React.useState(false);
 
   React.useEffect(() => {
     if (open) {
       setEmail("");
       setPassword("");
       setRole("member");
+      setMethod("link");
+      setLink(null);
+      setCopied(false);
     }
   }, [open]);
 
   const create = useMutation({
-    mutationFn: () =>
-      inviteUser(orgId, {
+    mutationFn: async () => {
+      if (method === "link") {
+        const created = await createInvitation(orgId, {
+          email: email.trim(),
+          role: role as Role,
+        });
+        return created.accept_url;
+      }
+      await inviteUser(orgId, {
         email: email.trim(),
         password: password.trim() ? password : undefined,
         role,
-      }),
-    onSuccess: () => {
+      });
+      return null;
+    },
+    onSuccess: (accept_url) => {
       onDone();
-      onOpenChange(false);
+      // the link is shown once and never recoverable, so the dialog stays open
+      // until it has been copied somewhere
+      if (accept_url) setLink(accept_url);
+      else onOpenChange(false);
     },
   });
 
@@ -309,52 +331,98 @@ function InviteUserDialog({
       <DialogHeader>
         <DialogTitle>Invite user</DialogTitle>
         <DialogDescription>
-          Create an account and grant it a role in this org. Leave the password
-          blank for an SSO-only account that can't sign in locally yet.
+          Send a one-time link and let them set their own password, or create
+          the account outright with a password you choose.
         </DialogDescription>
       </DialogHeader>
-      <div className="space-y-3">
-        <Field label="Email">
-          <Input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="dev@example.com"
-          />
-        </Field>
-        <Field label="Password (optional)" hint="at least 8 characters if set">
-          <Input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="leave blank for SSO-only"
-          />
-        </Field>
-        <Field label="Org role">
-          <Select value={role} onChange={(e) => setRole(e.target.value)}>
-            {ROLES.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        {create.isError && (
-          <p className="text-xs text-destructive">
-            {(create.error as Error).message}
+      {link ? (
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Send this link to <strong>{email.trim()}</strong>. It works once,
+            expires in seven days, and is not recoverable after you close this
+            dialog.
           </p>
-        )}
-      </div>
+          <code className="block break-all rounded-md border bg-muted/40 p-2 text-xs">
+            {link}
+          </code>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <Field label="Email">
+            <Input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="dev@example.com"
+            />
+          </Field>
+          <Field label="Method">
+            <Select
+              value={method}
+              onChange={(e) =>
+                setMethod(e.target.value as "link" | "password")
+              }
+            >
+              <option value="link">Invitation link (they pick a password)</option>
+              <option value="password">Set a password now</option>
+            </Select>
+          </Field>
+          {method === "password" && (
+            <Field
+              label="Password (optional)"
+              hint="at least 8 characters if set; blank leaves an SSO-only account"
+            >
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="leave blank for SSO-only"
+              />
+            </Field>
+          )}
+          <Field label="Org role">
+            <Select value={role} onChange={(e) => setRole(e.target.value)}>
+              {ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          {create.isError && (
+            <p className="text-xs text-destructive">
+              {(create.error as Error).message}
+            </p>
+          )}
+        </div>
+      )}
       <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button
-          disabled={!email.trim() || create.isPending}
-          onClick={() => create.mutate()}
-        >
-          Invite
-        </Button>
+        {link ? (
+          <>
+            <Button
+              variant="outline"
+              onClick={() => {
+                void navigator.clipboard?.writeText(link);
+                setCopied(true);
+              }}
+            >
+              {copied ? "Copied" : "Copy link"}
+            </Button>
+            <Button onClick={() => onOpenChange(false)}>Done</Button>
+          </>
+        ) : (
+          <>
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!email.trim() || create.isPending}
+              onClick={() => create.mutate()}
+            >
+              Invite
+            </Button>
+          </>
+        )}
       </DialogFooter>
     </Dialog>
   );
