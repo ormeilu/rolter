@@ -57,6 +57,11 @@ services:
   sim-c: { <<: *sim }
 
   control:
+    # the same image the gateway runs — one image carries all three binaries and
+    # the services differ only by `command`. sharing the tag keeps compose to a
+    # single build; with distinct tags it compiled the identical workspace twice,
+    # concurrently, fighting over the same cores.
+    image: rolter-e2e-local:latest
     build:
       context: ../..
       dockerfile: docker/Dockerfile
