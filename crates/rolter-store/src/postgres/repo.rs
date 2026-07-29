@@ -16,8 +16,8 @@ use super::models::{
     Customer, FeatureFlags, LoggingSettings, McpOAuthGrant, McpOAuthSession, McpServer, Membership,
     ModelPrice, Org, OwnedVirtualKey, Project, PromptTemplate, PromptTemplateScope,
     PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember, RateLimit, Route,
-    RouteTarget, RuntimePolicy, SecuritySettings, Session, Skill, SkillVersion, Team, User,
-    VirtualKey,
+    RouteTarget, RuntimePolicy, ScimIdentity, ScimToken, SecuritySettings, Session, Skill,
+    SkillVersion, Team, User, VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -996,6 +996,180 @@ impl ProviderRepo<'_> {
         if res.rows_affected() == 0 {
             return Err(Error::NotFound(format!("provider {id}")));
         }
+        Ok(())
+    }
+}
+
+/// SCIM provisioning tokens. Lookup is by peppered digest only; the plaintext
+/// token never reaches the database.
+pub struct ScimTokenRepo<'a>(pub &'a PgPool);
+
+const SCIM_TOKEN_COLUMNS: &str =
+    "id, org_id, name, token_hash, created_by, created_at, last_used_at, revoked_at";
+
+impl ScimTokenRepo<'_> {
+    pub async fn create(
+        &self,
+        org_id: Uuid,
+        name: &str,
+        token_hash: &str,
+        created_by: Option<Uuid>,
+    ) -> Result<ScimToken> {
+        sqlx::query_as(&format!(
+            "insert into scim_tokens (org_id, name, token_hash, created_by) \
+             values ($1, $2, $3, $4) returning {SCIM_TOKEN_COLUMNS}"
+        ))
+        .bind(org_id)
+        .bind(name)
+        .bind(token_hash)
+        .bind(created_by)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn list(&self, org_id: Uuid) -> Result<Vec<ScimToken>> {
+        sqlx::query_as(&format!(
+            "select {SCIM_TOKEN_COLUMNS} from scim_tokens where org_id = $1 \
+             order by created_at desc"
+        ))
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get(&self, id: Uuid) -> Result<ScimToken> {
+        sqlx::query_as(&format!(
+            "select {SCIM_TOKEN_COLUMNS} from scim_tokens where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("scim token {id}")))
+    }
+
+    /// Resolve a presented token by digest. Revoked tokens never resolve, so a
+    /// revocation takes effect on the next request with no cache to invalidate.
+    pub async fn find_active_by_hash(&self, token_hash: &str) -> Result<Option<ScimToken>> {
+        sqlx::query_as(&format!(
+            "select {SCIM_TOKEN_COLUMNS} from scim_tokens \
+             where token_hash = $1 and revoked_at is null"
+        ))
+        .bind(token_hash)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn revoke(&self, id: Uuid) -> Result<ScimToken> {
+        sqlx::query_as(&format!(
+            "update scim_tokens set revoked_at = coalesce(revoked_at, now()) \
+             where id = $1 returning {SCIM_TOKEN_COLUMNS}"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("scim token {id}")))
+    }
+
+    /// Best-effort last-used stamp for the provisioning screen.
+    pub async fn touch(&self, id: Uuid) -> Result<()> {
+        sqlx::query("update scim_tokens set last_used_at = now() where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        Ok(())
+    }
+}
+
+/// The org-scoped SCIM identity of a local user.
+pub struct ScimIdentityRepo<'a>(pub &'a PgPool);
+
+const SCIM_IDENTITY_COLUMNS: &str =
+    "user_id, org_id, external_id, user_name, display_name, created_at, updated_at";
+
+impl ScimIdentityRepo<'_> {
+    /// Create or update the identity for `user_id` in `org_id`. Idempotent by
+    /// design: an IdP that replays a create must not produce a second row.
+    pub async fn upsert(
+        &self,
+        user_id: Uuid,
+        org_id: Uuid,
+        external_id: Option<&str>,
+        user_name: &str,
+        display_name: &str,
+    ) -> Result<ScimIdentity> {
+        sqlx::query_as(&format!(
+            "insert into scim_identities (user_id, org_id, external_id, user_name, display_name) \
+             values ($1, $2, $3, $4, $5) \
+             on conflict (user_id, org_id) do update set \
+                 external_id = excluded.external_id, user_name = excluded.user_name, \
+                 display_name = excluded.display_name, updated_at = now() \
+             returning {SCIM_IDENTITY_COLUMNS}"
+        ))
+        .bind(user_id)
+        .bind(org_id)
+        .bind(external_id)
+        .bind(user_name)
+        .bind(display_name)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get(&self, user_id: Uuid, org_id: Uuid) -> Result<Option<ScimIdentity>> {
+        sqlx::query_as(&format!(
+            "select {SCIM_IDENTITY_COLUMNS} from scim_identities \
+             where user_id = $1 and org_id = $2"
+        ))
+        .bind(user_id)
+        .bind(org_id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn find_by_user_name(
+        &self,
+        org_id: Uuid,
+        user_name: &str,
+    ) -> Result<Option<ScimIdentity>> {
+        sqlx::query_as(&format!(
+            "select {SCIM_IDENTITY_COLUMNS} from scim_identities \
+             where org_id = $1 and user_name = $2"
+        ))
+        .bind(org_id)
+        .bind(user_name)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Every provisioned identity in the org, oldest first so paging is stable.
+    pub async fn list(&self, org_id: Uuid) -> Result<Vec<ScimIdentity>> {
+        sqlx::query_as(&format!(
+            "select {SCIM_IDENTITY_COLUMNS} from scim_identities where org_id = $1 \
+             order by created_at, user_id"
+        ))
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Drop the mapping without touching the underlying user, whose row,
+    /// memberships and audit trail outlive any one IdP.
+    pub async fn delete(&self, user_id: Uuid, org_id: Uuid) -> Result<()> {
+        sqlx::query("delete from scim_identities where user_id = $1 and org_id = $2")
+            .bind(user_id)
+            .bind(org_id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
         Ok(())
     }
 }

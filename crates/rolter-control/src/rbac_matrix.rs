@@ -192,6 +192,15 @@ const CAPABILITIES: &[Capability] = &[
         write: W,
         unsupported: &[Action::Update],
     },
+    // listing provisioning tokens is an admin read: the rows name the IdPs a
+    // tenant trusts, which is not viewer-grade information
+    Capability {
+        resource: "scim_token",
+        scope: "org",
+        read: Requirement::Role(Role::Admin),
+        write: W,
+        unsupported: &[Action::Update],
+    },
     Capability {
         resource: "mcp_server",
         scope: "org",

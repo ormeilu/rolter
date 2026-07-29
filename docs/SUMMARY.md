@@ -11,6 +11,7 @@
 - [Data model](architecture/data-model.md)
 - [RBAC & auth](architecture/rbac-and-auth.md)
 - [MCP OAuth](architecture/mcp-oauth.md)
+- [SCIM provisioning](architecture/scim-provisioning.md)
 - [Security](architecture/security.md)
 - [Observability](architecture/observability.md)
 - [Performance](architecture/performance.md)
