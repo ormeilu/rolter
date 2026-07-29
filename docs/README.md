@@ -11,7 +11,8 @@ Start here. rolter is a high-performance OpenAI/Anthropic-compatible AI gateway 
 - [Multi-region deployment](deployment/multi-region.md) — active-active/passive state and failover topology
 - [Config & hot reload](architecture/config-and-hot-reload.md) — reload-free updates
 - [Data model](architecture/data-model.md) — tenancy, keys, pricing, budgets
-- [RBAC & auth](architecture/rbac-and-auth.md) — roles, virtual keys, SSO/LDAP roadmap
+- [RBAC & auth](architecture/rbac-and-auth.md) — roles, virtual keys, membership sources
+- [Single sign-on (OIDC)](architecture/sso.md) — optional OIDC login and group→role mapping
 - [MCP OAuth](architecture/mcp-oauth.md) — MCP servers, consent grants, sealed token sessions
 - [SCIM provisioning](architecture/scim-provisioning.md) — IdP-driven user lifecycle and provisioning tokens
 - [Security](architecture/security.md) — secret handling, threat model

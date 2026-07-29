@@ -232,6 +232,30 @@ const CAPABILITIES: &[Capability] = &[
         write: S,
         unsupported: &[Action::Create, Action::Update, Action::Delete],
     },
+    // single sign-on: registering an identity provider or mapping its groups to
+    // roles is a way to grant roles, so it needs the same admin bar as granting
+    // one directly
+    Capability {
+        resource: "sso_provider",
+        scope: "org",
+        read: Requirement::Role(Role::Admin),
+        write: Requirement::Role(Role::Admin),
+        unsupported: &[Action::Update],
+    },
+    Capability {
+        resource: "sso_group_mapping",
+        scope: "org",
+        read: Requirement::Role(Role::Admin),
+        write: Requirement::Role(Role::Admin),
+        unsupported: &[Action::Update],
+    },
+    Capability {
+        resource: "org_auth_policy",
+        scope: "org",
+        read: Requirement::Role(Role::Admin),
+        write: Requirement::Role(Role::Admin),
+        unsupported: &[Action::Create, Action::Delete],
+    },
     // deployment-wide policy: no tenancy scope exists to be a member of, so
     // these are the admin token's (or a superadmin's) alone
     Capability {

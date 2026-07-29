@@ -41,7 +41,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use rolter_store::postgres::models::{Membership, Session, User};
-use rolter_store::postgres::repo::{AuditLogRepo, MembershipRepo, SessionRepo, UserRepo};
+use rolter_store::postgres::repo::{
+    AuditLogRepo, MembershipRepo, OrgAuthPolicyRepo, SessionRepo, UserRepo,
+};
 
 use crate::ControlState;
 
@@ -75,6 +77,10 @@ fn pool(state: &ControlState) -> &PgPool {
 pub enum AuthError {
     InvalidCredentials,
     Unauthenticated,
+    /// the account is real, but its org requires single sign-on (403). Said
+    /// plainly rather than as a wrong-password: the user has no way to guess
+    /// their way past a policy, and hiding it just sends them to support
+    PasswordLoginDisabled,
     Internal(String),
 }
 
@@ -83,6 +89,10 @@ impl IntoResponse for AuthError {
         let (status, message) = match self {
             Self::InvalidCredentials => (StatusCode::UNAUTHORIZED, "invalid email or password"),
             Self::Unauthenticated => (StatusCode::UNAUTHORIZED, "missing or invalid session"),
+            Self::PasswordLoginDisabled => (
+                StatusCode::FORBIDDEN,
+                "password login is disabled for this organization; sign in with sso",
+            ),
             Self::Internal(ref msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.as_str()),
         };
         (
@@ -138,6 +148,18 @@ async fn login(
         // password rather than leaking which accounts exist
         return Err(AuthError::InvalidCredentials);
     };
+    // an org may require its members to come through the IdP. superadmins are
+    // exempt on purpose: that is the break-glass path back in when the IdP is
+    // misconfigured or down, and without it turning the flag on would be an
+    // irreversible mistake
+    if !user.is_superadmin
+        && OrgAuthPolicyRepo(pool)
+            .password_login_blocked_for_user(user.id)
+            .await?
+    {
+        return Err(AuthError::PasswordLoginDisabled);
+    }
+
     let parsed = PasswordHash::new(hash).map_err(|e| AuthError::Internal(e.to_string()))?;
     if Argon2::default()
         .verify_password(body.password.as_bytes(), &parsed)
