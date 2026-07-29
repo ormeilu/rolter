@@ -2247,6 +2247,439 @@ async fn skill_access_policy_filters_list_history_and_resolution() {
     assert_eq!(denied_resolution.status(), 403);
 }
 
+/// A stub OIDC provider: discovery, JWKS and a token endpoint that signs id
+/// tokens with the fixture RSA key. Lets the SSO flow be exercised end to end
+/// without a container, while the Keycloak suite covers a real IdP.
+mod stub_idp {
+    use super::*;
+    use axum::Router;
+    use std::sync::{Arc, Mutex};
+
+    pub const KID: &str = "stub-key-1";
+
+    /// The stub's signing key, generated once per test process rather than
+    /// checked in: a private key in the repository is a private key in the
+    /// repository, whatever the comment above it says, and every secret
+    /// scanner is right to flag one. ES256 keeps generation instant.
+    fn signing_key() -> &'static (jsonwebtoken::EncodingKey, String, String) {
+        static KEY: std::sync::OnceLock<(jsonwebtoken::EncodingKey, String, String)> =
+            std::sync::OnceLock::new();
+        KEY.get_or_init(|| {
+            use base64::Engine;
+            use p256::elliptic_curve::sec1::ToEncodedPoint;
+            use p256::pkcs8::EncodePrivateKey;
+
+            let secret = p256::SecretKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+            let pem = secret.to_pkcs8_pem(p256::pkcs8::LineEnding::LF).unwrap();
+            let encoding = jsonwebtoken::EncodingKey::from_ec_pem(pem.as_bytes()).unwrap();
+            // the jwk carries the affine coordinates, so publish them from the
+            // uncompressed sec1 point: 0x04 || x || y
+            let point = secret.public_key().to_encoded_point(false);
+            let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+            (
+                encoding,
+                b64.encode(point.x().unwrap()),
+                b64.encode(point.y().unwrap()),
+            )
+        })
+    }
+
+    #[derive(Clone, Default)]
+    pub struct Stub {
+        /// claims the next token exchange will mint, set by the test
+        pub next_claims: Arc<Mutex<Value>>,
+        /// form fields of the last token request, so PKCE can be asserted
+        pub last_form: Arc<Mutex<String>>,
+        pub issuer: Arc<Mutex<String>>,
+    }
+
+    pub async fn serve_stub() -> (String, Stub) {
+        let stub = Stub::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let issuer = format!("http://{addr}");
+        *stub.issuer.lock().unwrap() = issuer.clone();
+
+        let app = Router::new()
+            .route(
+                "/.well-known/openid-configuration",
+                axum::routing::get({
+                    let stub = stub.clone();
+                    move || {
+                        let issuer = stub.issuer.lock().unwrap().clone();
+                        async move {
+                            axum::Json(json!({
+                                "issuer": issuer,
+                                "authorization_endpoint": format!("{issuer}/authorize"),
+                                "token_endpoint": format!("{issuer}/token"),
+                                "jwks_uri": format!("{issuer}/jwks"),
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/jwks",
+                axum::routing::get(|| async {
+                    let (_, x, y) = signing_key();
+                    axum::Json(json!({
+                        "keys": [{
+                            "kty": "EC",
+                            "use": "sig",
+                            "alg": "ES256",
+                            "crv": "P-256",
+                            "kid": KID,
+                            "x": x,
+                            "y": y,
+                        }]
+                    }))
+                }),
+            )
+            .route(
+                "/token",
+                axum::routing::post({
+                    let stub = stub.clone();
+                    move |body: String| {
+                        let stub = stub.clone();
+                        async move {
+                            *stub.last_form.lock().unwrap() = body;
+                            let claims = stub.next_claims.lock().unwrap().clone();
+                            axum::Json(json!({
+                                "access_token": "stub-access",
+                                "token_type": "Bearer",
+                                "id_token": sign(&claims),
+                            }))
+                        }
+                    }
+                }),
+            );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (issuer, stub)
+    }
+
+    /// Sign a claim set as an ES256 id token with the process's stub key.
+    pub fn sign(claims: &Value) -> String {
+        let (key, _, _) = signing_key();
+        let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
+        header.kid = Some(KID.to_string());
+        jsonwebtoken::encode(&header, claims, key).unwrap()
+    }
+
+    pub fn claims(issuer: &str, audience: &str, nonce: &str, groups: Value) -> Value {
+        let now = chrono::Utc::now().timestamp();
+        json!({
+            "iss": issuer,
+            "aud": audience,
+            "sub": "idp-subject-1",
+            "email": "ada@example.com",
+            "preferred_username": "ada",
+            "nonce": nonce,
+            "groups": groups,
+            "iat": now,
+            "exp": now + 300,
+        })
+    }
+}
+
+/// OIDC SSO (#240) end to end against a stub identity provider: the login
+/// redirect carries PKCE, the callback verifies the id token, groups become
+/// memberships, and every rejection path fails closed.
+#[tokio::test]
+async fn sso_login_maps_groups_to_memberships_and_fails_closed() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    // the redirect uri is deployment-owned, so the control plane must know its
+    // own public url for the flow to be coherent
+    std::env::set_var("ROLTER_PUBLIC_URL", format!("http://{addr}"));
+    std::env::set_var("ROLTER_KEK", "sso-test-kek");
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let base = format!("http://{addr}");
+
+    let (issuer, stub) = stub_idp::serve_stub().await;
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "SsoOrg", "slug": "sso-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let team: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/teams"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Platform"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let team_id = team["id"].as_str().unwrap().to_string();
+
+    // a non-http issuer is refused before anything is stored
+    let bad = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/sso-providers"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Bad", "slug": "bad", "issuer": "not-a-url", "client_id": "x"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
+
+    let provider: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/sso-providers"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Stub IdP",
+            "slug": "stub",
+            "issuer": issuer,
+            "client_id": "rolter",
+            "client_secret": "s3cret",
+            "group_claim": "groups"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let provider_id = provider["id"].as_str().unwrap().to_string();
+    // the client secret is sealed and never echoed back
+    let provider_text = provider.to_string();
+    assert!(
+        !provider_text.contains("s3cret") && !provider_text.contains("secret_ciphertext"),
+        "client secret leaked into the api response: {provider_text}"
+    );
+
+    // map an IdP group to a team-scoped admin role
+    let mapping = client
+        .post(format!(
+            "{base}/api/v1/sso-providers/{provider_id}/group-mappings"
+        ))
+        .bearer_auth("admintok")
+        .json(&json!({"group_name": "platform", "role": "admin", "team_id": team_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mapping.status(), 200);
+
+    // starting a login redirects to the provider with PKCE + state + nonce
+    let start = client
+        .get(format!("{base}/auth/sso/stub/start"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(start.status(), 303);
+    let location = start
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(location.starts_with(&format!("{issuer}/authorize?response_type=code")));
+    assert!(location.contains("code_challenge_method=S256"));
+    let state = url_param(&location, "state");
+
+    // an id token minted for a different login (wrong nonce) is refused
+    *stub.next_claims.lock().unwrap() =
+        stub_idp::claims(&issuer, "rolter", "other-nonce", json!(["/platform"]));
+    let replayed = client
+        .get(format!(
+            "{base}/auth/sso/stub/callback?code=abc&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replayed.status(), 400, "a mismatched nonce must be refused");
+
+    // ...and that consumed the state, so the real callback needs a fresh login
+    let start = client
+        .get(format!("{base}/auth/sso/stub/start"))
+        .send()
+        .await
+        .unwrap();
+    let location = start
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let state = url_param(&location, "state");
+    let nonce = url_param(&location, "nonce");
+
+    *stub.next_claims.lock().unwrap() =
+        stub_idp::claims(&issuer, "rolter", &nonce, json!(["/platform"]));
+    let logged_in: Value = client
+        .get(format!(
+            "{base}/auth/sso/stub/callback?code=abc&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(logged_in["user"]["email"], "ada@example.com");
+    assert_eq!(logged_in["granted_roles"][0], "admin");
+    let session_token = logged_in["token"].as_str().unwrap().to_string();
+
+    // the token exchange used the authorization code with a PKCE verifier
+    let form = stub.last_form.lock().unwrap().clone();
+    assert!(form.contains("grant_type=authorization_code"));
+    assert!(form.contains("code_verifier="));
+
+    // the session works, and the mapped membership is real: the team-scoped
+    // admin can create a project inside that team
+    let created = client
+        .post(format!("{base}/api/v1/teams/{team_id}/projects"))
+        .bearer_auth(&session_token)
+        .json(&json!({"name": "FromSso"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 200);
+    // but holds nothing at the org level, which no mapping granted
+    let denied = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/teams"))
+        .bearer_auth(&session_token)
+        .json(&json!({"name": "Nope"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 403);
+
+    // a repeat login does not accumulate duplicate memberships
+    let before: i64 = sqlx::query_scalar("select count(*) from memberships")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let start = client
+        .get(format!("{base}/auth/sso/stub/start"))
+        .send()
+        .await
+        .unwrap();
+    let location = start
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let state = url_param(&location, "state");
+    let nonce = url_param(&location, "nonce");
+    *stub.next_claims.lock().unwrap() =
+        stub_idp::claims(&issuer, "rolter", &nonce, json!(["/platform"]));
+    let again = client
+        .get(format!(
+            "{base}/auth/sso/stub/callback?code=abc&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(again.status(), 200);
+    let after: i64 = sqlx::query_scalar("select count(*) from memberships")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(before, after, "a repeat sso login must be idempotent");
+
+    // a user in no mapped group is refused, because the provider set no
+    // default_role: SSO authenticates, it does not implicitly authorize
+    let start = client
+        .get(format!("{base}/auth/sso/stub/start"))
+        .send()
+        .await
+        .unwrap();
+    let location = start
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let state = url_param(&location, "state");
+    let nonce = url_param(&location, "nonce");
+    *stub.next_claims.lock().unwrap() =
+        stub_idp::claims(&issuer, "rolter", &nonce, json!(["/unmapped"]));
+    let ungrouped = client
+        .get(format!(
+            "{base}/auth/sso/stub/callback?code=abc&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ungrouped.status(), 403);
+
+    // an id token signed for another audience never becomes a session
+    let start = client
+        .get(format!("{base}/auth/sso/stub/start"))
+        .send()
+        .await
+        .unwrap();
+    let location = start
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let state = url_param(&location, "state");
+    let nonce = url_param(&location, "nonce");
+    *stub.next_claims.lock().unwrap() =
+        stub_idp::claims(&issuer, "some-other-client", &nonce, json!(["/platform"]));
+    let wrong_audience = client
+        .get(format!(
+            "{base}/auth/sso/stub/callback?code=abc&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_audience.status(), 400);
+
+    // an unknown state (never issued, or already consumed) is refused
+    let unknown = client
+        .get(format!(
+            "{base}/auth/sso/stub/callback?code=abc&state=made-up"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), 400);
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'auth.sso_login' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("auth.sso_login"));
+}
+
+/// Pull a query parameter out of a redirect URL.
+fn url_param(url: &str, key: &str) -> String {
+    url.split(['?', '&'])
+        .find_map(|pair| pair.strip_prefix(&format!("{key}=")))
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// SCIM 2.0 Users provisioning (#540): an IdP token scopes every call to one
 /// org, create/deactivate/reconcile are idempotent, no local password is ever
 /// involved, and a revoked token stops working immediately.
@@ -3458,4 +3891,301 @@ async fn self_service_key_lifecycle() {
         .await
         .unwrap();
     assert_eq!(remaining.as_array().unwrap().len(), 1);
+}
+
+/// Invitations and single sign-on co-exist (#240): an operator-granted role is
+/// never reconciled away by a later SSO login, an IdP group that disappears
+/// does revoke the role it granted, and an org can require SSO without locking
+/// out the break-glass superadmin.
+#[tokio::test]
+async fn sso_and_password_login_coexist_per_org_policy() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    std::env::set_var("ROLTER_PUBLIC_URL", format!("http://{addr}"));
+    std::env::set_var("ROLTER_KEK", "sso-test-kek");
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "MixedOrg", "slug": "mixed-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+
+    // with no provider registered, the login screen offers a password form and
+    // nothing else: an operator who never wants an IdP never sees one
+    let methods: Value = client
+        .get(format!("{base}/api/v1/auth/methods"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(methods["password"], true);
+    assert_eq!(methods["sso"].as_array().unwrap().len(), 0);
+
+    // an invited local account: created with a password, granted a role by an
+    // operator, and able to log in
+    let invited: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/users"))
+        .bearer_auth("admintok")
+        .json(&json!({"email": "ada@example.com", "password": "correct horse battery"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let user_id = invited["user"]["id"].as_str().unwrap().to_string();
+    assert_eq!(invited["membership"]["role"], "member");
+    let source: String = sqlx::query_scalar("select source from memberships where user_id = $1")
+        .bind(uuid::Uuid::parse_str(&user_id).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(source, "manual", "an operator grant must be tagged manual");
+
+    let logged_in = client
+        .post(format!("{base}/api/v1/auth/login"))
+        .json(&json!({"email": "ada@example.com", "password": "correct horse battery"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(logged_in.status(), 200);
+
+    // now the same deployment gains an IdP, and the same person arrives
+    // through it: the account is adopted by email, not duplicated
+    let (issuer, stub) = stub_idp::serve_stub().await;
+    let provider: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/sso-providers"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Stub IdP", "slug": "mixed", "issuer": issuer,
+            "client_id": "rolter", "client_secret": "s3cret"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let provider_id = provider["id"].as_str().unwrap().to_string();
+    let mapping: Value = client
+        .post(format!(
+            "{base}/api/v1/sso-providers/{provider_id}/group-mappings"
+        ))
+        .bearer_auth("admintok")
+        .json(&json!({"group_name": "admins", "role": "admin", "org_id": org_id}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mapping_id = mapping["id"].as_str().unwrap().to_string();
+
+    // the login screen now offers both
+    let methods: Value = client
+        .get(format!("{base}/api/v1/auth/methods"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(methods["password"], true);
+    assert_eq!(methods["sso"][0]["slug"], "mixed");
+    assert_eq!(methods["sso"][0]["start_url"], "/auth/sso/mixed/start");
+
+    sso_login(&client, &base, &stub, &issuer, json!(["admins"]))
+        .await
+        .unwrap();
+    let user_uuid = uuid::Uuid::parse_str(&user_id).unwrap();
+    let users: i64 = sqlx::query_scalar("select count(*) from users where email = $1")
+        .bind("ada@example.com")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(users, 1, "sso must adopt the invited account, not fork it");
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("select role, source from memberships where user_id = $1 order by source")
+            .bind(user_uuid)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("member".to_string(), "manual".to_string()),
+            ("admin".to_string(), "sso".to_string()),
+        ],
+        "the operator grant and the sso grant must co-exist"
+    );
+
+    // the IdP drops the group; the next login revokes the role it granted and
+    // leaves the operator's grant alone
+    client
+        .delete(format!("{base}/api/v1/sso-group-mappings/{mapping_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    let refused = sso_login(&client, &base, &stub, &issuer, json!(["admins"])).await;
+    assert_eq!(
+        refused, None,
+        "with no mapping left and no default_role, the login must fail closed"
+    );
+    let remaining: Vec<(String, String)> =
+        sqlx::query_as("select role, source from memberships where user_id = $1")
+            .bind(user_uuid)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        remaining,
+        vec![("member".to_string(), "manual".to_string())],
+        "losing every mapped group revokes the sso grant, not the operator's"
+    );
+
+    // an org cannot disable password login before an IdP can carry the load...
+    let other: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "NoIdp", "slug": "no-idp"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_id = other["id"].as_str().unwrap();
+    let premature = client
+        .put(format!("{base}/api/v1/orgs/{other_id}/auth-policy"))
+        .bearer_auth("admintok")
+        .json(&json!({"allow_password_login": false, "allow_sso": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(premature.status(), 409);
+
+    // ...nor turn both methods off
+    let neither = client
+        .put(format!("{base}/api/v1/orgs/{org_id}/auth-policy"))
+        .bearer_auth("admintok")
+        .json(&json!({"allow_password_login": false, "allow_sso": false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(neither.status(), 409);
+
+    // enforcing sso for the org that has a provider refuses that member's
+    // password, and the login screen stops offering the form
+    let enforced = client
+        .put(format!("{base}/api/v1/orgs/{org_id}/auth-policy"))
+        .bearer_auth("admintok")
+        .json(&json!({"allow_password_login": false, "allow_sso": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(enforced.status(), 200);
+    let blocked = client
+        .post(format!("{base}/api/v1/auth/login"))
+        .json(&json!({"email": "ada@example.com", "password": "correct horse battery"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), 403);
+
+    // break-glass: a superadmin who belongs to the same org still gets in with
+    // a password, which is the only reason enforcing sso is a safe switch to
+    // flip — a mistyped issuer must not be unrecoverable
+    let root: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/users"))
+        .bearer_auth("admintok")
+        .json(&json!({"email": "root@example.com", "password": "break glass in case", "role": "admin"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let root_id = uuid::Uuid::parse_str(root["user"]["id"].as_str().unwrap()).unwrap();
+    sqlx::query("update users set is_superadmin = true where id = $1")
+        .bind(root_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let super_login = client
+        .post(format!("{base}/api/v1/auth/login"))
+        .json(&json!({"email": "root@example.com", "password": "break glass in case"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(super_login.status(), 200);
+
+    // sso can be switched off without deleting the provider
+    let off = client
+        .put(format!("{base}/api/v1/orgs/{org_id}/auth-policy"))
+        .bearer_auth("admintok")
+        .json(&json!({"allow_password_login": true, "allow_sso": false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(off.status(), 200);
+    let refused = sso_login(&client, &base, &stub, &issuer, json!(["admins"])).await;
+    assert_eq!(
+        refused, None,
+        "sso must be refused while the org disables it"
+    );
+}
+
+/// Drive one full SSO round trip, returning the session token on success and
+/// `None` when the callback refused.
+async fn sso_login(
+    client: &reqwest::Client,
+    base: &str,
+    stub: &stub_idp::Stub,
+    issuer: &str,
+    groups: Value,
+) -> Option<String> {
+    let start = client
+        .get(format!("{base}/auth/sso/mixed/start"))
+        .send()
+        .await
+        .unwrap();
+    let location = start
+        .headers()
+        .get("location")?
+        .to_str()
+        .unwrap()
+        .to_string();
+    let state = url_param(&location, "state");
+    let nonce = url_param(&location, "nonce");
+    *stub.next_claims.lock().unwrap() = stub_idp::claims(issuer, "rolter", &nonce, groups);
+    let response = client
+        .get(format!(
+            "{base}/auth/sso/mixed/callback?code=abc&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    if !response.status().is_success() {
+        return None;
+    }
+    let body: Value = response.json().await.unwrap();
+    Some(body["token"].as_str().unwrap().to_string())
 }

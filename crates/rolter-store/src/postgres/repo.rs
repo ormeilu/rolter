@@ -14,10 +14,10 @@ use rolter_core::{Error, Result};
 use super::models::{
     AdaptiveRoutingPolicy, AuditLogEntry, Budget, BusinessUnit, ClusterNode, CompatibilityPolicy,
     Customer, FeatureFlags, LoggingSettings, McpOAuthGrant, McpOAuthSession, McpServer, Membership,
-    ModelPrice, Org, OwnedVirtualKey, Project, PromptTemplate, PromptTemplateScope,
+    ModelPrice, Org, OrgAuthPolicy, OwnedVirtualKey, Project, PromptTemplate, PromptTemplateScope,
     PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember, RateLimit, Route,
     RouteTarget, RuntimePolicy, ScimIdentity, ScimToken, SecuritySettings, Session, Skill,
-    SkillVersion, Team, User, VirtualKey,
+    SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider, Team, User, VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -997,6 +997,227 @@ impl ProviderRepo<'_> {
             return Err(Error::NotFound(format!("provider {id}")));
         }
         Ok(())
+    }
+}
+
+/// OIDC identity providers, their group→role mappings, and the short-lived
+/// state rows that make the authorization-code flow replay-safe.
+pub struct SsoRepo<'a>(pub &'a PgPool);
+
+const SSO_PROVIDER_COLUMNS: &str = "id, org_id, name, slug, issuer, client_id, secret_ciphertext, \
+     secret_nonce, scopes, group_claim, default_role, enabled, created_at";
+
+impl SsoRepo<'_> {
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_provider(
+        &self,
+        org_id: Uuid,
+        name: &str,
+        slug: &str,
+        issuer: &str,
+        client_id: &str,
+        secret: Option<(&[u8], &[u8])>,
+        scopes: &[String],
+        group_claim: &str,
+        default_role: Option<&str>,
+    ) -> Result<SsoProvider> {
+        let (ciphertext, nonce) = match secret {
+            Some((c, n)) => (Some(c), Some(n)),
+            None => (None, None),
+        };
+        sqlx::query_as(&format!(
+            "insert into sso_providers (org_id, name, slug, issuer, client_id, \
+                    secret_ciphertext, secret_nonce, scopes, group_claim, default_role) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             returning {SSO_PROVIDER_COLUMNS}"
+        ))
+        .bind(org_id)
+        .bind(name)
+        .bind(slug)
+        .bind(issuer)
+        .bind(client_id)
+        .bind(ciphertext)
+        .bind(nonce)
+        .bind(scopes)
+        .bind(group_claim)
+        .bind(default_role)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn list_providers(&self, org_id: Uuid) -> Result<Vec<SsoProvider>> {
+        sqlx::query_as(&format!(
+            "select {SSO_PROVIDER_COLUMNS} from sso_providers where org_id = $1 order by name"
+        ))
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get_provider(&self, id: Uuid) -> Result<SsoProvider> {
+        sqlx::query_as(&format!(
+            "select {SSO_PROVIDER_COLUMNS} from sso_providers where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("sso provider {id}")))
+    }
+
+    /// Resolve the provider a login URL names. Slugs are unique per org, and a
+    /// login URL carries no org, so a duplicate slug across orgs is ambiguous
+    /// and rejected rather than resolved arbitrarily.
+    pub async fn find_provider_by_slug(&self, slug: &str) -> Result<Option<SsoProvider>> {
+        let mut rows: Vec<SsoProvider> = sqlx::query_as(&format!(
+            "select {SSO_PROVIDER_COLUMNS} from sso_providers where slug = $1 and enabled limit 2"
+        ))
+        .bind(slug)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)?;
+        if rows.len() > 1 {
+            return Err(Error::Store(format!(
+                "sso slug '{slug}' is registered by more than one org; log in through the \
+                 org-specific url"
+            )));
+        }
+        Ok(rows.pop())
+    }
+
+    /// every enabled provider across all orgs, for the login screen. Returns
+    /// names and slugs the login URL already exposes; never secrets.
+    pub async fn list_enabled_providers(&self) -> Result<Vec<SsoProvider>> {
+        sqlx::query_as(&format!(
+            "select {SSO_PROVIDER_COLUMNS} from sso_providers where enabled order by name"
+        ))
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn delete_provider(&self, id: Uuid) -> Result<()> {
+        let res = sqlx::query("delete from sso_providers where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("sso provider {id}")));
+        }
+        Ok(())
+    }
+
+    /// Open the sealed client secret. Returns `None` for a public client.
+    pub async fn client_secret(
+        &self,
+        kek: &super::crypto::Kek,
+        provider: &SsoProvider,
+    ) -> Result<Option<String>> {
+        match (&provider.secret_ciphertext, &provider.secret_nonce) {
+            (Some(c), Some(n)) => Ok(Some(kek.decrypt(c, n)?)),
+            _ => Ok(None),
+        }
+    }
+
+    pub async fn add_mapping(
+        &self,
+        provider_id: Uuid,
+        group_name: &str,
+        org_id: Option<Uuid>,
+        team_id: Option<Uuid>,
+        project_id: Option<Uuid>,
+        role: &str,
+    ) -> Result<SsoGroupMapping> {
+        sqlx::query_as(
+            "insert into sso_group_mappings (provider_id, group_name, org_id, team_id, \
+                    project_id, role) \
+             values ($1, $2, $3, $4, $5, $6) \
+             returning id, provider_id, group_name, org_id, team_id, project_id, role, created_at",
+        )
+        .bind(provider_id)
+        .bind(group_name)
+        .bind(org_id)
+        .bind(team_id)
+        .bind(project_id)
+        .bind(role)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn list_mappings(&self, provider_id: Uuid) -> Result<Vec<SsoGroupMapping>> {
+        sqlx::query_as(
+            "select id, provider_id, group_name, org_id, team_id, project_id, role, created_at \
+             from sso_group_mappings where provider_id = $1 order by group_name",
+        )
+        .bind(provider_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn delete_mapping(&self, id: Uuid) -> Result<()> {
+        let res = sqlx::query("delete from sso_group_mappings where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("sso group mapping {id}")));
+        }
+        Ok(())
+    }
+
+    pub async fn start_login(
+        &self,
+        state: &str,
+        provider_id: Uuid,
+        code_verifier: &str,
+        nonce: &str,
+        redirect_uri: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "insert into sso_login_states (state, provider_id, code_verifier, nonce, redirect_uri) \
+             values ($1, $2, $3, $4, $5)",
+        )
+        .bind(state)
+        .bind(provider_id)
+        .bind(code_verifier)
+        .bind(nonce)
+        .bind(redirect_uri)
+        .execute(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(())
+    }
+
+    /// Consume a login state exactly once. A replayed callback finds nothing,
+    /// so an intercepted `code`+`state` pair cannot be redeemed twice. States
+    /// older than `max_age_secs` are treated as absent and swept.
+    pub async fn consume_login(
+        &self,
+        state: &str,
+        max_age_secs: i64,
+    ) -> Result<Option<SsoLoginState>> {
+        // opportunistic sweep: expired rows are worthless and unbounded growth
+        // would be the only other outcome
+        let _ = sqlx::query(
+            "delete from sso_login_states where created_at < now() - ($1 || ' seconds')::interval",
+        )
+        .bind(max_age_secs.to_string())
+        .execute(self.0)
+        .await;
+        sqlx::query_as(
+            "delete from sso_login_states where state = $1 \
+             returning state, provider_id, code_verifier, nonce, redirect_uri, created_at",
+        )
+        .bind(state)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)
     }
 }
 
@@ -2203,7 +2424,7 @@ pub struct MembershipRepo<'a>(pub &'a PgPool);
 impl MembershipRepo<'_> {
     pub async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<Membership>> {
         sqlx::query_as(
-            "select id, user_id, org_id, team_id, project_id, role, created_at
+            "select id, user_id, org_id, team_id, project_id, role, source, created_at
              from memberships where user_id = $1 order by created_at",
         )
         .bind(user_id)
@@ -2217,7 +2438,7 @@ impl MembershipRepo<'_> {
     /// org admin can see and manage all role assignments under their org
     pub async fn list_in_org(&self, org_id: Uuid) -> Result<Vec<Membership>> {
         sqlx::query_as(
-            "select m.id, m.user_id, m.org_id, m.team_id, m.project_id, m.role, m.created_at
+            "select m.id, m.user_id, m.org_id, m.team_id, m.project_id, m.role, m.source, m.created_at
              from memberships m
              left join teams t on t.id = m.team_id
              left join projects p on p.id = m.project_id
@@ -2233,7 +2454,7 @@ impl MembershipRepo<'_> {
 
     pub async fn get(&self, id: Uuid) -> Result<Membership> {
         sqlx::query_as(
-            "select id, user_id, org_id, team_id, project_id, role, created_at
+            "select id, user_id, org_id, team_id, project_id, role, source, created_at
              from memberships where id = $1",
         )
         .bind(id)
@@ -2254,16 +2475,34 @@ impl MembershipRepo<'_> {
         project_id: Option<Uuid>,
         role: &str,
     ) -> Result<Membership> {
+        self.create_with_source(user_id, org_id, team_id, project_id, role, "manual")
+            .await
+    }
+
+    /// grant a role and record where the grant came from. `source` is
+    /// `manual` for anything an operator did (admin API, invitation, seed) and
+    /// `sso` for a grant an IdP group mapping produced; only `sso` rows are
+    /// ever reconciled away by a later login.
+    pub async fn create_with_source(
+        &self,
+        user_id: Uuid,
+        org_id: Option<Uuid>,
+        team_id: Option<Uuid>,
+        project_id: Option<Uuid>,
+        role: &str,
+        source: &str,
+    ) -> Result<Membership> {
         sqlx::query_as(
-            "insert into memberships (user_id, org_id, team_id, project_id, role)
-             values ($1, $2, $3, $4, $5)
-             returning id, user_id, org_id, team_id, project_id, role, created_at",
+            "insert into memberships (user_id, org_id, team_id, project_id, role, source)
+             values ($1, $2, $3, $4, $5, $6)
+             returning id, user_id, org_id, team_id, project_id, role, source, created_at",
         )
         .bind(user_id)
         .bind(org_id)
         .bind(team_id)
         .bind(project_id)
         .bind(role)
+        .bind(source)
         .fetch_one(self.0)
         .await
         .map_err(store_err)
@@ -2279,6 +2518,92 @@ impl MembershipRepo<'_> {
             return Err(Error::NotFound(format!("membership {id}")));
         }
         Ok(())
+    }
+}
+
+/// per-org login policy: whether members may use a local password, and
+/// whether SSO callbacks for the org's providers are honoured.
+pub struct OrgAuthPolicyRepo<'a>(pub &'a PgPool);
+
+impl OrgAuthPolicyRepo<'_> {
+    /// The policy for `org_id`, or the permissive default when no row exists.
+    /// Orgs created before single sign-on existed have no row, and must keep
+    /// logging in exactly as they did.
+    pub async fn get(&self, org_id: Uuid) -> Result<OrgAuthPolicy> {
+        let found: Option<OrgAuthPolicy> = sqlx::query_as(
+            "select org_id, allow_password_login, allow_sso, updated_at
+             from org_auth_policies where org_id = $1",
+        )
+        .bind(org_id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(found.unwrap_or(OrgAuthPolicy {
+            org_id,
+            allow_password_login: true,
+            allow_sso: true,
+            updated_at: chrono::Utc::now(),
+        }))
+    }
+
+    pub async fn set(
+        &self,
+        org_id: Uuid,
+        allow_password_login: bool,
+        allow_sso: bool,
+    ) -> Result<OrgAuthPolicy> {
+        sqlx::query_as(
+            "insert into org_auth_policies (org_id, allow_password_login, allow_sso)
+             values ($1, $2, $3)
+             on conflict (org_id) do update
+                 set allow_password_login = excluded.allow_password_login,
+                     allow_sso = excluded.allow_sso,
+                     updated_at = now()
+             returning org_id, allow_password_login, allow_sso, updated_at",
+        )
+        .bind(org_id)
+        .bind(allow_password_login)
+        .bind(allow_sso)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// True when at least one org this user belongs to forbids password login.
+    /// Membership scopes are org/team/project, so the team's and project's
+    /// owning org counts too.
+    pub async fn password_login_blocked_for_user(&self, user_id: Uuid) -> Result<bool> {
+        let blocked: Option<(bool,)> = sqlx::query_as(
+            "select true from memberships m
+             left join teams t on t.id = m.team_id
+             left join projects p on p.id = m.project_id
+             left join teams pt on pt.id = p.team_id
+             join org_auth_policies ap
+               on ap.org_id = coalesce(m.org_id, t.org_id, pt.org_id)
+             where m.user_id = $1 and not ap.allow_password_login
+             limit 1",
+        )
+        .bind(user_id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(blocked.is_some())
+    }
+
+    /// True when any org allows password login, or when no org has a policy
+    /// row at all. Drives the login page: a deployment that turned password
+    /// login off everywhere should not render a password form.
+    pub async fn any_password_login_allowed(&self) -> Result<bool> {
+        let row: Option<(bool,)> = sqlx::query_as(
+            "select true from orgs o
+             left join org_auth_policies ap on ap.org_id = o.id
+             where ap.allow_password_login is not false
+             limit 1",
+        )
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(row.is_some())
     }
 }
 

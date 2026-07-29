@@ -861,6 +861,20 @@ export function login(email: string, password: string): Promise<LoginResponse> {
   });
 }
 
+/** what the login screen may offer; see crates/rolter-control/src/auth_policy.rs */
+export interface AuthMethods {
+  /** render the email + password form */
+  password: boolean;
+  /** one entry per enabled identity provider; empty when no IdP is configured */
+  sso: { slug: string; name: string; start_url: string }[];
+}
+
+// unauthenticated by necessity: read before anyone has a session, so the login
+// screen knows whether this deployment uses passwords, sso, or both
+export function getAuthMethods(): Promise<AuthMethods> {
+  return getJson<AuthMethods>("/api/v1/auth/methods");
+}
+
 export function logout(): Promise<void> {
   return sendJson<void>("POST", "/api/v1/auth/logout");
 }

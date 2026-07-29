@@ -306,6 +306,54 @@ pub struct CompatibilityPolicy {
     pub updated_at: DateTime<Utc>,
 }
 
+/// an OIDC identity provider registered for one org.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SsoProvider {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub issuer: String,
+    pub client_id: String,
+    /// sealed client secret; never serialized, and read only by the token
+    /// exchange through [`super::repo::SsoRepo::client_secret`]
+    #[serde(skip_serializing)]
+    pub secret_ciphertext: Option<Vec<u8>>,
+    #[serde(skip_serializing)]
+    pub secret_nonce: Option<Vec<u8>>,
+    pub scopes: Vec<String>,
+    pub group_claim: String,
+    /// role granted when no group mapping matches; `None` denies login to a
+    /// user the IdP has not put in a mapped group
+    pub default_role: Option<String>,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+/// an IdP group name granting a role at a scope
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SsoGroupMapping {
+    pub id: Uuid,
+    pub provider_id: Uuid,
+    pub group_name: String,
+    pub org_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// one in-flight authorization-code login
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SsoLoginState {
+    pub state: String,
+    pub provider_id: Uuid,
+    pub code_verifier: String,
+    pub nonce: String,
+    pub redirect_uri: String,
+    pub created_at: DateTime<Utc>,
+}
+
 /// a SCIM provisioning token. `token_hash` is peppered sha-256; the plaintext
 /// is returned once at creation and never stored.
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -433,7 +481,19 @@ pub struct Membership {
     pub project_id: Option<Uuid>,
     /// one of `admin` | `member` | `viewer`
     pub role: String,
+    /// who granted this: `manual` (invitation, seed, admin API) or `sso` (an
+    /// IdP group mapping). SSO reconciliation only ever touches its own rows
+    pub source: String,
     pub created_at: DateTime<Utc>,
+}
+
+/// how one org's members are allowed to authenticate
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct OrgAuthPolicy {
+    pub org_id: Uuid,
+    pub allow_password_login: bool,
+    pub allow_sso: bool,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// a record of an admin/CRUD/auth action, for the audit-log API

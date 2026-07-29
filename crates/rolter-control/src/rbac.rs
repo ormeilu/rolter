@@ -354,6 +354,7 @@ mod tests {
             team_id: team,
             project_id: project,
             role: role.to_string(),
+            source: "manual".into(),
             created_at: Utc::now(),
         }
     }
