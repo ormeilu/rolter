@@ -3437,7 +3437,7 @@ const MIN_PASSWORD_LEN: usize = 8;
 
 /// hash a plaintext password with argon2id for at-rest storage; the repo layer
 /// only ever sees the digest
-fn hash_password(password: &str) -> ApiResult<String> {
+pub(crate) fn hash_password(password: &str) -> ApiResult<String> {
     use argon2::password_hash::rand_core::OsRng;
     use argon2::password_hash::{PasswordHasher, SaltString};
     use argon2::Argon2;
@@ -3457,7 +3457,7 @@ fn hash_password(password: &str) -> ApiResult<String> {
 /// minimal email sanity check: trimmed, non-empty, with a single `@` separating
 /// non-empty local and domain parts. deliberately permissive — full RFC 5322 is
 /// not worth the surface here, we only guard against obvious junk
-fn validate_email(email: &str) -> ApiResult<String> {
+pub(crate) fn validate_email(email: &str) -> ApiResult<String> {
     let email = email.trim();
     let ok = match email.split_once('@') {
         Some((local, domain)) => {
@@ -3473,7 +3473,7 @@ fn validate_email(email: &str) -> ApiResult<String> {
     Ok(email.to_string())
 }
 
-fn validate_role(role: &str) -> ApiResult<()> {
+pub(crate) fn validate_role(role: &str) -> ApiResult<()> {
     if !matches!(role, "admin" | "member" | "viewer") {
         return Err(ApiError::Core(Error::Config(
             "role must be one of admin, member, viewer".to_string(),

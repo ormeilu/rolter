@@ -10,6 +10,7 @@
 - [Config & hot reload](architecture/config-and-hot-reload.md)
 - [Data model](architecture/data-model.md)
 - [RBAC & auth](architecture/rbac-and-auth.md)
+- [Invitations](architecture/invitations.md)
 - [Single sign-on (OIDC)](architecture/sso.md)
 - [MCP OAuth](architecture/mcp-oauth.md)
 - [SCIM provisioning](architecture/scim-provisioning.md)

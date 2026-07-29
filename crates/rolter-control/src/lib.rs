@@ -27,6 +27,8 @@ mod crud;
 mod feature_flags;
 mod health;
 #[cfg(feature = "postgres")]
+mod invitations;
+#[cfg(feature = "postgres")]
 mod logging_settings;
 #[cfg(feature = "postgres")]
 mod mcp_logs;
@@ -372,6 +374,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(alerting::router())
             .merge(auth::router())
             .merge(auth_policy::router())
+            .merge(invitations::router())
             .merge(crud::router())
             .merge(me::router())
             .merge(mcp_logs::router())
