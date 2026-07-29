@@ -306,6 +306,51 @@ pub struct CompatibilityPolicy {
     pub updated_at: DateTime<Utc>,
 }
 
+/// an MCP server an org has registered; the anchor OAuth grants hang off
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct McpServer {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub url: String,
+    /// one of `stdio` | `sse` | `streamable_http` | `websocket`
+    pub transport: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// a user's consent grant against one MCP server. Revoked grants are kept so
+/// the audit trail survives; `revoked_at` is the live/dead flag.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct McpOAuthGrant {
+    pub id: Uuid,
+    pub server_id: Uuid,
+    pub user_id: Uuid,
+    pub scopes: Vec<String>,
+    pub granted_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub revoked_by: Option<Uuid>,
+}
+
+/// Session metadata for a grant, with **no** token material on it. The sealed
+/// tokens live in the same row but are only ever read through
+/// [`super::repo::McpOAuthRepo::open_session`], so a DTO that reaches an API
+/// response cannot carry them by accident.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct McpOAuthSession {
+    pub id: Uuid,
+    pub grant_id: Uuid,
+    pub scopes: Vec<String>,
+    pub expires_at: DateTime<Utc>,
+    pub refresh_expires_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    /// whether a refresh token is stored, so a UI can show renewability
+    /// without the control plane ever handing the token out
+    pub has_refresh_token: bool,
+}
+
 /// singleton persisted adaptive-routing policy projected into snapshots
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct AdaptiveRoutingPolicy {
