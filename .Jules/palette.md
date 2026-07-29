@@ -6,3 +6,6 @@
 **Action:** Always verify keyboard accessibility (`focus-visible`) and semantic HTML tags (`type="search"`) on custom input wrappers and icon-only buttons across the application.
 
 I am learning that Linear tickets are no longer used for PR titles.
+## 2026-07-29 - [Global refresh visual indicator]
+**Learning:** Relying purely on a manual manual loading state in global headers can mismatch UI states if a user triggers an implicit background fetch while also hitting the 'Refresh' button. We need to tie top-level refresh visual indicators to the global `useIsFetching` state.
+**Action:** Next time, always check if manual refresh indicators can be augmented with the data library's global fetching hooks (like TanStack's `useIsFetching()`) to represent all ongoing network states.
