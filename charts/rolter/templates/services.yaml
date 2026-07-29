@@ -37,4 +37,3 @@ spec:
     - name: http
       port: {{ .Values.control.service.port }}
       targetPort: http
-

@@ -158,6 +158,8 @@ impl ConfigStore for MergedConfigStore {
         merged.retry = db.retry;
         merged.timeouts = db.timeouts;
         merged.queue = db.queue;
+        merged.compatibility = db.compatibility;
+        merged.adaptive_routing = db.adaptive_routing;
         merged.logging = db.logging;
         merged.feature_flags = db.feature_flags;
         merged.apply_feature_flags();

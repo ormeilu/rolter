@@ -65,4 +65,3 @@ integration/llama-cpp-smoke.sh http://127.0.0.1:8080 model.gguf
 
 The script starts a temporary Rolter gateway, verifies model listing,
 non-streaming completion, SSE, and routing headers, then cleans up.
-

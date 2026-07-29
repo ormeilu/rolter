@@ -315,7 +315,7 @@ jobs:
   # boots postgres, redis, clickhouse, gateway and control together via
   # docker-compose.yml + the CI overlay, then exercises the gateway (fake-llm)
   # and the control snapshot path. catches wiring/env/compose regressions the
-  # single-binary smoke above cannot see (e.g. a mis-named ROLTER_DATABASE_URL).
+  # single-binary smoke above cannot see (e.g. a misnamed ROLTER_DATABASE_URL).
   # informational until the ~image-build cost and flake profile are trusted;
   # promote by dropping continue-on-error. see ROL-245.
   compose-smoke:

@@ -145,7 +145,7 @@ See [Custom CA bundles](custom-ca-bundles.md) for rotation behavior and Docker/K
 
 ### `[[routes]]`
 - `model` (string) — public model name clients request
-- `strategy` (`round_robin` | `random` | `power_of_two` | `consistent_hash` | `cache_aware` | `weighted` | `pipeline` | `cheapest` | `fastest` | `precise_cache_aware` | `lmcache_aware`, default `round_robin`)
+- `strategy` (`round_robin` | `random` | `power_of_two` | `consistent_hash` | `cache_aware` | `weighted` | `pipeline` | `cheapest` | `fastest` | `precise_cache_aware` | `lmcache_aware` | `adaptive`, default `round_robin`)
 - `[[routes.targets]]`
   - `provider` (string) — a provider `name`
   - `model` (string, optional) — upstream model id; defaults to the requested model
@@ -166,6 +166,13 @@ See [Custom CA bundles](custom-ca-bundles.md) for rotation behavior and Docker/K
 - `key` (string) — the bearer token clients present
 - `name` (string, optional)
 - `models` (string[], default `[]`) — allow-list; empty = all
+
+### `[adaptive_routing]`
+Deployment-wide policy for routes using the `adaptive` strategy. See [load balancing](../architecture/load-balancing.md#adaptive-routing).
+- `enabled` (bool, default `false`) — kill switch; while off, every `adaptive` route serves the `pipeline` stack
+- `latency_weight` (f32, default `1.0`), `cost_weight` (f32, default `0.5`), `load_weight` (f32, default `0.25`) — blend weights; negatives are clamped to `0`, and all-zero disables the blend
+- `exploration_ratio` (f32, default `0.05`) — share of picks made at random to keep latency samples fresh; clamped to `[0, 0.5]`
+- `min_samples` (u32, default `50`) — requests a route must serve before the blend engages
 
 ### `[logging]`
 - `clickhouse_url` (string, optional)
@@ -347,6 +354,7 @@ keys are rejected.
 - `ROLTER_CONFIG`, `ROLTER_HOST`, `ROLTER_PORT` — gateway
 - `ROLTER_CONTROL_HOST`, `ROLTER_CONTROL_PORT`, `ROLTER_UI_DIR` — control plane
 - `ROLTER_MASTER_KEY` — AES-256-GCM KEK for provider-secret encryption
+- `ROLTER_PUBLIC_URL` — the control plane's externally reachable base URL (default `http://localhost:4001`). The OIDC redirect URI is derived from it, so single sign-on needs it set correctly behind a proxy; see [Single sign-on](../architecture/sso.md)
 - `DATABASE_URL`, `REDIS_URL`, `CLICKHOUSE_URL` — datastores
 - `RUST_LOG` — tracing filter (e.g. `info`, `rolter_gateway=debug`)
 - provider key vars referenced by `api_key_env` (e.g. `OPENAI_API_KEY`)

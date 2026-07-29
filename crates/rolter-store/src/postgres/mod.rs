@@ -19,7 +19,8 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::postgres::models::{
-    Budget, FeatureFlags, LoggingSettings, ModelPrice, RateLimit, RuntimePolicy,
+    AdaptiveRoutingPolicy, Budget, CompatibilityPolicy, FeatureFlags, LoggingSettings, ModelPrice,
+    RateLimit, RuntimePolicy,
 };
 use crate::ConfigStore;
 
@@ -300,6 +301,7 @@ fn parse_strategy(s: &str) -> Result<BalancingStrategy> {
         "fastest" => BalancingStrategy::Fastest,
         "precise_cache_aware" => BalancingStrategy::PreciseCacheAware,
         "lmcache_aware" => BalancingStrategy::LmcacheAware,
+        "adaptive" => BalancingStrategy::Adaptive,
         other => {
             return Err(Error::Store(format!(
                 "unknown balancing strategy '{other}'"
@@ -377,10 +379,32 @@ impl PostgresConfigStore {
         .map_err(store_err)
     }
 
+    async fn load_compatibility_policy(&self) -> Result<CompatibilityPolicy> {
+        sqlx::query_as(
+            "select anthropic_version, default_max_tokens, updated_at \
+             from compatibility_policy where id = true",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(store_err)
+    }
+
+    async fn load_adaptive_routing_policy(&self) -> Result<AdaptiveRoutingPolicy> {
+        sqlx::query_as(
+            "select enabled, latency_weight, cost_weight, load_weight, exploration_ratio, \
+                    min_samples, updated_at \
+             from adaptive_routing_policy where id = true",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(store_err)
+    }
+
     async fn load_logging_settings(&self) -> Result<LoggingSettings> {
         sqlx::query_as(
             "select sample_rate, payload_capture_enabled, payload_capture_max_bytes, \
-                    payload_capture_redact_fields, payload_capture_models, payload_capture_virtual_key_ids, updated_at \
+                    payload_capture_redact_fields, payload_capture_models, payload_capture_virtual_key_ids, \
+                    retention_days, payload_retention_hours, updated_at \
              from logging_settings where id = true",
         )
         .fetch_one(&self.pool)
@@ -570,6 +594,8 @@ impl PostgresConfigStore {
                     "team" => BudgetScope::Team,
                     "project" => BudgetScope::Project,
                     "virtual_key" => BudgetScope::Key,
+                    "business_unit" => BudgetScope::BusinessUnit,
+                    "customer" => BudgetScope::Customer,
                     // unknown scope: skip rather than mis-enforce
                     _ => return None,
                 };
@@ -600,6 +626,8 @@ impl PostgresConfigStore {
                     "team" => BudgetScope::Team,
                     "project" => BudgetScope::Project,
                     "virtual_key" => BudgetScope::Key,
+                    "business_unit" => BudgetScope::BusinessUnit,
+                    "customer" => BudgetScope::Customer,
                     // unknown scope: skip rather than mis-enforce
                     _ => return None,
                 };
@@ -803,6 +831,8 @@ impl ConfigStore for PostgresConfigStore {
         let flags = self.load_feature_flags().await?;
         let runtime_policy = self.load_runtime_policy().await?;
         let logging = self.load_logging_settings().await?;
+        let compatibility = self.load_compatibility_policy().await?;
+        let adaptive = self.load_adaptive_routing_policy().await?;
         let providers = self.load_providers().await?;
         let routes = self.load_routes().await?;
         let provider_groups = self.load_provider_groups().await?;
@@ -852,6 +882,17 @@ impl ConfigStore for PostgresConfigStore {
             _ => BackpressurePolicy::Error,
         };
         config.queue.block_timeout_ms = runtime_policy.queue_block_ms.max(0) as u64;
+        config.compatibility.anthropic_version = compatibility.anthropic_version;
+        config.compatibility.default_max_tokens = compatibility.default_max_tokens.max(1) as u32;
+        config.adaptive_routing = rolter_core::AdaptiveRoutingConfig {
+            enabled: adaptive.enabled,
+            latency_weight: adaptive.latency_weight,
+            cost_weight: adaptive.cost_weight,
+            load_weight: adaptive.load_weight,
+            exploration_ratio: adaptive.exploration_ratio,
+            min_samples: adaptive.min_samples.max(0) as u32,
+        }
+        .sanitized();
         Ok(config)
     }
 
@@ -1506,6 +1547,132 @@ mod tests {
 
         assert_eq!(config.budgets.len(), 1);
         assert_eq!(config.budgets[0].limit_usd, 100.5);
+    }
+
+    // governance dimensions carry their own caps, so a business-unit budget and
+    // a customer rate limit must survive the snapshot projection (#539)
+    #[tokio::test]
+    async fn loads_governance_scoped_budgets_and_limits() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+
+        let org_id: Uuid = sqlx::query_scalar(
+            "insert into orgs (name, slug) values ('acme', 'acme') returning id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let unit_id: Uuid = sqlx::query_scalar(
+            "insert into business_units (org_id, name, slug) values ($1, 'Payments', 'payments') returning id",
+        )
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let customer_id: Uuid = sqlx::query_scalar(
+            "insert into customers (org_id, name, slug) values ($1, 'Acme EU', 'acme-eu') returning id",
+        )
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into budgets (scope_type, scope_id, limit_usd, period)
+             values ('business_unit', $1, 250.0, '30d')",
+        )
+        .bind(unit_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into rate_limits (scope_type, scope_id, rpm, tpm)
+             values ('customer', $1, 60, 90000)",
+        )
+        .bind(customer_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let config = PostgresConfigStore::new(pool).load().await.unwrap();
+
+        let budget = config
+            .budgets
+            .iter()
+            .find(|b| b.scope == BudgetScope::BusinessUnit)
+            .expect("business-unit budget in snapshot");
+        assert_eq!(budget.id, unit_id.to_string());
+        assert_eq!(budget.limit_usd, 250.0);
+
+        let limit = config
+            .rate_limits
+            .iter()
+            .find(|l| l.scope == BudgetScope::Customer)
+            .expect("customer rate limit in snapshot");
+        assert_eq!(limit.id, customer_id.to_string());
+        assert_eq!(limit.rpm, Some(60));
+    }
+
+    // the adaptive-routing kill switch and blend weights are control-plane
+    // owned, so an operator change must reach the polling gateway (#544)
+    #[tokio::test]
+    async fn adaptive_routing_policy_projects_into_snapshot() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+
+        // the shipped defaults leave adaptive routing off
+        let config = PostgresConfigStore::new(pool.clone()).load().await.unwrap();
+        assert!(!config.adaptive_routing.enabled);
+        assert_eq!(config.adaptive_routing.min_samples, 50);
+
+        sqlx::query(
+            "update adaptive_routing_policy set enabled = true, latency_weight = 2.0, \
+                    cost_weight = 0, load_weight = 0.5, exploration_ratio = 0.1, \
+                    min_samples = 10 where id = true",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let config = PostgresConfigStore::new(pool).load().await.unwrap();
+        assert!(config.adaptive_routing.enabled);
+        assert_eq!(config.adaptive_routing.latency_weight, 2.0);
+        assert_eq!(config.adaptive_routing.cost_weight, 0.0);
+        assert_eq!(config.adaptive_routing.exploration_ratio, 0.1);
+        assert_eq!(config.adaptive_routing.min_samples, 10);
+    }
+
+    // compiled-in translation constants are control-plane owned now, so the
+    // persisted policy must reach the snapshot the gateway polls (#546)
+    #[tokio::test]
+    async fn compatibility_policy_projects_into_snapshot() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+
+        // defaults preserve the previous hardcoded behavior
+        let config = PostgresConfigStore::new(pool.clone()).load().await.unwrap();
+        assert_eq!(config.compatibility.anthropic_version, "2023-06-01");
+        assert_eq!(config.compatibility.default_max_tokens, 1024);
+
+        sqlx::query(
+            "update compatibility_policy set anthropic_version = '2024-10-22', \
+                    default_max_tokens = 4096 where id = true",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let config = PostgresConfigStore::new(pool).load().await.unwrap();
+        assert_eq!(config.compatibility.anthropic_version, "2024-10-22");
+        assert_eq!(config.compatibility.default_max_tokens, 4096);
     }
 
     #[tokio::test]

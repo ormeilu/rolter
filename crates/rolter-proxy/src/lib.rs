@@ -21,7 +21,9 @@ use arc_swap::ArcSwap;
 use bytes::Bytes;
 use dashmap::DashMap;
 use reqwest::{Client, Method, Proxy, RequestBuilder, Response};
-use rolter_core::{EgressPolicy, Error, ProviderConfig, ProviderKind, Result, TimeoutConfig};
+use rolter_core::{
+    CompatibilityConfig, EgressPolicy, Error, ProviderConfig, ProviderKind, Result, TimeoutConfig,
+};
 
 use crate::egress_resolver::{EgressResolver, SharedEgressPolicy};
 
@@ -36,6 +38,8 @@ pub struct Forwarder {
     connect_timeout_secs: AtomicU64,
     /// time-to-response-headers bound applied around each `send()` (0 disables)
     request_timeout_secs: AtomicU64,
+    /// control-plane-owned cross-dialect behavior; swapped on reload (#546)
+    compatibility: ArcSwap<CompatibilityConfig>,
     next_proxy: AtomicUsize,
     proxy_health: DashMap<String, ProxyHealth>,
 }
@@ -99,6 +103,7 @@ impl Forwarder {
             egress,
             connect_timeout_secs: AtomicU64::new(timeouts.connect_secs),
             request_timeout_secs: AtomicU64::new(timeouts.request_secs),
+            compatibility: ArcSwap::from_pointee(CompatibilityConfig::default()),
             next_proxy: AtomicUsize::new(0),
             proxy_health: DashMap::new(),
         }
@@ -267,6 +272,12 @@ impl Forwarder {
         self.configured.clear();
     }
 
+    /// Apply the control plane's cross-dialect compatibility policy. Hot-swapped
+    /// on snapshot reload; in-flight requests keep the policy they started with.
+    pub fn set_compatibility(&self, compatibility: &CompatibilityConfig) {
+        self.compatibility.store(Arc::new(compatibility.clone()));
+    }
+
     /// Forward a JSON body to `provider` at `path` and return the raw response.
     ///
     /// `api_key` is injected per provider kind (Bearer for OpenAI-style,
@@ -319,7 +330,8 @@ impl Forwarder {
         } else {
             provider_url(provider, translation.upstream_path(path))
         };
-        let body = translation.translate_request(body)?;
+        let compatibility = self.compatibility.load();
+        let body = translation.translate_request_with(body, &compatibility)?;
         let body = translation::normalize_prompt_cache_control(body, provider.kind)?;
         // gemini native takes no top-level `model` field (it is in the url)
         let body = if translation.is_gemini_generate() {
@@ -328,12 +340,13 @@ impl Forwarder {
             maybe_rewrite_model(body, upstream_model)
         };
         self.send_with_proxy_retry(provider, |client| {
-            let mut req = apply_provider_auth(
+            let mut req = apply_provider_auth_with(
                 client
                     .request(Method::POST, &url)
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
                 provider,
                 api_key,
+                &compatibility,
             );
             if provider.kind == ProviderKind::Openrouter {
                 if let Ok(referer) = std::env::var("OPENROUTER_HTTP_REFERER") {
@@ -374,13 +387,15 @@ impl Forwarder {
             )));
         }
         let url = provider_url(provider, path);
+        let compatibility = self.compatibility.load();
         self.send_with_proxy_retry(provider, |client| {
-            let mut req = apply_provider_auth(
+            let mut req = apply_provider_auth_with(
                 client
                     .request(Method::POST, &url)
                     .header(reqwest::header::CONTENT_TYPE, content_type),
                 provider,
                 api_key,
+                &compatibility,
             );
             for (name, value) in passthrough_headers {
                 req = req.header(*name, *value);
@@ -402,9 +417,14 @@ impl Forwarder {
         passthrough_headers: &[(&str, &str)],
     ) -> Result<Response> {
         let url = provider_url(provider, path);
+        let compatibility = self.compatibility.load();
         self.send_with_proxy_retry(provider, |client| {
-            let mut req =
-                apply_provider_auth(client.request(method.clone(), &url), provider, api_key);
+            let mut req = apply_provider_auth_with(
+                client.request(method.clone(), &url),
+                provider,
+                api_key,
+                &compatibility,
+            );
             for (name, value) in passthrough_headers {
                 req = req.header(*name, *value);
             }
@@ -440,17 +460,29 @@ fn epoch_millis() -> u64 {
         .min(u64::MAX as u128) as u64
 }
 
+#[cfg(test)]
 fn apply_provider_auth(
+    request: RequestBuilder,
+    provider: &ProviderConfig,
+    api_key: Option<&str>,
+) -> RequestBuilder {
+    apply_provider_auth_with(request, provider, api_key, &CompatibilityConfig::default())
+}
+
+/// Auth headers for `provider`, applying the deployment's compatibility policy
+/// where a header is version-pinned (Anthropic's `anthropic-version`, #546).
+fn apply_provider_auth_with(
     mut request: RequestBuilder,
     provider: &ProviderConfig,
     api_key: Option<&str>,
+    compat: &CompatibilityConfig,
 ) -> RequestBuilder {
     match provider.kind {
         ProviderKind::Anthropic => {
             if let Some(key) = api_key {
                 request = request.header("x-api-key", key);
             }
-            request.header("anthropic-version", "2023-06-01")
+            request.header("anthropic-version", compat.anthropic_version.clone())
         }
         ProviderKind::AzureOpenai => {
             if let Some(key) = api_key {
@@ -949,6 +981,30 @@ mod tests {
             .await
             .unwrap()
             .contains("authorization: bearer cloud-secret"));
+    }
+
+    #[test]
+    fn anthropic_version_header_comes_from_the_compatibility_policy() {
+        let provider = provider(ProviderKind::Anthropic, "https://example.com".to_string());
+        let compat = CompatibilityConfig {
+            anthropic_version: "2024-10-22".to_string(),
+            default_max_tokens: 1024,
+        };
+        let request = apply_provider_auth_with(
+            Client::new().post("https://example.com/v1/messages"),
+            &provider,
+            Some("sk-anthropic"),
+            &compat,
+        )
+        .build()
+        .unwrap();
+        assert_eq!(
+            request
+                .headers()
+                .get("anthropic-version")
+                .and_then(|v| v.to_str().ok()),
+            Some("2024-10-22")
+        );
     }
 
     #[test]

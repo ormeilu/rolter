@@ -320,7 +320,7 @@ where
 }
 
 /// Reject a required field that's empty after trimming.
-fn require_non_empty(value: &str, field: &str) -> ApiResult<()> {
+pub(crate) fn require_non_empty(value: &str, field: &str) -> ApiResult<()> {
     if value.trim().is_empty() {
         return Err(ApiError::Core(Error::Config(format!(
             "{field} must not be empty"
@@ -370,7 +370,7 @@ pub(crate) async fn publish_config_change(state: &ControlState) -> ApiResult<()>
 
 /// Record an admin/CRUD/auth action to the audit log. Best-effort: a logging
 /// failure is warned about but never fails the request it's attached to.
-async fn log_audit(
+pub(crate) async fn log_audit(
     state: &ControlState,
     principal: &Principal,
     org_id: Option<Uuid>,
@@ -2392,7 +2392,7 @@ fn default_strategy() -> String {
     "round_robin".to_string()
 }
 
-const STRATEGIES: [&str; 11] = [
+const STRATEGIES: [&str; 12] = [
     "round_robin",
     "random",
     "power_of_two",
@@ -2404,6 +2404,7 @@ const STRATEGIES: [&str; 11] = [
     "fastest",
     "precise_cache_aware",
     "lmcache_aware",
+    "adaptive",
 ];
 
 async fn create_route(
@@ -3104,7 +3105,14 @@ struct ScopeQuery {
     scope_id: Uuid,
 }
 
-const SCOPE_TYPES: [&str; 4] = ["org", "team", "project", "virtual_key"];
+const SCOPE_TYPES: [&str; 6] = [
+    "org",
+    "team",
+    "project",
+    "virtual_key",
+    "business_unit",
+    "customer",
+];
 
 fn validate_scope(scope_type: &str) -> ApiResult<()> {
     if !SCOPE_TYPES.contains(&scope_type) {
@@ -3429,7 +3437,7 @@ const MIN_PASSWORD_LEN: usize = 8;
 
 /// hash a plaintext password with argon2id for at-rest storage; the repo layer
 /// only ever sees the digest
-fn hash_password(password: &str) -> ApiResult<String> {
+pub(crate) fn hash_password(password: &str) -> ApiResult<String> {
     use argon2::password_hash::rand_core::OsRng;
     use argon2::password_hash::{PasswordHasher, SaltString};
     use argon2::Argon2;
@@ -3449,7 +3457,7 @@ fn hash_password(password: &str) -> ApiResult<String> {
 /// minimal email sanity check: trimmed, non-empty, with a single `@` separating
 /// non-empty local and domain parts. deliberately permissive — full RFC 5322 is
 /// not worth the surface here, we only guard against obvious junk
-fn validate_email(email: &str) -> ApiResult<String> {
+pub(crate) fn validate_email(email: &str) -> ApiResult<String> {
     let email = email.trim();
     let ok = match email.split_once('@') {
         Some((local, domain)) => {
@@ -3465,7 +3473,7 @@ fn validate_email(email: &str) -> ApiResult<String> {
     Ok(email.to_string())
 }
 
-fn validate_role(role: &str) -> ApiResult<()> {
+pub(crate) fn validate_role(role: &str) -> ApiResult<()> {
     if !matches!(role, "admin" | "member" | "viewer") {
         return Err(ApiError::Core(Error::Config(
             "role must be one of admin, member, viewer".to_string(),

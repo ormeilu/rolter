@@ -20,6 +20,7 @@ import Dashboard from "@/pages/Dashboard";
 import Health from "@/pages/Health";
 import Keys from "@/pages/Keys";
 import Limits from "@/pages/Limits";
+import AcceptInvite from "@/pages/AcceptInvite";
 import Login from "@/pages/Login";
 import Logs from "@/pages/Logs";
 import McpCatalog from "@/pages/McpCatalog";
@@ -161,6 +162,13 @@ export default function App() {
     if (token) void logout().catch(() => {});
     signOut();
   };
+
+  // an invite link is reachable without a session: the invitee does not have
+  // one yet, and the token in the url is what stands in for it
+  const invite = location.pathname.match(/^\/invite\/([^/]+)$/);
+  if (invite) {
+    return <AcceptInvite token={decodeURIComponent(invite[1])} />;
+  }
 
   if (!email) {
     return <Login />;

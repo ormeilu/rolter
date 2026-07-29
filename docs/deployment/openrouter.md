@@ -77,4 +77,3 @@ credential and an explicitly selected model:
 OPENROUTER_API_KEY=... ROLTER_OPENROUTER_LIVE_MODEL=openai/gpt-4.1-mini \
   cargo test -p rolter-gateway --test openrouter live_openrouter_smoke -- --ignored
 ```
-

@@ -26,4 +26,3 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "rolter.image" -}}
 {{ printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) }}
 {{- end }}
-
