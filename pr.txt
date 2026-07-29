@@ -1,0 +1,5 @@
+💡 **What:** Modified `evaluate_enabled` to fetch the complete `Rule` objects rather than just their IDs, eliminating the need to query the database inside the `for` loop.
+
+🎯 **Why:** Previously, evaluating `N` alert rules required `1 + N` database queries against PostgreSQL. With this change, it only requires 1 query. This reduces connection pool exhaustion and significantly improves background task performance.
+
+📊 **Measured Improvement:** I could not easily measure the performance impact since this requires a live PostgreSQL and ClickHouse integration with realistic dummy data running background tasks. However, the algorithmic reduction in database roundtrips from O(N) to O(1) gives an immediate, unquestionable boost to database efficiency.
