@@ -198,9 +198,21 @@ impl RateLimiter {
 
         // admitted: count this request against every rpm-capped limit
         let bucket = now / WINDOW_SECS;
+        let mut has_req = false;
+        let mut pipe = redis::pipe();
         for limit in &applicable {
             if limit.rpm.is_some() {
-                Self::incr_bucket(&mut conn, &bucket_key(limit, "req", bucket), 1).await;
+                let key = bucket_key(limit, "req", bucket);
+                pipe.incr(&key, 1)
+                    .ignore()
+                    .expire(&key, BUCKET_TTL_SECS as i64)
+                    .ignore();
+                has_req = true;
+            }
+        }
+        if has_req {
+            if let Err(err) = pipe.query_async::<()>(&mut conn).await {
+                tracing::warn!(error = %err, "failed to record request rate-limit count");
             }
         }
         None
@@ -223,21 +235,22 @@ impl RateLimiter {
             return;
         };
         let bucket = Utc::now().timestamp() / WINDOW_SECS;
+        let mut has_tok = false;
+        let mut pipe = redis::pipe();
         for limit in applicable {
             if limit.tpm.is_some() {
-                Self::incr_bucket(&mut conn, &bucket_key(limit, "tok", bucket), tokens).await;
+                let key = bucket_key(limit, "tok", bucket);
+                pipe.incr(&key, tokens)
+                    .ignore()
+                    .expire(&key, BUCKET_TTL_SECS as i64)
+                    .ignore();
+                has_tok = true;
             }
         }
-    }
-
-    /// INCRBY a bucket counter and refresh its TTL, logging (not failing) on err.
-    async fn incr_bucket(conn: &mut redis::aio::MultiplexedConnection, key: &str, by: u64) {
-        let incr: redis::RedisResult<u64> = conn.incr(key, by).await;
-        match incr {
-            Ok(_) => {
-                let _: redis::RedisResult<()> = conn.expire(key, BUCKET_TTL_SECS as i64).await;
+        if has_tok {
+            if let Err(err) = pipe.query_async::<()>(&mut conn).await {
+                tracing::warn!(error = %err, "failed to record token rate-limit count");
             }
-            Err(err) => tracing::warn!(error = %err, key, "failed to record rate-limit count"),
         }
     }
 }
