@@ -123,6 +123,30 @@ async fn subscribe(redis_url: String, wakeup: Arc<Notify>) {
     }
 }
 
+/// Header names this node identifies itself with on each poll, so the control
+/// plane can keep a cluster inventory without a second channel (#543).
+const NODE_ID_HEADER: &str = "x-rolter-node-id";
+const NODE_ROLE_HEADER: &str = "x-rolter-node-role";
+const NODE_BUILD_HEADER: &str = "x-rolter-node-build";
+/// Response header carrying the operator-requested state for this node.
+const NODE_STATE_HEADER: &str = "x-rolter-node-state";
+
+/// Stable identity for this gateway process. `ROLTER_NODE_ID` when set (the
+/// deployment's own name for the replica), otherwise the hostname, otherwise
+/// nothing — an unidentified node polls exactly as before and stays out of the
+/// inventory rather than churning it with a per-restart id.
+fn node_id() -> Option<String> {
+    for key in ["ROLTER_NODE_ID", "HOSTNAME"] {
+        if let Ok(value) = std::env::var(key) {
+            let value = value.trim().to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
 /// Fetch the snapshot once and apply it if newer. Returns `Ok(Some(version))`
 /// when a reload happened, `Ok(None)` on `304`/no-change, `Err` on transport
 /// or decode failure.
@@ -139,7 +163,17 @@ async fn poll_once(
     if let Some(token) = admin_token {
         request = request.bearer_auth(token);
     }
+    if let Some(id) = node_id() {
+        request = request
+            .header(NODE_ID_HEADER, id)
+            .header(NODE_ROLE_HEADER, "gateway")
+            .header(NODE_BUILD_HEADER, env!("CARGO_PKG_VERSION"));
+    }
     let resp = request.send().await?;
+
+    // the control plane answers every poll with the node's requested state, so
+    // a drain lands even when the config itself has not changed
+    apply_node_state(state, resp.headers());
 
     if resp.status() == StatusCode::NOT_MODIFIED {
         return Ok(None);
@@ -160,6 +194,20 @@ async fn poll_once(
     state.reload(&body.config, body.version);
     tracing::info!(version = body.version, "applied new config snapshot");
     Ok(Some(body.version))
+}
+
+/// Apply the operator-requested node state carried on the snapshot response.
+/// A response without the header leaves the current state alone, so an
+/// unmanaged or unidentified node never flips itself out of service.
+fn apply_node_state(state: &AppState, headers: &reqwest::header::HeaderMap) {
+    let Some(requested) = headers.get(NODE_STATE_HEADER).and_then(|v| v.to_str().ok()) else {
+        return;
+    };
+    let draining = requested.eq_ignore_ascii_case("draining");
+    let previous = state.draining.swap(draining, Relaxed);
+    if previous != draining {
+        tracing::info!(draining, "control plane changed this node's serving state");
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +257,32 @@ mod tests {
         let applied = poll_once(&client, &state, &url, None).await.unwrap();
         assert_eq!(applied, None);
         assert_eq!(state.metrics.config_reloads_total.load(Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn drain_state_from_the_snapshot_response_flips_readiness() {
+        use reqwest::header::{HeaderMap, HeaderValue};
+
+        let state = AppState::new(&GatewayConfig::default());
+        assert!(!state.draining.load(Relaxed));
+
+        // a response with no header leaves the node serving
+        apply_node_state(&state, &HeaderMap::new());
+        assert!(!state.draining.load(Relaxed));
+
+        let mut draining = HeaderMap::new();
+        draining.insert(NODE_STATE_HEADER, HeaderValue::from_static("draining"));
+        apply_node_state(&state, &draining);
+        assert!(state.draining.load(Relaxed));
+
+        // an unchanged poll must not silently return the node to service
+        apply_node_state(&state, &HeaderMap::new());
+        assert!(state.draining.load(Relaxed));
+
+        let mut active = HeaderMap::new();
+        active.insert(NODE_STATE_HEADER, HeaderValue::from_static("active"));
+        apply_node_state(&state, &active);
+        assert!(!state.draining.load(Relaxed));
     }
 
     #[tokio::test]

@@ -1,9 +1,9 @@
 import { ArrowRight, Eye, EyeOff, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { login } from "@/lib/api";
+import { getAuthMethods, login, type AuthMethods } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 // login — one of the two sanctioned places the вышивка thread runs
@@ -13,6 +13,22 @@ export default function Login() {
   const [pw, setPw] = useState("correct-horse");
   const [show, setShow] = useState(false);
   const [pending, setPending] = useState(false);
+  // what this deployment offers. null while unknown; the permissive shape is
+  // assumed on failure so an api hiccup never hides the only way in
+  const [methods, setMethods] = useState<AuthMethods | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void getAuthMethods()
+      .then((m) => live && setMethods(m))
+      .catch(() => live && setMethods({ password: true, sso: [] }));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const showPassword = methods?.password !== false;
+  const providers = methods?.sso ?? [];
 
   // try a real local-account login first (needed for the self-service /me/*
   // endpoints, which require a session token). if it fails — wrong creds, or an
@@ -50,6 +66,7 @@ export default function Login() {
               Manage models, keys, routing and usage.
             </p>
           </div>
+          {showPassword && (
           <form
             className="flex flex-col gap-4"
             onSubmit={(e) => {
@@ -104,13 +121,30 @@ export default function Login() {
               )}
             </Button>
           </form>
-          <div className="flex flex-col gap-3 border-t border-[color:var(--border-subtle)] pt-5">
-            <button
-              type="button"
-              className="h-9 rounded-md border text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
-              Continue with SSO
-            </button>
+          )}
+          <div
+            className={
+              showPassword
+                ? "flex flex-col gap-3 border-t border-[color:var(--border-subtle)] pt-5"
+                : "flex flex-col gap-3"
+            }
+          >
+            {/* one button per configured identity provider. a deployment with
+                no IdP registered gets none, and never learns sso exists */}
+            {providers.map((p) => (
+              <a
+                key={p.slug}
+                href={p.start_url}
+                className="inline-flex h-9 items-center justify-center rounded-md border text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Continue with {p.name}
+              </a>
+            ))}
+            {!showPassword && providers.length === 0 && (
+              <span className="text-center text-sm text-muted-foreground">
+                No login method is enabled for this deployment.
+              </span>
+            )}
             <span className="text-center text-xs text-[color:var(--text-subtle)]">
               Self-hosted · sessions are local to this deployment.
             </span>

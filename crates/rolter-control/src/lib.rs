@@ -9,30 +9,48 @@
 //! reuses the same entrypoint as its `control` subcommand.
 
 #[cfg(feature = "postgres")]
+mod adaptive_policy;
+#[cfg(feature = "postgres")]
 mod alerting;
 mod analytics;
 #[cfg(feature = "postgres")]
 mod auth;
+#[cfg(feature = "postgres")]
+mod auth_policy;
+#[cfg(feature = "postgres")]
+mod cluster;
+#[cfg(feature = "postgres")]
+mod compatibility_policy;
 #[cfg(feature = "postgres")]
 mod crud;
 #[cfg(feature = "postgres")]
 mod feature_flags;
 mod health;
 #[cfg(feature = "postgres")]
+mod invitations;
+#[cfg(feature = "postgres")]
 mod logging_settings;
 #[cfg(feature = "postgres")]
 mod mcp_logs;
+#[cfg(feature = "postgres")]
+mod mcp_oauth;
 #[cfg(feature = "postgres")]
 mod me;
 mod proxy;
 #[cfg(feature = "postgres")]
 mod rbac;
 #[cfg(feature = "postgres")]
+mod rbac_matrix;
+#[cfg(feature = "postgres")]
 mod runtime_policy;
+#[cfg(feature = "postgres")]
+mod scim;
 #[cfg(feature = "postgres")]
 mod security;
 #[cfg(feature = "postgres")]
 pub mod seed;
+#[cfg(feature = "postgres")]
+mod sso;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -355,12 +373,21 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
         api = api
             .merge(alerting::router())
             .merge(auth::router())
+            .merge(auth_policy::router())
+            .merge(invitations::router())
             .merge(crud::router())
             .merge(me::router())
             .merge(mcp_logs::router())
+            .merge(mcp_oauth::router())
             .merge(feature_flags::router())
             .merge(logging_settings::router())
             .merge(runtime_policy::router())
+            .merge(compatibility_policy::router())
+            .merge(adaptive_policy::router())
+            .merge(rbac_matrix::router())
+            .merge(scim::router())
+            .merge(sso::router())
+            .merge(cluster::router())
             .merge(security::router());
     }
 
@@ -540,6 +567,7 @@ async fn seed_default_models(pool: &sqlx::PgPool, config: &GatewayConfig) -> any
             rolter_core::BalancingStrategy::Fastest => "fastest",
             rolter_core::BalancingStrategy::PreciseCacheAware => "precise_cache_aware",
             rolter_core::BalancingStrategy::LmcacheAware => "lmcache_aware",
+            rolter_core::BalancingStrategy::Adaptive => "adaptive",
         };
         let created = routes.create(project_id, &route.model, strategy).await?;
         let params = serde_json::to_value(&route.params)?;
@@ -773,6 +801,7 @@ fn balancing_strategy_str(strategy: rolter_core::BalancingStrategy) -> &'static 
         Fastest => "fastest",
         PreciseCacheAware => "precise_cache_aware",
         LmcacheAware => "lmcache_aware",
+        Adaptive => "adaptive",
     }
 }
 
@@ -810,13 +839,42 @@ struct SnapshotQuery {
     version: Option<i64>,
 }
 
+/// Attach the polling node's operator-requested state, so a drain reaches it on
+/// the channel it already polls. Absent when the caller is not a known node.
+#[cfg(feature = "postgres")]
+fn with_node_state(mut response: Response, desired_state: &Option<String>) -> Response {
+    if let Some(value) = desired_state
+        .as_deref()
+        .and_then(|state| axum::http::HeaderValue::from_str(state).ok())
+    {
+        response
+            .headers_mut()
+            .insert(cluster::NODE_STATE_HEADER, value);
+    }
+    response
+}
+
+/// Without the store there is no inventory, so nothing is attached.
+#[cfg(not(feature = "postgres"))]
+fn with_node_state(response: Response, _desired_state: &Option<String>) -> Response {
+    response
+}
+
 /// Runtime snapshot endpoint gateways poll to pick up config changes without
 /// a restart. Returns `{"version": N, "config": GatewayConfig}`, or `304` if
 /// the caller's `version` is already current.
 async fn get_snapshot(
     State(state): State<ControlState>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<SnapshotQuery>,
 ) -> Response {
+    // a node that identifies itself is recorded in the cluster inventory; the
+    // poll it already makes is the heartbeat, so there is no second channel
+    #[cfg(feature = "postgres")]
+    let desired_state = cluster::record_heartbeat(&state, &headers, query.version).await;
+    #[cfg(not(feature = "postgres"))]
+    let desired_state: Option<String> = None;
+    let _ = &headers;
     let version = match state.store.current_version().await {
         Ok(v) => v,
         Err(err) => {
@@ -828,7 +886,7 @@ async fn get_snapshot(
         }
     };
     if query.version.is_some_and(|requested| requested >= version) {
-        return StatusCode::NOT_MODIFIED.into_response();
+        return with_node_state(StatusCode::NOT_MODIFIED.into_response(), &desired_state);
     }
     match state.store.load().await {
         Ok(mut config) => {
@@ -855,7 +913,10 @@ async fn get_snapshot(
                 )
                     .into_response();
             }
-            Json(json!({"version": version, "config": config})).into_response()
+            with_node_state(
+                Json(json!({"version": version, "config": config})).into_response(),
+                &desired_state,
+            )
         }
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,

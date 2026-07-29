@@ -91,6 +91,19 @@ ahash = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
 subtle = "2"
 
+# oidc single sign-on (rolter-control): id-token verification against the
+# provider's published jwks. default features drop the pem parser we do not use
+# aws_lc_rs, not rust_crypto: the pure-rust `rsa` crate that rust_crypto pulls
+# in carries RUSTSEC-2023-0071 (Marvin timing sidechannel) with no patched
+# release, and aws-lc-rs is already in the tree under rustls
+jsonwebtoken = { version = "10", default-features = false, features = [
+  "aws_lc_rs",
+  # pem parsing is used by the sso integration test's stub identity provider,
+  # which mints id tokens with a key generated per test run
+  "use_pem",
+] }
+base64 = "0.22"
+
 # postgres persistence (rolter-store `postgres` feature)
 argon2 = "0.5"
 sha2 = "0.11"

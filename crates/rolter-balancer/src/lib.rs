@@ -13,6 +13,7 @@ use parking_lot::Mutex;
 use rand::RngExt;
 use rolter_core::BalancingStrategy;
 
+pub mod adaptive;
 pub mod complexity;
 pub mod scorer;
 pub mod trie;
@@ -42,6 +43,28 @@ pub trait LoadBalancer: Send + Sync {
     /// Record that `target` served the given context. Strategies that learn from
     /// traffic (cache aware) override this; others ignore it.
     fn observe(&self, _target: usize, _ctx: &RouteContext) {}
+
+    /// Decision counters for strategies that choose *how* to pick, not just
+    /// what to pick. Only [`adaptive::Adaptive`] reports today; every other
+    /// strategy makes one kind of decision and returns `None`.
+    fn decisions(&self) -> Option<DecisionCounts> {
+        None
+    }
+}
+
+/// How a route's picks were split between the strategy's modes, cumulative
+/// since the balancer was built (a config reload rebuilds it, so a Prometheus
+/// counter reset lines up with a config-version bump).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DecisionCounts {
+    /// picks made by the adaptive blend
+    pub blend: u64,
+    /// picks spent exploring so starved targets keep producing samples
+    pub exploration: u64,
+    /// picks served by the deterministic fallback stack
+    pub fallback: u64,
+    /// whether the blend was engaged at the last pick
+    pub engaged: bool,
 }
 
 /// Build-time, per-target signals for strategies that rank on more than
@@ -60,6 +83,9 @@ pub struct TargetStats {
     pub kv_cache: Option<std::sync::Arc<dyn scorer::KvCacheSource>>,
     /// live LMCache occupancy/availability source
     pub lmcache: Option<std::sync::Arc<dyn scorer::LmCacheSource>>,
+    /// deployment-wide adaptive-routing policy, read once at build time by the
+    /// `adaptive` strategy and ignored by every other one
+    pub adaptive: rolter_core::AdaptiveRoutingConfig,
 }
 
 impl std::fmt::Debug for TargetStats {
@@ -69,6 +95,7 @@ impl std::fmt::Debug for TargetStats {
             .field("latency", &self.latency.as_ref().map(|_| "<live>"))
             .field("kv_cache", &self.kv_cache.as_ref().map(|_| "<live>"))
             .field("lmcache", &self.lmcache.as_ref().map(|_| "<live>"))
+            .field("adaptive", &self.adaptive)
             .finish()
     }
 }
@@ -128,6 +155,12 @@ pub fn build_with_stats(
                     .with(Box::new(scorer::LeastLoadScorer::new(n)), 1.0),
             ),
         },
+        BalancingStrategy::Adaptive => Box::new(adaptive::Adaptive::new(
+            weights,
+            &stats.cost_per_mtok,
+            stats.latency.clone(),
+            &stats.adaptive,
+        )),
         BalancingStrategy::LmcacheAware => match &stats.lmcache {
             Some(source) => Box::new(
                 scorer::Pipeline::new(n)

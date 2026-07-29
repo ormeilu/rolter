@@ -12,10 +12,12 @@ use uuid::Uuid;
 use rolter_core::{Error, Result};
 
 use super::models::{
-    AuditLogEntry, Budget, BusinessUnit, Customer, FeatureFlags, LoggingSettings, Membership,
-    ModelPrice, Org, OwnedVirtualKey, Project, PromptTemplate, PromptTemplateScope,
-    PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember, RateLimit, Route,
-    RouteTarget, RuntimePolicy, SecuritySettings, Session, Skill, SkillVersion, Team, User,
+    AdaptiveRoutingPolicy, AuditLogEntry, Budget, BusinessUnit, ClusterNode, CompatibilityPolicy,
+    Customer, FeatureFlags, Invitation, LoggingSettings, McpOAuthGrant, McpOAuthSession, McpServer,
+    Membership, ModelPrice, Org, OrgAuthPolicy, OwnedVirtualKey, Project, PromptTemplate,
+    PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember,
+    RateLimit, Route, RouteTarget, RuntimePolicy, ScimIdentity, ScimToken, SecuritySettings,
+    Session, Skill, SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider, Team, User,
     VirtualKey,
 };
 
@@ -65,6 +67,79 @@ impl OrgRepo<'_> {
             return Err(Error::NotFound(format!("org {id}")));
         }
         Ok(())
+    }
+}
+
+impl CompatibilityPolicyRepo<'_> {
+    pub async fn get(&self) -> Result<CompatibilityPolicy> {
+        sqlx::query_as(
+            "select anthropic_version, default_max_tokens, updated_at \
+             from compatibility_policy where id = true",
+        )
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn update(
+        &self,
+        anthropic_version: &str,
+        default_max_tokens: i32,
+    ) -> Result<CompatibilityPolicy> {
+        sqlx::query_as(
+            "update compatibility_policy set \
+                anthropic_version = $1, default_max_tokens = $2, updated_at = now() \
+             where id = true \
+             returning anthropic_version, default_max_tokens, updated_at",
+        )
+        .bind(anthropic_version)
+        .bind(default_max_tokens)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound("compatibility policy".to_string()))
+    }
+}
+
+const ADAPTIVE_POLICY_COLUMNS: &str = "enabled, latency_weight, cost_weight, load_weight, \
+     exploration_ratio, min_samples, updated_at";
+
+impl AdaptiveRoutingPolicyRepo<'_> {
+    pub async fn get(&self) -> Result<AdaptiveRoutingPolicy> {
+        sqlx::query_as(&format!(
+            "select {ADAPTIVE_POLICY_COLUMNS} from adaptive_routing_policy where id = true"
+        ))
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update(
+        &self,
+        enabled: bool,
+        latency_weight: f32,
+        cost_weight: f32,
+        load_weight: f32,
+        exploration_ratio: f32,
+        min_samples: i32,
+    ) -> Result<AdaptiveRoutingPolicy> {
+        sqlx::query_as(&format!(
+            "update adaptive_routing_policy set \
+                enabled = $1, latency_weight = $2, cost_weight = $3, load_weight = $4, \
+                exploration_ratio = $5, min_samples = $6, updated_at = now() \
+             where id = true returning {ADAPTIVE_POLICY_COLUMNS}"
+        ))
+        .bind(enabled)
+        .bind(latency_weight)
+        .bind(cost_weight)
+        .bind(load_weight)
+        .bind(exploration_ratio)
+        .bind(min_samples)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound("adaptive routing policy".to_string()))
     }
 }
 
@@ -926,6 +1001,710 @@ impl ProviderRepo<'_> {
     }
 }
 
+/// OIDC identity providers, their group→role mappings, and the short-lived
+/// state rows that make the authorization-code flow replay-safe.
+pub struct SsoRepo<'a>(pub &'a PgPool);
+
+const SSO_PROVIDER_COLUMNS: &str = "id, org_id, name, slug, issuer, client_id, secret_ciphertext, \
+     secret_nonce, scopes, group_claim, default_role, enabled, created_at";
+
+impl SsoRepo<'_> {
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_provider(
+        &self,
+        org_id: Uuid,
+        name: &str,
+        slug: &str,
+        issuer: &str,
+        client_id: &str,
+        secret: Option<(&[u8], &[u8])>,
+        scopes: &[String],
+        group_claim: &str,
+        default_role: Option<&str>,
+    ) -> Result<SsoProvider> {
+        let (ciphertext, nonce) = match secret {
+            Some((c, n)) => (Some(c), Some(n)),
+            None => (None, None),
+        };
+        sqlx::query_as(&format!(
+            "insert into sso_providers (org_id, name, slug, issuer, client_id, \
+                    secret_ciphertext, secret_nonce, scopes, group_claim, default_role) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             returning {SSO_PROVIDER_COLUMNS}"
+        ))
+        .bind(org_id)
+        .bind(name)
+        .bind(slug)
+        .bind(issuer)
+        .bind(client_id)
+        .bind(ciphertext)
+        .bind(nonce)
+        .bind(scopes)
+        .bind(group_claim)
+        .bind(default_role)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn list_providers(&self, org_id: Uuid) -> Result<Vec<SsoProvider>> {
+        sqlx::query_as(&format!(
+            "select {SSO_PROVIDER_COLUMNS} from sso_providers where org_id = $1 order by name"
+        ))
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get_provider(&self, id: Uuid) -> Result<SsoProvider> {
+        sqlx::query_as(&format!(
+            "select {SSO_PROVIDER_COLUMNS} from sso_providers where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("sso provider {id}")))
+    }
+
+    /// Resolve the provider a login URL names. Slugs are unique per org, and a
+    /// login URL carries no org, so a duplicate slug across orgs is ambiguous
+    /// and rejected rather than resolved arbitrarily.
+    pub async fn find_provider_by_slug(&self, slug: &str) -> Result<Option<SsoProvider>> {
+        let mut rows: Vec<SsoProvider> = sqlx::query_as(&format!(
+            "select {SSO_PROVIDER_COLUMNS} from sso_providers where slug = $1 and enabled limit 2"
+        ))
+        .bind(slug)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)?;
+        if rows.len() > 1 {
+            return Err(Error::Store(format!(
+                "sso slug '{slug}' is registered by more than one org; log in through the \
+                 org-specific url"
+            )));
+        }
+        Ok(rows.pop())
+    }
+
+    /// every enabled provider across all orgs, for the login screen. Returns
+    /// names and slugs the login URL already exposes; never secrets.
+    pub async fn list_enabled_providers(&self) -> Result<Vec<SsoProvider>> {
+        sqlx::query_as(&format!(
+            "select {SSO_PROVIDER_COLUMNS} from sso_providers where enabled order by name"
+        ))
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn delete_provider(&self, id: Uuid) -> Result<()> {
+        let res = sqlx::query("delete from sso_providers where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("sso provider {id}")));
+        }
+        Ok(())
+    }
+
+    /// Open the sealed client secret. Returns `None` for a public client.
+    pub async fn client_secret(
+        &self,
+        kek: &super::crypto::Kek,
+        provider: &SsoProvider,
+    ) -> Result<Option<String>> {
+        match (&provider.secret_ciphertext, &provider.secret_nonce) {
+            (Some(c), Some(n)) => Ok(Some(kek.decrypt(c, n)?)),
+            _ => Ok(None),
+        }
+    }
+
+    pub async fn add_mapping(
+        &self,
+        provider_id: Uuid,
+        group_name: &str,
+        org_id: Option<Uuid>,
+        team_id: Option<Uuid>,
+        project_id: Option<Uuid>,
+        role: &str,
+    ) -> Result<SsoGroupMapping> {
+        sqlx::query_as(
+            "insert into sso_group_mappings (provider_id, group_name, org_id, team_id, \
+                    project_id, role) \
+             values ($1, $2, $3, $4, $5, $6) \
+             returning id, provider_id, group_name, org_id, team_id, project_id, role, created_at",
+        )
+        .bind(provider_id)
+        .bind(group_name)
+        .bind(org_id)
+        .bind(team_id)
+        .bind(project_id)
+        .bind(role)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn list_mappings(&self, provider_id: Uuid) -> Result<Vec<SsoGroupMapping>> {
+        sqlx::query_as(
+            "select id, provider_id, group_name, org_id, team_id, project_id, role, created_at \
+             from sso_group_mappings where provider_id = $1 order by group_name",
+        )
+        .bind(provider_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn delete_mapping(&self, id: Uuid) -> Result<()> {
+        let res = sqlx::query("delete from sso_group_mappings where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("sso group mapping {id}")));
+        }
+        Ok(())
+    }
+
+    pub async fn start_login(
+        &self,
+        state: &str,
+        provider_id: Uuid,
+        code_verifier: &str,
+        nonce: &str,
+        redirect_uri: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "insert into sso_login_states (state, provider_id, code_verifier, nonce, redirect_uri) \
+             values ($1, $2, $3, $4, $5)",
+        )
+        .bind(state)
+        .bind(provider_id)
+        .bind(code_verifier)
+        .bind(nonce)
+        .bind(redirect_uri)
+        .execute(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(())
+    }
+
+    /// Consume a login state exactly once. A replayed callback finds nothing,
+    /// so an intercepted `code`+`state` pair cannot be redeemed twice. States
+    /// older than `max_age_secs` are treated as absent and swept.
+    pub async fn consume_login(
+        &self,
+        state: &str,
+        max_age_secs: i64,
+    ) -> Result<Option<SsoLoginState>> {
+        // opportunistic sweep: expired rows are worthless and unbounded growth
+        // would be the only other outcome
+        let _ = sqlx::query(
+            "delete from sso_login_states where created_at < now() - ($1 || ' seconds')::interval",
+        )
+        .bind(max_age_secs.to_string())
+        .execute(self.0)
+        .await;
+        sqlx::query_as(
+            "delete from sso_login_states where state = $1 \
+             returning state, provider_id, code_verifier, nonce, redirect_uri, created_at",
+        )
+        .bind(state)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)
+    }
+}
+
+/// SCIM provisioning tokens. Lookup is by peppered digest only; the plaintext
+/// token never reaches the database.
+pub struct ScimTokenRepo<'a>(pub &'a PgPool);
+
+const SCIM_TOKEN_COLUMNS: &str =
+    "id, org_id, name, token_hash, created_by, created_at, last_used_at, revoked_at";
+
+impl ScimTokenRepo<'_> {
+    pub async fn create(
+        &self,
+        org_id: Uuid,
+        name: &str,
+        token_hash: &str,
+        created_by: Option<Uuid>,
+    ) -> Result<ScimToken> {
+        sqlx::query_as(&format!(
+            "insert into scim_tokens (org_id, name, token_hash, created_by) \
+             values ($1, $2, $3, $4) returning {SCIM_TOKEN_COLUMNS}"
+        ))
+        .bind(org_id)
+        .bind(name)
+        .bind(token_hash)
+        .bind(created_by)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn list(&self, org_id: Uuid) -> Result<Vec<ScimToken>> {
+        sqlx::query_as(&format!(
+            "select {SCIM_TOKEN_COLUMNS} from scim_tokens where org_id = $1 \
+             order by created_at desc"
+        ))
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get(&self, id: Uuid) -> Result<ScimToken> {
+        sqlx::query_as(&format!(
+            "select {SCIM_TOKEN_COLUMNS} from scim_tokens where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("scim token {id}")))
+    }
+
+    /// Resolve a presented token by digest. Revoked tokens never resolve, so a
+    /// revocation takes effect on the next request with no cache to invalidate.
+    pub async fn find_active_by_hash(&self, token_hash: &str) -> Result<Option<ScimToken>> {
+        sqlx::query_as(&format!(
+            "select {SCIM_TOKEN_COLUMNS} from scim_tokens \
+             where token_hash = $1 and revoked_at is null"
+        ))
+        .bind(token_hash)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn revoke(&self, id: Uuid) -> Result<ScimToken> {
+        sqlx::query_as(&format!(
+            "update scim_tokens set revoked_at = coalesce(revoked_at, now()) \
+             where id = $1 returning {SCIM_TOKEN_COLUMNS}"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("scim token {id}")))
+    }
+
+    /// Best-effort last-used stamp for the provisioning screen.
+    pub async fn touch(&self, id: Uuid) -> Result<()> {
+        sqlx::query("update scim_tokens set last_used_at = now() where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        Ok(())
+    }
+}
+
+/// The org-scoped SCIM identity of a local user.
+pub struct ScimIdentityRepo<'a>(pub &'a PgPool);
+
+const SCIM_IDENTITY_COLUMNS: &str =
+    "user_id, org_id, external_id, user_name, display_name, created_at, updated_at";
+
+impl ScimIdentityRepo<'_> {
+    /// Create or update the identity for `user_id` in `org_id`. Idempotent by
+    /// design: an IdP that replays a create must not produce a second row.
+    pub async fn upsert(
+        &self,
+        user_id: Uuid,
+        org_id: Uuid,
+        external_id: Option<&str>,
+        user_name: &str,
+        display_name: &str,
+    ) -> Result<ScimIdentity> {
+        sqlx::query_as(&format!(
+            "insert into scim_identities (user_id, org_id, external_id, user_name, display_name) \
+             values ($1, $2, $3, $4, $5) \
+             on conflict (user_id, org_id) do update set \
+                 external_id = excluded.external_id, user_name = excluded.user_name, \
+                 display_name = excluded.display_name, updated_at = now() \
+             returning {SCIM_IDENTITY_COLUMNS}"
+        ))
+        .bind(user_id)
+        .bind(org_id)
+        .bind(external_id)
+        .bind(user_name)
+        .bind(display_name)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get(&self, user_id: Uuid, org_id: Uuid) -> Result<Option<ScimIdentity>> {
+        sqlx::query_as(&format!(
+            "select {SCIM_IDENTITY_COLUMNS} from scim_identities \
+             where user_id = $1 and org_id = $2"
+        ))
+        .bind(user_id)
+        .bind(org_id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn find_by_user_name(
+        &self,
+        org_id: Uuid,
+        user_name: &str,
+    ) -> Result<Option<ScimIdentity>> {
+        sqlx::query_as(&format!(
+            "select {SCIM_IDENTITY_COLUMNS} from scim_identities \
+             where org_id = $1 and user_name = $2"
+        ))
+        .bind(org_id)
+        .bind(user_name)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Every provisioned identity in the org, oldest first so paging is stable.
+    pub async fn list(&self, org_id: Uuid) -> Result<Vec<ScimIdentity>> {
+        sqlx::query_as(&format!(
+            "select {SCIM_IDENTITY_COLUMNS} from scim_identities where org_id = $1 \
+             order by created_at, user_id"
+        ))
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Drop the mapping without touching the underlying user, whose row,
+    /// memberships and audit trail outlive any one IdP.
+    pub async fn delete(&self, user_id: Uuid, org_id: Uuid) -> Result<()> {
+        sqlx::query("delete from scim_identities where user_id = $1 and org_id = $2")
+            .bind(user_id)
+            .bind(org_id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        Ok(())
+    }
+}
+
+/// MCP servers an org has registered.
+pub struct McpServerRepo<'a>(pub &'a PgPool);
+
+const MCP_SERVER_COLUMNS: &str = "id, org_id, name, slug, url, transport, created_at";
+
+impl McpServerRepo<'_> {
+    pub async fn list(&self, org_id: Uuid) -> Result<Vec<McpServer>> {
+        sqlx::query_as(&format!(
+            "select {MCP_SERVER_COLUMNS} from mcp_servers where org_id = $1 order by name"
+        ))
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get(&self, id: Uuid) -> Result<McpServer> {
+        sqlx::query_as(&format!(
+            "select {MCP_SERVER_COLUMNS} from mcp_servers where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("mcp server {id}")))
+    }
+
+    pub async fn create(
+        &self,
+        org_id: Uuid,
+        name: &str,
+        slug: &str,
+        url: &str,
+        transport: &str,
+    ) -> Result<McpServer> {
+        sqlx::query_as(&format!(
+            "insert into mcp_servers (org_id, name, slug, url, transport) \
+             values ($1, $2, $3, $4, $5) returning {MCP_SERVER_COLUMNS}"
+        ))
+        .bind(org_id)
+        .bind(name)
+        .bind(slug)
+        .bind(url)
+        .bind(transport)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Delete a server. Its grants and sessions cascade, which is the intended
+    /// blast radius: removing the server withdraws access to it entirely.
+    pub async fn delete(&self, id: Uuid) -> Result<()> {
+        let res = sqlx::query("delete from mcp_servers where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("mcp server {id}")));
+        }
+        Ok(())
+    }
+}
+
+/// Sealed columns of one session row: `(access ciphertext, access nonce,
+/// refresh ciphertext, refresh nonce, scopes)`.
+type SealedSessionRow = (
+    Vec<u8>,
+    Vec<u8>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    Vec<String>,
+);
+
+/// OAuth consent grants and token sessions for MCP servers.
+///
+/// Token material is sealed with the deployment KEK ([`super::crypto::Kek`])
+/// before it is written and is only ever returned by [`Self::open_session`],
+/// which the future MCP proxy calls on the request path. Every other method
+/// returns metadata only, so an API handler cannot leak a token by reaching
+/// for the wrong function.
+pub struct McpOAuthRepo<'a>(pub &'a PgPool);
+
+const GRANT_COLUMNS: &str = "id, server_id, user_id, scopes, granted_at, revoked_at, revoked_by";
+const SESSION_COLUMNS: &str = "id, grant_id, scopes, expires_at, refresh_expires_at, revoked_at, \
+     created_at, last_used_at, (refresh_ciphertext is not null) as has_refresh_token";
+
+impl McpOAuthRepo<'_> {
+    /// Record (or refresh) a user's consent for a server. Re-consenting
+    /// updates the scope set on the live grant rather than accumulating rows.
+    pub async fn upsert_grant(
+        &self,
+        server_id: Uuid,
+        user_id: Uuid,
+        scopes: &[String],
+    ) -> Result<McpOAuthGrant> {
+        sqlx::query_as(&format!(
+            "insert into mcp_oauth_grants (server_id, user_id, scopes) values ($1, $2, $3) \
+             on conflict (server_id, user_id) where revoked_at is null \
+             do update set scopes = excluded.scopes, granted_at = now() \
+             returning {GRANT_COLUMNS}"
+        ))
+        .bind(server_id)
+        .bind(user_id)
+        .bind(scopes)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get_grant(&self, id: Uuid) -> Result<McpOAuthGrant> {
+        sqlx::query_as(&format!(
+            "select {GRANT_COLUMNS} from mcp_oauth_grants where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("mcp oauth grant {id}")))
+    }
+
+    /// Grants across an org, newest first. `user_id` narrows the listing to one
+    /// owner, which is how a non-admin caller sees only their own.
+    pub async fn list_grants(
+        &self,
+        org_id: Uuid,
+        user_id: Option<Uuid>,
+    ) -> Result<Vec<McpOAuthGrant>> {
+        sqlx::query_as(
+            "select g.id, g.server_id, g.user_id, g.scopes, g.granted_at, g.revoked_at, \
+                    g.revoked_by \
+             from mcp_oauth_grants g join mcp_servers s on s.id = g.server_id \
+             where s.org_id = $1 and ($2::uuid is null or g.user_id = $2) \
+             order by g.granted_at desc",
+        )
+        .bind(org_id)
+        .bind(user_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Revoke a grant and every session under it in one transaction, so a
+    /// revoked consent can never leave a live token behind.
+    pub async fn revoke_grant(&self, id: Uuid, revoked_by: Option<Uuid>) -> Result<McpOAuthGrant> {
+        let mut tx = self.0.begin().await.map_err(store_err)?;
+        let grant: Option<McpOAuthGrant> = sqlx::query_as(&format!(
+            "update mcp_oauth_grants set revoked_at = coalesce(revoked_at, now()), \
+                    revoked_by = coalesce(revoked_by, $2) \
+             where id = $1 returning {GRANT_COLUMNS}"
+        ))
+        .bind(id)
+        .bind(revoked_by)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(store_err)?;
+        let grant = grant.ok_or_else(|| Error::NotFound(format!("mcp oauth grant {id}")))?;
+        sqlx::query(
+            "update mcp_oauth_sessions set revoked_at = coalesce(revoked_at, now()) \
+             where grant_id = $1",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(store_err)?;
+        tx.commit().await.map_err(store_err)?;
+        Ok(grant)
+    }
+
+    /// Seal and store a token session for a live grant.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn store_session(
+        &self,
+        kek: &super::crypto::Kek,
+        grant_id: Uuid,
+        access_token: &str,
+        refresh_token: Option<&str>,
+        scopes: &[String],
+        expires_at: DateTime<Utc>,
+        refresh_expires_at: Option<DateTime<Utc>>,
+    ) -> Result<McpOAuthSession> {
+        let (access_ciphertext, access_nonce) = kek.encrypt(access_token)?;
+        let refresh = refresh_token.map(|t| kek.encrypt(t)).transpose()?;
+        let (refresh_ciphertext, refresh_nonce) = match refresh {
+            Some((c, n)) => (Some(c), Some(n)),
+            None => (None, None),
+        };
+        sqlx::query_as(&format!(
+            "insert into mcp_oauth_sessions (grant_id, access_ciphertext, access_nonce, \
+                    refresh_ciphertext, refresh_nonce, scopes, expires_at, refresh_expires_at) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8) returning {SESSION_COLUMNS}"
+        ))
+        .bind(grant_id)
+        .bind(access_ciphertext)
+        .bind(access_nonce)
+        .bind(refresh_ciphertext)
+        .bind(refresh_nonce)
+        .bind(scopes)
+        .bind(expires_at)
+        .bind(refresh_expires_at)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Sessions across an org, newest first; `user_id` narrows to one owner.
+    pub async fn list_sessions(
+        &self,
+        org_id: Uuid,
+        user_id: Option<Uuid>,
+    ) -> Result<Vec<McpOAuthSession>> {
+        sqlx::query_as(
+            "select s.id, s.grant_id, s.scopes, s.expires_at, s.refresh_expires_at, \
+                    s.revoked_at, s.created_at, s.last_used_at, \
+                    (s.refresh_ciphertext is not null) as has_refresh_token \
+             from mcp_oauth_sessions s \
+             join mcp_oauth_grants g on g.id = s.grant_id \
+             join mcp_servers srv on srv.id = g.server_id \
+             where srv.org_id = $1 and ($2::uuid is null or g.user_id = $2) \
+             order by s.created_at desc",
+        )
+        .bind(org_id)
+        .bind(user_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get_session(&self, id: Uuid) -> Result<McpOAuthSession> {
+        sqlx::query_as(&format!(
+            "select {SESSION_COLUMNS} from mcp_oauth_sessions where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("mcp oauth session {id}")))
+    }
+
+    pub async fn revoke_session(&self, id: Uuid) -> Result<McpOAuthSession> {
+        sqlx::query_as(&format!(
+            "update mcp_oauth_sessions set revoked_at = coalesce(revoked_at, now()) \
+             where id = $1 returning {SESSION_COLUMNS}"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("mcp oauth session {id}")))
+    }
+
+    /// Open the sealed tokens for a session that is live *and* whose grant is
+    /// live. Returns `None` for a revoked or expired session, or one whose
+    /// consent was withdrawn — the caller cannot accidentally use a token the
+    /// user has taken back.
+    pub async fn open_session(
+        &self,
+        kek: &super::crypto::Kek,
+        id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<Option<McpSessionTokens>> {
+        let row: Option<SealedSessionRow> = sqlx::query_as(
+            "select s.access_ciphertext, s.access_nonce, s.refresh_ciphertext, \
+                        s.refresh_nonce, s.scopes \
+                 from mcp_oauth_sessions s join mcp_oauth_grants g on g.id = s.grant_id \
+                 where s.id = $1 and s.revoked_at is null and g.revoked_at is null \
+                   and s.expires_at > $2",
+        )
+        .bind(id)
+        .bind(now)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        let Some((access_c, access_n, refresh_c, refresh_n, scopes)) = row else {
+            return Ok(None);
+        };
+        let access_token = kek.decrypt(&access_c, &access_n)?;
+        let refresh_token = match (refresh_c, refresh_n) {
+            (Some(c), Some(n)) => Some(kek.decrypt(&c, &n)?),
+            _ => None,
+        };
+        Ok(Some(McpSessionTokens {
+            access_token,
+            refresh_token,
+            scopes,
+        }))
+    }
+
+    /// Stamp a session as used. Best-effort bookkeeping for the sessions
+    /// screen; a failure must never fail the MCP call it belongs to.
+    pub async fn touch_session(&self, id: Uuid) -> Result<()> {
+        sqlx::query("update mcp_oauth_sessions set last_used_at = now() where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        Ok(())
+    }
+}
+
+/// Opened token material. Deliberately not `Serialize`: nothing in this struct
+/// may reach an API response or a log line.
+#[derive(Debug, Clone)]
+pub struct McpSessionTokens {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub scopes: Vec<String>,
+}
+
 /// Runtime provider credentials, sealed with AES-256-GCM (see
 /// [`super::crypto`]). One active key per provider; setting a new one
 /// replaces the old in place.
@@ -980,6 +1759,19 @@ impl RouteRepo<'_> {
              from routes where project_id = $1 order by model",
         )
         .bind(project_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Every enabled route on `strategy`, across projects. Used by the global
+    /// routing policies to report which routes a change actually affects.
+    pub async fn list_by_strategy(&self, strategy: &str) -> Result<Vec<Route>> {
+        sqlx::query_as(
+            "select id, project_id, model, strategy, enabled, params, param_policy, advanced, created_at
+             from routes where strategy = $1 and enabled order by model",
+        )
+        .bind(strategy)
         .fetch_all(self.0)
         .await
         .map_err(store_err)
@@ -1633,7 +2425,7 @@ pub struct MembershipRepo<'a>(pub &'a PgPool);
 impl MembershipRepo<'_> {
     pub async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<Membership>> {
         sqlx::query_as(
-            "select id, user_id, org_id, team_id, project_id, role, created_at
+            "select id, user_id, org_id, team_id, project_id, role, source, created_at
              from memberships where user_id = $1 order by created_at",
         )
         .bind(user_id)
@@ -1647,7 +2439,7 @@ impl MembershipRepo<'_> {
     /// org admin can see and manage all role assignments under their org
     pub async fn list_in_org(&self, org_id: Uuid) -> Result<Vec<Membership>> {
         sqlx::query_as(
-            "select m.id, m.user_id, m.org_id, m.team_id, m.project_id, m.role, m.created_at
+            "select m.id, m.user_id, m.org_id, m.team_id, m.project_id, m.role, m.source, m.created_at
              from memberships m
              left join teams t on t.id = m.team_id
              left join projects p on p.id = m.project_id
@@ -1663,7 +2455,7 @@ impl MembershipRepo<'_> {
 
     pub async fn get(&self, id: Uuid) -> Result<Membership> {
         sqlx::query_as(
-            "select id, user_id, org_id, team_id, project_id, role, created_at
+            "select id, user_id, org_id, team_id, project_id, role, source, created_at
              from memberships where id = $1",
         )
         .bind(id)
@@ -1684,16 +2476,34 @@ impl MembershipRepo<'_> {
         project_id: Option<Uuid>,
         role: &str,
     ) -> Result<Membership> {
+        self.create_with_source(user_id, org_id, team_id, project_id, role, "manual")
+            .await
+    }
+
+    /// grant a role and record where the grant came from. `source` is
+    /// `manual` for anything an operator did (admin API, invitation, seed) and
+    /// `sso` for a grant an IdP group mapping produced; only `sso` rows are
+    /// ever reconciled away by a later login.
+    pub async fn create_with_source(
+        &self,
+        user_id: Uuid,
+        org_id: Option<Uuid>,
+        team_id: Option<Uuid>,
+        project_id: Option<Uuid>,
+        role: &str,
+        source: &str,
+    ) -> Result<Membership> {
         sqlx::query_as(
-            "insert into memberships (user_id, org_id, team_id, project_id, role)
-             values ($1, $2, $3, $4, $5)
-             returning id, user_id, org_id, team_id, project_id, role, created_at",
+            "insert into memberships (user_id, org_id, team_id, project_id, role, source)
+             values ($1, $2, $3, $4, $5, $6)
+             returning id, user_id, org_id, team_id, project_id, role, source, created_at",
         )
         .bind(user_id)
         .bind(org_id)
         .bind(team_id)
         .bind(project_id)
         .bind(role)
+        .bind(source)
         .fetch_one(self.0)
         .await
         .map_err(store_err)
@@ -1709,6 +2519,196 @@ impl MembershipRepo<'_> {
             return Err(Error::NotFound(format!("membership {id}")));
         }
         Ok(())
+    }
+}
+
+/// invitations: one-time links that let an invitee create their own account.
+pub struct InvitationRepo<'a>(pub &'a PgPool);
+
+const INVITATION_COLUMNS: &str = "id, org_id, email, role, team_id, project_id, token_hash, \
+     invited_by, expires_at, accepted_at, revoked_at, created_at";
+
+impl InvitationRepo<'_> {
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create(
+        &self,
+        org_id: Uuid,
+        email: &str,
+        role: &str,
+        team_id: Option<Uuid>,
+        project_id: Option<Uuid>,
+        token_hash: &str,
+        invited_by: Option<Uuid>,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Invitation> {
+        sqlx::query_as(&format!(
+            "insert into invitations (org_id, email, role, team_id, project_id, token_hash, \
+                    invited_by, expires_at) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8) \
+             returning {INVITATION_COLUMNS}"
+        ))
+        .bind(org_id)
+        .bind(email)
+        .bind(role)
+        .bind(team_id)
+        .bind(project_id)
+        .bind(token_hash)
+        .bind(invited_by)
+        .bind(expires_at)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn list(&self, org_id: Uuid) -> Result<Vec<Invitation>> {
+        sqlx::query_as(&format!(
+            "select {INVITATION_COLUMNS} from invitations \
+             where org_id = $1 order by created_at desc"
+        ))
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Look an invitation up by token digest, but only while it is live:
+    /// unaccepted, unrevoked and unexpired. Spent invitations are
+    /// indistinguishable from wrong ones to the caller, which is the point.
+    pub async fn find_live_by_hash(&self, token_hash: &str) -> Result<Option<Invitation>> {
+        sqlx::query_as(&format!(
+            "select {INVITATION_COLUMNS} from invitations \
+             where token_hash = $1 and accepted_at is null and revoked_at is null \
+               and expires_at > now()"
+        ))
+        .bind(token_hash)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Mark an invitation accepted, but only if it is still live. Returns
+    /// `false` when another request got there first, so acceptance is
+    /// single-use even under a race.
+    pub async fn mark_accepted(&self, id: Uuid) -> Result<bool> {
+        let res = sqlx::query(
+            "update invitations set accepted_at = now() \
+             where id = $1 and accepted_at is null and revoked_at is null and expires_at > now()",
+        )
+        .bind(id)
+        .execute(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(res.rows_affected() == 1)
+    }
+
+    pub async fn revoke(&self, id: Uuid) -> Result<Invitation> {
+        sqlx::query_as(&format!(
+            "update invitations set revoked_at = now() \
+             where id = $1 and accepted_at is null \
+             returning {INVITATION_COLUMNS}"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("pending invitation {id}")))
+    }
+
+    pub async fn get(&self, id: Uuid) -> Result<Invitation> {
+        sqlx::query_as(&format!(
+            "select {INVITATION_COLUMNS} from invitations where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("invitation {id}")))
+    }
+}
+
+/// per-org login policy: whether members may use a local password, and
+/// whether SSO callbacks for the org's providers are honoured.
+pub struct OrgAuthPolicyRepo<'a>(pub &'a PgPool);
+
+impl OrgAuthPolicyRepo<'_> {
+    /// The policy for `org_id`, or the permissive default when no row exists.
+    /// Orgs created before single sign-on existed have no row, and must keep
+    /// logging in exactly as they did.
+    pub async fn get(&self, org_id: Uuid) -> Result<OrgAuthPolicy> {
+        let found: Option<OrgAuthPolicy> = sqlx::query_as(
+            "select org_id, allow_password_login, allow_sso, updated_at
+             from org_auth_policies where org_id = $1",
+        )
+        .bind(org_id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(found.unwrap_or(OrgAuthPolicy {
+            org_id,
+            allow_password_login: true,
+            allow_sso: true,
+            updated_at: chrono::Utc::now(),
+        }))
+    }
+
+    pub async fn set(
+        &self,
+        org_id: Uuid,
+        allow_password_login: bool,
+        allow_sso: bool,
+    ) -> Result<OrgAuthPolicy> {
+        sqlx::query_as(
+            "insert into org_auth_policies (org_id, allow_password_login, allow_sso)
+             values ($1, $2, $3)
+             on conflict (org_id) do update
+                 set allow_password_login = excluded.allow_password_login,
+                     allow_sso = excluded.allow_sso,
+                     updated_at = now()
+             returning org_id, allow_password_login, allow_sso, updated_at",
+        )
+        .bind(org_id)
+        .bind(allow_password_login)
+        .bind(allow_sso)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// True when at least one org this user belongs to forbids password login.
+    /// Membership scopes are org/team/project, so the team's and project's
+    /// owning org counts too.
+    pub async fn password_login_blocked_for_user(&self, user_id: Uuid) -> Result<bool> {
+        let blocked: Option<(bool,)> = sqlx::query_as(
+            "select true from memberships m
+             left join teams t on t.id = m.team_id
+             left join projects p on p.id = m.project_id
+             left join teams pt on pt.id = p.team_id
+             join org_auth_policies ap
+               on ap.org_id = coalesce(m.org_id, t.org_id, pt.org_id)
+             where m.user_id = $1 and not ap.allow_password_login
+             limit 1",
+        )
+        .bind(user_id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(blocked.is_some())
+    }
+
+    /// True when any org allows password login, or when no org has a policy
+    /// row at all. Drives the login page: a deployment that turned password
+    /// login off everywhere should not render a password form.
+    pub async fn any_password_login_allowed(&self) -> Result<bool> {
+        let row: Option<(bool,)> = sqlx::query_as(
+            "select true from orgs o
+             left join org_auth_policies ap on ap.org_id = o.id
+             where ap.allow_password_login is not false
+             limit 1",
+        )
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(row.is_some())
     }
 }
 
@@ -1815,6 +2815,93 @@ pub struct SecuritySettingsRepo<'a>(pub &'a PgPool);
 pub struct FeatureFlagsRepo<'a>(pub &'a PgPool);
 pub struct LoggingSettingsRepo<'a>(pub &'a PgPool);
 pub struct RuntimePolicyRepo<'a>(pub &'a PgPool);
+pub struct CompatibilityPolicyRepo<'a>(pub &'a PgPool);
+pub struct AdaptiveRoutingPolicyRepo<'a>(pub &'a PgPool);
+
+/// Cluster inventory: one row per gateway/control node, upserted from the
+/// snapshot poll each node already performs.
+pub struct ClusterNodeRepo<'a>(pub &'a PgPool);
+
+impl ClusterNodeRepo<'_> {
+    /// Record a node sighting. `first_seen_at` is preserved across restarts of
+    /// the same node id so an operator can tell a flapping node from a new one.
+    pub async fn heartbeat(
+        &self,
+        id: &str,
+        role: &str,
+        build_version: &str,
+        config_version: i64,
+    ) -> Result<ClusterNode> {
+        sqlx::query_as(
+            "insert into cluster_nodes (id, role, build_version, config_version) \
+             values ($1, $2, $3, $4) \
+             on conflict (id) do update set \
+                role = excluded.role, build_version = excluded.build_version, \
+                config_version = excluded.config_version, last_seen_at = now() \
+             returning id, role, build_version, config_version, desired_state, \
+                state_changed_at, first_seen_at, last_seen_at",
+        )
+        .bind(id)
+        .bind(role)
+        .bind(build_version)
+        .bind(config_version)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn list(&self) -> Result<Vec<ClusterNode>> {
+        sqlx::query_as(
+            "select id, role, build_version, config_version, desired_state, \
+                    state_changed_at, first_seen_at, last_seen_at \
+             from cluster_nodes order by role, id",
+        )
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Set the operator-requested state for a node. Returns the updated row so
+    /// the caller can audit what actually changed.
+    pub async fn set_desired_state(&self, id: &str, desired_state: &str) -> Result<ClusterNode> {
+        sqlx::query_as(
+            "update cluster_nodes set desired_state = $2, state_changed_at = now() \
+             where id = $1 \
+             returning id, role, build_version, config_version, desired_state, \
+                       state_changed_at, first_seen_at, last_seen_at",
+        )
+        .bind(id)
+        .bind(desired_state)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("cluster node {id}")))
+    }
+
+    /// The state a node should move to, read on its snapshot poll. `None` when
+    /// the node is not in the inventory yet.
+    pub async fn desired_state(&self, id: &str) -> Result<Option<String>> {
+        sqlx::query_scalar("select desired_state from cluster_nodes where id = $1")
+            .bind(id)
+            .fetch_optional(self.0)
+            .await
+            .map_err(store_err)
+    }
+
+    /// Forget a node an operator has decommissioned. A node that is still
+    /// running reappears on its next poll.
+    pub async fn delete(&self, id: &str) -> Result<()> {
+        let res = sqlx::query("delete from cluster_nodes where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("cluster node {id}")));
+        }
+        Ok(())
+    }
+}
 
 impl SecuritySettingsRepo<'_> {
     pub async fn get(&self) -> Result<SecuritySettings> {
@@ -1919,7 +3006,8 @@ impl LoggingSettingsRepo<'_> {
     pub async fn get(&self) -> Result<LoggingSettings> {
         sqlx::query_as(
             "select sample_rate, payload_capture_enabled, payload_capture_max_bytes, \
-                    payload_capture_redact_fields, payload_capture_models, payload_capture_virtual_key_ids, updated_at \
+                    payload_capture_redact_fields, payload_capture_models, payload_capture_virtual_key_ids, \
+                    retention_days, payload_retention_hours, updated_at \
              from logging_settings where id = true",
         )
         .fetch_one(self.0)
@@ -1936,16 +3024,20 @@ impl LoggingSettingsRepo<'_> {
         payload_capture_redact_fields: &[String],
         payload_capture_models: &[String],
         payload_capture_virtual_key_ids: &[String],
+        retention_days: i32,
+        payload_retention_hours: i32,
     ) -> Result<LoggingSettings> {
         sqlx::query_as(
             "update logging_settings set \
                 sample_rate = $1, payload_capture_enabled = $2, payload_capture_max_bytes = $3, \
                 payload_capture_redact_fields = $4, payload_capture_models = $5, \
-                payload_capture_virtual_key_ids = $6, updated_at = now() \
+                payload_capture_virtual_key_ids = $6, retention_days = $7, \
+                payload_retention_hours = $8, updated_at = now() \
              where id = true \
              returning sample_rate, payload_capture_enabled, payload_capture_max_bytes, \
                        payload_capture_redact_fields, payload_capture_models, \
-                       payload_capture_virtual_key_ids, updated_at",
+                       payload_capture_virtual_key_ids, retention_days, \
+                       payload_retention_hours, updated_at",
         )
         .bind(sample_rate)
         .bind(payload_capture_enabled)
@@ -1953,6 +3045,8 @@ impl LoggingSettingsRepo<'_> {
         .bind(payload_capture_redact_fields)
         .bind(payload_capture_models)
         .bind(payload_capture_virtual_key_ids)
+        .bind(retention_days)
+        .bind(payload_retention_hours)
         .fetch_one(self.0)
         .await
         .map_err(store_err)

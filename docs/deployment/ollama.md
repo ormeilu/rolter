@@ -82,4 +82,3 @@ OpenAI-compatible embeddings endpoint accepts models with embedding support;
 for production, route it to a dedicated embedding model. Ollama's native
 `/api/*` endpoints and Ollama Cloud authentication are outside this provider's
 scope.
-

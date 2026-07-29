@@ -376,6 +376,101 @@ async fn business_unit_and_customer_crud_round_trip() {
 }
 
 #[tokio::test]
+async fn governance_scoped_budgets_and_rate_limits() {
+    skip_without_db!();
+    let addr = serve(fresh_app().await).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    async fn post(client: &reqwest::Client, url: String, body: Value) -> Value {
+        let resp = client.post(&url).json(&body).send().await.unwrap();
+        let status = resp.status();
+        let json: Value = resp.json().await.unwrap();
+        assert!(status.is_success(), "POST {url} failed ({status}): {json}");
+        json
+    }
+
+    let org = post(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Acme", "slug": "acme"}),
+    )
+    .await;
+    let org_id = org["id"].as_str().expect("org id");
+
+    let unit = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/business-units"),
+        json!({"name": "Payments"}),
+    )
+    .await;
+    let unit_id = unit["id"].as_str().expect("business unit id");
+
+    let customer = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/customers"),
+        json!({"name": "Acme EU"}),
+    )
+    .await;
+    let customer_id = customer["id"].as_str().expect("customer id");
+
+    let budget = post(
+        &client,
+        format!("{base}/api/v1/budgets"),
+        json!({"scope_type": "business_unit", "scope_id": unit_id, "limit_usd": "250.0"}),
+    )
+    .await;
+    assert_eq!(budget["scope_type"], "business_unit");
+
+    let limit = post(
+        &client,
+        format!("{base}/api/v1/rate-limits"),
+        json!({"scope_type": "customer", "scope_id": customer_id, "rpm": 60}),
+    )
+    .await;
+    assert_eq!(limit["scope_type"], "customer");
+
+    let listed: Value = client
+        .get(format!(
+            "{base}/api/v1/budgets?scope_type=business_unit&scope_id={unit_id}"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+
+    // an unknown scope type is rejected before it reaches the store
+    let bad = client
+        .post(format!("{base}/api/v1/budgets"))
+        .json(&json!({"scope_type": "division", "scope_id": unit_id, "limit_usd": "1.0"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
+
+    // the gateway snapshot carries both caps with their governance scopes
+    let snap: Value = client
+        .get(format!("{base}/internal/snapshot"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let budgets = snap["config"]["budgets"].as_array().expect("budgets");
+    assert!(budgets
+        .iter()
+        .any(|b| b["scope"] == "business_unit" && b["id"] == unit_id));
+    let limits = snap["config"]["rate_limits"].as_array().expect("limits");
+    assert!(limits
+        .iter()
+        .any(|l| l["scope"] == "customer" && l["id"] == customer_id));
+}
+
+#[tokio::test]
 async fn virtual_key_cost_attribution_round_trip() {
     skip_without_db!();
     let addr = serve(fresh_app().await).await;
@@ -1200,6 +1295,250 @@ async fn feature_flags_are_superadmin_only_and_audited() {
 }
 
 #[tokio::test]
+async fn cluster_inventory_tracks_polling_nodes() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // an anonymous poll stays out of the inventory: single-node deployments
+    // need no cluster setup
+    let anonymous = client
+        .get(format!("{base}/internal/snapshot"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap();
+    assert!(anonymous.status().is_success());
+    let nodes: Value = client
+        .get(format!("{base}/api/v1/cluster/nodes"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(nodes.as_array().unwrap().len(), 0);
+
+    // an identified poll registers the node and its applied config version
+    let identified = client
+        .get(format!("{base}/internal/snapshot?version=0"))
+        .bearer_auth("sekrit")
+        .header("x-rolter-node-id", "gw-1")
+        .header("x-rolter-node-role", "gateway")
+        .header("x-rolter-node-build", "0.0.10")
+        .send()
+        .await
+        .unwrap();
+    assert!(identified.status().is_success());
+
+    let nodes: Value = client
+        .get(format!("{base}/api/v1/cluster/nodes"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let node = &nodes.as_array().expect("nodes")[0];
+    assert_eq!(node["id"], "gw-1");
+    assert_eq!(node["role"], "gateway");
+    assert_eq!(node["build_version"], "0.0.10");
+    assert_eq!(node["live"], true);
+
+    // the inventory is superadmin-only
+    let denied = client
+        .get(format!("{base}/api/v1/cluster/nodes"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    // the only live gateway may not be drained: it would take the data plane down
+    let refused = client
+        .put(format!("{base}/api/v1/cluster/nodes/gw-1/drain"))
+        .bearer_auth("sekrit")
+        .json(&json!({"draining": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 400);
+
+    // with a second live gateway the drain is safe, and the draining node
+    // learns about it on its next poll
+    let second = client
+        .get(format!("{base}/internal/snapshot?version=0"))
+        .bearer_auth("sekrit")
+        .header("x-rolter-node-id", "gw-2")
+        .header("x-rolter-node-role", "gateway")
+        .send()
+        .await
+        .unwrap();
+    assert!(second.status().is_success());
+
+    let drained: Value = client
+        .put(format!("{base}/api/v1/cluster/nodes/gw-1/drain"))
+        .bearer_auth("sekrit")
+        .json(&json!({"draining": true}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(drained["desired_state"], "draining");
+
+    let polled = client
+        .get(format!("{base}/internal/snapshot?version=0"))
+        .bearer_auth("sekrit")
+        .header("x-rolter-node-id", "gw-1")
+        .header("x-rolter-node-role", "gateway")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        polled
+            .headers()
+            .get("x-rolter-node-state")
+            .and_then(|v| v.to_str().ok()),
+        Some("draining")
+    );
+
+    let drain_action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'cluster_node.set_drain' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(drain_action.as_deref(), Some("cluster_node.set_drain"));
+
+    // returning it to service is the same call with draining=false
+    let restored: Value = client
+        .put(format!("{base}/api/v1/cluster/nodes/gw-1/drain"))
+        .bearer_auth("sekrit")
+        .json(&json!({"draining": false}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(restored["desired_state"], "active");
+
+    let forgotten_second = client
+        .delete(format!("{base}/api/v1/cluster/nodes/gw-2"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forgotten_second.status(), 204);
+
+    // a decommissioned node can be forgotten, and the action is audited
+    let forgotten = client
+        .delete(format!("{base}/api/v1/cluster/nodes/gw-1"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forgotten.status(), 204);
+    let nodes: Value = client
+        .get(format!("{base}/api/v1/cluster/nodes"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(nodes.as_array().unwrap().len(), 0);
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'cluster_node.forget' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("cluster_node.forget"));
+}
+
+#[tokio::test]
+async fn unavailable_feature_flags_are_reported_and_cannot_be_enabled() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // this deployment has no redis and no cache-publishing provider
+    let view: Value = client
+        .get(format!("{base}/api/v1/feature-flags"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let unavailable = view["unavailable"].as_array().expect("unavailable list");
+    let names: Vec<&str> = unavailable
+        .iter()
+        .map(|u| u["flag"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"response_cache"), "{view}");
+    assert!(names.contains(&"cache_aware_routing"), "{view}");
+    assert!(unavailable
+        .iter()
+        .all(|u| !u["reason"].as_str().unwrap_or_default().is_empty()));
+
+    // turning one on would persist a policy the gateway silently ignores
+    let rejected = client
+        .put(format!("{base}/api/v1/feature-flags"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "response_cache": true,
+            "cache_aware_routing": false,
+            "circuit_breaker": true,
+            "active_health_checks": true,
+            "complexity_routing": true,
+            "guardrails": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 400);
+
+    // the available flags stay editable
+    let updated: Value = client
+        .put(format!("{base}/api/v1/feature-flags"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "response_cache": false,
+            "cache_aware_routing": false,
+            "circuit_breaker": false,
+            "active_health_checks": true,
+            "complexity_routing": true,
+            "guardrails": true
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["circuit_breaker"], false);
+    assert_eq!(updated["unavailable"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn logging_settings_are_superadmin_only_and_audited() {
     skip_without_db!();
     let pool = fresh_pool().await;
@@ -1237,7 +1576,9 @@ async fn logging_settings_are_superadmin_only_and_audited() {
             "payload_capture_max_bytes": 4096,
             "payload_capture_redact_fields": ["token", "authorization"],
             "payload_capture_models": ["gpt-4o"],
-            "payload_capture_virtual_key_ids": ["00000000-0000-0000-0000-000000000001"]
+            "payload_capture_virtual_key_ids": ["00000000-0000-0000-0000-000000000001"],
+            "retention_days": 30,
+            "payload_retention_hours": 24
         }))
         .send()
         .await
@@ -1248,6 +1589,27 @@ async fn logging_settings_are_superadmin_only_and_audited() {
     assert_eq!(updated["sample_rate"], 0.25);
     assert_eq!(updated["payload_capture_enabled"], true);
     assert_eq!(updated["payload_capture_max_bytes"], 4096);
+    assert_eq!(updated["retention_days"], 30);
+    assert_eq!(updated["payload_retention_hours"], 24);
+
+    // raw bodies may never outlive the metadata row they belong to
+    let rejected = client
+        .put(format!("{base}/api/v1/logging-settings"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "sample_rate": 0.25,
+            "payload_capture_enabled": true,
+            "payload_capture_max_bytes": 4096,
+            "payload_capture_redact_fields": ["token"],
+            "payload_capture_models": [],
+            "payload_capture_virtual_key_ids": [],
+            "retention_days": 1,
+            "payload_retention_hours": 720
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 400);
 
     let reloaded: Value = client
         .get(format!("{base}/api/v1/logging-settings"))
@@ -1260,6 +1622,7 @@ async fn logging_settings_are_superadmin_only_and_audited() {
         .unwrap();
     assert_eq!(reloaded["sample_rate"], 0.25);
     assert_eq!(reloaded["payload_capture_enabled"], true);
+    assert_eq!(reloaded["retention_days"], 30);
 
     let action: Option<String> = sqlx::query_scalar(
         "select action from audit_log where action = 'logging_settings.update' order by at desc limit 1",
@@ -1344,6 +1707,196 @@ async fn runtime_policy_is_superadmin_only_and_audited() {
     .await
     .unwrap();
     assert_eq!(action.as_deref(), Some("runtime_policy.update"));
+}
+
+#[tokio::test]
+async fn compatibility_policy_is_superadmin_only_validated_and_audited() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let denied = client
+        .get(format!("{base}/api/v1/compatibility-policy"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    let baseline: Value = client
+        .get(format!("{base}/api/v1/compatibility-policy"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // defaults preserve the previously compiled-in behavior
+    assert_eq!(baseline["anthropic_version"], "2023-06-01");
+    assert_eq!(baseline["default_max_tokens"], 1024);
+    assert_eq!(baseline["restart_required"].as_array().unwrap().len(), 0);
+
+    // a free-form version would fail every anthropic call at the edge
+    let rejected = client
+        .put(format!("{base}/api/v1/compatibility-policy"))
+        .bearer_auth("sekrit")
+        .json(&json!({"anthropic_version": "latest", "default_max_tokens": 1024}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 400);
+
+    let updated: Value = client
+        .put(format!("{base}/api/v1/compatibility-policy"))
+        .bearer_auth("sekrit")
+        .json(&json!({"anthropic_version": "2024-10-22", "default_max_tokens": 4096}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["anthropic_version"], "2024-10-22");
+    assert_eq!(updated["default_max_tokens"], 4096);
+
+    // the gateway snapshot carries the new policy without a restart
+    let snap: Value = client
+        .get(format!("{base}/internal/snapshot"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        snap["config"]["compatibility"]["anthropic_version"],
+        "2024-10-22"
+    );
+    assert_eq!(snap["config"]["compatibility"]["default_max_tokens"], 4096);
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'compatibility_policy.update' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("compatibility_policy.update"));
+}
+
+#[tokio::test]
+async fn adaptive_routing_policy_is_superadmin_only_validated_and_audited() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let denied = client
+        .get(format!("{base}/api/v1/adaptive-routing-policy"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    let baseline: Value = client
+        .get(format!("{base}/api/v1/adaptive-routing-policy"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // shipped off, so enabling it is always a deliberate action
+    assert_eq!(baseline["enabled"], false);
+    assert_eq!(baseline["min_samples"], 50);
+    assert_eq!(baseline["affected_routes"].as_array().unwrap().len(), 0);
+
+    // an all-zero blend would make `adaptive` a random balancer
+    let rejected = client
+        .put(format!("{base}/api/v1/adaptive-routing-policy"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "enabled": true,
+            "latency_weight": 0.0,
+            "cost_weight": 0.0,
+            "load_weight": 0.0,
+            "exploration_ratio": 0.05,
+            "min_samples": 50
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 400);
+
+    // and exploration is capped well below "route at random"
+    let too_much_exploration = client
+        .put(format!("{base}/api/v1/adaptive-routing-policy"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "enabled": true,
+            "latency_weight": 1.0,
+            "cost_weight": 0.5,
+            "load_weight": 0.25,
+            "exploration_ratio": 0.9,
+            "min_samples": 50
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(too_much_exploration.status(), 400);
+
+    let updated: Value = client
+        .put(format!("{base}/api/v1/adaptive-routing-policy"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "enabled": true,
+            "latency_weight": 2.0,
+            "cost_weight": 0.0,
+            "load_weight": 0.5,
+            "exploration_ratio": 0.1,
+            "min_samples": 10
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["enabled"], true);
+    assert_eq!(updated["latency_weight"], 2.0);
+    assert_eq!(updated["min_samples"], 10);
+
+    // the gateway snapshot carries the new policy without a restart
+    let snap: Value = client
+        .get(format!("{base}/internal/snapshot"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(snap["config"]["adaptive_routing"]["enabled"], true);
+    assert_eq!(snap["config"]["adaptive_routing"]["latency_weight"], 2.0);
+    assert_eq!(snap["config"]["adaptive_routing"]["min_samples"], 10);
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'adaptive_routing_policy.update' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("adaptive_routing_policy.update"));
 }
 
 /// End-to-end local-account login (ROL-32): seed a user with an argon2id hash
@@ -1692,6 +2245,1163 @@ async fn skill_access_policy_filters_list_history_and_resolution() {
         .await
         .unwrap();
     assert_eq!(denied_resolution.status(), 403);
+}
+
+/// A stub OIDC provider: discovery, JWKS and a token endpoint that signs id
+/// tokens with the fixture RSA key. Lets the SSO flow be exercised end to end
+/// without a container, while the Keycloak suite covers a real IdP.
+mod stub_idp {
+    use super::*;
+    use axum::Router;
+    use std::sync::{Arc, Mutex};
+
+    pub const KID: &str = "stub-key-1";
+
+    /// The stub's signing key, generated once per test process rather than
+    /// checked in: a private key in the repository is a private key in the
+    /// repository, whatever the comment above it says, and every secret
+    /// scanner is right to flag one. ES256 keeps generation instant.
+    fn signing_key() -> &'static (jsonwebtoken::EncodingKey, String, String) {
+        static KEY: std::sync::OnceLock<(jsonwebtoken::EncodingKey, String, String)> =
+            std::sync::OnceLock::new();
+        KEY.get_or_init(|| {
+            use base64::Engine;
+            use p256::elliptic_curve::sec1::ToEncodedPoint;
+            use p256::pkcs8::EncodePrivateKey;
+
+            let secret = p256::SecretKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+            let pem = secret.to_pkcs8_pem(p256::pkcs8::LineEnding::LF).unwrap();
+            let encoding = jsonwebtoken::EncodingKey::from_ec_pem(pem.as_bytes()).unwrap();
+            // the jwk carries the affine coordinates, so publish them from the
+            // uncompressed sec1 point: 0x04 || x || y
+            let point = secret.public_key().to_encoded_point(false);
+            let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+            (
+                encoding,
+                b64.encode(point.x().unwrap()),
+                b64.encode(point.y().unwrap()),
+            )
+        })
+    }
+
+    #[derive(Clone, Default)]
+    pub struct Stub {
+        /// claims the next token exchange will mint, set by the test
+        pub next_claims: Arc<Mutex<Value>>,
+        /// form fields of the last token request, so PKCE can be asserted
+        pub last_form: Arc<Mutex<String>>,
+        pub issuer: Arc<Mutex<String>>,
+    }
+
+    pub async fn serve_stub() -> (String, Stub) {
+        let stub = Stub::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let issuer = format!("http://{addr}");
+        *stub.issuer.lock().unwrap() = issuer.clone();
+
+        let app = Router::new()
+            .route(
+                "/.well-known/openid-configuration",
+                axum::routing::get({
+                    let stub = stub.clone();
+                    move || {
+                        let issuer = stub.issuer.lock().unwrap().clone();
+                        async move {
+                            axum::Json(json!({
+                                "issuer": issuer,
+                                "authorization_endpoint": format!("{issuer}/authorize"),
+                                "token_endpoint": format!("{issuer}/token"),
+                                "jwks_uri": format!("{issuer}/jwks"),
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/jwks",
+                axum::routing::get(|| async {
+                    let (_, x, y) = signing_key();
+                    axum::Json(json!({
+                        "keys": [{
+                            "kty": "EC",
+                            "use": "sig",
+                            "alg": "ES256",
+                            "crv": "P-256",
+                            "kid": KID,
+                            "x": x,
+                            "y": y,
+                        }]
+                    }))
+                }),
+            )
+            .route(
+                "/token",
+                axum::routing::post({
+                    let stub = stub.clone();
+                    move |body: String| {
+                        let stub = stub.clone();
+                        async move {
+                            *stub.last_form.lock().unwrap() = body;
+                            let claims = stub.next_claims.lock().unwrap().clone();
+                            axum::Json(json!({
+                                "access_token": "stub-access",
+                                "token_type": "Bearer",
+                                "id_token": sign(&claims),
+                            }))
+                        }
+                    }
+                }),
+            );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (issuer, stub)
+    }
+
+    /// Sign a claim set as an ES256 id token with the process's stub key.
+    pub fn sign(claims: &Value) -> String {
+        let (key, _, _) = signing_key();
+        let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
+        header.kid = Some(KID.to_string());
+        jsonwebtoken::encode(&header, claims, key).unwrap()
+    }
+
+    pub fn claims(issuer: &str, audience: &str, nonce: &str, groups: Value) -> Value {
+        let now = chrono::Utc::now().timestamp();
+        json!({
+            "iss": issuer,
+            "aud": audience,
+            "sub": "idp-subject-1",
+            "email": "ada@example.com",
+            "preferred_username": "ada",
+            "nonce": nonce,
+            "groups": groups,
+            "iat": now,
+            "exp": now + 300,
+        })
+    }
+}
+
+/// OIDC SSO (#240) end to end against a stub identity provider: the login
+/// redirect carries PKCE, the callback verifies the id token, groups become
+/// memberships, and every rejection path fails closed.
+#[tokio::test]
+async fn sso_login_maps_groups_to_memberships_and_fails_closed() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    // the redirect uri is deployment-owned, so the control plane must know its
+    // own public url for the flow to be coherent
+    std::env::set_var("ROLTER_PUBLIC_URL", format!("http://{addr}"));
+    std::env::set_var("ROLTER_KEK", "sso-test-kek");
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let base = format!("http://{addr}");
+
+    let (issuer, stub) = stub_idp::serve_stub().await;
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "SsoOrg", "slug": "sso-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let team: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/teams"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Platform"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let team_id = team["id"].as_str().unwrap().to_string();
+
+    // a non-http issuer is refused before anything is stored
+    let bad = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/sso-providers"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Bad", "slug": "bad", "issuer": "not-a-url", "client_id": "x"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
+
+    let provider: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/sso-providers"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Stub IdP",
+            "slug": "stub",
+            "issuer": issuer,
+            "client_id": "rolter",
+            "client_secret": "s3cret",
+            "group_claim": "groups"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let provider_id = provider["id"].as_str().unwrap().to_string();
+    // the client secret is sealed and never echoed back
+    let provider_text = provider.to_string();
+    assert!(
+        !provider_text.contains("s3cret") && !provider_text.contains("secret_ciphertext"),
+        "client secret leaked into the api response: {provider_text}"
+    );
+
+    // map an IdP group to a team-scoped admin role
+    let mapping = client
+        .post(format!(
+            "{base}/api/v1/sso-providers/{provider_id}/group-mappings"
+        ))
+        .bearer_auth("admintok")
+        .json(&json!({"group_name": "platform", "role": "admin", "team_id": team_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mapping.status(), 200);
+
+    // starting a login redirects to the provider with PKCE + state + nonce
+    let start = client
+        .get(format!("{base}/auth/sso/stub/start"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(start.status(), 303);
+    let location = start
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(location.starts_with(&format!("{issuer}/authorize?response_type=code")));
+    assert!(location.contains("code_challenge_method=S256"));
+    let state = url_param(&location, "state");
+
+    // an id token minted for a different login (wrong nonce) is refused
+    *stub.next_claims.lock().unwrap() =
+        stub_idp::claims(&issuer, "rolter", "other-nonce", json!(["/platform"]));
+    let replayed = client
+        .get(format!(
+            "{base}/auth/sso/stub/callback?code=abc&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replayed.status(), 400, "a mismatched nonce must be refused");
+
+    // ...and that consumed the state, so the real callback needs a fresh login
+    let start = client
+        .get(format!("{base}/auth/sso/stub/start"))
+        .send()
+        .await
+        .unwrap();
+    let location = start
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let state = url_param(&location, "state");
+    let nonce = url_param(&location, "nonce");
+
+    *stub.next_claims.lock().unwrap() =
+        stub_idp::claims(&issuer, "rolter", &nonce, json!(["/platform"]));
+    let logged_in: Value = client
+        .get(format!(
+            "{base}/auth/sso/stub/callback?code=abc&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(logged_in["user"]["email"], "ada@example.com");
+    assert_eq!(logged_in["granted_roles"][0], "admin");
+    let session_token = logged_in["token"].as_str().unwrap().to_string();
+
+    // the token exchange used the authorization code with a PKCE verifier
+    let form = stub.last_form.lock().unwrap().clone();
+    assert!(form.contains("grant_type=authorization_code"));
+    assert!(form.contains("code_verifier="));
+
+    // the session works, and the mapped membership is real: the team-scoped
+    // admin can create a project inside that team
+    let created = client
+        .post(format!("{base}/api/v1/teams/{team_id}/projects"))
+        .bearer_auth(&session_token)
+        .json(&json!({"name": "FromSso"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 200);
+    // but holds nothing at the org level, which no mapping granted
+    let denied = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/teams"))
+        .bearer_auth(&session_token)
+        .json(&json!({"name": "Nope"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 403);
+
+    // a repeat login does not accumulate duplicate memberships
+    let before: i64 = sqlx::query_scalar("select count(*) from memberships")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let start = client
+        .get(format!("{base}/auth/sso/stub/start"))
+        .send()
+        .await
+        .unwrap();
+    let location = start
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let state = url_param(&location, "state");
+    let nonce = url_param(&location, "nonce");
+    *stub.next_claims.lock().unwrap() =
+        stub_idp::claims(&issuer, "rolter", &nonce, json!(["/platform"]));
+    let again = client
+        .get(format!(
+            "{base}/auth/sso/stub/callback?code=abc&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(again.status(), 200);
+    let after: i64 = sqlx::query_scalar("select count(*) from memberships")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(before, after, "a repeat sso login must be idempotent");
+
+    // a user in no mapped group is refused, because the provider set no
+    // default_role: SSO authenticates, it does not implicitly authorize
+    let start = client
+        .get(format!("{base}/auth/sso/stub/start"))
+        .send()
+        .await
+        .unwrap();
+    let location = start
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let state = url_param(&location, "state");
+    let nonce = url_param(&location, "nonce");
+    *stub.next_claims.lock().unwrap() =
+        stub_idp::claims(&issuer, "rolter", &nonce, json!(["/unmapped"]));
+    let ungrouped = client
+        .get(format!(
+            "{base}/auth/sso/stub/callback?code=abc&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ungrouped.status(), 403);
+
+    // an id token signed for another audience never becomes a session
+    let start = client
+        .get(format!("{base}/auth/sso/stub/start"))
+        .send()
+        .await
+        .unwrap();
+    let location = start
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let state = url_param(&location, "state");
+    let nonce = url_param(&location, "nonce");
+    *stub.next_claims.lock().unwrap() =
+        stub_idp::claims(&issuer, "some-other-client", &nonce, json!(["/platform"]));
+    let wrong_audience = client
+        .get(format!(
+            "{base}/auth/sso/stub/callback?code=abc&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_audience.status(), 400);
+
+    // an unknown state (never issued, or already consumed) is refused
+    let unknown = client
+        .get(format!(
+            "{base}/auth/sso/stub/callback?code=abc&state=made-up"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), 400);
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'auth.sso_login' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("auth.sso_login"));
+}
+
+/// Pull a query parameter out of a redirect URL.
+fn url_param(url: &str, key: &str) -> String {
+    url.split(['?', '&'])
+        .find_map(|pair| pair.strip_prefix(&format!("{key}=")))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// SCIM 2.0 Users provisioning (#540): an IdP token scopes every call to one
+/// org, create/deactivate/reconcile are idempotent, no local password is ever
+/// involved, and a revoked token stops working immediately.
+#[tokio::test]
+async fn scim_users_are_provisioned_scoped_and_idempotent() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "ScimOrg", "slug": "scim-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+
+    let other: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "OtherScimOrg", "slug": "other-scim-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_id = other["id"].as_str().unwrap().to_string();
+
+    // minting a token returns the secret exactly once
+    let minted: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/scim-tokens"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "okta"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = minted["secret"].as_str().unwrap().to_string();
+    assert!(secret.starts_with("rolter_scim_"));
+    let token_id = minted["id"].as_str().unwrap().to_string();
+
+    let listed: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/scim-tokens"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let listed_text = listed.to_string();
+    assert!(
+        !listed_text.contains(&secret) && !listed_text.contains("token_hash"),
+        "token material leaked into the listing: {listed_text}"
+    );
+
+    // an unauthenticated SCIM call is a SCIM-shaped 401, not an axum rejection
+    let unauth = client
+        .get(format!("{base}/scim/v2/Users"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth.status(), 401);
+    let body: Value = unauth.json().await.unwrap();
+    assert_eq!(
+        body["schemas"][0],
+        "urn:ietf:params:scim:api:messages:2.0:Error"
+    );
+
+    // provision a user
+    let created = client
+        .post(format!("{base}/scim/v2/Users"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            "userName": "ada@example.com",
+            "externalId": "idp-1",
+            "displayName": "Ada Lovelace",
+            "emails": [{"value": "ada@example.com", "primary": true}],
+            "password": "hunter2"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 201);
+    let created: Value = created.json().await.unwrap();
+    assert_eq!(created["userName"], "ada@example.com");
+    assert_eq!(created["active"], true);
+    assert_eq!(created["externalId"], "idp-1");
+    let scim_id = created["id"].as_str().unwrap().to_string();
+    // the supplied password is ignored, never stored
+    let hash: Option<String> = sqlx::query_scalar("select password_hash from users where id = $1")
+        .bind(scim_id.parse::<uuid::Uuid>().unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(hash.is_none(), "provisioning must not store a password");
+
+    // a replayed create is a SCIM uniqueness conflict, not a second account
+    let replay = client
+        .post(format!("{base}/scim/v2/Users"))
+        .bearer_auth(&secret)
+        .json(&json!({"userName": "ada@example.com", "emails": [{"value": "ada@example.com"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 409);
+    let replay: Value = replay.json().await.unwrap();
+    assert_eq!(replay["scimType"], "uniqueness");
+
+    // the filter IdPs reconcile with
+    let found: Value = client
+        .get(format!(
+            "{base}/scim/v2/Users?filter=userName%20eq%20%22ada@example.com%22"
+        ))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(found["totalResults"], 1);
+    assert_eq!(found["Resources"][0]["id"], scim_id);
+
+    // an unsupported filter is refused rather than answered with everything
+    let bad_filter = client
+        .get(format!(
+            "{base}/scim/v2/Users?filter=displayName%20eq%20%22Ada%22"
+        ))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_filter.status(), 400);
+
+    // a live session exists, then the IdP deactivates the leaver
+    let user_uuid: uuid::Uuid = scim_id.parse().unwrap();
+    let session_token = seed_session(&pool, user_uuid, "scimuser").await;
+    let me_before = client
+        .get(format!("{base}/api/v1/auth/me"))
+        .bearer_auth(&session_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(me_before.status(), 200);
+
+    let patched: Value = client
+        .patch(format!("{base}/scim/v2/Users/{scim_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{"op": "replace", "path": "active", "value": false}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(patched["active"], false);
+    // deactivation logs the leaver out rather than only blocking future logins
+    let me_after = client
+        .get(format!("{base}/api/v1/auth/me"))
+        .bearer_auth(&session_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(me_after.status(), 401);
+
+    // re-enabling is the same call with the other value
+    let reenabled: Value = client
+        .patch(format!("{base}/scim/v2/Users/{scim_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({"Operations": [{"op": "replace", "value": {"active": true}}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reenabled["active"], true);
+
+    // another org's token cannot see or touch this resource
+    let other_minted: Value = client
+        .post(format!("{base}/api/v1/orgs/{other_id}/scim-tokens"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "entra"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_secret = other_minted["secret"].as_str().unwrap().to_string();
+    let cross = client
+        .get(format!("{base}/scim/v2/Users/{scim_id}"))
+        .bearer_auth(&other_secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross.status(), 404, "a token must not reach another tenant");
+    let cross_list: Value = client
+        .get(format!("{base}/scim/v2/Users"))
+        .bearer_auth(&other_secret)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cross_list["totalResults"], 0);
+
+    // delete deprovisions: the mapping goes, the account survives deactivated
+    let deleted = client
+        .delete(format!("{base}/scim/v2/Users/{scim_id}"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 204);
+    let gone = client
+        .get(format!("{base}/scim/v2/Users/{scim_id}"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 404);
+    let still_there: Option<uuid::Uuid> = sqlx::query_scalar("select id from users where id = $1")
+        .bind(user_uuid)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    assert!(
+        still_there.is_some(),
+        "the account row must outlive the IdP"
+    );
+
+    // revoking the token stops provisioning immediately
+    let revoked = client
+        .delete(format!("{base}/api/v1/scim-tokens/{token_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), 200);
+    let after_revoke = client
+        .get(format!("{base}/scim/v2/Users"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(after_revoke.status(), 401);
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'scim.user.deprovision' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("scim.user.deprovision"));
+}
+
+/// MCP OAuth grants and sessions (#541): admins see the whole org, a member
+/// sees only what they own, revoking a grant kills its sessions, and no token
+/// material ever appears in a response.
+#[tokio::test]
+async fn mcp_oauth_grants_and_sessions_are_owner_scoped_and_revocable() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "McpOrg", "slug": "mcp-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let org_uuid: uuid::Uuid = org_id.parse().unwrap();
+
+    // a bad transport or a non-http url is refused before anything is stored
+    for bad in [
+        json!({"name": "S", "slug": "s", "url": "https://mcp.example.com", "transport": "carrier-pigeon"}),
+        json!({"name": "S", "slug": "s", "url": "file:///etc/passwd"}),
+    ] {
+        let resp = client
+            .post(format!("{base}/api/v1/orgs/{org_id}/mcp-servers"))
+            .bearer_auth("admintok")
+            .json(&bad)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "accepted {bad}");
+    }
+
+    let server: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/mcp-servers"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Docs", "slug": "docs", "url": "https://mcp.example.com"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(server["transport"], "streamable_http");
+    let server_uuid: uuid::Uuid = server["id"].as_str().unwrap().parse().unwrap();
+
+    // two members of the same org, each with their own grant and session
+    let alice = seed_user(&pool, "alice@example.com", false).await;
+    seed_membership(&pool, alice, Some(org_uuid), None, None, "member").await;
+    let alice_token = seed_session(&pool, alice, "alice").await;
+    let bob = seed_user(&pool, "bob@example.com", false).await;
+    seed_membership(&pool, bob, Some(org_uuid), None, None, "member").await;
+    let bob_token = seed_session(&pool, bob, "bob").await;
+
+    let kek = rolter_store::postgres::crypto::Kek::from_secret("test-kek");
+    let repo = rolter_store::postgres::repo::McpOAuthRepo(&pool);
+    let alice_grant = repo
+        .upsert_grant(server_uuid, alice, &["tools:read".to_string()])
+        .await
+        .unwrap();
+    let bob_grant = repo
+        .upsert_grant(server_uuid, bob, &["tools:read".to_string()])
+        .await
+        .unwrap();
+    let alice_session = repo
+        .store_session(
+            &kek,
+            alice_grant.id,
+            "at-alice-secret",
+            Some("rt-alice-secret"),
+            &["tools:read".to_string()],
+            chrono::Utc::now() + chrono::Duration::hours(1),
+            Some(chrono::Utc::now() + chrono::Duration::days(30)),
+        )
+        .await
+        .unwrap();
+    repo.store_session(
+        &kek,
+        bob_grant.id,
+        "at-bob-secret",
+        None,
+        &["tools:read".to_string()],
+        chrono::Utc::now() + chrono::Duration::hours(1),
+        None,
+    )
+    .await
+    .unwrap();
+
+    // the admin token sees both owners
+    let all: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/grants"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(all.as_array().unwrap().len(), 2);
+
+    // a member sees only their own grant and session
+    let mine: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/grants"))
+        .bearer_auth(&alice_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mine = mine.as_array().unwrap();
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0]["user_id"], alice.to_string());
+    assert_eq!(mine[0]["active"], true);
+
+    let sessions: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/sessions"))
+        .bearer_auth(&alice_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let sessions_text = sessions.to_string();
+    assert_eq!(sessions.as_array().unwrap().len(), 1);
+    assert_eq!(sessions[0]["has_refresh_token"], true);
+    // the response describes the session without ever carrying its tokens
+    assert!(
+        !sessions_text.contains("at-alice-secret") && !sessions_text.contains("rt-alice-secret"),
+        "token material leaked into the sessions response: {sessions_text}"
+    );
+
+    // one member may not revoke another's session
+    let denied = client
+        .delete(format!("{base}/api/v1/mcp/sessions/{}", alice_session.id))
+        .bearer_auth(&bob_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 403);
+
+    // a member of a different org cannot even see it
+    let other_org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "OtherMcpOrg", "slug": "other-mcp-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_uuid: uuid::Uuid = other_org["id"].as_str().unwrap().parse().unwrap();
+    let outsider = seed_user(&pool, "outsider@example.com", false).await;
+    seed_membership(&pool, outsider, Some(other_uuid), None, None, "admin").await;
+    let outsider_token = seed_session(&pool, outsider, "outsider").await;
+    let cross_tenant = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/grants"))
+        .bearer_auth(&outsider_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_tenant.status(), 403);
+    let cross_revoke = client
+        .delete(format!("{base}/api/v1/mcp/grants/{}", alice_grant.id))
+        .bearer_auth(&outsider_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_revoke.status(), 403);
+
+    // the sealed tokens open while the grant is live
+    let opened = repo
+        .open_session(&kek, alice_session.id, chrono::Utc::now())
+        .await
+        .unwrap()
+        .expect("live session opens");
+    assert_eq!(opened.access_token, "at-alice-secret");
+    assert_eq!(opened.refresh_token.as_deref(), Some("rt-alice-secret"));
+
+    // revoking the grant revokes its sessions in the same breath
+    let revoked: Value = client
+        .delete(format!("{base}/api/v1/mcp/grants/{}", alice_grant.id))
+        .bearer_auth(&alice_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(revoked["active"], false);
+    let after: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/sessions"))
+        .bearer_auth(&alice_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(after[0]["revoked_at"].is_string());
+    // and the tokens stop opening, so withdrawn consent cannot be spent
+    assert!(repo
+        .open_session(&kek, alice_session.id, chrono::Utc::now())
+        .await
+        .unwrap()
+        .is_none());
+
+    // an expired session is dead even though nobody revoked it
+    let expired = repo
+        .store_session(
+            &kek,
+            bob_grant.id,
+            "at-bob-expired",
+            None,
+            &["tools:read".to_string()],
+            chrono::Utc::now() - chrono::Duration::minutes(1),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(repo
+        .open_session(&kek, expired.id, chrono::Utc::now())
+        .await
+        .unwrap()
+        .is_none());
+
+    // and a KEK that did not seal the token cannot open it
+    let wrong = rolter_store::postgres::crypto::Kek::from_secret("not-the-kek");
+    let bob_live = repo
+        .list_sessions(org_uuid, Some(bob))
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.id != expired.id)
+        .unwrap();
+    assert!(repo
+        .open_session(&wrong, bob_live.id, chrono::Utc::now())
+        .await
+        .is_err());
+
+    let action: Option<String> = sqlx::query_scalar(
+        "select action from audit_log where action = 'mcp_oauth_grant.revoke' order by at desc limit 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(action.as_deref(), Some("mcp_oauth_grant.revoke"));
+}
+
+/// The capability matrix and the caller's effective permissions are served by
+/// the control plane rather than assembled in the browser (#534): the matrix
+/// describes the rules, `effective` answers for the caller at a scope, and the
+/// answer matches what the CRUD guard actually does.
+#[tokio::test]
+async fn rbac_matrix_and_effective_permissions_are_api_backed() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // the matrix needs authentication but no particular role
+    let unauth = client
+        .get(format!("{base}/api/v1/rbac/matrix"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth.status(), 401);
+
+    let matrix: Value = client
+        .get(format!("{base}/api/v1/rbac/matrix"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(matrix["roles"].as_array().unwrap().len(), 3);
+    let provider = matrix["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["resource"] == "provider")
+        .expect("provider in the matrix");
+    let create = provider["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["action"] == "create")
+        .unwrap();
+    assert_eq!(create["minimum_role"], "admin");
+    assert_eq!(create["superadmin_only"], false);
+    // deployment-wide policy is not something an org admin can reach
+    let flags = matrix["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["resource"] == "feature_flags")
+        .expect("feature_flags in the matrix");
+    assert_eq!(flags["actions"][0]["superadmin_only"], true);
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "MatrixOrg", "slug": "matrix-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let org_uuid: uuid::Uuid = org_id.parse().unwrap();
+
+    let viewer = seed_user(&pool, "matrix-viewer@example.com", false).await;
+    seed_membership(&pool, viewer, Some(org_uuid), None, None, "viewer").await;
+    let viewer_token = seed_session(&pool, viewer, "matrixviewer").await;
+
+    let effective: Value = client
+        .get(format!("{base}/api/v1/rbac/effective?org_id={org_id}"))
+        .bearer_auth(&viewer_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(effective["superadmin"], false);
+    assert_eq!(effective["role"], "viewer");
+    let allowed: Vec<String> = serde_json::from_value(effective["allowed"].clone()).unwrap();
+    assert!(allowed.contains(&"provider:read".to_string()));
+    assert!(!allowed.contains(&"provider:create".to_string()));
+
+    // and the guard agrees with what `effective` reported
+    let denied = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/teams"))
+        .bearer_auth(&viewer_token)
+        .json(&json!({"name": "T"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 403);
+
+    // an org the caller has no membership in yields no permissions at all
+    let other: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "OtherOrg", "slug": "other-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_id = other["id"].as_str().unwrap();
+    let elsewhere: Value = client
+        .get(format!("{base}/api/v1/rbac/effective?org_id={other_id}"))
+        .bearer_auth(&viewer_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(elsewhere["role"].is_null());
+    assert_eq!(elsewhere["allowed"].as_array().unwrap().len(), 0);
+
+    // a project-scoped admin inherits nothing upward: the same user is only an
+    // admin inside the project chain they were granted
+    let team: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/teams"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "MatrixTeam"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let team_id = team["id"].as_str().unwrap().to_string();
+    let team_uuid: uuid::Uuid = team_id.parse().unwrap();
+    let project: Value = client
+        .post(format!("{base}/api/v1/teams/{team_id}/projects"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "MatrixProject"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let project_id = project["id"].as_str().unwrap().to_string();
+    let project_uuid: uuid::Uuid = project_id.parse().unwrap();
+
+    let scoped = seed_user(&pool, "matrix-project-admin@example.com", false).await;
+    seed_membership(
+        &pool,
+        scoped,
+        Some(org_uuid),
+        Some(team_uuid),
+        Some(project_uuid),
+        "admin",
+    )
+    .await;
+    let scoped_token = seed_session(&pool, scoped, "matrixscoped").await;
+
+    let in_project: Value = client
+        .get(format!(
+            "{base}/api/v1/rbac/effective?org_id={org_id}&team_id={team_id}&project_id={project_id}"
+        ))
+        .bearer_auth(&scoped_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(in_project["role"], "admin");
+
+    let at_org: Value = client
+        .get(format!("{base}/api/v1/rbac/effective?org_id={org_id}"))
+        .bearer_auth(&scoped_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        at_org["role"].is_null(),
+        "a project-scoped grant must not authorize the whole org"
+    );
 }
 
 /// With an admin token configured (RBAC enforcement active), every control
@@ -2181,4 +3891,538 @@ async fn self_service_key_lifecycle() {
         .await
         .unwrap();
     assert_eq!(remaining.as_array().unwrap().len(), 1);
+}
+
+/// Invitations and single sign-on co-exist (#240): an operator-granted role is
+/// never reconciled away by a later SSO login, an IdP group that disappears
+/// does revoke the role it granted, and an org can require SSO without locking
+/// out the break-glass superadmin.
+#[tokio::test]
+async fn sso_and_password_login_coexist_per_org_policy() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    std::env::set_var("ROLTER_PUBLIC_URL", format!("http://{addr}"));
+    std::env::set_var("ROLTER_KEK", "sso-test-kek");
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "MixedOrg", "slug": "mixed-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+
+    // with no provider registered, the login screen offers a password form and
+    // nothing else: an operator who never wants an IdP never sees one
+    let methods: Value = client
+        .get(format!("{base}/api/v1/auth/methods"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(methods["password"], true);
+    assert_eq!(methods["sso"].as_array().unwrap().len(), 0);
+
+    // an invited local account: created with a password, granted a role by an
+    // operator, and able to log in
+    let invited: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/users"))
+        .bearer_auth("admintok")
+        .json(&json!({"email": "ada@example.com", "password": "correct horse battery"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let user_id = invited["user"]["id"].as_str().unwrap().to_string();
+    assert_eq!(invited["membership"]["role"], "member");
+    let source: String = sqlx::query_scalar("select source from memberships where user_id = $1")
+        .bind(uuid::Uuid::parse_str(&user_id).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(source, "manual", "an operator grant must be tagged manual");
+
+    let logged_in = client
+        .post(format!("{base}/api/v1/auth/login"))
+        .json(&json!({"email": "ada@example.com", "password": "correct horse battery"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(logged_in.status(), 200);
+
+    // now the same deployment gains an IdP, and the same person arrives
+    // through it: the account is adopted by email, not duplicated
+    let (issuer, stub) = stub_idp::serve_stub().await;
+    let provider: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/sso-providers"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Stub IdP", "slug": "mixed", "issuer": issuer,
+            "client_id": "rolter", "client_secret": "s3cret"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let provider_id = provider["id"].as_str().unwrap().to_string();
+    let mapping: Value = client
+        .post(format!(
+            "{base}/api/v1/sso-providers/{provider_id}/group-mappings"
+        ))
+        .bearer_auth("admintok")
+        .json(&json!({"group_name": "admins", "role": "admin", "org_id": org_id}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mapping_id = mapping["id"].as_str().unwrap().to_string();
+
+    // the login screen now offers both
+    let methods: Value = client
+        .get(format!("{base}/api/v1/auth/methods"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(methods["password"], true);
+    assert_eq!(methods["sso"][0]["slug"], "mixed");
+    assert_eq!(methods["sso"][0]["start_url"], "/auth/sso/mixed/start");
+
+    sso_login(&client, &base, &stub, &issuer, json!(["admins"]))
+        .await
+        .unwrap();
+    let user_uuid = uuid::Uuid::parse_str(&user_id).unwrap();
+    let users: i64 = sqlx::query_scalar("select count(*) from users where email = $1")
+        .bind("ada@example.com")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(users, 1, "sso must adopt the invited account, not fork it");
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("select role, source from memberships where user_id = $1 order by source")
+            .bind(user_uuid)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("member".to_string(), "manual".to_string()),
+            ("admin".to_string(), "sso".to_string()),
+        ],
+        "the operator grant and the sso grant must co-exist"
+    );
+
+    // the IdP drops the group; the next login revokes the role it granted and
+    // leaves the operator's grant alone
+    client
+        .delete(format!("{base}/api/v1/sso-group-mappings/{mapping_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    let refused = sso_login(&client, &base, &stub, &issuer, json!(["admins"])).await;
+    assert_eq!(
+        refused, None,
+        "with no mapping left and no default_role, the login must fail closed"
+    );
+    let remaining: Vec<(String, String)> =
+        sqlx::query_as("select role, source from memberships where user_id = $1")
+            .bind(user_uuid)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        remaining,
+        vec![("member".to_string(), "manual".to_string())],
+        "losing every mapped group revokes the sso grant, not the operator's"
+    );
+
+    // an org cannot disable password login before an IdP can carry the load...
+    let other: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "NoIdp", "slug": "no-idp"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_id = other["id"].as_str().unwrap();
+    let premature = client
+        .put(format!("{base}/api/v1/orgs/{other_id}/auth-policy"))
+        .bearer_auth("admintok")
+        .json(&json!({"allow_password_login": false, "allow_sso": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(premature.status(), 409);
+
+    // ...nor turn both methods off
+    let neither = client
+        .put(format!("{base}/api/v1/orgs/{org_id}/auth-policy"))
+        .bearer_auth("admintok")
+        .json(&json!({"allow_password_login": false, "allow_sso": false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(neither.status(), 409);
+
+    // enforcing sso for the org that has a provider refuses that member's
+    // password, and the login screen stops offering the form
+    let enforced = client
+        .put(format!("{base}/api/v1/orgs/{org_id}/auth-policy"))
+        .bearer_auth("admintok")
+        .json(&json!({"allow_password_login": false, "allow_sso": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(enforced.status(), 200);
+    let blocked = client
+        .post(format!("{base}/api/v1/auth/login"))
+        .json(&json!({"email": "ada@example.com", "password": "correct horse battery"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), 403);
+
+    // break-glass: a superadmin who belongs to the same org still gets in with
+    // a password, which is the only reason enforcing sso is a safe switch to
+    // flip — a mistyped issuer must not be unrecoverable
+    let root: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/users"))
+        .bearer_auth("admintok")
+        .json(&json!({"email": "root@example.com", "password": "break glass in case", "role": "admin"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let root_id = uuid::Uuid::parse_str(root["user"]["id"].as_str().unwrap()).unwrap();
+    sqlx::query("update users set is_superadmin = true where id = $1")
+        .bind(root_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let super_login = client
+        .post(format!("{base}/api/v1/auth/login"))
+        .json(&json!({"email": "root@example.com", "password": "break glass in case"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(super_login.status(), 200);
+
+    // sso can be switched off without deleting the provider
+    let off = client
+        .put(format!("{base}/api/v1/orgs/{org_id}/auth-policy"))
+        .bearer_auth("admintok")
+        .json(&json!({"allow_password_login": true, "allow_sso": false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(off.status(), 200);
+    let refused = sso_login(&client, &base, &stub, &issuer, json!(["admins"])).await;
+    assert_eq!(
+        refused, None,
+        "sso must be refused while the org disables it"
+    );
+}
+
+/// Drive one full SSO round trip, returning the session token on success and
+/// `None` when the callback refused.
+async fn sso_login(
+    client: &reqwest::Client,
+    base: &str,
+    stub: &stub_idp::Stub,
+    issuer: &str,
+    groups: Value,
+) -> Option<String> {
+    let start = client
+        .get(format!("{base}/auth/sso/mixed/start"))
+        .send()
+        .await
+        .unwrap();
+    let location = start
+        .headers()
+        .get("location")?
+        .to_str()
+        .unwrap()
+        .to_string();
+    let state = url_param(&location, "state");
+    let nonce = url_param(&location, "nonce");
+    *stub.next_claims.lock().unwrap() = stub_idp::claims(issuer, "rolter", &nonce, groups);
+    let response = client
+        .get(format!(
+            "{base}/auth/sso/mixed/callback?code=abc&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    if !response.status().is_success() {
+        return None;
+    }
+    let body: Value = response.json().await.unwrap();
+    Some(body["token"].as_str().unwrap().to_string())
+}
+
+/// Invitation onboarding (#712): an admin mints a one-time link, the invitee
+/// sets their own password, and every way the link can be misused fails.
+#[tokio::test]
+async fn invitations_onboard_accounts_once_and_expire_closed() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "InviteOrg", "slug": "invite-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let team: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/teams"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Platform"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let team_id = team["id"].as_str().unwrap().to_string();
+
+    // a role rolter does not have is refused before anything is stored
+    let bad_role = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/invitations"))
+        .bearer_auth("admintok")
+        .json(&json!({"email": "ada@example.com", "role": "root"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_role.status(), 400);
+
+    let created: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/invitations"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "email": "ada@example.com", "role": "admin",
+            "scope_type": "team", "scope_id": team_id
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = created["token"].as_str().unwrap().to_string();
+    assert!(token.starts_with("rolter_invite_"));
+    assert!(created["accept_url"].as_str().unwrap().ends_with(&token));
+    // the token is handed over once and only its digest is kept
+    let stored: String = sqlx::query_scalar("select token_hash from invitations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_ne!(stored, token, "the raw token must not be stored");
+    let listed: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/invitations"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert!(
+        !listed.to_string().contains("token_hash"),
+        "the digest must not be serialized back out: {listed}"
+    );
+
+    // the accept screen can render without a session, and learns nothing about
+    // the org beyond what it must show
+    let preview: Value = client
+        .get(format!("{base}/api/v1/invitations/accept/{token}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(preview["org_name"], "InviteOrg");
+    assert_eq!(preview["email"], "ada@example.com");
+    assert_eq!(preview["role"], "admin");
+
+    // a made-up token is refused, and so is a short password
+    let unknown = client
+        .get(format!(
+            "{base}/api/v1/invitations/accept/rolter_invite_nope"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), 401);
+    let too_short = client
+        .post(format!("{base}/api/v1/invitations/accept/{token}/accept"))
+        .json(&json!({"password": "short"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(too_short.status(), 400);
+
+    // accepting creates the account with the invitee's own password and hands
+    // back a live session
+    let accepted: Value = client
+        .post(format!("{base}/api/v1/invitations/accept/{token}/accept"))
+        .json(&json!({"password": "chosen by ada"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(accepted["user"]["email"], "ada@example.com");
+    let session = accepted["token"].as_str().unwrap().to_string();
+
+    // the granted membership is real and tagged manual, so a later sso login
+    // cannot reconcile it away
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("select role, source from memberships where user_id = $1")
+            .bind(uuid::Uuid::parse_str(accepted["user"]["id"].as_str().unwrap()).unwrap())
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, vec![("admin".to_string(), "manual".to_string())]);
+    let project = client
+        .post(format!("{base}/api/v1/teams/{team_id}/projects"))
+        .bearer_auth(&session)
+        .json(&json!({"name": "FromInvite"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(project.status(), 200);
+
+    // the password the invitee chose is the one that works
+    let login = client
+        .post(format!("{base}/api/v1/auth/login"))
+        .json(&json!({"email": "ada@example.com", "password": "chosen by ada"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 200);
+
+    // the link is single-use: the second accept is refused, and no second
+    // membership appears
+    let replay = client
+        .post(format!("{base}/api/v1/invitations/accept/{token}/accept"))
+        .json(&json!({"password": "someone else's"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 401);
+    let memberships: i64 = sqlx::query_scalar("select count(*) from memberships")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(memberships, 1);
+
+    // a revoked invitation stops working immediately
+    let second: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/invitations"))
+        .bearer_auth("admintok")
+        .json(&json!({"email": "grace@example.com", "role": "viewer"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let second_token = second["token"].as_str().unwrap().to_string();
+    let second_id = second["invitation"]["id"].as_str().unwrap().to_string();
+    let revoked = client
+        .delete(format!("{base}/api/v1/invitations/{second_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), 200);
+    let after_revoke = client
+        .post(format!(
+            "{base}/api/v1/invitations/accept/{second_token}/accept"
+        ))
+        .json(&json!({"password": "too late now"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(after_revoke.status(), 401);
+
+    // an expired invitation is refused as firmly as a wrong one
+    let third: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/invitations"))
+        .bearer_auth("admintok")
+        .json(&json!({"email": "hopper@example.com", "role": "member"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let third_token = third["token"].as_str().unwrap().to_string();
+    sqlx::query("update invitations set expires_at = now() - interval '1 hour' where email = $1")
+        .bind("hopper@example.com")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let expired = client
+        .post(format!(
+            "{base}/api/v1/invitations/accept/{third_token}/accept"
+        ))
+        .json(&json!({"password": "way too late"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(expired.status(), 401);
+
+    let actions: Vec<String> =
+        sqlx::query_scalar("select action from audit_log where action like 'invitation.%'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert!(actions.iter().any(|a| a == "invitation.create"));
+    assert!(actions.iter().any(|a| a == "invitation.accept"));
+    assert!(actions.iter().any(|a| a == "invitation.revoke"));
 }

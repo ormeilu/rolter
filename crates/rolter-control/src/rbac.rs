@@ -40,7 +40,8 @@ use subtle::ConstantTimeEq;
 use rolter_auth::Role;
 use rolter_store::postgres::models::{Membership, User};
 use rolter_store::postgres::repo::{
-    MembershipRepo, ProjectRepo, SessionRepo, TeamRepo, UserRepo, VirtualKeyRepo,
+    BusinessUnitRepo, CustomerRepo, MembershipRepo, ProjectRepo, SessionRepo, TeamRepo, UserRepo,
+    VirtualKeyRepo,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -155,6 +156,14 @@ impl ScopeChain {
                 let vk = VirtualKeyRepo(pool).get(scope_id).await?;
                 Self::from_project(pool, vk.project_id).await
             }
+            "business_unit" => {
+                let unit = BusinessUnitRepo(pool).get(scope_id).await?;
+                Ok(Self::org(unit.org_id))
+            }
+            "customer" => {
+                let customer = CustomerRepo(pool).get(scope_id).await?;
+                Ok(Self::org(customer.org_id))
+            }
             other => Err(ApiError::Core(rolter_core::Error::Config(format!(
                 "unknown scope_type '{other}'"
             )))),
@@ -162,8 +171,12 @@ impl ScopeChain {
     }
 }
 
+/// every built-in role, weakest first. The one place the set is enumerated, so
+/// the capability matrix and the guard cannot disagree about what exists.
+pub(crate) const ROLES: [Role; 3] = [Role::Viewer, Role::Member, Role::Admin];
+
 /// total order over roles: viewer < member < admin
-fn role_rank(role: Role) -> u8 {
+pub(crate) fn role_rank(role: Role) -> u8 {
     match role {
         Role::Viewer => 0,
         Role::Member => 1,
@@ -341,6 +354,7 @@ mod tests {
             team_id: team,
             project_id: project,
             role: role.to_string(),
+            source: "manual".into(),
             created_at: Utc::now(),
         }
     }

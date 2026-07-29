@@ -39,6 +39,20 @@ struct UpdateLoggingSettings {
     payload_capture_models: Vec<String>,
     #[serde(default)]
     payload_capture_virtual_key_ids: Vec<String>,
+    /// how long request-log metadata is kept, in days
+    #[serde(default = "default_retention_days")]
+    retention_days: i32,
+    /// how long captured raw payloads are kept, in hours
+    #[serde(default = "default_payload_retention_hours")]
+    payload_retention_hours: i32,
+}
+
+fn default_retention_days() -> i32 {
+    90
+}
+
+fn default_payload_retention_hours() -> i32 {
+    168
 }
 
 fn invalid(message: impl Into<String>) -> ApiError {
@@ -77,6 +91,21 @@ fn validate_settings(body: &UpdateLoggingSettings) -> ApiResult<()> {
             "payload_capture_virtual_key_ids must contain valid UUIDs",
         ));
     }
+    if !(1..=3650).contains(&body.retention_days) {
+        return Err(invalid("retention_days must be between 1 and 3650"));
+    }
+    if !(1..=8760).contains(&body.payload_retention_hours) {
+        return Err(invalid(
+            "payload_retention_hours must be between 1 and 8760",
+        ));
+    }
+    // raw bodies are the sensitive half; keeping them past the metadata they
+    // belong to would leak prompt content the operator meant to expire
+    if i64::from(body.payload_retention_hours) > i64::from(body.retention_days) * 24 {
+        return Err(invalid(
+            "payload_retention_hours must not exceed retention_days",
+        ));
+    }
     Ok(())
 }
 
@@ -95,9 +124,24 @@ async fn update_logging_settings(
             &body.payload_capture_redact_fields,
             &body.payload_capture_models,
             &body.payload_capture_virtual_key_ids,
+            body.retention_days,
+            body.payload_retention_hours,
         )
         .await?;
     publish_config_change(&state).await?;
+    // clickhouse owns expiry; a failure here leaves the stored policy in place
+    // and is surfaced in logs rather than failing the admin write
+    if let Some(clickhouse) = &state.clickhouse {
+        if let Err(err) = clickhouse
+            .apply_log_retention(
+                row.retention_days as u32,
+                row.payload_retention_hours as u32,
+            )
+            .await
+        {
+            tracing::warn!(error = %err, "failed to apply log retention to clickhouse");
+        }
+    }
     let actor = match &principal {
         Principal::User(user) => Some(user.id),
         Principal::Superadmin => None,
@@ -116,6 +160,8 @@ async fn update_logging_settings(
                 "payload_capture_redact_field_count": row.payload_capture_redact_fields.len(),
                 "payload_capture_model_count": row.payload_capture_models.len(),
                 "payload_capture_virtual_key_id_count": row.payload_capture_virtual_key_ids.len(),
+                "retention_days": row.retention_days,
+                "payload_retention_hours": row.payload_retention_hours,
             })),
         )
         .await
@@ -123,4 +169,37 @@ async fn update_logging_settings(
         tracing::warn!(error = %err, "failed to write logging settings audit log");
     }
     Ok(Json(row))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(retention_days: i32, payload_retention_hours: i32) -> UpdateLoggingSettings {
+        UpdateLoggingSettings {
+            sample_rate: 1.0,
+            payload_capture_enabled: false,
+            payload_capture_max_bytes: 32768,
+            payload_capture_redact_fields: vec!["api_key".to_string()],
+            payload_capture_models: Vec::new(),
+            payload_capture_virtual_key_ids: Vec::new(),
+            retention_days,
+            payload_retention_hours,
+        }
+    }
+
+    #[test]
+    fn accepts_retention_within_bounds() {
+        assert!(validate_settings(&settings(90, 168)).is_ok());
+        assert!(validate_settings(&settings(1, 24)).is_ok());
+    }
+
+    #[test]
+    fn rejects_out_of_range_or_outliving_retention() {
+        assert!(validate_settings(&settings(0, 24)).is_err());
+        assert!(validate_settings(&settings(4000, 24)).is_err());
+        assert!(validate_settings(&settings(90, 0)).is_err());
+        // payloads must never outlive the metadata they belong to
+        assert!(validate_settings(&settings(1, 48)).is_err());
+    }
 }
