@@ -53,6 +53,10 @@ pub struct KeyMeta {
     /// `Some(false)` bypasses the cache for this key, `Some(true)` caches even
     /// on a non-opted-in route (the global switch is still required)
     pub cache_override: Option<bool>,
+    /// governance dimensions this key's spend rolls up to; empty when the key
+    /// is attributed by tenancy alone (#539)
+    pub business_unit_id: String,
+    pub customer_id: String,
 }
 
 impl KeyMeta {
@@ -123,6 +127,9 @@ pub struct Snapshot {
     /// versioned prompt templates / route decorators, compiled once per snapshot
     /// and shared across requests; inert unless enabled (ROL-256)
     pub prompt_templates: Arc<rolter_core::CompiledTemplates>,
+    /// deployment-wide adaptive-routing policy, read when a route's balancer is
+    /// built; inert unless enabled (#544)
+    pub adaptive_routing: rolter_core::AdaptiveRoutingConfig,
 }
 
 /// Live per-target latency handle for the `fastest` strategy, backed by the
@@ -254,6 +261,7 @@ impl Snapshot {
                             .collect(),
                     )
                 }),
+                adaptive: config.adaptive_routing.clone(),
             };
             let balancer = build_with_stats(route.strategy, &weights, &stats);
             let variant_balancers = route
@@ -283,6 +291,7 @@ impl Snapshot {
                                     .collect(),
                             )
                         }),
+                        adaptive: config.adaptive_routing.clone(),
                     };
                     build_with_stats(route.strategy, &w, &s)
                 })
@@ -330,6 +339,8 @@ impl Snapshot {
                     disabled: k.disabled,
                     expires_at: k.expires_at,
                     cache_override: k.cache,
+                    business_unit_id: k.business_unit_id.clone(),
+                    customer_id: k.customer_id.clone(),
                 },
             );
         }
@@ -357,6 +368,7 @@ impl Snapshot {
             prompt_templates: Arc::new(rolter_core::CompiledTemplates::from_config(
                 &config.prompt_templates,
             )),
+            adaptive_routing: config.adaptive_routing.clone(),
         }
     }
 
@@ -421,6 +433,7 @@ impl Snapshot {
         let stats = TargetStats {
             cost_per_mtok: target_costs(&targets, model, &self.prices),
             latency: None,
+            adaptive: self.adaptive_routing.clone(),
             ..Default::default()
         };
         let balancer = build_with_stats(strategy, &weights, &stats);
@@ -499,6 +512,10 @@ pub struct AppState {
     /// `server.require_auth` overrides this either way. process-level rather
     /// than snapshot-level so a control-plane reload can never clear it
     pub managed_auth: bool,
+    /// set by the config watcher when the control plane marks this node as
+    /// draining; `/readyz` then reports not-ready so a load balancer stops
+    /// sending new traffic while in-flight requests finish (#543)
+    pub draining: Arc<std::sync::atomic::AtomicBool>,
     /// live egress policy every upstream client's resolver consults at connect
     /// time; swapped on reload so hostname/rebinding enforcement re-tunes
     /// without rebuilding pooled clients (#656)
@@ -625,6 +642,7 @@ impl AppState {
             &config.timeouts,
             egress.clone(),
         ));
+        forwarder.set_compatibility(&config.compatibility);
         let provider_queues = ProviderQueues::new(forwarder.clone(), metrics.clone());
         let cache_telemetry = crate::cache_telemetry::CacheTelemetry::new(metrics.clone());
         cache_telemetry.configure(&config.providers);
@@ -636,6 +654,7 @@ impl AppState {
             ))),
             // opted into by the binary when a snapshot url is configured
             managed_auth: false,
+            draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             egress,
             forwarder,
             provider_queues,
@@ -680,6 +699,9 @@ impl AppState {
         // configured clients capture CA roots at construction time; clearing
         // them makes bundle rotation take effect on the next request
         self.forwarder.reload(&config.timeouts);
+        // cross-dialect translation behavior is hot-swappable: the next request
+        // reads the new policy, in-flight ones keep the one they started with
+        self.forwarder.set_compatibility(&config.compatibility);
         // the resolver reads this on every lookup, so a policy change takes
         // effect on the next connect without rebuilding a single client
         self.egress.store(Arc::new(config.egress.clone()));

@@ -58,4 +58,3 @@ and verifies batch embeddings, optional fields, usage, and routing headers:
 ```bash
 integration/tei/run.sh
 ```
-

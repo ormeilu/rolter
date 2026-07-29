@@ -21,6 +21,7 @@ Every route in Rolter picks exactly one load-balancing strategy. The strategy ru
 | `fastest` | Lowest observed request latency (EWMA); load breaks ties and carries cold routes | Heterogeneous pools where speed matters most |
 | `precise_cache_aware` | Exact resident-prefix score from vLLM KV events; load fallback | vLLM fleets with KV-event publishing |
 | `lmcache_aware` | Cache availability and free-capacity score from controller occupancy | LMCache-backed fleets |
+| `adaptive` | Weighted blend of latency, cost and load, gated by a global kill switch | Mixed price *and* latency pools, tuned by the gateway |
 
 ---
 

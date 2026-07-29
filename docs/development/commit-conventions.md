@@ -1,6 +1,6 @@
 # Commit conventions
 
-rolter uses [Conventional Commits](https://www.conventionalcommits.org) for commit messages **and** PR titles. CI checks PR titles; the `conventional-pre-commit` hook checks local messages.
+rolter uses [Conventional Commits](https://www.conventionalcommits.org) for commit messages **and** PR titles. CI checks PR titles; the `conventional-pre-commit` hook managed by `prek` checks local messages.
 
 ## Format
 
@@ -38,5 +38,13 @@ BREAKING CHANGE: config field `targets` is now `upstreams`.
 ## Tooling
 
 - `.config/commitlint.config.mjs` — rules (types, scopes, lowercase subject, 72-char header).
-- `.pre-commit-config.yaml` — `conventional-pre-commit` (commit-msg) + `cargo fmt`/`cargo clippy`.
-- Install hooks: `prek install` (or `pre-commit install && pre-commit install --hook-type commit-msg`).
+- `prek.toml` — fast commit-time hygiene, secret scanning, formatting/linting, commit-message validation, and pre-push test/security gates.
+- Install all configured hook stages with `prek install --prepare-hooks`. The configuration installs `pre-commit`, `commit-msg`, and `pre-push` shims.
+- Run commit-time checks manually with `prek run --all-files`.
+- Run the push gate manually with `prek run --all-files --hook-stage pre-push`.
+
+The commit stage uses prek's built-in checks plus pinned Gitleaks and
+Conventional Commit hooks. Project-specific checks require `actionlint`,
+`taplo`, and `typos` on `PATH`. The push stage also requires `cargo-deny` and
+Bun when UI files are part of the push. Install `cargo-nextest` for CI-equivalent
+test execution; the hook falls back to `cargo test` when it is unavailable.

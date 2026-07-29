@@ -10,7 +10,7 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures_util::Stream;
-use rolter_core::{Error, ProviderKind, Result, RoleProfile};
+use rolter_core::{CompatibilityConfig, Error, ProviderKind, Result, RoleProfile};
 use serde_json::{json, Map, Value};
 
 /// Public wire dialect presented by a client or accepted by an upstream.
@@ -97,6 +97,21 @@ static TRANSLATION_PAIRS: &[TranslationPair] = &[
     },
 ];
 
+/// The Anthropic Messages API rejects a request without `max_tokens`, so a
+/// translated request that carried neither `max_tokens` nor
+/// `max_completion_tokens` gets the deployment's configured default (#546).
+fn apply_max_tokens_default(value: &mut Value, upstream: Protocol, default_max_tokens: u32) {
+    if upstream != Protocol::AnthropicMessages {
+        return;
+    }
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    if !obj.contains_key("max_tokens") {
+        obj.insert("max_tokens".into(), json!(default_max_tokens));
+    }
+}
+
 fn registered_pair(source: Protocol, target: Protocol) -> Option<&'static TranslationPair> {
     TRANSLATION_PAIRS
         .iter()
@@ -174,7 +189,18 @@ impl TranslationPlan {
         self.upstream == Protocol::GeminiGenerate
     }
 
+    /// Translate with the deployment's compatibility defaults.
     pub fn translate_request(self, body: Bytes) -> Result<Bytes> {
+        self.translate_request_with(body, &CompatibilityConfig::default())
+    }
+
+    /// Translate applying `compat`, the control-plane-owned cross-dialect
+    /// behavior (#546).
+    pub fn translate_request_with(
+        self,
+        body: Bytes,
+        compat: &CompatibilityConfig,
+    ) -> Result<Bytes> {
         if self.upstream == Protocol::GeminiInteractions {
             return Err(Error::Config(
                 "gemini_interactions_unsupported: request translation is not implemented; see #599"
@@ -195,6 +221,7 @@ impl TranslationPlan {
             return Ok(body);
         };
         value = (pair.request)(value);
+        apply_max_tokens_default(&mut value, self.upstream, compat.default_max_tokens);
         normalize_openai_roles(&mut value, self.upstream, self.role_profile);
         serde_json::to_vec(&value).map(Bytes::from).map_err(|err| {
             Error::Config(format!("role_capability: failed to encode request: {err}"))
@@ -572,8 +599,9 @@ fn openai_request(mut v: Value) -> Value {
         obj.insert("system".into(), Value::Array(system));
     }
     if !obj.contains_key("max_tokens") {
-        let max = obj.remove("max_completion_tokens").unwrap_or(json!(1024));
-        obj.insert("max_tokens".into(), max);
+        if let Some(max) = obj.remove("max_completion_tokens") {
+            obj.insert("max_tokens".into(), max);
+        }
     }
     obj.remove("max_completion_tokens");
     if let Some(stop) = obj.remove("stop") {
@@ -1733,6 +1761,34 @@ mod tests {
         assert_eq!(v["messages"][1]["content"][0]["type"], "tool_use");
         assert_eq!(v["messages"][2]["content"][0]["type"], "tool_result");
         assert_eq!(v["tools"][0]["input_schema"]["type"], "object");
+    }
+
+    #[test]
+    fn anthropic_max_tokens_default_comes_from_the_compatibility_policy() {
+        // the Messages API rejects a request without max_tokens, so a translated
+        // request that set neither field gets the configured default (#546)
+        let body = Bytes::from_static(br#"{"messages":[{"role":"user","content":"hello"}]}"#);
+        let plan = plan(Protocol::OpenAiChat, Protocol::AnthropicMessages);
+        let compat = CompatibilityConfig {
+            anthropic_version: "2023-06-01".to_string(),
+            default_max_tokens: 4096,
+        };
+        let out = plan.translate_request_with(body.clone(), &compat).unwrap();
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["max_tokens"], 4096);
+
+        // the default never overrides what the caller asked for
+        let explicit = Bytes::from_static(
+            br#"{"messages":[{"role":"user","content":"hello"}],"max_completion_tokens":32}"#,
+        );
+        let out = plan.translate_request_with(explicit, &compat).unwrap();
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["max_tokens"], 32);
+
+        // and the compiled-in default still applies when no policy is passed
+        let out = plan.translate_request(body).unwrap();
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["max_tokens"], 1024);
     }
 
     #[test]

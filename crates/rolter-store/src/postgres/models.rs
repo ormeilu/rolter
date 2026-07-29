@@ -281,6 +281,164 @@ pub struct RuntimePolicy {
     pub updated_at: DateTime<Utc>,
 }
 
+/// a gateway or control node seen by the control plane, refreshed on every
+/// snapshot poll it makes
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ClusterNode {
+    pub id: String,
+    pub role: String,
+    pub build_version: String,
+    /// config snapshot version the node reported running
+    pub config_version: i64,
+    /// operator-requested state: `active` or `draining`
+    pub desired_state: String,
+    pub state_changed_at: DateTime<Utc>,
+    pub first_seen_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+}
+
+/// singleton persisted cross-dialect compatibility policy projected into
+/// snapshots
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct CompatibilityPolicy {
+    pub anthropic_version: String,
+    pub default_max_tokens: i32,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// an OIDC identity provider registered for one org.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SsoProvider {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub issuer: String,
+    pub client_id: String,
+    /// sealed client secret; never serialized, and read only by the token
+    /// exchange through [`super::repo::SsoRepo::client_secret`]
+    #[serde(skip_serializing)]
+    pub secret_ciphertext: Option<Vec<u8>>,
+    #[serde(skip_serializing)]
+    pub secret_nonce: Option<Vec<u8>>,
+    pub scopes: Vec<String>,
+    pub group_claim: String,
+    /// role granted when no group mapping matches; `None` denies login to a
+    /// user the IdP has not put in a mapped group
+    pub default_role: Option<String>,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+/// an IdP group name granting a role at a scope
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SsoGroupMapping {
+    pub id: Uuid,
+    pub provider_id: Uuid,
+    pub group_name: String,
+    pub org_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// one in-flight authorization-code login
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SsoLoginState {
+    pub state: String,
+    pub provider_id: Uuid,
+    pub code_verifier: String,
+    pub nonce: String,
+    pub redirect_uri: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// a SCIM provisioning token. `token_hash` is peppered sha-256; the plaintext
+/// is returned once at creation and never stored.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ScimToken {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    #[serde(skip_serializing)]
+    pub token_hash: String,
+    pub created_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// the SCIM view of a local user within one org: what the IdP calls them and
+/// the stable id it knows them by.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ScimIdentity {
+    pub user_id: Uuid,
+    pub org_id: Uuid,
+    pub external_id: Option<String>,
+    pub user_name: String,
+    pub display_name: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// an MCP server an org has registered; the anchor OAuth grants hang off
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct McpServer {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub url: String,
+    /// one of `stdio` | `sse` | `streamable_http` | `websocket`
+    pub transport: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// a user's consent grant against one MCP server. Revoked grants are kept so
+/// the audit trail survives; `revoked_at` is the live/dead flag.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct McpOAuthGrant {
+    pub id: Uuid,
+    pub server_id: Uuid,
+    pub user_id: Uuid,
+    pub scopes: Vec<String>,
+    pub granted_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub revoked_by: Option<Uuid>,
+}
+
+/// Session metadata for a grant, with **no** token material on it. The sealed
+/// tokens live in the same row but are only ever read through
+/// [`super::repo::McpOAuthRepo::open_session`], so a DTO that reaches an API
+/// response cannot carry them by accident.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct McpOAuthSession {
+    pub id: Uuid,
+    pub grant_id: Uuid,
+    pub scopes: Vec<String>,
+    pub expires_at: DateTime<Utc>,
+    pub refresh_expires_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    /// whether a refresh token is stored, so a UI can show renewability
+    /// without the control plane ever handing the token out
+    pub has_refresh_token: bool,
+}
+
+/// singleton persisted adaptive-routing policy projected into snapshots
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AdaptiveRoutingPolicy {
+    pub enabled: bool,
+    pub latency_weight: f32,
+    pub cost_weight: f32,
+    pub load_weight: f32,
+    pub exploration_ratio: f32,
+    pub min_samples: i32,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// singleton persisted request-log policy projected into snapshots
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct LoggingSettings {
@@ -290,6 +448,10 @@ pub struct LoggingSettings {
     pub payload_capture_redact_fields: Vec<String>,
     pub payload_capture_models: Vec<String>,
     pub payload_capture_virtual_key_ids: Vec<String>,
+    /// how long request-log metadata is kept in clickhouse
+    pub retention_days: i32,
+    /// how long captured raw payloads are kept; always the shorter clock
+    pub payload_retention_hours: i32,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -319,7 +481,39 @@ pub struct Membership {
     pub project_id: Option<Uuid>,
     /// one of `admin` | `member` | `viewer`
     pub role: String,
+    /// who granted this: `manual` (invitation, seed, admin API) or `sso` (an
+    /// IdP group mapping). SSO reconciliation only ever touches its own rows
+    pub source: String,
     pub created_at: DateTime<Utc>,
+}
+
+/// a pending (or spent) invitation to join an org at a scope
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Invitation {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub email: String,
+    pub role: String,
+    pub team_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    /// peppered digest of the one-time token; never serialized, and never
+    /// compared outside [`super::repo::InvitationRepo::find_live_by_hash`]
+    #[serde(skip_serializing)]
+    pub token_hash: String,
+    pub invited_by: Option<Uuid>,
+    pub expires_at: DateTime<Utc>,
+    pub accepted_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// how one org's members are allowed to authenticate
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct OrgAuthPolicy {
+    pub org_id: Uuid,
+    pub allow_password_login: bool,
+    pub allow_sso: bool,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// a record of an admin/CRUD/auth action, for the audit-log API
