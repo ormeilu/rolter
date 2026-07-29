@@ -6,12 +6,18 @@ default_stages = ["pre-commit"]
 [[repos]]
 repo = "builtin"
 
+# applied migrations are checksummed by sqlx, so a whitespace-only rewrite is
+# enough to stop every existing deployment from booting. the two hooks that
+# rewrite file contents skip that directory
+
 [[repos.hooks]]
 id = "trailing-whitespace"
 args = ["--markdown-linebreak-ext=md"]
+exclude = "^crates/rolter-store/migrations/"
 
 [[repos.hooks]]
 id = "end-of-file-fixer"
+exclude = "^crates/rolter-store/migrations/"
 
 [[repos.hooks]]
 id = "mixed-line-ending"
