@@ -418,7 +418,20 @@ fn responses_request(mut v: Value) -> Value {
     let Some(obj) = v.as_object_mut() else {
         return v;
     };
-    let mut messages = Vec::new();
+
+    // Determine capacity: optional system prompt + input elements
+    let input_len = match obj.get("input") {
+        Some(serde_json::Value::Array(items)) => items.len(),
+        Some(_) => 1,
+        None => 0,
+    };
+    let capacity = if obj.contains_key("instructions") {
+        input_len + 1
+    } else {
+        input_len
+    };
+    let mut messages = Vec::with_capacity(capacity);
+
     if let Some(instructions) = obj.remove("instructions") {
         messages.push(json!({"role":"system","content":instructions}));
     }
