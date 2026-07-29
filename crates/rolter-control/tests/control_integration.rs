@@ -257,7 +257,7 @@ async fn org_slug_is_validated() {
     let base = format!("http://{addr}");
 
     let res = client
-        .post(format!("{base}/v1/orgs"))
+        .post(format!("{base}/api/v1/orgs"))
         .json(&serde_json::json!({
             "name": "Test Org",
             "slug": "invalid slug with spaces",

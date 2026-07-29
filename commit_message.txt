@@ -1,9 +1,0 @@
-fix(security): Enforce slug validation during organization creation
-
-Closes #security-missing-slug-validation
-
-What: Added missing `validate_slug` call in `create_org` to prevent the creation of organizations with malformed or malicious slugs.
-Risk: An attacker could create an organization with an invalid slug format containing spaces, special characters, or control characters, potentially causing injection issues or breaking routing systems reliant on valid slug formats.
-Solution: Validates the slug using the existing `validate_slug` function before creating the database row, aligning organization creation with other resource creation endpoints. Added an integration test to verify the fix.
-
-Co-authored-by: Jules <jules@anthropic.com>
