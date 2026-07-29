@@ -4,3 +4,4 @@ alter table providers
 alter table providers
     add constraint providers_egress_proxies_array
     check (jsonb_typeof(egress_proxies) = 'array');
+
