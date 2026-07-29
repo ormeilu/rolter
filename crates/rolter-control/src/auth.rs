@@ -246,7 +246,7 @@ async fn me(
 
 /// generate a fresh opaque session token and its peppered digest; the digest
 /// is what's persisted, the token is only ever returned to the client
-fn generate_session_token(pepper: &str) -> (String, String) {
+pub(crate) fn generate_session_token(pepper: &str) -> (String, String) {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     let token = format!("rolter_sess_{}", hex_encode(&bytes));
