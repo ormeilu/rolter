@@ -127,18 +127,7 @@ impl RateLimiter {
     /// Sliding-window estimate of a `kind` counter for `limit` at second `now`.
     /// Reads the current and previous fixed buckets and weights the previous one
     /// by the fraction still inside the trailing window.
-    async fn windowed_count(
-        conn: &mut redis::aio::MultiplexedConnection,
-        limit: &RateLimitConfig,
-        kind: &str,
-        now: i64,
-    ) -> f64 {
-        let bucket = now / WINDOW_SECS;
-        let curr_key = bucket_key(limit, kind, bucket);
-        let prev_key = bucket_key(limit, kind, bucket - 1);
-        let counts: redis::RedisResult<(Option<u64>, Option<u64>)> =
-            conn.mget(&[curr_key, prev_key]).await;
-        let (curr, prev) = counts.unwrap_or((None, None));
+    fn windowed_count(curr: Option<u64>, prev: Option<u64>, now: i64) -> f64 {
         let curr = curr.unwrap_or(0) as f64;
         let prev = prev.unwrap_or(0) as f64;
         // how much of the previous fixed window still lies within the trailing
@@ -165,12 +154,35 @@ impl RateLimiter {
         let mut conn = Self::connection(inner).await?;
         let now = Utc::now().timestamp();
         let retry_after = (WINDOW_SECS - (now % WINDOW_SECS)) as u64;
+        let bucket = now / WINDOW_SECS;
+
+        // collect all keys to mget in a single batch
+        let mut keys = Vec::with_capacity(applicable.len() * 4);
+        for limit in &applicable {
+            if limit.rpm.is_some() {
+                keys.push(bucket_key(limit, "req", bucket));
+                keys.push(bucket_key(limit, "req", bucket - 1));
+            }
+            if limit.tpm.is_some() {
+                keys.push(bucket_key(limit, "tok", bucket));
+                keys.push(bucket_key(limit, "tok", bucket - 1));
+            }
+        }
+
+        let mut values_iter = if keys.is_empty() {
+            vec![].into_iter()
+        } else {
+            let counts: redis::RedisResult<Vec<Option<u64>>> = conn.mget(&keys).await;
+            counts.unwrap_or_default().into_iter()
+        };
 
         // evaluate all caps before mutating any counter, so a request rejected
         // on one limit is not counted against another
         for limit in &applicable {
             if let Some(rpm) = limit.rpm {
-                let est = Self::windowed_count(&mut conn, limit, "req", now).await;
+                let curr = values_iter.next().flatten();
+                let prev = values_iter.next().flatten();
+                let est = Self::windowed_count(curr, prev, now);
                 if est + 1.0 > rpm as f64 {
                     return Some(RateLimitHit {
                         scope: limit.scope,
@@ -182,7 +194,9 @@ impl RateLimiter {
                 }
             }
             if let Some(tpm) = limit.tpm {
-                let est = Self::windowed_count(&mut conn, limit, "tok", now).await;
+                let curr = values_iter.next().flatten();
+                let prev = values_iter.next().flatten();
+                let est = Self::windowed_count(curr, prev, now);
                 // reactive: block once the trailing window is already at the cap
                 if est >= tpm as f64 {
                     return Some(RateLimitHit {

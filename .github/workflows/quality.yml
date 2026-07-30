@@ -224,6 +224,8 @@ jobs:
           fi
       - name: lint (tsc --noEmit)
         run: bun run lint
+      - name: unit tests (bun test)
+        run: bun run test
       - name: build
         run: bun run build
 
