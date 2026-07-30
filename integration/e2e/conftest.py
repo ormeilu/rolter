@@ -16,15 +16,29 @@ from rolter_e2e.client import ControlClient, GatewayClient
 from rolter_e2e.stack import ADMIN_TOKEN, CONTROL_URL, GATEWAY_URL, Stack
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--idp",
+        action="store_true",
+        default=False,
+        help="also start keycloak (compose profile 'idp') and run the sso suite",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     # everything under tests/ needs the live stack
+    skip_idp = pytest.mark.skip(reason="needs an identity provider; pass --idp")
     for item in items:
         item.add_marker(pytest.mark.e2e)
+        # keycloak roughly doubles stack boot time, so it stays opt-in
+        if "idp" in item.keywords and not config.getoption("--idp"):
+            item.add_marker(skip_idp)
 
 
 @pytest.fixture(scope="session")
-def stack() -> Iterator[Stack]:
-    s = Stack()
+def stack(request: pytest.FixtureRequest) -> Iterator[Stack]:
+    profiles = ("idp",) if request.config.getoption("--idp") else ()
+    s = Stack(profiles=profiles)
     manage = os.environ.get("ROLTER_E2E_NO_MANAGE") != "1"
     if manage:
         s.up(build=os.environ.get("ROLTER_E2E_NO_BUILD") != "1")

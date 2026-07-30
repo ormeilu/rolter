@@ -157,7 +157,8 @@ impl BatchWriter {
         if batch.is_empty() {
             return;
         }
-        let mut body = String::new();
+        // Heuristic: ~256 bytes per health event line
+        let mut body = String::with_capacity(batch.len() * 256);
         for record in batch.iter() {
             match serde_json::to_string(record) {
                 Ok(line) => {
