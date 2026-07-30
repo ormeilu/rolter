@@ -49,7 +49,7 @@ rolter is a high-performance OpenAI/Anthropic-compatible AI gateway and load bal
 ## Storage & migrations
 
 - Migrations are embedded with `sqlx::migrate!("./migrations")` in `crates/rolter-store/src/postgres/mod.rs`. **Never edit an applied migration file** — sqlx records a checksum, and any byte change breaks every existing deployment (see #724, which had to restore one). Add a new `NNNN_*.sql` instead.
-- Migration numbers are append-only and never reused, even where the sequence has a gap.
+- Migration numbers are append-only and never reused, even where the sequence has a gap. `scripts/check-migrations-immutable.sh` enforces this — it runs as the `migrations append-only` job in `quality.yml` and as a `prek` hook, and rejects any modified, deleted or renamed file under `migrations/`.
 - Any table the data plane consumes must bump `config_version` inside the write transaction, via a `bump_config_version()` statement trigger (`0003_config_version_trigger.sql`, `0029_*`, `0031_*` are the models to copy). Without it `/internal/snapshot` never propagates the change and the gateway silently serves stale config.
 - Postgres tests must run in an isolated schema (per-test `search_path`); the coverage job runs plain `cargo test` against a shared database and will race otherwise.
 - `rolter-control` CRUD tests only build under `--features postgres`. Check both feature sets before pushing.

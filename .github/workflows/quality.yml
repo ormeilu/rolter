@@ -166,6 +166,24 @@ jobs:
           # gates org-owned repos behind a license (the CLI itself is free)
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
+  # ── storage: migrations are append-only ─────────────────────────────────────
+  # sqlx checksums every applied migration, so editing a shipped file breaks
+  # every existing deployment on its next upgrade — and nothing else catches it,
+  # because CI databases always start empty. see #710 / #724.
+  migrations-immutable:
+    name: migrations append-only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # the check diffs against origin/master, so it needs real history
+          fetch-depth: 0
+      - name: check migrations are append-only
+        env:
+          CI: "true"
+        run: bash scripts/check-migrations-immutable.sh origin/master
+
   # ── workflow lint: validate the CI yaml itself ──────────────────────────────
   # agents edit workflows too; catch syntax and shell smells early.
   actionlint:
