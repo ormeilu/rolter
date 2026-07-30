@@ -221,7 +221,7 @@ function ChatColumn({
           {image && (
             <div className="mb-1 inline-flex items-center gap-1.5 rounded bg-[color:var(--surface-subtle)] px-2 py-1 text-[0.625rem] text-muted-foreground">
               <ImageIcon className="h-3 w-3" /> image attached
-              <button onClick={() => setImage(null)} aria-label="Remove attachment">
+              <button onClick={() => setImage(null)} aria-label="Remove attachment" className="focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded">
                 <Trash2 className="h-3 w-3" />
               </button>
             </div>

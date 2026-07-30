@@ -1,5 +1,5 @@
 import { RefreshCw } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useIsFetching } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { cn } from "@/lib/utils";
@@ -10,14 +10,17 @@ import { cn } from "@/lib/utils";
 // in the sidebar user menu, not here.
 export function ScreenHeader({ title, subtitle }: { title: string; subtitle: string }) {
   const queryClient = useQueryClient();
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const isGlobalFetching = useIsFetching() > 0;
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+
+  const isRefreshing = isManualRefreshing || isGlobalFetching;
 
   async function refresh() {
-    setIsRefreshing(true);
+    setIsManualRefreshing(true);
     try {
       await queryClient.invalidateQueries();
     } finally {
-      setIsRefreshing(false);
+      setIsManualRefreshing(false);
     }
   }
 

@@ -349,7 +349,7 @@ export function ParamsEditor(props: EditProps | CreateProps) {
                   aria-pressed={row.locked}
                   onClick={() => updateRow(row.id, { locked: !row.locked })}
                   className={
-                    "mt-0.5 shrink-0 rounded-md border border-input p-1.5 transition-colors hover:bg-transparent " +
+                    "mt-0.5 shrink-0 rounded-md border border-input p-1.5 transition-colors hover:bg-transparent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring " +
                     (row.locked
                       ? "bg-destructive text-destructive-foreground hover:text-destructive"
                       : "bg-[color:var(--surface-subtle)] text-muted-foreground hover:text-foreground")
@@ -366,7 +366,7 @@ export function ParamsEditor(props: EditProps | CreateProps) {
                 type="button"
                 aria-label="Remove param"
                 onClick={() => removeRow(row.id)}
-                className="mt-1.5 shrink-0 text-muted-foreground hover:text-destructive"
+                className="mt-1.5 shrink-0 text-muted-foreground hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -409,7 +409,7 @@ export function ParamsEditor(props: EditProps | CreateProps) {
               type="button"
               onClick={() => setMode(m)}
               className={
-                "rounded px-2.5 py-1 font-medium transition-colors " +
+                "rounded px-2.5 py-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring " +
                 (mode === m
                   ? "bg-foreground text-background"
                   : "text-muted-foreground hover:text-foreground")
