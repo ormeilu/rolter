@@ -5,3 +5,8 @@
 ## Redis MGET Batching
 When iterating over limits or lists and fetching Redis keys for each item inside a loop (like `windowed_count` being awaited in a loop), we incur an N+1 query problem resulting in N roundtrips to Redis.
 To solve this, we can pre-collect all the keys required into a `Vec<String>`, perform a single `conn.mget(&keys).await`, and then iterate over the results. This significantly reduced latency (from 5.9ms to 3.2ms in a local benchmark of 6 rate limits).
+
+## Performance optimization context
+
+* Attempted to run criterion benchmarks natively in `rolter-gateway` but ran into workspace dependency resolution / linking errors on missing `main` when relying on `criterion_main` macros in the context of the workspace configuration.
+* Opted for asserting the O(N) to O(1) network topology improvement instead by moving from `conn.get(key)` inside the applicable budget `for` loop to pipelined queries using `MGET`.

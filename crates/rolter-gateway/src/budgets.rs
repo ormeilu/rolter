@@ -14,7 +14,6 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use redis::AsyncCommands;
 use rolter_core::{BudgetConfig, BudgetScope};
 use tokio::sync::OnceCell;
 
@@ -136,14 +135,20 @@ impl BudgetEnforcer {
         }
         let mut conn = Self::connection(inner).await?;
         let now = Utc::now();
-        for budget in applicable {
-            let key = spend_key(budget, now);
-            let spent: Option<String> = conn.get(&key).await.ok().flatten();
+
+        let keys: Vec<String> = applicable.iter().map(|b| spend_key(b, now)).collect();
+        let spents: Vec<Option<String>> = redis::cmd("MGET")
+            .arg(&keys)
+            .query_async(&mut conn)
+            .await
+            .unwrap_or_else(|_| vec![None; applicable.len()]);
+        for (budget, spent) in applicable.into_iter().zip(spents) {
             let spent = spent.and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
             if spent >= budget.limit_usd {
-                return Some(budget.clone());
+                return Some((*budget).clone());
             }
         }
+
         None
     }
 
