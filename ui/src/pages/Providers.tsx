@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
+import { Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 
 import { ProviderSheet, type ProviderSheetMode } from "@/components/ProviderSheet";
@@ -132,8 +132,9 @@ export default function Providers() {
               <button
                 type="button"
                 title="Delete provider"
+                aria-label={`Delete provider ${provider.name}`}
                 onClick={() => setDeleteTarget(provider)}
-                className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)]"
+                className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -183,6 +184,7 @@ export default function Providers() {
               });
             }}
           >
+            {removeProvider.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Delete
           </Button>
         </DialogFooter>
