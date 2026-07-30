@@ -1211,6 +1211,38 @@ export function updateSecuritySettings(
 }
 
 // ---------------------------------------------------------------------------
+// compatibility policy: values applied when translating between the OpenAI and
+// Anthropic wire formats
+
+export interface CompatibilityPolicyDto {
+  anthropic_version: string;
+  default_max_tokens: number;
+  updated_at: string;
+  // fields that only take effect after a gateway restart; empty today, but the
+  // server owns the list so the screen can warn without knowing which they are
+  restart_required: string[];
+}
+
+export interface UpdateCompatibilityPolicyInput {
+  anthropic_version: string;
+  default_max_tokens: number;
+}
+
+export function fetchCompatibilityPolicy(): Promise<CompatibilityPolicyDto> {
+  return getJson<CompatibilityPolicyDto>("/api/v1/compatibility-policy");
+}
+
+export function updateCompatibilityPolicy(
+  input: UpdateCompatibilityPolicyInput,
+): Promise<CompatibilityPolicyDto> {
+  return sendJson<CompatibilityPolicyDto>(
+    "PUT",
+    "/api/v1/compatibility-policy",
+    input,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // runtime policy: retry, timeout and admission-queue controls
 
 export const BACKPRESSURE_POLICIES = ["drop", "block", "error"] as const;

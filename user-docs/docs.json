@@ -54,7 +54,8 @@
               "configuration/config-file",
               "configuration/environment-variables",
               "configuration/hot-reload",
-              "configuration/feature-flags"
+              "configuration/feature-flags",
+              "configuration/compatibility"
             ]
           },
           {
