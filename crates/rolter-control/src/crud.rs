@@ -613,6 +613,7 @@ async fn create_org(
     require_superadmin(&principal)?;
     require_non_empty(&body.name, "name")?;
     require_non_empty(&body.slug, "slug")?;
+    validate_slug(&body.slug)?;
     let org = OrgRepo(pool(&state)).create(&body.name, &body.slug).await?;
     log_audit(
         &state,

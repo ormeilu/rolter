@@ -28,7 +28,7 @@
 
 rolter proxies commercial providers and load-balances self-hosted OpenAI-compatible fleets (e.g. 20–30 vLLM instances) with **cache-aware routing**, full RBAC, reload-free configuration, and cost/usage tracking.
 
-> **Status:** active development. The gateway, Postgres-backed control plane, reload-free configuration, cost controls, reliability primitives, and core provider surfaces are implemented; remaining work is tracked in [`ROADMAP.md`](ROADMAP.md), [`TODO.md`](TODO.md), and the Linear project.
+> **Status:** active development. The gateway, Postgres-backed control plane, reload-free configuration, cost controls, reliability primitives, and core provider surfaces are implemented; remaining work is tracked in [`ROADMAP.md`](ROADMAP.md), [`TODO.md`](TODO.md), and [GitHub issues](https://github.com/rolter-ai/rolter/issues).
 
 ## Why rolter
 
