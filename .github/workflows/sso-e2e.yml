@@ -1,0 +1,51 @@
+name: sso e2e (keycloak)
+
+# single sign-on and SCIM against a real identity provider (#714). heavy: builds
+# the rolter images and boots the full stack plus keycloak, so it is NOT part of
+# the per-PR gate. run on demand or nightly. no secrets — keycloak is local and
+# its credentials are throwaway test values.
+on:
+  workflow_dispatch:
+  schedule:
+    # nightly at 04:11 UTC, after the dashboard suite
+    - cron: "11 4 * * *"
+
+permissions:
+  contents: read
+
+env:
+  # throwaway AES-256-GCM envelope key for provider api_key sealing (base64 of a
+  # readable 32-byte phrase; matches integration/e2e/rolter_e2e/stack.py). never
+  # a real secret.
+  ROLTER_KEK: cm9sdGVyLWUyZS10ZXN0LWtlay1ub3Qtc2VjcmV0ISE=
+
+jobs:
+  sso:
+    name: sso + scim against keycloak
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: run the suite
+        working-directory: integration/e2e
+        # the harness owns the compose lifecycle, including the `idp` profile
+        run: uv run pytest tests/test_sso.py --idp -ra
+
+      - name: stack logs
+        if: ${{ failure() }}
+        run: |
+          docker compose -f integration/e2e/docker-compose.e2e.yml --profile idp \
+            logs --no-color --tail 400
+
+      - name: tear down the stack
+        if: ${{ always() }}
+        run: |
+          docker compose -f integration/e2e/docker-compose.e2e.yml --profile idp \
+            down -v --remove-orphans
