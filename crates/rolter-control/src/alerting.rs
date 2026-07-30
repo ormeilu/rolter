@@ -394,32 +394,37 @@ async fn evaluate(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Evaluation>> {
     require_superadmin(&principal)?;
-    Ok(Json(evaluate_rule(&state, id).await?))
+    let previous: Rule = sqlx::query_as(&format!(
+        "select {} from alert_rules where id=$1",
+        rule_columns()
+    ))
+    .bind(id)
+    .fetch_optional(pool(&state))
+    .await
+    .map_err(|e| Error::Store(e.to_string()))?
+    .ok_or_else(|| Error::NotFound(format!("alert rule {id}")))?;
+    Ok(Json(evaluate_rule(&state, previous).await?))
 }
 
 async fn evaluate_enabled(state: &ControlState) -> Result<(), Error> {
-    let ids: Vec<(Uuid,)> = sqlx::query_as("select id from alert_rules where enabled")
-        .fetch_all(pool(state))
-        .await
-        .map_err(|e| Error::Store(e.to_string()))?;
-    for (id,) in ids {
-        if let Err(error) = evaluate_rule(state, id).await {
+    let rules: Vec<Rule> = sqlx::query_as(&format!(
+        "select {} from alert_rules where enabled",
+        rule_columns()
+    ))
+    .fetch_all(pool(state))
+    .await
+    .map_err(|e| Error::Store(e.to_string()))?;
+    for rule in rules {
+        let id = rule.id;
+        if let Err(error) = evaluate_rule(state, rule).await {
             tracing::warn!(%id, error = ?error, "alert rule evaluation failed");
         }
     }
     Ok(())
 }
 
-async fn evaluate_rule(state: &ControlState, id: Uuid) -> ApiResult<Evaluation> {
-    let previous: Rule = sqlx::query_as(&format!(
-        "select {} from alert_rules where id=$1",
-        rule_columns()
-    ))
-    .bind(id)
-    .fetch_optional(pool(state))
-    .await
-    .map_err(|e| Error::Store(e.to_string()))?
-    .ok_or_else(|| Error::NotFound(format!("alert rule {id}")))?;
+async fn evaluate_rule(state: &ControlState, previous: Rule) -> ApiResult<Evaluation> {
+    let id = previous.id;
     let ch = client_or_503(state).map_err(|_| {
         ApiError::Core(Error::Store(
             "alert evaluation requires CLICKHOUSE_URL".into(),
