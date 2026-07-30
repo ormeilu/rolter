@@ -90,6 +90,29 @@ Policy (ROL-246):
 
 `.github/workflows/ci.yml` delegates to the shared `quality.yml` gate, which runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo nextest run --workspace --all-features` plus a `cargo test --doc` pass, the feature matrix, `cargo doc` (warnings as errors), cargo-deny, gitleaks, the UI lint/build, and a Conventional Commit PR-title check on every push/PR.
 
+### Secret scanning
+
+The `gitleaks` job runs the gitleaks **CLI** from a digest-pinned container, not
+`gitleaks-action`. The action gates org-owned repositories behind a license key,
+and license secrets are invisible to both dependabot runs (a separate secret
+store) and fork PRs (no secrets at all), so every such PR failed the job and with
+it `ci-ok`. The CLI is free and unrestricted, so `quality.yml` now takes no
+secrets and behaves identically for forks, dependabot and direct pushes.
+
+Two passes run with the shared `.github/config/gitleaks.toml` policy: `gitleaks
+dir` over the working tree (everything the commit ships) and, on PRs, `gitleaks
+git --log-opts base..head` over the branch history (catches a secret added and
+then removed inside the same PR). The pinned digest is v8.30.1 — the version
+`prek.toml` already uses for the staged-content hook, so local and CI scans agree.
+
+Reproduce a CI run locally:
+
+```bash
+docker run --rm -v "$PWD:/repo" -w /repo \
+  ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+  dir . --config .github/config/gitleaks.toml --redact --exit-code 1
+```
+
 ### Full-stack compose smoke
 
 The `compose-smoke` job boots the production-shaped Docker Compose topology
