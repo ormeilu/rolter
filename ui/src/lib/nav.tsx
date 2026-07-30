@@ -243,6 +243,7 @@ export const BUILT = new Set([
   "alerting-channels",
   "alerting-rules",
   "alerting-history",
+  "feature-flags",
 ]);
 
 // every navigable leaf key (parents with children are toggles, not screens)

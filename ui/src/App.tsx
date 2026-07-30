@@ -17,6 +17,7 @@ import ComplexityRouter from "@/pages/ComplexityRouter";
 import Config from "@/pages/Config";
 import Connectors from "@/pages/Connectors";
 import Dashboard from "@/pages/Dashboard";
+import FeatureFlags from "@/pages/FeatureFlags";
 import Health from "@/pages/Health";
 import Keys from "@/pages/Keys";
 import Limits from "@/pages/Limits";
@@ -65,6 +66,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   "api-keys": <Account />,
   security: <Security />,
   caching: <Config />,
+  "feature-flags": <FeatureFlags />,
 };
 
 // old bookmarkable paths → new IA keys
