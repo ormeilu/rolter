@@ -1211,6 +1211,44 @@ export function updateSecuritySettings(
 }
 
 // ---------------------------------------------------------------------------
+// feature flags: global switches for hot-reloadable gateway subsystems
+
+// a flag whose subsystem this deployment cannot run. the screen renders these
+// as unavailable rather than as a switch that silently does nothing (#535)
+export interface UnavailableFlagDto {
+  flag: FeatureFlagKey;
+  reason: string;
+}
+
+export const FEATURE_FLAG_KEYS = [
+  "response_cache",
+  "cache_aware_routing",
+  "circuit_breaker",
+  "active_health_checks",
+  "complexity_routing",
+  "guardrails",
+] as const;
+
+export type FeatureFlagKey = (typeof FEATURE_FLAG_KEYS)[number];
+
+export type FeatureFlagValues = Record<FeatureFlagKey, boolean>;
+
+export type FeatureFlagsDto = FeatureFlagValues & {
+  updated_at: string;
+  unavailable: UnavailableFlagDto[];
+};
+
+export function fetchFeatureFlags(): Promise<FeatureFlagsDto> {
+  return getJson<FeatureFlagsDto>("/api/v1/feature-flags");
+}
+
+export function updateFeatureFlags(
+  input: FeatureFlagValues,
+): Promise<FeatureFlagsDto> {
+  return sendJson<FeatureFlagsDto>("PUT", "/api/v1/feature-flags", input);
+}
+
+// ---------------------------------------------------------------------------
 // alerting: channels, rules, notification history
 
 export const ALERT_SIGNALS = [

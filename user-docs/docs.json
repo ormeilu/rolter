@@ -53,7 +53,8 @@
             "pages": [
               "configuration/config-file",
               "configuration/environment-variables",
-              "configuration/hot-reload"
+              "configuration/hot-reload",
+              "configuration/feature-flags"
             ]
           },
           {
