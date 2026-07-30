@@ -31,6 +31,27 @@ erDiagram
 
 `config_version` holds a single monotonic counter the gateways watch for reload-free updates ([config-and-hot-reload.md](config-and-hot-reload.md)). `audit_log` records who changed what.
 
+## Migrations are append-only
+
+Migrations are embedded with `sqlx::migrate!` and sqlx stores a checksum of every
+migration it applies. If a shipped file's bytes change — even a stripped trailing
+newline, as a formatting hook once did in #710 — every database that already ran it
+refuses to start on its next upgrade:
+
+```
+Error: store error: migration 18 was previously applied but has been modified
+```
+
+CI databases always start empty, so nothing else catches this: the change merges
+green and breaks deployments later. Never edit, delete or rename a file under
+`crates/rolter-store/migrations/`; add a new `NNNN_*.sql` instead. Numbers are
+append-only and never reused, even where the sequence has a gap.
+
+`scripts/check-migrations-immutable.sh` enforces this. It runs as the
+`migrations append-only` job in `quality.yml` (inside the `ci-ok` gate) and as a
+`prek` hook locally, rejecting any modified, deleted or renamed migration relative
+to the branch's fork point from `master`.
+
 ## Mapping to the gateway
 
 The control plane composes the normalized tables into the same shape as `rolter_core::GatewayConfig` (providers + routes + virtual_keys), which the gateway turns into an immutable `Snapshot`.

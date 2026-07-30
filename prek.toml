@@ -140,6 +140,14 @@ language = "system"
 types = ["text"]
 
 [[repos.hooks]]
+id = "migrations-immutable"
+name = "migrations are append-only"
+entry = "bash scripts/check-migrations-immutable.sh"
+language = "system"
+files = "^crates/rolter-store/migrations/"
+pass_filenames = false
+
+[[repos.hooks]]
 id = "cargo-clippy-postgres"
 name = "cargo clippy (postgres)"
 entry = "cargo clippy -p rolter-store --all-targets --features postgres -- -D warnings"
