@@ -1211,6 +1211,66 @@ export function updateSecuritySettings(
 }
 
 // ---------------------------------------------------------------------------
+// runtime policy: retry, timeout and admission-queue controls
+
+export const BACKPRESSURE_POLICIES = ["drop", "block", "error"] as const;
+
+export type BackpressurePolicy = (typeof BACKPRESSURE_POLICIES)[number];
+
+export interface RuntimePolicyDto {
+  retry_max_retries: number;
+  retry_base_ms: number;
+  retry_max_ms: number;
+  timeout_connect_s: number;
+  timeout_request_s: number;
+  queue_enabled: boolean;
+  queue_capacity: number;
+  queue_workers: number;
+  queue_backpressure: BackpressurePolicy;
+  queue_block_ms: number;
+  updated_at: string;
+}
+
+export type UpdateRuntimePolicyInput = Omit<RuntimePolicyDto, "updated_at">;
+
+export function fetchRuntimePolicy(): Promise<RuntimePolicyDto> {
+  return getJson<RuntimePolicyDto>("/api/v1/runtime-policy");
+}
+
+export function updateRuntimePolicy(
+  input: UpdateRuntimePolicyInput,
+): Promise<RuntimePolicyDto> {
+  return sendJson<RuntimePolicyDto>("PUT", "/api/v1/runtime-policy", input);
+}
+
+// ---------------------------------------------------------------------------
+// logging settings: request-log sampling, payload capture and retention
+
+export interface LoggingSettingsDto {
+  sample_rate: number;
+  payload_capture_enabled: boolean;
+  payload_capture_max_bytes: number;
+  payload_capture_redact_fields: string[];
+  payload_capture_models: string[];
+  payload_capture_virtual_key_ids: string[];
+  retention_days: number;
+  payload_retention_hours: number;
+  updated_at: string;
+}
+
+export type UpdateLoggingSettingsInput = Omit<LoggingSettingsDto, "updated_at">;
+
+export function fetchLoggingSettings(): Promise<LoggingSettingsDto> {
+  return getJson<LoggingSettingsDto>("/api/v1/logging-settings");
+}
+
+export function updateLoggingSettings(
+  input: UpdateLoggingSettingsInput,
+): Promise<LoggingSettingsDto> {
+  return sendJson<LoggingSettingsDto>("PUT", "/api/v1/logging-settings", input);
+}
+
+// ---------------------------------------------------------------------------
 // feature flags: global switches for hot-reloadable gateway subsystems
 
 // a flag whose subsystem this deployment cannot run. the screen renders these

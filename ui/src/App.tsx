@@ -19,6 +19,7 @@ import Connectors from "@/pages/Connectors";
 import Dashboard from "@/pages/Dashboard";
 import FeatureFlags from "@/pages/FeatureFlags";
 import Health from "@/pages/Health";
+import LogsSettings from "@/pages/LogsSettings";
 import Keys from "@/pages/Keys";
 import Limits from "@/pages/Limits";
 import AcceptInvite from "@/pages/AcceptInvite";
@@ -27,6 +28,7 @@ import Logs from "@/pages/Logs";
 import McpCatalog from "@/pages/McpCatalog";
 import McpLogs from "@/pages/McpLogs";
 import Models from "@/pages/Models";
+import Performance from "@/pages/Performance";
 import Playground from "@/pages/Playground";
 import Pricing from "@/pages/Pricing";
 import ProviderGroups from "@/pages/ProviderGroups";
@@ -67,6 +69,8 @@ const SCREENS: Record<string, React.ReactNode> = {
   security: <Security />,
   caching: <Config />,
   "feature-flags": <FeatureFlags />,
+  "logs-settings": <LogsSettings />,
+  performance: <Performance />,
 };
 
 // old bookmarkable paths → new IA keys

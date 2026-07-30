@@ -1,0 +1,68 @@
+---
+title: "Log Settings: Sampling, Payload Capture and Retention"
+sidebarTitle: "Log Settings"
+description: "Control what fraction of requests Rolter logs, whether raw prompt and completion bodies are captured, which fields are redacted from them, and how long each half is kept."
+---
+
+Request logging is governed by one deployment-wide policy, edited from **Observability → Logs Settings** in the dashboard or through the management API. It decides three things: how much traffic is logged, whether raw payloads are captured alongside the metadata, and how long each is kept.
+
+---
+
+## Sampling
+
+`sample_rate` is the fraction of requests written to the log, from `0` to `1`. The dashboard shows it as a percentage. Lowering it is the first lever to pull on a high-volume deployment — metrics, budgets and rate limits are computed from every request regardless, so sampling only reduces what lands in the log store.
+
+---
+
+## Payload capture
+
+Payload capture stores the raw prompt and completion bodies next to the log metadata. It is **off by default**: payloads contain whatever the caller sent, which is the most sensitive data Rolter touches.
+
+When it is on, four settings narrow what gets stored:
+
+| Setting | Effect |
+|---|---|
+| `payload_capture_max_bytes` | Truncates anything longer. Maximum `1048576` (1 MiB). |
+| `payload_capture_redact_fields` | JSON keys stripped **before the write**, so a redacted value never reaches storage. |
+| `payload_capture_models` | Capture only these models. Empty means all. |
+| `payload_capture_virtual_key_ids` | Capture only these virtual keys. Empty means all. |
+
+Redaction happening before the write is the important part: turning a field on later does not retroactively clean what is already stored, and turning it off does not expose history that was never captured.
+
+---
+
+## Retention
+
+The two halves of the log expire on separate clocks:
+
+- `retention_days` — how long log **metadata** is kept (1–3650 days).
+- `payload_retention_hours` — how long **captured payloads** are kept (1–8760 hours).
+
+Payloads cannot outlive the metadata they belong to. `payload_retention_hours` must not exceed `retention_days × 24`, and both the dashboard and the API reject a policy that breaks it — otherwise raw prompt content would survive past the point an operator meant it to expire.
+
+---
+
+## API
+
+Both endpoints are **superadmin only**, and every update is audited.
+
+```bash
+curl -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  https://control.example.com/api/v1/logging-settings
+
+curl -X PUT -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "sample_rate": 0.1,
+        "payload_capture_enabled": true,
+        "payload_capture_max_bytes": 65536,
+        "payload_capture_redact_fields": ["authorization", "api_key"],
+        "payload_capture_models": [],
+        "payload_capture_virtual_key_ids": [],
+        "retention_days": 90,
+        "payload_retention_hours": 168
+      }' \
+  https://control.example.com/api/v1/logging-settings
+```
+
+Send the full policy, not a patch. A successful update bumps `config_version`, so gateways pick it up on their next snapshot poll without a restart.

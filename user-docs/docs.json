@@ -62,7 +62,8 @@
             "pages": [
               "reliability/retries-and-cooldowns",
               "reliability/circuit-breakers",
-              "reliability/health-checks"
+              "reliability/health-checks",
+              "reliability/performance-tuning"
             ]
           },
           {
@@ -78,7 +79,8 @@
             "pages": [
               "observability/metrics",
               "observability/logs-and-cost",
-              "observability/tracing"
+              "observability/tracing",
+              "observability/log-settings"
             ]
           },
           {
