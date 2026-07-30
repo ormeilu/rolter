@@ -42,11 +42,21 @@ def _compose_env() -> dict[str, str]:
 class Stack:
     """thin wrapper over ``docker compose`` for the e2e topology."""
 
-    def __init__(self, compose_file: pathlib.Path = COMPOSE_FILE):
+    def __init__(
+        self,
+        compose_file: pathlib.Path = COMPOSE_FILE,
+        profiles: tuple[str, ...] = (),
+    ):
         self.compose_file = compose_file
+        # opt-in services (``idp`` brings up keycloak, ``chaos`` the fault
+        # injectors); the default run starts neither
+        self.profiles = profiles
 
     def _compose(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-        cmd = ["docker", "compose", "-f", str(self.compose_file), *args]
+        profiles: list[str] = []
+        for profile in self.profiles:
+            profiles += ["--profile", profile]
+        cmd = ["docker", "compose", "-f", str(self.compose_file), *profiles, *args]
         return subprocess.run(cmd, check=check, text=True, capture_output=True, env=_compose_env())
 
     def up(self, *, build: bool = True) -> None:

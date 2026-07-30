@@ -6,3 +6,7 @@
 **Action:** Always verify keyboard accessibility (`focus-visible`) and semantic HTML tags (`type="search"`) on custom input wrappers and icon-only buttons across the application.
 
 I am learning that Linear tickets are no longer used for PR titles.
+
+## 2024-05-18 - [Missing a11y & async feedback on Row Actions]
+**Learning:** Found a recurring pattern in data tables where icon-only action buttons (like Delete) in rows lack `aria-label` attributes and keyboard focus states (`focus-visible` classes). Additionally, confirmation dialogs for these destructive row actions often lack visual loading indicators (`Loader2` from lucide-react) while the asynchronous mutation is pending. This makes keyboard navigation difficult and leaves users wondering if their delete request was registered.
+**Action:** When working on data table rows or generic item listings, explicitly verify that all icon-only buttons include an `aria-label` and `focus-visible` classes. Also, always ensure the corresponding confirmation dialogs provide visual loading feedback via `Loader2` during the mutation.
