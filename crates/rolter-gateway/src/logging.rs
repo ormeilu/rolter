@@ -629,7 +629,8 @@ impl BatchWriter {
         if batch.is_empty() {
             return;
         }
-        let mut body = String::new();
+        // Heuristic: ~1024 bytes per log line for pre-allocation
+        let mut body = String::with_capacity(batch.len() * 1024);
         for record in batch.iter() {
             match serde_json::to_string(record) {
                 Ok(line) => {
@@ -655,7 +656,8 @@ impl BatchWriter {
                 self.metrics.logs_dropped_total.fetch_add(count, Relaxed);
             }
         }
-        let mut payloads = String::new();
+        // Heuristic: ~1024 bytes per payload line for pre-allocation
+        let mut payloads = String::with_capacity(batch.len() * 1024);
         for record in batch.iter().filter(|record| {
             !record.request_payload.is_empty() || !record.response_payload.is_empty()
         }) {

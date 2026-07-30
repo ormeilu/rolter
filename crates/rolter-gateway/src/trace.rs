@@ -254,4 +254,28 @@ mod tests {
         ]);
         assert_eq!(inbound_trace_id(&h), "11111111111111111111111111111111");
     }
+
+    #[test]
+    fn outbound_trace_headers_extracts_known_headers() {
+        let h = headers(&[
+            ("traceparent", "00-1111-2222-01"),
+            ("tracestate", "rojo=00f067aa0ba902b7"),
+            ("b3", "80f198ee56343ba864fe8b2a57d3eff7-e457b5a2e4d86bd1-1"),
+            ("unknown-header", "some-value"),
+            ("x-b3-traceid", ""),
+        ]);
+        let outbound = outbound_trace_headers(&h);
+        assert_eq!(outbound.len(), 3);
+
+        let outbound_map: std::collections::HashMap<&str, String> = outbound.into_iter().collect();
+        assert_eq!(outbound_map.get("traceparent").unwrap(), "00-1111-2222-01");
+        assert_eq!(
+            outbound_map.get("tracestate").unwrap(),
+            "rojo=00f067aa0ba902b7"
+        );
+        assert_eq!(
+            outbound_map.get("b3").unwrap(),
+            "80f198ee56343ba864fe8b2a57d3eff7-e457b5a2e4d86bd1-1"
+        );
+    }
 }

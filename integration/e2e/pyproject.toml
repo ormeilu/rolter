@@ -19,6 +19,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
   "e2e: full-stack test that requires the docker-compose stack (heavy, gated)",
+  "idp: needs the keycloak identity provider (compose profile 'idp'); run with --idp",
 ]
 
 [tool.uv]
