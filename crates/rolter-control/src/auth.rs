@@ -132,41 +132,61 @@ async fn login(
 ) -> AuthResult<Json<LoginResponse>> {
     let email = body.email.trim();
     let pool = pool(&state);
-    let user = UserRepo(pool)
-        .find_by_email(email)
-        .await?
-        .ok_or(AuthError::InvalidCredentials)?;
 
-    if user.deactivated_at.is_some() {
-        // deactivated accounts keep their row but cannot authenticate; reject
-        // like a bad credential rather than revealing the account is disabled
-        return Err(AuthError::InvalidCredentials);
+    // every rejection path still runs one argon2 verification against this
+    // hash, so the response time does not reveal whether the email is
+    // registered, deactivated or sso-only
+    const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$csPSM0eDz1Mw8vSYmpUZtA$B00EO0lHN1rK85A5RyDcvLIhc+7tTs0vVoBL4I0MOe0";
+
+    let user_opt = UserRepo(pool).find_by_email(email).await?;
+
+    let mut auth_error: Option<AuthError> = None;
+    let mut hash_to_check = DUMMY_HASH;
+    if let Some(user) = &user_opt {
+        if user.deactivated_at.is_some() {
+            // deactivated accounts keep their row but cannot authenticate; reject
+            // like a bad credential rather than revealing the account is disabled
+            auth_error = Some(AuthError::InvalidCredentials);
+        } else if let Some(hash) = &user.password_hash {
+            hash_to_check = hash;
+            // an org may require its members to come through the IdP. superadmins are
+            // exempt on purpose: that is the break-glass path back in when the IdP is
+            // misconfigured or down, and without it turning the flag on would be an
+            // irreversible mistake
+            if !user.is_superadmin
+                && OrgAuthPolicyRepo(pool)
+                    .password_login_blocked_for_user(user.id)
+                    .await?
+            {
+                auth_error = Some(AuthError::PasswordLoginDisabled);
+            }
+        } else {
+            // sso-only account (no local password set); reject like a wrong
+            // password rather than leaking which accounts exist
+            auth_error = Some(AuthError::InvalidCredentials);
+        }
     }
 
-    let Some(hash) = &user.password_hash else {
-        // sso-only account (no local password set); reject like a wrong
-        // password rather than leaking which accounts exist
+    let parsed =
+        PasswordHash::new(hash_to_check).map_err(|e| AuthError::Internal(e.to_string()))?;
+    let password_verified = Argon2::default()
+        .verify_password(body.password.as_bytes(), &parsed)
+        .is_ok();
+
+    // an error recorded above wins: those checks ran before the password check
+    // in the original sequential form and must keep their more specific status
+    if !password_verified {
+        auth_error = auth_error.or(Some(AuthError::InvalidCredentials));
+    }
+
+    if let Some(err) = auth_error {
+        return Err(err);
+    }
+
+    // unreachable with no user: the branch above always records an error then
+    let Some(user) = user_opt else {
         return Err(AuthError::InvalidCredentials);
     };
-    // an org may require its members to come through the IdP. superadmins are
-    // exempt on purpose: that is the break-glass path back in when the IdP is
-    // misconfigured or down, and without it turning the flag on would be an
-    // irreversible mistake
-    if !user.is_superadmin
-        && OrgAuthPolicyRepo(pool)
-            .password_login_blocked_for_user(user.id)
-            .await?
-    {
-        return Err(AuthError::PasswordLoginDisabled);
-    }
-
-    let parsed = PasswordHash::new(hash).map_err(|e| AuthError::Internal(e.to_string()))?;
-    if Argon2::default()
-        .verify_password(body.password.as_bytes(), &parsed)
-        .is_err()
-    {
-        return Err(AuthError::InvalidCredentials);
-    }
 
     let (token, token_hash) = generate_session_token(&session_pepper());
     let expires_at = Utc::now() + Duration::hours(SESSION_TTL_HOURS);
