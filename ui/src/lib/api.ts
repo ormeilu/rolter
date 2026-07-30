@@ -1211,6 +1211,39 @@ export function updateSecuritySettings(
 }
 
 // ---------------------------------------------------------------------------
+// runtime policy: retry, timeout and admission-queue controls
+
+export const BACKPRESSURE_POLICIES = ["drop", "block", "error"] as const;
+
+export type BackpressurePolicy = (typeof BACKPRESSURE_POLICIES)[number];
+
+export interface RuntimePolicyDto {
+  retry_max_retries: number;
+  retry_base_ms: number;
+  retry_max_ms: number;
+  timeout_connect_s: number;
+  timeout_request_s: number;
+  queue_enabled: boolean;
+  queue_capacity: number;
+  queue_workers: number;
+  queue_backpressure: BackpressurePolicy;
+  queue_block_ms: number;
+  updated_at: string;
+}
+
+export type UpdateRuntimePolicyInput = Omit<RuntimePolicyDto, "updated_at">;
+
+export function fetchRuntimePolicy(): Promise<RuntimePolicyDto> {
+  return getJson<RuntimePolicyDto>("/api/v1/runtime-policy");
+}
+
+export function updateRuntimePolicy(
+  input: UpdateRuntimePolicyInput,
+): Promise<RuntimePolicyDto> {
+  return sendJson<RuntimePolicyDto>("PUT", "/api/v1/runtime-policy", input);
+}
+
+// ---------------------------------------------------------------------------
 // logging settings: request-log sampling, payload capture and retention
 
 export interface LoggingSettingsDto {

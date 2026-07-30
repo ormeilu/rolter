@@ -62,7 +62,8 @@
             "pages": [
               "reliability/retries-and-cooldowns",
               "reliability/circuit-breakers",
-              "reliability/health-checks"
+              "reliability/health-checks",
+              "reliability/performance-tuning"
             ]
           },
           {

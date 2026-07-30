@@ -1,0 +1,73 @@
+---
+title: "Performance Tuning: Retries, Timeouts and the Admission Queue"
+sidebarTitle: "Performance Tuning"
+description: "Tune Rolter's upstream retry budget, connect and request timeouts, and the per-provider bounded admission queue from the dashboard or the management API."
+---
+
+One deployment-wide runtime policy governs how Rolter talks to upstreams under load: how hard it retries, how long it waits, and how many requests it admits at once. Edit it from **Settings → Performance Tuning** in the dashboard, or through the management API.
+
+---
+
+## Retries
+
+| Setting | Range | Meaning |
+|---|---|---|
+| `retry_max_retries` | 0–10 | Retry budget for a single client request. |
+| `retry_base_ms` | 0–60000 | First backoff interval. |
+| `retry_max_ms` | 0–600000 | Ceiling the exponential backoff grows to. |
+
+The cap cannot be lower than the base — an incoherent pair is rejected rather than silently clamped.
+
+---
+
+## Timeouts
+
+`timeout_connect_s` (0–300) bounds establishing the upstream connection; `timeout_request_s` (0–3600) bounds the whole exchange, streaming responses included. Zero disables the corresponding timeout.
+
+---
+
+## Admission queue
+
+Rolter creates an **independent bounded queue and worker set per provider**, so one slow provider cannot consume the admission capacity that healthy providers need.
+
+| Setting | Range | Meaning |
+|---|---|---|
+| `queue_capacity` | 1–100000 | Requests that may wait for a worker. |
+| `queue_workers` | 1–2048 | Concurrent in-flight requests per provider. |
+| `queue_backpressure` | `drop` / `block` / `error` | What happens when the queue is full. |
+| `queue_block_ms` | 0–120000 | How long `block` waits for capacity. |
+
+The three backpressure policies:
+
+- **`drop`** — shed the request immediately with an overload response.
+- **`block`** — wait for capacity until `queue_block_ms` expires. This requires a non-zero timeout; blocking forever would park callers indefinitely, so the combination is rejected.
+- **`error`** — return a structured `queue_full` error immediately. This is the default.
+
+---
+
+## API
+
+Both endpoints are **superadmin only**, and every update is audited.
+
+```bash
+curl -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  https://control.example.com/api/v1/runtime-policy
+
+curl -X PUT -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "retry_max_retries": 2,
+        "retry_base_ms": 200,
+        "retry_max_ms": 5000,
+        "timeout_connect_s": 10,
+        "timeout_request_s": 120,
+        "queue_enabled": true,
+        "queue_capacity": 1024,
+        "queue_workers": 32,
+        "queue_backpressure": "error",
+        "queue_block_ms": 0
+      }' \
+  https://control.example.com/api/v1/runtime-policy
+```
+
+Send the full policy, not a patch. A successful update bumps `config_version`, so gateways pick it up on their next snapshot poll without a restart.
