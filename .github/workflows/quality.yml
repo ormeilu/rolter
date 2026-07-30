@@ -291,8 +291,11 @@ jobs:
           else
             bun install --frozen-lockfile
           fi
+      # the test-runner launches the headless shell, a separate download from the
+      # full chromium build. ui/package.json pins the test-runner's playwright to
+      # the same version as @playwright/test, so one install serves both (#737)
       - name: install chromium (playwright)
-        run: bunx playwright install --with-deps chromium
+        run: bunx playwright install --with-deps chromium chromium-headless-shell
       - name: build storybook
         run: bun run build-storybook
       - name: run play tests
