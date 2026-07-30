@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.0.11](https://github.com/rolter-ai/rolter/compare/rolter-proxy-v0.0.10...rolter-proxy-v0.0.11) - 2026-07-30
+
+### Bug Fixes
+- *(proxy)* re-check the egress policy at connect time ([#662](https://github.com/rolter-ai/rolter/pull/662)) by [@ormeilu](https://github.com/ormeilu)
+
+### Features
+- *(control)* manage cross-dialect compatibility policy ([#696](https://github.com/rolter-ai/rolter/pull/696)) by [@ormeilu](https://github.com/ormeilu)
+- *(proxy)* register Gemini Interactions provider kind by [@ormeilu](https://github.com/ormeilu)
+- *(control)* persist global runtime policy settings by [@ormeilu](https://github.com/ormeilu)
+- *(core)* expand provider adapter kind coverage [ROL-132] ([#645](https://github.com/rolter-ai/rolter/pull/645)) by [@ormeilu](https://github.com/ormeilu)
+
+### Performance
+- *(gateway)* [performance improvement] [ROL-PERF] ([#726](https://github.com/rolter-ai/rolter/pull/726)) by [@ormeilu](https://github.com/ormeilu)
 ## [0.0.10](https://github.com/rolter-ai/rolter/compare/rolter-proxy-v0.0.9...rolter-proxy-v0.0.10) - 2026-07-21
 
 ### Features
