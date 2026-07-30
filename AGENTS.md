@@ -110,7 +110,7 @@ This repo uses **Conventional Commits** for commit messages and PR titles. Forma
 ```
 
 - **types**: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`, `revert`
-- **scopes**: `gateway`, `balancer`, `proxy`, `core`, `store`, `auth`, `control`, `ui`, `docs`, `infra`, `ci`, `deps`, `e2e`
+- **scopes**: `gateway`, `balancer`, `proxy`, `core`, `store`, `auth`, `control`, `ui`, `docs`, `infra`, `ci`, `deps`, `release`, `e2e`
 - subject is imperative, lowercase, ≤ 72 chars, no trailing period
 - breaking changes: add `!` after the scope (`feat(core)!: ...`) and a `BREAKING CHANGE:` footer
 
@@ -122,10 +122,10 @@ fix(gateway): stream anthropic sse without buffering
 docs(architecture): document reload-free config propagation
 ```
 
-- Link Linear issues in the body/footer with `Closes ROL-123` / `Refs ROL-123` (GitHub issues: `Closes #123`).
-- PR titles must be a single valid Conventional Commit line (CI checks this); append the Linear key in brackets, e.g. `feat(gateway): built-in fake-llm default model [ROL-98]`.
-- Branch names follow `<type>/<ISSUE-KEY>-<short-description>` with the same Conventional Commit types, e.g. `fix/ROL-94-models-auth`. Never use a person or agent name as the prefix.
-- Prefer stacked branches/PRs (GitButler) for dependent work; keep each PR one logical change.
+- Link GitHub issues in the body/footer with `Closes #123` / `Refs #123`.
+- PR titles must be a single valid Conventional Commit line (CI checks this); append the issue number in brackets, e.g. `feat(gateway): built-in fake-llm default model [#98]`.
+- Branch names follow `<type>/<issue-number>-<short-description>` with the same Conventional Commit types, e.g. `fix/94-models-auth`. Never use a person or agent name as the prefix.
+- Keep each PR one logical change; for dependent work use plain `git` branches (or `git worktree`) stacked on one another.
 - Keep PRs focused; update `docs/` and `TODO.md` when behavior changes.
 - Include a co-author trailer identifying the agent that made the commit, using
   that agent's own name and email (for example,
