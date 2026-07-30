@@ -11,14 +11,10 @@ name: quality
 # informational (continue-on-error) until their baseline is trusted, then get
 # promoted to blocking — see ROL-124.
 on:
+  # takes no secrets: every job here scans the checked-out source with pinned
+  # public tooling, so the gate behaves identically on dependabot and fork PRs,
+  # which receive no secrets at all (#734)
   workflow_call:
-    # reusable workflows do not inherit caller secrets automatically. the gitleaks
-    # job needs a license because the repo is org-owned; each caller passes it
-    # explicitly (least-privilege — no `secrets: inherit`). optional so callers
-    # that predate the secret still validate; gitleaks then fails loudly.
-    secrets:
-      GITLEAKS_LICENSE:
-        required: false
 
 # least-privilege GITHUB_TOKEN: every job here only reads the checked-out repo.
 # a reusable workflow cannot exceed the caller's grant, but declaring it here
@@ -150,21 +146,44 @@ jobs:
 
   # ── supply chain: secret scanning ───────────────────────────────────────────
   # agents must never leak a provider key; fail the build if one is committed.
+  # runs the gitleaks CLI, not gitleaks-action: the action gates org-owned repos
+  # behind a license key, and license secrets are invisible to dependabot runs
+  # (separate secret store) and to fork PRs (no secrets at all), so every such
+  # PR failed this job and therefore ci-ok. the CLI is free and unrestricted.
+  # the image digest is v8.30.1, the same version prek.toml pins for the staged
+  # hook, so local and CI scan with one binary and one policy. see #734.
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-latest
+    env:
+      GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+      # working tree: everything the commit actually ships
+      - name: gitleaks (working tree)
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo "$GITLEAKS_IMAGE" \
+            dir . --config .github/config/gitleaks.toml --redact --exit-code 1
+      # history for this branch: catches a secret added and then removed within
+      # the same PR, which a working-tree scan cannot see
+      - name: gitleaks (branch history)
+        if: github.event_name == 'pull_request'
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GITLEAKS_CONFIG: .github/config/gitleaks.toml
-          # required since the repo moved under the rolter-ai org: gitleaks-action
-          # gates org-owned repos behind a license (the CLI itself is free)
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # the container runs as root over a runner-owned checkout, which git
+          # rejects as dubious ownership unless /repo is marked safe
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/repo \
+            "$GITLEAKS_IMAGE" \
+            git . --config .github/config/gitleaks.toml --redact --exit-code 1 \
+            --log-opts "$BASE_SHA..$HEAD_SHA"
 
   # ── storage: migrations are append-only ─────────────────────────────────────
   # sqlx checksums every applied migration, so editing a shipped file breaks

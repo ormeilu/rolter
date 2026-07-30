@@ -144,7 +144,7 @@ Commit hygiene is enforced by `commitlint` (PR titles) and the `conventional-pre
 ## CI
 
 - `ci-ok` is the single required status check; it aggregates `quality`, `pr-title` and `codeql`. The heavy gate lives in the reusable `.github/workflows/quality.yml`, so the release paths enforce exactly the same checks.
-- Every action is pinned to a full commit SHA; `zizmor` and `actionlint` run over the workflows. Any caller of `quality.yml` must pass `GITLEAKS_LICENSE` through.
+- Every action is pinned to a full commit SHA; `zizmor` and `actionlint` run over the workflows. `quality.yml` takes **no secrets** — it must stay that way so dependabot and fork PRs, which receive none, pass the same gate (#734); secret scanning uses the free gitleaks CLI from a pinned digest, not the licensed action.
 - PR titles are validated against a fixed scope allowlist — a scope outside the list above fails CI.
 
 ## Changelogs
