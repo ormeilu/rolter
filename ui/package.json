@@ -15,6 +15,11 @@
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui"
   },
+  "//overrides": "@storybook/test-runner pulls its own playwright, which asks for a browser revision `playwright install` (resolved from @playwright/test) never downloads. pin both to one version so a single install step serves both. see #737",
+  "overrides": {
+    "playwright": "1.62.0",
+    "playwright-core": "1.62.0"
+  },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/geist-mono": "^5.3.0",

@@ -112,6 +112,30 @@ docker run --rm -v "$PWD:/repo" -w /repo \
   ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
   dir . --config .github/config/gitleaks.toml --redact --exit-code 1
 ```
+### Storybook play tests
+
+The `storybook` job builds the static Storybook, serves it, and runs the
+interaction (play) tests with `@storybook/test-runner` against a headless
+chromium. Locally:
+
+```bash
+cd ui
+bunx playwright install --with-deps chromium chromium-headless-shell
+bun run build-storybook
+python3 -m http.server 6006 --directory storybook-static &
+bun run test-storybook --url http://127.0.0.1:6006
+```
+
+`ui/package.json` pins `playwright` and `playwright-core` through `overrides`.
+The test-runner declares its own loose `playwright` range, so without the pin it
+resolves a different version from `@playwright/test` and launches a browser
+revision `playwright install` never downloaded — the test-runner then fails at
+launch and the play tests silently stop running (#737). Keep both on one version,
+and install `chromium-headless-shell` alongside `chromium`, since the test-runner
+launches the shell rather than the full build.
+
+The job is **informational** (`continue-on-error: true`) pending the ROL-124
+promotion path.
 
 ### Full-stack compose smoke
 
