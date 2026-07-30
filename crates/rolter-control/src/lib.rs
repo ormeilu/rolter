@@ -16,6 +16,8 @@ mod analytics;
 #[cfg(feature = "postgres")]
 mod auth;
 #[cfg(feature = "postgres")]
+mod auth_policy;
+#[cfg(feature = "postgres")]
 mod cluster;
 #[cfg(feature = "postgres")]
 mod compatibility_policy;
@@ -24,6 +26,8 @@ mod crud;
 #[cfg(feature = "postgres")]
 mod feature_flags;
 mod health;
+#[cfg(feature = "postgres")]
+mod invitations;
 #[cfg(feature = "postgres")]
 mod logging_settings;
 #[cfg(feature = "postgres")]
@@ -40,9 +44,13 @@ mod rbac_matrix;
 #[cfg(feature = "postgres")]
 mod runtime_policy;
 #[cfg(feature = "postgres")]
+mod scim;
+#[cfg(feature = "postgres")]
 mod security;
 #[cfg(feature = "postgres")]
 pub mod seed;
+#[cfg(feature = "postgres")]
+mod sso;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -365,6 +373,8 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
         api = api
             .merge(alerting::router())
             .merge(auth::router())
+            .merge(auth_policy::router())
+            .merge(invitations::router())
             .merge(crud::router())
             .merge(me::router())
             .merge(mcp_logs::router())
@@ -375,6 +385,8 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(compatibility_policy::router())
             .merge(adaptive_policy::router())
             .merge(rbac_matrix::router())
+            .merge(scim::router())
+            .merge(sso::router())
             .merge(cluster::router())
             .merge(security::router());
     }

@@ -29,6 +29,7 @@ import {
   deleteRateLimit,
   fetchBudgets,
   fetchRateLimits,
+  fetchVirtualKeys,
   SCOPE_TYPES,
   type BudgetRow,
   type RateLimitRow,
@@ -38,8 +39,7 @@ import { useScope } from "@/lib/scope";
 // budgets and rate limits share a scope (scope_type + scope_id), so this
 // page combines both concerns behind one scope picker. defaults to the
 // current project scope — pick another scope_type and paste an id to
-// manage org/team/virtual-key scoped limits (no id lookup UI yet, see
-// TODO.md follow-up)
+// manage org/team/virtual-key scoped limits.
 export default function Limits() {
   const queryClient = useQueryClient();
   const scope = useScope();
@@ -52,6 +52,13 @@ export default function Limits() {
       setScopeId(scope.projectId);
     }
   }, [scopeType, scope.projectId, scopeId]);
+
+
+  const virtualKeys = useQuery({
+    queryKey: ["virtual-keys", scope.projectId],
+    queryFn: () => fetchVirtualKeys(scope.projectId as string),
+    enabled: scopeType === "virtual_key" && !!scope.projectId,
+  });
 
   const budgets = useQuery({
     queryKey: ["budgets", scopeType, scopeId],
@@ -119,13 +126,51 @@ export default function Limits() {
               ))}
             </Select>
           </Field>
-          <Field label="Scope id" hint="uuid of the org/team/project/virtual key">
-            <Input
-              value={scopeId}
-              onChange={(e) => setScopeId(e.target.value)}
-              placeholder="00000000-0000-0000-0000-000000000000"
-              className="font-mono text-xs"
-            />
+          <Field label="Scope id" hint={`uuid of the ${scopeType}`}>
+            {scopeType === "org" && scope.orgs.length > 0 ? (
+              <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
+                <option value="">Select an org</option>
+                {scope.orgs.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                  </option>
+                ))}
+              </Select>
+            ) : scopeType === "team" && scope.teams.length > 0 ? (
+              <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
+                <option value="">Select a team</option>
+                {scope.teams.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </Select>
+            ) : scopeType === "project" && scope.projects.length > 0 ? (
+              <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
+                <option value="">Select a project</option>
+                {scope.projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </Select>
+            ) : scopeType === "virtual_key" && virtualKeys.data && virtualKeys.data.length > 0 ? (
+              <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
+                <option value="">Select a virtual key</option>
+                {virtualKeys.data.map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.name || k.key_prefix}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              <Input
+                value={scopeId}
+                onChange={(e) => setScopeId(e.target.value)}
+                placeholder="00000000-0000-0000-0000-000000000000"
+                className="font-mono text-xs"
+              />
+            )}
           </Field>
         </CardContent>
       </Card>

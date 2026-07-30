@@ -130,4 +130,35 @@ mod tests {
         assert_eq!(text_field(body.as_bytes(), b, "file"), None);
         assert_eq!(text_field(body.as_bytes(), b, "missing"), None);
     }
+    #[test]
+    fn extracts_edge_cases_and_malformed() {
+        let b = "BOUND";
+        // Empty body
+        assert_eq!(text_field(b"", b, "model"), None);
+
+        // Truncated after boundary
+        let trunc = format!("--{b}");
+        assert_eq!(text_field(trunc.as_bytes(), b, "model"), None);
+
+        // Boundary but no headers
+        let no_headers = format!("--{b}\r\n");
+        assert_eq!(text_field(no_headers.as_bytes(), b, "model"), None);
+
+        // Headers but no terminator
+        let no_term = format!("--{b}\r\nContent-Disposition: form-data; name=\"model\"");
+        assert_eq!(text_field(no_term.as_bytes(), b, "model"), None);
+
+        // Missing trailing boundary
+        let no_trail =
+            format!("--{b}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nvalue");
+        assert_eq!(text_field(no_trail.as_bytes(), b, "model"), None);
+
+        // Invalid UTF-8 in headers
+        let invalid_headers = b"--BOUND\r\nContent-Disposition: \xFF\r\n\r\nvalue\r\n--BOUND--\r\n";
+        assert_eq!(text_field(invalid_headers, b, "model"), None);
+
+        // Invalid UTF-8 in value
+        let invalid_value = b"--BOUND\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n\xFF\r\n--BOUND--\r\n";
+        assert_eq!(text_field(invalid_value, b, "model"), None);
+    }
 }

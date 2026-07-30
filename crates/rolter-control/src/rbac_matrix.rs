@@ -192,6 +192,15 @@ const CAPABILITIES: &[Capability] = &[
         write: W,
         unsupported: &[Action::Update],
     },
+    // listing provisioning tokens is an admin read: the rows name the IdPs a
+    // tenant trusts, which is not viewer-grade information
+    Capability {
+        resource: "scim_token",
+        scope: "org",
+        read: Requirement::Role(Role::Admin),
+        write: W,
+        unsupported: &[Action::Update],
+    },
     Capability {
         resource: "mcp_server",
         scope: "org",
@@ -222,6 +231,37 @@ const CAPABILITIES: &[Capability] = &[
         read: Requirement::Role(Role::Admin),
         write: S,
         unsupported: &[Action::Create, Action::Update, Action::Delete],
+    },
+    Capability {
+        resource: "invitation",
+        scope: "org",
+        read: Requirement::Role(Role::Admin),
+        write: Requirement::Role(Role::Admin),
+        unsupported: &[Action::Update],
+    },
+    // single sign-on: registering an identity provider or mapping its groups to
+    // roles is a way to grant roles, so it needs the same admin bar as granting
+    // one directly
+    Capability {
+        resource: "sso_provider",
+        scope: "org",
+        read: Requirement::Role(Role::Admin),
+        write: Requirement::Role(Role::Admin),
+        unsupported: &[Action::Update],
+    },
+    Capability {
+        resource: "sso_group_mapping",
+        scope: "org",
+        read: Requirement::Role(Role::Admin),
+        write: Requirement::Role(Role::Admin),
+        unsupported: &[Action::Update],
+    },
+    Capability {
+        resource: "org_auth_policy",
+        scope: "org",
+        read: Requirement::Role(Role::Admin),
+        write: Requirement::Role(Role::Admin),
+        unsupported: &[Action::Create, Action::Delete],
     },
     // deployment-wide policy: no tenancy scope exists to be a member of, so
     // these are the admin token's (or a superadmin's) alone

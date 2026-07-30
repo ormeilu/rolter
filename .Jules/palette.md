@@ -6,6 +6,11 @@
 **Action:** Always verify keyboard accessibility (`focus-visible`) and semantic HTML tags (`type="search"`) on custom input wrappers and icon-only buttons across the application.
 
 I am learning that Linear tickets are no longer used for PR titles.
+
+## 2024-05-18 - [Missing a11y & async feedback on Row Actions]
+**Learning:** Found a recurring pattern in data tables where icon-only action buttons (like Delete) in rows lack `aria-label` attributes and keyboard focus states (`focus-visible` classes). Additionally, confirmation dialogs for these destructive row actions often lack visual loading indicators (`Loader2` from lucide-react) while the asynchronous mutation is pending. This makes keyboard navigation difficult and leaves users wondering if their delete request was registered.
+**Action:** When working on data table rows or generic item listings, explicitly verify that all icon-only buttons include an `aria-label` and `focus-visible` classes. Also, always ensure the corresponding confirmation dialogs provide visual loading feedback via `Loader2` during the mutation.
+
 ## 2026-07-29 - [Global refresh visual indicator]
-**Learning:** Relying purely on a manual manual loading state in global headers can mismatch UI states if a user triggers an implicit background fetch while also hitting the 'Refresh' button. We need to tie top-level refresh visual indicators to the global `useIsFetching` state.
+**Learning:** Relying purely on a manual loading state in global headers can mismatch UI states if a user triggers an implicit background fetch while also hitting the 'Refresh' button. We need to tie top-level refresh visual indicators to the global `useIsFetching` state.
 **Action:** Next time, always check if manual refresh indicators can be augmented with the data library's global fetching hooks (like TanStack's `useIsFetching()`) to represent all ongoing network states.

@@ -306,6 +306,82 @@ pub struct CompatibilityPolicy {
     pub updated_at: DateTime<Utc>,
 }
 
+/// an OIDC identity provider registered for one org.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SsoProvider {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub issuer: String,
+    pub client_id: String,
+    /// sealed client secret; never serialized, and read only by the token
+    /// exchange through [`super::repo::SsoRepo::client_secret`]
+    #[serde(skip_serializing)]
+    pub secret_ciphertext: Option<Vec<u8>>,
+    #[serde(skip_serializing)]
+    pub secret_nonce: Option<Vec<u8>>,
+    pub scopes: Vec<String>,
+    pub group_claim: String,
+    /// role granted when no group mapping matches; `None` denies login to a
+    /// user the IdP has not put in a mapped group
+    pub default_role: Option<String>,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+/// an IdP group name granting a role at a scope
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SsoGroupMapping {
+    pub id: Uuid,
+    pub provider_id: Uuid,
+    pub group_name: String,
+    pub org_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// one in-flight authorization-code login
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SsoLoginState {
+    pub state: String,
+    pub provider_id: Uuid,
+    pub code_verifier: String,
+    pub nonce: String,
+    pub redirect_uri: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// a SCIM provisioning token. `token_hash` is peppered sha-256; the plaintext
+/// is returned once at creation and never stored.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ScimToken {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    #[serde(skip_serializing)]
+    pub token_hash: String,
+    pub created_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// the SCIM view of a local user within one org: what the IdP calls them and
+/// the stable id it knows them by.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ScimIdentity {
+    pub user_id: Uuid,
+    pub org_id: Uuid,
+    pub external_id: Option<String>,
+    pub user_name: String,
+    pub display_name: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// an MCP server an org has registered; the anchor OAuth grants hang off
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct McpServer {
@@ -405,7 +481,39 @@ pub struct Membership {
     pub project_id: Option<Uuid>,
     /// one of `admin` | `member` | `viewer`
     pub role: String,
+    /// who granted this: `manual` (invitation, seed, admin API) or `sso` (an
+    /// IdP group mapping). SSO reconciliation only ever touches its own rows
+    pub source: String,
     pub created_at: DateTime<Utc>,
+}
+
+/// a pending (or spent) invitation to join an org at a scope
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Invitation {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub email: String,
+    pub role: String,
+    pub team_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    /// peppered digest of the one-time token; never serialized, and never
+    /// compared outside [`super::repo::InvitationRepo::find_live_by_hash`]
+    #[serde(skip_serializing)]
+    pub token_hash: String,
+    pub invited_by: Option<Uuid>,
+    pub expires_at: DateTime<Utc>,
+    pub accepted_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// how one org's members are allowed to authenticate
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct OrgAuthPolicy {
+    pub org_id: Uuid,
+    pub allow_password_login: bool,
+    pub allow_sso: bool,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// a record of an admin/CRUD/auth action, for the audit-log API
