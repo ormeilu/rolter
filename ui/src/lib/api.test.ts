@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
 import {
   fetchConfig,

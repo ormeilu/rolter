@@ -11,6 +11,7 @@
     "test-storybook": "test-storybook",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
+    "test": "bun test src",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui"
   },
