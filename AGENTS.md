@@ -6,6 +6,23 @@ Guidance for humans and AI agents working in this repository. `CLAUDE.md` is a s
 
 rolter is a high-performance OpenAI/Anthropic-compatible AI gateway and load balancer. The backend is Rust (a Cargo workspace with two binaries over shared crates); the dashboard is a Vite + React + shadcn/ui SPA served as static assets by the control plane.
 
+## Repository map
+
+| Path | What lives there |
+|---|---|
+| `crates/rolter-core` | config types (`ProviderKind`, routes, strategies), shared errors |
+| `crates/rolter-balancer` | `LoadBalancer` trait, strategies, cache-aware scorer, `build()` |
+| `crates/rolter-proxy` | upstream HTTP/TLS client, provider dialect adapters |
+| `crates/rolter-store` | storage traits, `postgres` feature backend, `migrations/` |
+| `crates/rolter-auth` | virtual keys, roles, access checks |
+| `crates/rolter-gateway` | data-plane binary (`/v1/*` surface) |
+| `crates/rolter-control` | control-plane binary, CRUD API, `/internal/snapshot`, UI host |
+| `crates/rolter` | unified launcher (`gateway` / `control` / `easy-up`) |
+| `ui/` | dashboard SPA (also a `publish = false` Cargo member so release-plz sees UI commits) |
+| `docs/` | architecture, ADRs, developer docs (mdBook; `SUMMARY.md` is the nav) |
+| `user-docs/` | end-user documentation site (Mintlify; `docs.json` is the nav) |
+| `integration/`, `charts/`, `docker/`, `infra/` | engine integration suite, Helm chart, compose, deployment |
+
 ## Commands
 
 - `cargo build --workspace` — build everything
@@ -28,6 +45,34 @@ rolter is a high-performance OpenAI/Anthropic-compatible AI gateway and load bal
 - New balancing strategies implement `rolter_balancer::LoadBalancer` and are wired into `build()`.
 - New storage backends implement the `rolter_store` traits behind a cargo feature.
 - The gateway ships a built-in `fake-llm` model (deterministic lorem ipsum, no upstream or config needed) on `/v1/chat/completions` and `/v1/messages` (non-streaming and SSE) plus `/v1/embeddings` (deterministic vectors). Use it for smoke tests and local dev without secrets; a configured route named `fake-llm` shadows the builtin.
+
+## Storage & migrations
+
+- Migrations are embedded with `sqlx::migrate!("./migrations")` in `crates/rolter-store/src/postgres/mod.rs`. **Never edit an applied migration file** — sqlx records a checksum, and any byte change breaks every existing deployment (see #724, which had to restore one). Add a new `NNNN_*.sql` instead.
+- Migration numbers are append-only and never reused, even where the sequence has a gap.
+- Any table the data plane consumes must bump `config_version` inside the write transaction, via a `bump_config_version()` statement trigger (`0003_config_version_trigger.sql`, `0029_*`, `0031_*` are the models to copy). Without it `/internal/snapshot` never propagates the change and the gateway silently serves stale config.
+- Postgres tests must run in an isolated schema (per-test `search_path`); the coverage job runs plain `cargo test` against a shared database and will race otherwise.
+- `rolter-control` CRUD tests only build under `--features postgres`. Check both feature sets before pushing.
+- `cargo hack check --each-feature --workspace` runs in CI: every feature must compile alone, so never let a feature-gated item leak into a default-feature path.
+
+## Maintenance matrix
+
+When you change the thing on the left, the entries on the right must change with it.
+
+| You changed | You must also update |
+|---|---|
+| Added a balancing strategy | implement `rolter_balancer::LoadBalancer` in `crates/rolter-balancer/src/`; wire it into `build()` and `build_with_stats()` (`lib.rs:108`, `:115`); add the `BalancingStrategy` variant in `crates/rolter-core/src/config.rs`; add a migration allowing the new value (see `0019_cache_aware_strategies.sql`); surface it in `ui/src/pages/RoutingRules.tsx`; document it in `docs/architecture/load-balancing.md` |
+| Added a provider / adapter kind | add the `ProviderKind` variant in `crates/rolter-core/src/config.rs`; add dialect handling in `crates/rolter-proxy`; add a migration widening the stored enum (see `0027_provider_adapter_kinds.sql`); update `ui/src/components/ProviderSheet.tsx` and `ui/src/pages/Providers.tsx`; add a row to `rolter.example.toml`; document it under `user-docs/configuration/` |
+| Added a control-plane endpoint module | create `crates/rolter-control/src/<module>.rs` exposing `router()`; `.merge()` it into the router in `lib.rs` (~line 374); add the capability to `CAPABILITIES` in `rbac_matrix.rs` (the `the_matrix_lists_every_capability_exactly_once` test enforces coverage); call it from `ui/src/lib/api.ts`; document it in `user-docs/api/` |
+| Added a dashboard screen | add `ui/src/pages/<Screen>.tsx`; register the route in `ui/src/App.tsx`; add the nav entry in `ui/src/lib/nav.tsx`; add a `.stories.tsx` and run `run-story-tests`; cover empty/loading/error states; add a mock in `ui/src/lib/mock.ts` |
+| Added a table the data plane reads | a `NNNN_*.sql` migration **plus** a `bump_config_version()` trigger migration; extend the store traits in `crates/rolter-store/src/` and the postgres impl; extend the snapshot payload in `crates/rolter-control` and its consumer in `crates/rolter-gateway`; update `docs/architecture/data-model.md` |
+| Added a storage backend | implement the `rolter_store` traits behind a new cargo feature; keep it compiling under `cargo hack check --each-feature`; add the feature to the clippy/test matrix in `.github/workflows/quality.yml` |
+| Changed the gateway HTTP surface | update `crates/rolter-gateway/tests/integration.rs`; keep the OpenAI and Anthropic dialects in sync; update `docs/api/openai-and-anthropic.md` and `user-docs/api/` |
+| Changed configuration keys | `crates/rolter-core/src/config.rs`, `rolter.example.toml`, `.env.example`, `charts/` values, `docker/docker-compose.yml`, `user-docs/configuration/` |
+| Added a doc page | add it to `docs/SUMMARY.md` (mdBook nav) or to the matching `"pages"` group in `user-docs/docs.json` (Mintlify nav) — an unlisted page is invisible |
+| Added an ADR | `docs/adr/NNNN-*.md` plus its line in `docs/adr/README.md`; English only; commit as plain `docs:` since `adr` is not an allowed scope |
+| Added or changed a workflow | pin new actions to a full commit SHA; add a least-privilege `permissions:` block; keep `uvx zizmor` and `actionlint` clean; if it is a merge gate, add it to `ci-ok`'s `needs:` in `.github/workflows/ci.yml` |
+| Changed behaviour of any feature | ship the `docs/` (and `user-docs/` where user-facing) update in the *same* PR, plus the index/nav line; update `TODO.md` / `ROADMAP.md` when the roadmap moves |
 
 ## Dashboard design
 
@@ -93,3 +138,15 @@ Commit hygiene is enforced by `commitlint` (PR titles) and the `conventional-pre
 - Add unit tests next to the code (`#[cfg(test)] mod tests`).
 - Run the tests (`just test`, or `cargo nextest run --workspace`) and `cargo clippy` before committing.
 - Never commit secrets; provider keys come from env vars or the encrypted store.
+- Use the built-in `fake-llm` model for smoke tests instead of reaching for a real provider key.
+- Pin test-fixture typos in `.github/config/typos.toml` rather than renaming code to satisfy the spellchecker.
+
+## CI
+
+- `ci-ok` is the single required status check; it aggregates `quality`, `pr-title` and `codeql`. The heavy gate lives in the reusable `.github/workflows/quality.yml`, so the release paths enforce exactly the same checks.
+- Every action is pinned to a full commit SHA; `zizmor` and `actionlint` run over the workflows. Any caller of `quality.yml` must pass `GITLEAKS_LICENSE` through.
+- PR titles are validated against a fixed scope allowlist — a scope outside the list above fails CI.
+
+## Changelogs
+
+There is intentionally **no root `CHANGELOG.md`**. release-plz maintains one changelog per published crate at `crates/<crate>/CHANGELOG.md`, driven by Conventional Commit scopes. UI changes are captured because `ui/` is a `publish = false` workspace member (`rolter-ui`) with `ui/changelog.rs`; the Dockerfile must keep copying `ui/Cargo.toml` and `ui/changelog.rs`. Do not add a root changelog — write the commit message correctly instead.
