@@ -250,6 +250,26 @@ async fn crud_create_round_trip_reflects_in_snapshot() {
 }
 
 #[tokio::test]
+async fn org_slug_is_validated() {
+    skip_without_db!();
+    let addr = serve(fresh_app().await).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let res = client
+        .post(format!("{base}/api/v1/orgs"))
+        .json(&serde_json::json!({
+            "name": "Test Org",
+            "slug": "invalid slug with spaces",
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 400);
+}
+
+#[tokio::test]
 async fn business_unit_and_customer_crud_round_trip() {
     skip_without_db!();
     let addr = serve(fresh_app().await).await;

@@ -41,7 +41,8 @@ Granular, incremental checklist. See [`ROADMAP.md`](ROADMAP.md) for phase intent
 - [x] RBAC middleware resolving most-specific membership per resource
 - [x] Enforce roles on every control mutation
 - [ ] Pluggable `IdentityProvider` trait
-- [ ] OAuth2/OIDC SSO (group→role mapping)
+- [x] OAuth2/OIDC SSO (group→role mapping) (#240 — per-org providers, PKCE, `source`-tagged memberships, org login policy with superadmin break-glass)
+- [x] Invitation onboarding: one-time links, invitee-chosen password (#712)
 - [ ] LDAP bind + group mapping
 - [ ] Audit log writes + UI surface
 - [x] Virtual-key hardening (pepper, constant-time lookup, expiry/rotation, scopes)
@@ -106,7 +107,7 @@ Granular, incremental checklist. See [`ROADMAP.md`](ROADMAP.md) for phase intent
 ## Phase 10 — Control panel
 Full-featured hostable web control panel, not a read-only dashboard.
 - [x] [Zero-cred startup + runtime provider/model CRUD with encrypted keys](https://linear.app/rolter/issue/ROL-250/zero-cred-startup-run-with-fake-llm-only-add-providersmodels-at) (provider `api_key` via API sealed with `ROLTER_KEK`, `PUT /providers/{id}`, `ROLTER_ADMIN_TOKEN` guard on CRUD + snapshot, gateway `/admin/*` proxy)
-- [ ] Auth screens (login, SSO)
+- [x] Auth screens (login, SSO): login page renders password form and/or provider buttons from `GET /api/v1/auth/methods`; `/invite/{token}` accept screen
 - [x] CRUD: providers, routes (+ targets/strategy), virtual keys, budgets, pricing (members CRUD blocked on Phase 3 accounts)
 - [x] Model management UI: add/edit/enable-disable/delete models + provider/route binding
 - [ ] User & team management UI: create/invite/edit/deactivate users, assign roles/teams (blocked on Phase 3 accounts/RBAC)

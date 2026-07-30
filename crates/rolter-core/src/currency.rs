@@ -151,6 +151,16 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_currency_codes() {
+        assert_eq!(normalize_code("usd"), "USD");
+        assert_eq!(normalize_code("USD"), "USD");
+        assert_eq!(normalize_code("Usd"), "USD");
+        assert_eq!(normalize_code(" usd "), "USD");
+        assert_eq!(normalize_code(""), "");
+        assert_eq!(normalize_code("   "), "");
+    }
+
+    #[test]
     fn converts_into_and_out_of_the_base() {
         let fx = rates();
         assert_eq!(fx.convert(10.0, "EUR", "USD"), Some(11.0));

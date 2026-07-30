@@ -118,6 +118,21 @@ somewhere the IdP does not gate.
 Register the redirect URI `"$ROLTER_PUBLIC_URL/auth/sso/{slug}/callback"` with
 the identity provider.
 
+## Testing
+
+Unit and Postgres-gated integration tests drive a stub IdP in-process, which
+covers rolter's own logic. Interoperability is a separate question, so the
+[e2e harness](../../integration/e2e/README.md) runs the same flows against a
+real Keycloak — genuine discovery document, real JWKS, real login form, real
+`/`-prefixed realm groups:
+
+```bash
+cd integration/e2e && uv run pytest tests/test_sso.py --idp
+```
+
+That suite is nightly and on-demand (`.github/workflows/sso-e2e.yml`), not part
+of the per-PR gate.
+
 ## Related
 
 - [RBAC & auth](rbac-and-auth.md) — roles, scopes and how they are enforced

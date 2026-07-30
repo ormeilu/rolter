@@ -57,6 +57,11 @@ services:
   sim-c: { <<: *sim }
 
   control:
+    # the same image the gateway runs — one image carries all three binaries and
+    # the services differ only by `command`. sharing the tag keeps compose to a
+    # single build; with distinct tags it compiled the identical workspace twice,
+    # concurrently, fighting over the same cores.
+    image: rolter-e2e-local:latest
     build:
       context: ../..
       dockerfile: docker/Dockerfile
@@ -100,6 +105,10 @@ services:
       # injected by the harness (rolter_e2e/stack.py) so no key material lives in
       # git; export ROLTER_KEK yourself for a manual `docker compose up`.
       ROLTER_KEK: ${ROLTER_KEK:?set ROLTER_KEK (the harness sets a throwaway test value)}
+      # the oidc redirect uri is derived from this, and the identity provider
+      # redirects a *browser* there, so it must be the host-published url rather
+      # than the compose-internal one
+      ROLTER_PUBLIC_URL: http://localhost:4001
     # control needs postgres+redis at boot; clickhouse only receives async log
     # writes, so start-order is enough (don't block boot on the CH HTTP port).
     depends_on:
@@ -149,6 +158,31 @@ services:
     # gateway retries its snapshot fetch every 2s until control answers anyway.
     depends_on:
       - control
+
+  # ----------------------------------------------------------------------- #
+  # identity provider (issue #714) — opt-in via `--profile idp`. a real         #
+  # keycloak, so the sso suite exercises a genuine discovery document, jwks,    #
+  # login form and `/`-prefixed realm groups instead of a stub. dev mode: in    #
+  # memory, no persistence, cleared with the stack.                             #
+  # ----------------------------------------------------------------------- #
+  keycloak:
+    profiles: ["idp"]
+    image: quay.io/keycloak/keycloak:26.4
+    command: ["start-dev"]
+    environment:
+      # throwaway bootstrap credentials for the admin rest api the harness uses
+      # to create the realm; never real ones
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # front-channel urls are minted with this host, which is what the control
+      # plane resolves. the harness reaches the same server through the
+      # published port and rewrites the host on its own requests, so both sides
+      # agree on the issuer without either needing the other's dns
+      KC_HOSTNAME: http://keycloak:8080
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+    ports:
+      - "8081:8080"
 
   # ----------------------------------------------------------------------- #
   # chaos / fault-injection harness (issue #620) — opt-in via `--profile     #
