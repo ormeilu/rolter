@@ -1211,6 +1211,33 @@ export function updateSecuritySettings(
 }
 
 // ---------------------------------------------------------------------------
+// logging settings: request-log sampling, payload capture and retention
+
+export interface LoggingSettingsDto {
+  sample_rate: number;
+  payload_capture_enabled: boolean;
+  payload_capture_max_bytes: number;
+  payload_capture_redact_fields: string[];
+  payload_capture_models: string[];
+  payload_capture_virtual_key_ids: string[];
+  retention_days: number;
+  payload_retention_hours: number;
+  updated_at: string;
+}
+
+export type UpdateLoggingSettingsInput = Omit<LoggingSettingsDto, "updated_at">;
+
+export function fetchLoggingSettings(): Promise<LoggingSettingsDto> {
+  return getJson<LoggingSettingsDto>("/api/v1/logging-settings");
+}
+
+export function updateLoggingSettings(
+  input: UpdateLoggingSettingsInput,
+): Promise<LoggingSettingsDto> {
+  return sendJson<LoggingSettingsDto>("PUT", "/api/v1/logging-settings", input);
+}
+
+// ---------------------------------------------------------------------------
 // feature flags: global switches for hot-reloadable gateway subsystems
 
 // a flag whose subsystem this deployment cannot run. the screen renders these

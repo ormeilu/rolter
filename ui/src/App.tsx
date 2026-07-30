@@ -19,6 +19,7 @@ import Connectors from "@/pages/Connectors";
 import Dashboard from "@/pages/Dashboard";
 import FeatureFlags from "@/pages/FeatureFlags";
 import Health from "@/pages/Health";
+import LogsSettings from "@/pages/LogsSettings";
 import Keys from "@/pages/Keys";
 import Limits from "@/pages/Limits";
 import AcceptInvite from "@/pages/AcceptInvite";
@@ -67,6 +68,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   security: <Security />,
   caching: <Config />,
   "feature-flags": <FeatureFlags />,
+  "logs-settings": <LogsSettings />,
 };
 
 // old bookmarkable paths → new IA keys
