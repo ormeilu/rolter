@@ -28,6 +28,7 @@ import Logs from "@/pages/Logs";
 import McpCatalog from "@/pages/McpCatalog";
 import McpLogs from "@/pages/McpLogs";
 import Models from "@/pages/Models";
+import Performance from "@/pages/Performance";
 import Playground from "@/pages/Playground";
 import Pricing from "@/pages/Pricing";
 import ProviderGroups from "@/pages/ProviderGroups";
@@ -69,6 +70,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   caching: <Config />,
   "feature-flags": <FeatureFlags />,
   "logs-settings": <LogsSettings />,
+  performance: <Performance />,
 };
 
 // old bookmarkable paths → new IA keys
