@@ -19,6 +19,7 @@ import ComplexityRouter from "@/pages/ComplexityRouter";
 import Compatibility from "@/pages/Compatibility";
 import Config from "@/pages/Config";
 import Connectors from "@/pages/Connectors";
+import { BusinessUnits, Customers } from "@/pages/CostAttribution";
 import Dashboard from "@/pages/Dashboard";
 import FeatureFlags from "@/pages/FeatureFlags";
 import Health from "@/pages/Health";
@@ -77,6 +78,8 @@ const SCREENS: Record<string, React.ReactNode> = {
   compatibility: <Compatibility />,
   cluster: <Cluster />,
   "adaptive-settings": <AdaptiveSettings />,
+  "business-units": <BusinessUnits />,
+  customers: <Customers />,
 };
 
 // old bookmarkable paths → new IA keys

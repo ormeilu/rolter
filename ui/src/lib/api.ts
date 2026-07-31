@@ -423,6 +423,93 @@ export function deleteTeam(id: string): Promise<void> {
   return sendJson<void>("DELETE", `/api/v1/teams/${id}`);
 }
 
+// ---------------------------------------------------------------------------
+// cost attribution: business units roll teams up, customers attribute spend to
+// the org's own customers. both are retired rather than deleted once they have
+// history, so `retired_at` is part of the row, not a separate lookup
+
+export interface BusinessUnitRow {
+  id: string;
+  org_id: string;
+  name: string;
+  slug: string;
+  retired_at: string | null;
+  created_at: string;
+}
+
+export interface CustomerRow {
+  id: string;
+  org_id: string;
+  business_unit_id: string | null;
+  name: string;
+  slug: string;
+  retired_at: string | null;
+  created_at: string;
+}
+
+export function fetchBusinessUnits(orgId: string): Promise<BusinessUnitRow[]> {
+  return getJson<BusinessUnitRow[]>(`/api/v1/orgs/${orgId}/business-units`);
+}
+
+export function createBusinessUnit(
+  orgId: string,
+  input: { name: string; slug?: string },
+): Promise<BusinessUnitRow> {
+  return sendJson<BusinessUnitRow>(
+    "POST",
+    `/api/v1/orgs/${orgId}/business-units`,
+    input,
+  );
+}
+
+// a slug change breaks whatever already attributes spend by it, so the server
+// demands allow_slug_change before it will move one
+export function updateBusinessUnit(
+  id: string,
+  input: {
+    name?: string;
+    slug?: string;
+    allow_slug_change?: boolean;
+    retired?: boolean;
+  },
+): Promise<BusinessUnitRow> {
+  return sendJson<BusinessUnitRow>("PUT", `/api/v1/business-units/${id}`, input);
+}
+
+export function deleteBusinessUnit(id: string): Promise<void> {
+  return sendJson<void>("DELETE", `/api/v1/business-units/${id}`);
+}
+
+export function fetchCustomers(orgId: string): Promise<CustomerRow[]> {
+  return getJson<CustomerRow[]>(`/api/v1/orgs/${orgId}/customers`);
+}
+
+export function createCustomer(
+  orgId: string,
+  input: { name: string; slug?: string; business_unit_id?: string | null },
+): Promise<CustomerRow> {
+  return sendJson<CustomerRow>("POST", `/api/v1/orgs/${orgId}/customers`, input);
+}
+
+export function updateCustomer(
+  id: string,
+  // business_unit_id follows the server's three-state contract: omit to leave
+  // unchanged, null to unassign, an id to move it
+  input: {
+    name?: string;
+    slug?: string;
+    allow_slug_change?: boolean;
+    business_unit_id?: string | null;
+    retired?: boolean;
+  },
+): Promise<CustomerRow> {
+  return sendJson<CustomerRow>("PUT", `/api/v1/customers/${id}`, input);
+}
+
+export function deleteCustomer(id: string): Promise<void> {
+  return sendJson<void>("DELETE", `/api/v1/customers/${id}`);
+}
+
 export function createProject(
   teamId: string,
   input: { name: string },

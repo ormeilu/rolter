@@ -73,7 +73,8 @@
             "pages": [
               "security/authentication",
               "security/rbac",
-              "security/budgets-and-rate-limits"
+              "security/budgets-and-rate-limits",
+              "security/cost-attribution"
             ]
           },
           {

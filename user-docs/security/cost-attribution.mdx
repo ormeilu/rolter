@@ -1,0 +1,70 @@
+---
+title: "Cost Attribution: Business Units and Customers"
+sidebarTitle: "Cost Attribution"
+description: "Roll teams up into business units and attribute spend to your own customers, without breaking the identity that historical spend was recorded against."
+---
+
+Rolter attributes spend along two axes that sit beside the org/team/project hierarchy:
+
+- **Business units** roll teams up, so cost lands on the part of the organisation that incurred it.
+- **Customers** attribute usage to the people *you* serve, so it can be billed on or reported per account. A customer can optionally roll up into a business unit.
+
+Both live under **Governance** in the dashboard.
+
+---
+
+## Slugs are the identity
+
+Every unit and customer has a `name` (for humans) and a `slug` (for everything else). The slug is what spend is recorded against, and it is derived from the name when you leave it blank.
+
+It must match `^[a-z0-9][a-z0-9-]{0,62}$` — lowercase alphanumerics and dashes, starting with a letter or digit.
+
+**A slug is immutable by default.** Renaming one does not rewrite the attribution already recorded against the old value, so the API refuses a rename unless you pass `allow_slug_change: true`, and the dashboard makes you tick a box that names the old slug explicitly. This is deliberate friction: a silent rename produces a report that is quietly wrong rather than loudly broken.
+
+---
+
+## Retire, don't delete
+
+A unit or customer with history should be **retired**, not deleted. Retiring sets `retired_at`, keeps every record that points at it, and stops it being offered for new attribution — the dashboard keeps it visible, dimmed and badged, and drops it from the assignment dropdown unless it is the one already selected.
+
+Delete removes the row outright. Use it for something created by mistake, not for a customer who churned.
+
+---
+
+## Assignment
+
+A customer's `business_unit_id` follows a three-state contract on update:
+
+| Value | Meaning |
+|---|---|
+| omitted | leave unchanged |
+| `null` | unassign |
+| a UUID | assign to that unit |
+
+The unit must belong to the same org as the customer; a cross-org assignment is rejected.
+
+---
+
+## API
+
+Listing needs **Viewer** on the org; creating, updating and deleting need **Admin**. Every mutation is audited.
+
+```bash
+curl -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  https://control.example.com/api/v1/orgs/$ORG_ID/business-units
+
+curl -X POST -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Platform Engineering"}' \
+  https://control.example.com/api/v1/orgs/$ORG_ID/business-units
+
+curl -X POST -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Acme Corp", "business_unit_id": "'"$UNIT_ID"'"}' \
+  https://control.example.com/api/v1/orgs/$ORG_ID/customers
+
+# retire rather than delete once there is history
+curl -X PUT -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" -d '{"retired": true}' \
+  https://control.example.com/api/v1/customers/$CUSTOMER_ID
+```
