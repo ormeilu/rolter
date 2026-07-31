@@ -75,6 +75,7 @@
               "security/authentication",
               "security/rbac",
               "security/user-provisioning",
+              "security/mcp-oauth",
               "security/budgets-and-rate-limits",
               "security/cost-attribution"
             ]

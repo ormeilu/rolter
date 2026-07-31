@@ -31,6 +31,7 @@ import Login from "@/pages/Login";
 import Logs from "@/pages/Logs";
 import McpCatalog from "@/pages/McpCatalog";
 import McpLogs from "@/pages/McpLogs";
+import { AuthSessions, OAuthGrants } from "@/pages/McpOAuth";
 import Models from "@/pages/Models";
 import Performance from "@/pages/Performance";
 import Playground from "@/pages/Playground";
@@ -70,6 +71,8 @@ const SCREENS: Record<string, React.ReactNode> = {
   rbac: <Rbac />,
   "audit-logs": <AuditLog />,
   "mcp-catalog": <McpCatalog />,
+  "auth-sessions": <AuthSessions />,
+  "oauth-grants": <OAuthGrants />,
   "api-keys": <Account />,
   security: <Security />,
   caching: <Config />,

@@ -1834,6 +1834,79 @@ export function fetchMcpLogDetail(eventId: string): Promise<McpLogDetail> {
 }
 
 // ---------------------------------------------------------------------------
+// mcp servers, oauth consent grants and token sessions
+// (crates/rolter-control/src/mcp_oauth.rs, #561)
+//
+// three properties of that module are load-bearing for the screens below:
+// no token material ever crosses this boundary (a session carries metadata and
+// `has_refresh_token`, never a token); a grant is the unit of consent, so
+// revoking one revokes its sessions in the same transaction; and a listing is
+// owner-scoped — an org admin sees the whole org, everyone else sees only the
+// rows they own.
+
+export interface McpServerRow {
+  id: string;
+  org_id: string;
+  name: string;
+  slug: string;
+  url: string;
+  transport: string;
+  created_at: string;
+}
+
+export interface McpOAuthGrantRow {
+  id: string;
+  server_id: string;
+  user_id: string;
+  scopes: string[];
+  granted_at: string;
+  revoked_at: string | null;
+  revoked_by: string | null;
+  /// resolved server-side from `revoked_at`, so a client never infers the
+  /// live/dead state from a nullable timestamp
+  active: boolean;
+}
+
+/// session metadata for a grant. There is deliberately no token field: the
+/// sealed access/refresh tokens are only readable inside the control plane.
+export interface McpOAuthSessionRow {
+  id: string;
+  grant_id: string;
+  scopes: string[];
+  expires_at: string;
+  refresh_expires_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  last_used_at: string | null;
+  /// whether a refresh token is stored, so the UI can show renewability
+  /// without the token itself ever being handed out
+  has_refresh_token: boolean;
+}
+
+export function fetchMcpServers(orgId: string): Promise<McpServerRow[]> {
+  return getJson<McpServerRow[]>(`/api/v1/orgs/${orgId}/mcp-servers`);
+}
+
+export function fetchMcpGrants(orgId: string): Promise<McpOAuthGrantRow[]> {
+  return getJson<McpOAuthGrantRow[]>(`/api/v1/orgs/${orgId}/mcp/grants`);
+}
+
+// revoking consent cascades to every session under the grant
+export function revokeMcpGrant(id: string): Promise<McpOAuthGrantRow> {
+  return sendJson<McpOAuthGrantRow>("DELETE", `/api/v1/mcp/grants/${id}`);
+}
+
+export function fetchMcpSessions(orgId: string): Promise<McpOAuthSessionRow[]> {
+  return getJson<McpOAuthSessionRow[]>(`/api/v1/orgs/${orgId}/mcp/sessions`);
+}
+
+// revoking one session leaves the consent standing; a new session can be
+// minted against the same grant without asking the user again
+export function revokeMcpSession(id: string): Promise<McpOAuthSessionRow> {
+  return sendJson<McpOAuthSessionRow>("DELETE", `/api/v1/mcp/sessions/${id}`);
+}
+
+// ---------------------------------------------------------------------------
 // complexity routing policy (stored in route params, validated server-side)
 
 export interface ComplexityTier {
