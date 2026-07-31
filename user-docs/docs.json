@@ -45,7 +45,8 @@
               "concepts/providers-and-routes",
               "concepts/virtual-keys",
               "concepts/load-balancing",
-              "concepts/cache-aware-routing"
+              "concepts/cache-aware-routing",
+              "concepts/adaptive-routing"
             ]
           },
           {

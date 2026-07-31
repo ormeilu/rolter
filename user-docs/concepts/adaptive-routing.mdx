@@ -1,0 +1,60 @@
+---
+title: "Adaptive Routing: Blend Weights, Exploration, and the Kill Switch"
+sidebarTitle: "Adaptive Routing"
+description: "How Rolter's adaptive strategy scores targets from live latency, cost and load, and how to tune the blend without accidentally turning it into a random balancer."
+---
+
+A route on the `adaptive` strategy does not use its static target weights. It scores each target from live signals and sends traffic to the best one, holding a slice back to keep the scores honest. One deployment-wide policy governs every such route.
+
+Tune it under **Adaptive Routing → Settings** in the dashboard.
+
+---
+
+## The blend
+
+Three signals are scored in `[0, 1]` and combined as a weighted sum:
+
+| Signal | What it measures |
+|---|---|
+| `latency_weight` | observed latency — how strongly it pulls traffic |
+| `cost_weight` | per-token cost — how strongly it pulls traffic |
+| `load_weight` | in-flight load — how strongly it pushes traffic away |
+
+**Only the ratio between the weights matters.** Doubling all three changes nothing. Each is bounded to `0..=100`, not because the blend needs the range, but so a typo cannot make one signal numerically dominant. The dashboard shows each weight's share of the total alongside the raw number for exactly that reason.
+
+An **all-zero blend is rejected**. It would not stop adaptive routing — it would turn the strategy into a random balancer, which is a far less obvious thing to read off a dashboard than a switch in the off position. At least one weight must be positive.
+
+---
+
+## Exploration
+
+`exploration_ratio` is the share of traffic sent off the current best target so its rivals' scores stay fresh. Without it, a target that had one bad minute is never measured again. It is capped at **0.5** — the gateway clamps above that, so the API refuses the value instead of quietly reinterpreting it.
+
+`min_samples` is the warm-up: how many observations a target needs before its score is trusted. Below it, the target is not preferentially selected on a score built from too little data.
+
+---
+
+## The kill switch
+
+`enabled = false` is the intended way to stop adaptive routing. Every route on the `adaptive` strategy falls back to serving from its static target weights.
+
+The read response carries `affected_routes` — the public model names of every enabled route on the strategy — so the blast radius is visible before the switch is flipped. The dashboard renders that list next to the switch.
+
+A **disabled policy still has to be well-formed**. Switching the kill switch off does not license nonsense weights that would take effect the moment it is switched back on, so validation applies either way.
+
+---
+
+## API
+
+Both endpoints are **superadmin only**, updates are audited, and a successful update bumps `config_version` so the change reaches the data plane through the snapshot without a restart.
+
+```bash
+curl -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  https://control.example.com/api/v1/adaptive-routing-policy
+
+curl -X PUT -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "latency_weight": 1.0, "cost_weight": 0.5,
+       "load_weight": 0.25, "exploration_ratio": 0.05, "min_samples": 50}' \
+  https://control.example.com/api/v1/adaptive-routing-policy
+```

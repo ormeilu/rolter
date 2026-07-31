@@ -1382,6 +1382,52 @@ export function forgetClusterNode(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// adaptive routing policy: the global kill switch and blend weights every route
+// on the `adaptive` strategy is governed by
+
+// the gateway clamps the exploration ratio to this; the server rejects anything
+// above it rather than silently reinterpreting the value
+export const MAX_EXPLORATION_RATIO = 0.5;
+export const MAX_ADAPTIVE_WEIGHT = 100;
+export const MAX_ADAPTIVE_MIN_SAMPLES = 1_000_000;
+
+export interface AdaptiveRoutingPolicyDto {
+  enabled: boolean;
+  latency_weight: number;
+  cost_weight: number;
+  load_weight: number;
+  exploration_ratio: number;
+  min_samples: number;
+  updated_at: string;
+  // public model names of enabled routes on the `adaptive` strategy, so the
+  // blast radius of the kill switch is visible before it is flipped
+  affected_routes: string[];
+}
+
+export interface UpdateAdaptiveRoutingPolicyInput {
+  enabled: boolean;
+  latency_weight: number;
+  cost_weight: number;
+  load_weight: number;
+  exploration_ratio: number;
+  min_samples: number;
+}
+
+export function fetchAdaptiveRoutingPolicy(): Promise<AdaptiveRoutingPolicyDto> {
+  return getJson<AdaptiveRoutingPolicyDto>("/api/v1/adaptive-routing-policy");
+}
+
+export function updateAdaptiveRoutingPolicy(
+  input: UpdateAdaptiveRoutingPolicyInput,
+): Promise<AdaptiveRoutingPolicyDto> {
+  return sendJson<AdaptiveRoutingPolicyDto>(
+    "PUT",
+    "/api/v1/adaptive-routing-policy",
+    input,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // alerting: channels, rules, notification history
 
 export const ALERT_SIGNALS = [
