@@ -226,8 +226,8 @@ fn realtime_candidates<'a>(
                 *load = load.saturating_add(state.upstream_metrics.queue_depth(&target.provider));
             }
         }
-        let mut ordered = Vec::new();
-        let mut tried = Vec::new();
+        let mut ordered = Vec::with_capacity(entry.route.targets.len());
+        let mut tried = Vec::with_capacity(entry.route.targets.len());
         while let Some(index) = pick_untried(
             entry,
             context,
