@@ -1,0 +1,80 @@
+---
+title: "Provision Users into Rolter from Okta, Entra ID, or Any SCIM 2.0 Identity Provider"
+sidebarTitle: "User Provisioning (SCIM)"
+description: "Issue an org-scoped SCIM token, wire it into your identity provider, and let joiners, movers, and leavers flow into Rolter automatically."
+---
+
+Rolter speaks SCIM 2.0, so your identity provider can create, update, and deactivate Rolter accounts without anyone touching the dashboard. You issue a provisioning token for the org, paste it into the IdP's SCIM connector, and the IdP does the rest on its own schedule.
+
+The direction of control matters: **the identity provider drives provisioning, Rolter receives it.** The dashboard never calls the SCIM endpoints. What you manage in **Governance → User Provisioning** is the credential the IdP authenticates with — issuing one, seeing when it last synced, and revoking it.
+
+## What a provisioning token is
+
+A provisioning token is an opaque bearer credential scoped to exactly one org.
+
+<Info>
+The token carries the tenant. There is no org id anywhere in the SCIM URL, which means a token issued for one org physically cannot address another org's users — even if the IdP is misconfigured.
+</Info>
+
+Issuing, listing, and revoking tokens all require the **admin** role on the org (see [RBAC](/security/rbac)). A member or viewer sees an explanation instead of the token list.
+
+## Wire up an identity provider
+
+<Steps>
+  <Step title="Issue a token">
+    Open **Governance → User Provisioning** and choose **Issue token**. Name it after the connector it will live in — `Okta production`, `Entra staging` — because that name is the only thing that identifies it afterwards.
+  </Step>
+
+  <Step title="Copy the token immediately">
+    The plaintext value is displayed exactly once, in the panel that opens right after creation. Rolter stores only a peppered SHA-256 digest of it, so **the value cannot be displayed or recovered later** — not by you, not by support, not from a database dump. If you lose it, issue a new token and revoke the old one.
+  </Step>
+
+  <Step title="Configure the connector">
+    In your identity provider, set the SCIM base URL to `https://your-rolter-host/scim/v2` and the authentication mode to HTTP header / bearer token, using the value you just copied. Enable *create users*, *update user attributes*, and *deactivate users*.
+  </Step>
+
+  <Step title="Push a test user">
+    Assign one person to the Rolter application in the IdP and run a sync. They appear under **Governance → Users**, and the token's **Last sync** column updates on the next request.
+  </Step>
+</Steps>
+
+## What provisioning does and does not grant
+
+A provisioned account is deliberately minimal:
+
+- It joins the org with the **viewer** role. SCIM decides *who exists*; an operator still decides what they may do. Group-to-role mapping is a separate slice and is not part of this surface.
+- It has **no local password**. A `password` attribute sent by the IdP is ignored rather than stored — provisioned accounts are SSO-shaped by construction.
+- Deactivating a user through SCIM also drops their live sessions, so a leaver disabled in the IdP is logged out of Rolter rather than merely blocked from signing in again.
+- A SCIM `DELETE` deactivates the account and removes the org's identity mapping, but keeps the underlying user row: its memberships and audit trail have to outlive any one IdP. Re-provisioning the same person adopts the existing account instead of creating a duplicate.
+
+Every provisioning action is written to the [audit log](/observability/logs-and-cost) with the token id as the actor, since the change was made by a machine and not by a person.
+
+## Supported operations
+
+| Operation | Endpoint | Notes |
+| --- | --- | --- |
+| List / search users | `GET /scim/v2/Users` | Supports the `userName eq "value"` filter that IdPs use for reconciliation; other filters are rejected explicitly rather than silently ignored |
+| Create user | `POST /scim/v2/Users` | Idempotent — a replayed create returns a `uniqueness` conflict instead of a second account |
+| Read user | `GET /scim/v2/Users/{id}` | |
+| Replace user | `PUT /scim/v2/Users/{id}` | |
+| Patch user | `PATCH /scim/v2/Users/{id}` | The `active` attribute, in both the `path: "active"` and bare-value shapes IdPs send |
+| Deprovision | `DELETE /scim/v2/Users/{id}` | Deactivates and unmaps; the account row survives |
+
+Groups are not part of this slice yet.
+
+## Rotating and revoking a token
+
+Revocation takes effect on the very next request — the token is resolved from the database on every call, so there is no cache to wait out.
+
+<Warning>
+Revoking a token stops the sync. It does **not** touch the accounts that token already provisioned: nobody is deactivated, nobody is logged out, and no membership is removed. Those accounts simply stop receiving updates from the IdP until you point it at a new token.
+</Warning>
+
+To rotate without a gap in coverage:
+
+1. Issue a second token and copy it.
+2. Update the connector in the identity provider to use the new value.
+3. Run a sync and confirm the new token's **Last sync** timestamp moves.
+4. Revoke the old token.
+
+If you need to cut off an identity provider immediately — a compromised connector, for example — revoke the token first and deactivate the affected accounts from **Governance → Users** separately. Revocation alone is not a way to lock people out.

@@ -73,6 +73,7 @@
             "pages": [
               "security/authentication",
               "security/rbac",
+              "security/user-provisioning",
               "security/budgets-and-rate-limits",
               "security/cost-attribution"
             ]
