@@ -1,0 +1,43 @@
+---
+title: "Compatibility: Cross-Dialect Translation Settings"
+sidebarTitle: "Compatibility"
+description: "The values Rolter applies when translating a request between the OpenAI and Anthropic wire formats — the Anthropic API version header and the default max_tokens."
+---
+
+Rolter accepts both the OpenAI and Anthropic wire formats and translates between them and whatever dialect the upstream provider speaks. A few values have no equivalent on the other side of that translation and have to come from somewhere: the compatibility policy is where they come from.
+
+Edit it from **Settings → Compatibility** in the dashboard, or through the management API.
+
+---
+
+## Anthropic API version
+
+Sent as the `anthropic-version` header on every request Rolter translates into the Anthropic dialect. It is forwarded **verbatim**, so it must be a dated release string such as `2023-06-01`.
+
+Anything else is rejected up front, by both the dashboard and the API. A malformed version does not fail loudly at the point you save it — it fails every Anthropic call afterwards, with an opaque error from the upstream.
+
+---
+
+## Default max tokens
+
+Anthropic requires `max_tokens` on every request; OpenAI treats it as optional. When an OpenAI-shaped request that omits it is translated into the Anthropic dialect, this value fills the gap.
+
+Valid range is 1–1000000. A request that sets `max_tokens` explicitly always wins — this is only the fallback.
+
+---
+
+## API
+
+Both endpoints are **superadmin only**, and every update is audited.
+
+```bash
+curl -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  https://control.example.com/api/v1/compatibility-policy
+
+curl -X PUT -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"anthropic_version": "2023-06-01", "default_max_tokens": 4096}' \
+  https://control.example.com/api/v1/compatibility-policy
+```
+
+The read response also carries `restart_required`, the list of fields that only take effect after a gateway restart. It is empty today — both fields reach the data plane through the snapshot — but the server owns the list, so the dashboard surfaces a notice whenever it is non-empty rather than hard-coding which fields those are.

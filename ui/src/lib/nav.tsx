@@ -246,6 +246,7 @@ export const BUILT = new Set([
   "feature-flags",
   "logs-settings",
   "performance",
+  "compatibility",
 ]);
 
 // every navigable leaf key (parents with children are toggles, not screens)

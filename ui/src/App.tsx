@@ -14,6 +14,7 @@ import Account from "@/pages/Account";
 import { AlertChannels, AlertHistory, AlertRules } from "@/pages/Alerting";
 import AuditLog from "@/pages/AuditLog";
 import ComplexityRouter from "@/pages/ComplexityRouter";
+import Compatibility from "@/pages/Compatibility";
 import Config from "@/pages/Config";
 import Connectors from "@/pages/Connectors";
 import Dashboard from "@/pages/Dashboard";
@@ -71,6 +72,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   "feature-flags": <FeatureFlags />,
   "logs-settings": <LogsSettings />,
   performance: <Performance />,
+  compatibility: <Compatibility />,
 };
 
 // old bookmarkable paths → new IA keys
