@@ -89,6 +89,7 @@
             "pages": [
               "deployment/docker",
               "deployment/production",
+              "deployment/cluster",
               "deployment/air-gapped"
             ]
           }

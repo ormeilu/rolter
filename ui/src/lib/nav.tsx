@@ -247,6 +247,7 @@ export const BUILT = new Set([
   "logs-settings",
   "performance",
   "compatibility",
+  "cluster",
 ]);
 
 // every navigable leaf key (parents with children are toggles, not screens)

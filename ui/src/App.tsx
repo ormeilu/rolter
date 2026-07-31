@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import Account from "@/pages/Account";
 import { AlertChannels, AlertHistory, AlertRules } from "@/pages/Alerting";
 import AuditLog from "@/pages/AuditLog";
+import Cluster from "@/pages/Cluster";
 import ComplexityRouter from "@/pages/ComplexityRouter";
 import Compatibility from "@/pages/Compatibility";
 import Config from "@/pages/Config";
@@ -73,6 +74,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   "logs-settings": <LogsSettings />,
   performance: <Performance />,
   compatibility: <Compatibility />,
+  cluster: <Cluster />,
 };
 
 // old bookmarkable paths → new IA keys
