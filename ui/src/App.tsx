@@ -42,6 +42,7 @@ import RoutingRules from "@/pages/RoutingRules";
 import Security from "@/pages/Security";
 import Stub from "@/pages/Stub";
 import Teams from "@/pages/Teams";
+import UserProvisioning from "@/pages/UserProvisioning";
 import Users from "@/pages/Users";
 
 // screen key → element for every built screen; anything else in the nav
@@ -80,6 +81,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   "adaptive-settings": <AdaptiveSettings />,
   "business-units": <BusinessUnits />,
   customers: <Customers />,
+  "user-provisioning": <UserProvisioning />,
 };
 
 // old bookmarkable paths → new IA keys

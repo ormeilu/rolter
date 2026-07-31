@@ -1138,6 +1138,56 @@ export function deleteMembership(id: string): Promise<void> {
   return sendJson<void>("DELETE", `/api/v1/memberships/${id}`);
 }
 
+// --- scim provisioning tokens (crates/rolter-control/src/scim.rs, #540) ---
+//
+// the dashboard only manages the tokens an IdP authenticates with; the SCIM
+// resource endpoints (/scim/v2/Users) are driven by the IdP itself and are
+// deliberately not called from here. every one of these requires Admin on the
+// org (rolter_auth::Role::Admin).
+
+// an issued provisioning token as the server stores it. `token_hash` is never
+// serialised, so there is no field carrying the secret — a listed token can be
+// identified and revoked, never read back.
+export interface ScimTokenRow {
+  id: string;
+  org_id: string;
+  name: string;
+  created_by: string | null;
+  created_at: string;
+  /** last time an IdP presented this token; null until it is first used */
+  last_used_at: string | null;
+  /** set once revoked; a revoked token never authenticates again */
+  revoked_at: string | null;
+}
+
+// the create response: the stored row plus the one and only sighting of the
+// plaintext bearer value
+export interface CreatedScimToken extends ScimTokenRow {
+  /** the bearer value the IdP is configured with; not stored, not recoverable */
+  secret: string;
+}
+
+export function fetchScimTokens(orgId: string): Promise<ScimTokenRow[]> {
+  return getJson<ScimTokenRow[]>(`/api/v1/orgs/${orgId}/scim-tokens`);
+}
+
+export function createScimToken(
+  orgId: string,
+  input: { name: string },
+): Promise<CreatedScimToken> {
+  return sendJson<CreatedScimToken>(
+    "POST",
+    `/api/v1/orgs/${orgId}/scim-tokens`,
+    input,
+  );
+}
+
+// revocation returns the updated row rather than 204 — the screen uses it to
+// show the revoked timestamp without a refetch race
+export function revokeScimToken(id: string): Promise<ScimTokenRow> {
+  return sendJson<ScimTokenRow>("DELETE", `/api/v1/scim-tokens/${id}`);
+}
+
 // --- self-service (crates/rolter-control/src/me.rs, ROL-224) ---
 //
 // end-user surface: manage your own virtual keys and see your own usage. these
