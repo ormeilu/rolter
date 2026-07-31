@@ -14,3 +14,6 @@ I am learning that Linear tickets are no longer used for PR titles.
 ## 2026-07-29 - [Global refresh visual indicator]
 **Learning:** Relying purely on a manual loading state in global headers can mismatch UI states if a user triggers an implicit background fetch while also hitting the 'Refresh' button. We need to tie top-level refresh visual indicators to the global `useIsFetching` state.
 **Action:** Next time, always check if manual refresh indicators can be augmented with the data library's global fetching hooks (like TanStack's `useIsFetching()`) to represent all ongoing network states.
+## 2024-07-31 - Keyboard navigation in RowIconButton & SortLabel
+**Learning:** Shared UI components used across lists and grids (like `RowIconButton` and `SortLabel` in `screen.tsx`) didn't have keyboard focus indicators, making the entire app's tables inaccessible to keyboard-only users. Because these components are heavily reused, adding `focus-visible` to these primitives fixes accessibility across many pages (e.g., Users, Keys) at once.
+**Action:** When auditing list/table accessibility, verify focus styles on shared generic row action buttons. Ensure the `focus-visible:ring-1` pattern is applied to custom primitives that use `button` HTML tags.
