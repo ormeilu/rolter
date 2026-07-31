@@ -246,6 +246,8 @@ export const BUILT = new Set([
   "feature-flags",
   "logs-settings",
   "performance",
+  "business-units",
+  "customers",
   "compatibility",
   "cluster",
   "adaptive-settings",
