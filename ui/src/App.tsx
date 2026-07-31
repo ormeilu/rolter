@@ -12,6 +12,7 @@ import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 import Account from "@/pages/Account";
 import { AlertChannels, AlertHistory, AlertRules } from "@/pages/Alerting";
+import AdaptiveSettings from "@/pages/AdaptiveSettings";
 import AuditLog from "@/pages/AuditLog";
 import Cluster from "@/pages/Cluster";
 import ComplexityRouter from "@/pages/ComplexityRouter";
@@ -75,6 +76,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   performance: <Performance />,
   compatibility: <Compatibility />,
   cluster: <Cluster />,
+  "adaptive-settings": <AdaptiveSettings />,
 };
 
 // old bookmarkable paths → new IA keys
