@@ -1,0 +1,70 @@
+---
+title: "Cluster Inventory: Nodes, Convergence, and Draining"
+sidebarTitle: "Cluster"
+description: "How Rolter discovers the nodes in a deployment, how to tell a node that is lagging config from one that has stopped polling, and how to drain a node safely."
+---
+
+Rolter has no node-enrolment step. Every gateway already polls the control plane's `/internal/snapshot` on a timer, so a poll that carries the node identity headers **is** the heartbeat. That keeps a single-node deployment zero-config — a node that sends no headers simply never appears in the inventory — and keeps config propagation the one source of truth for convergence.
+
+View the inventory under **Cluster Config** in the dashboard.
+
+---
+
+## Identifying a node
+
+A node identifies itself with three headers on its snapshot poll:
+
+| Header | Meaning |
+|---|---|
+| `x-rolter-node-id` | stable identity, max 128 chars |
+| `x-rolter-node-role` | `gateway` or `control`; anything else is recorded as `gateway` |
+| `x-rolter-node-build` | build version, max 64 chars |
+
+Values are length-bounded and rejected if they contain control characters — they reach the database and the dashboard, so they are sanitized even though only a holder of the internal token can send them. A header that fails those checks is dropped rather than truncated into a new identity.
+
+Recording a sighting is best-effort: a bookkeeping failure never fails config propagation.
+
+---
+
+## Live vs converged
+
+These are two different questions, and the inventory reports them separately.
+
+- **Live** — the node polled within the last 60 seconds. The snapshot poll period is measured in seconds, so a node that misses several polls in a row is genuinely gone, not merely slow.
+- **Converged** — the node reported at least the control plane's current `config_version`.
+
+A node can be live but lagging (it is polling, it just has not applied the newest snapshot yet), or converged but stale (it stopped polling while on the current version — dead, not healthy). Reading only one axis hides the case that matters.
+
+---
+
+## Draining
+
+Draining takes a node out of service. The desired state travels back on the `x-rolter-node-state` response header of the poll the node already makes, so it takes effect on the channel the node is listening on — no second control channel, no push.
+
+Rolter **refuses to drain the last serving gateway**: if a node is the only gateway that is both live and not already draining, draining it would take the data plane offline. A dead or already-draining sibling does not count as cover. An operator who means it can scale up first, or forget the node.
+
+---
+
+## Forgetting a node
+
+Forgetting drops a decommissioned node from the inventory. A node that is still running reappears on its next poll, so this cannot be used to silence a live node — the dashboard only offers it once the node has gone stale.
+
+---
+
+## API
+
+All three endpoints are **superadmin only**, and drain and forget are audited.
+
+```bash
+curl -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  https://control.example.com/api/v1/cluster/nodes
+
+curl -X PUT -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" -d '{"draining": true}' \
+  https://control.example.com/api/v1/cluster/nodes/gw-1/drain
+
+curl -X DELETE -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  https://control.example.com/api/v1/cluster/nodes/gw-1
+```
+
+Each node in the list response carries `live` and `converged` alongside its reported `config_version`, `build_version`, `desired_state` and `last_seen_at`.
