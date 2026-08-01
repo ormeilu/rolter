@@ -132,7 +132,7 @@ export default function Logs() {
             type="button"
             onClick={() => setFiltersOpen((v) => !v)}
             className={cn(
-              "inline-flex h-8 items-center gap-[7px] rounded-md border border-[color:var(--border-subtle)] px-3 text-sm text-muted-foreground transition-colors hover:text-foreground",
+              "inline-flex h-8 items-center gap-[7px] rounded-md border border-[color:var(--border-subtle)] px-3 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
               filtersOpen && "bg-[color:var(--surface-subtle)]",
             )}
           >
@@ -157,9 +157,10 @@ export default function Logs() {
               <button
                 type="button"
                 title="Previous page"
+                aria-label="Previous page"
                 disabled={page === 0}
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
-                className="flex rounded-md border border-[color:var(--border-subtle)] p-[5px] text-[color:var(--text-subtle)] transition-colors enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex rounded-md border border-[color:var(--border-subtle)] p-[5px] text-[color:var(--text-subtle)] transition-colors enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <ChevronLeft className="h-3.5 w-3.5" />
               </button>
@@ -167,9 +168,10 @@ export default function Logs() {
               <button
                 type="button"
                 title="Next page"
+                aria-label="Next page"
                 disabled={!hasMore}
                 onClick={() => setPage((p) => p + 1)}
-                className="flex rounded-md border border-[color:var(--border-subtle)] p-[5px] text-[color:var(--text-subtle)] transition-colors enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex rounded-md border border-[color:var(--border-subtle)] p-[5px] text-[color:var(--text-subtle)] transition-colors enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <ChevronRight className="h-3.5 w-3.5" />
               </button>
@@ -259,7 +261,7 @@ export default function Logs() {
               type="button"
               aria-label="Close details"
               onClick={() => setSelected(null)}
-              className="ml-auto flex text-[color:var(--text-subtle)] transition-colors hover:text-foreground"
+              className="ml-auto flex text-[color:var(--text-subtle)] transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               <X className="h-4 w-4" />
             </button>
