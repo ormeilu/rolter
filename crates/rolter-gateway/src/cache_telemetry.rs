@@ -253,7 +253,7 @@ impl CacheTelemetry {
 
     pub fn freshness(&self) -> Vec<(String, &'static str, u64)> {
         let now = epoch_millis();
-        let mut values = Vec::new();
+        let mut values = Vec::with_capacity(self.inner.kv.len() + self.inner.lmcache.len());
         for entry in self.inner.kv.iter() {
             values.push((
                 entry.key().clone(),
