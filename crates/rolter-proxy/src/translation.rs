@@ -1299,12 +1299,7 @@ impl SseConverter {
             .lines()
             .find_map(|l| l.strip_prefix("event:"))
             .map(str::trim);
-        let data = text
-            .lines()
-            .filter_map(|l| l.strip_prefix("data:"))
-            .map(str::trim)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let data = join_data_lines(&text);
         if data.is_empty() {
             return vec![Bytes::from(format!("{text}\n\n"))];
         }
@@ -1452,12 +1447,7 @@ impl SseConverter {
 
     fn openai_to_responses_frame(&mut self, frame: &Bytes) -> Vec<Bytes> {
         let text = String::from_utf8_lossy(frame);
-        let data = text
-            .lines()
-            .filter_map(|line| line.strip_prefix("data:"))
-            .map(str::trim)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let data = join_data_lines(&text);
         self.openai_to_responses(&data)
     }
 
@@ -1637,12 +1627,7 @@ impl SseConverter {
     /// anthropic sse — used to chain gemini→openai→anthropic for native clients.
     fn openai_frame_to_anthropic(&mut self, frame: &Bytes) -> Vec<Bytes> {
         let text = String::from_utf8_lossy(frame);
-        let data = text
-            .lines()
-            .filter_map(|line| line.strip_prefix("data:"))
-            .map(str::trim)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let data = join_data_lines(&text);
         self.openai_to_anthropic(&data)
     }
 }
@@ -1694,6 +1679,24 @@ impl Stream for TranslatedStream {
                 Poll::Pending => return Poll::Pending,
             }
         }
+    }
+}
+
+fn join_data_lines(text: &str) -> String {
+    let mut lines = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("data:"))
+        .map(str::trim);
+    if let Some(first) = lines.next() {
+        let mut s = String::with_capacity(text.len());
+        s.push_str(first);
+        for line in lines {
+            s.push('\n');
+            s.push_str(line);
+        }
+        s
+    } else {
+        String::new()
     }
 }
 
