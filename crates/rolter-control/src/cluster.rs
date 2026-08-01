@@ -18,7 +18,8 @@ use rolter_store::postgres::models::ClusterNode;
 use rolter_store::postgres::repo::{AuditLogRepo, ClusterNodeRepo};
 
 use crate::crud::{pool, ApiError, ApiResult, SafeJson};
-use crate::rbac::{require_superadmin, Principal};
+use crate::rbac::{authorize_superadmin, Principal};
+use crate::rbac_matrix::superadmin_cap;
 use crate::ControlState;
 
 /// Header names a node uses to identify itself on its snapshot poll.
@@ -121,7 +122,7 @@ async fn set_node_drain(
     Path(id): Path<String>,
     SafeJson(body): SafeJson<SetNodeDrain>,
 ) -> ApiResult<Json<ClusterNodeView>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("cluster_node", Update))?;
     let repo = ClusterNodeRepo(pool(&state));
     let nodes = repo.list().await?;
     let now = Utc::now();
@@ -170,7 +171,7 @@ async fn list_nodes(
     principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<Vec<ClusterNodeView>>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("cluster_node", Read))?;
     let nodes = ClusterNodeRepo(pool(&state)).list().await?;
     let current_version = state.store.current_version().await.unwrap_or_default();
     let now = Utc::now();
@@ -189,7 +190,7 @@ async fn forget_node(
     State(state): State<ControlState>,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("cluster_node", Delete))?;
     ClusterNodeRepo(pool(&state)).delete(&id).await?;
     let actor = match &principal {
         Principal::User(user) => Some(user.id),

@@ -10,7 +10,8 @@ use rolter_store::postgres::models::LoggingSettings;
 use rolter_store::postgres::repo::{AuditLogRepo, LoggingSettingsRepo};
 
 use crate::crud::{pool, publish_config_change, ApiError, ApiResult, SafeJson};
-use crate::rbac::{require_superadmin, Principal};
+use crate::rbac::{authorize_superadmin, Principal};
+use crate::rbac_matrix::superadmin_cap;
 use crate::ControlState;
 
 pub(crate) fn router() -> Router<ControlState> {
@@ -24,7 +25,7 @@ async fn get_logging_settings(
     principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<LoggingSettings>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("logging_settings", Read))?;
     Ok(Json(LoggingSettingsRepo(pool(&state)).get().await?))
 }
 
@@ -114,7 +115,7 @@ async fn update_logging_settings(
     State(state): State<ControlState>,
     SafeJson(body): SafeJson<UpdateLoggingSettings>,
 ) -> ApiResult<Json<LoggingSettings>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("logging_settings", Update))?;
     validate_settings(&body)?;
     let row = LoggingSettingsRepo(pool(&state))
         .update(

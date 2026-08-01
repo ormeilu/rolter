@@ -16,7 +16,6 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use rolter_auth::Role;
 use rolter_store::postgres::models::{OwnedVirtualKey, VirtualKey};
 use rolter_store::postgres::repo::VirtualKeyRepo;
 
@@ -26,6 +25,7 @@ use crate::crud::{
     generate_virtual_key, key_pepper, pool, publish_config_change, ApiError, ApiResult, SafeJson,
 };
 use crate::rbac::{authorize, Principal, ScopeChain};
+use crate::rbac_matrix::cap;
 use crate::ControlState;
 
 pub fn router() -> Router<ControlState> {
@@ -82,7 +82,7 @@ async fn mint_my_key(
 ) -> ApiResult<Json<MintedKey>> {
     let chain = ScopeChain::from_project(pool(&state), project_id).await?;
     let principal = Principal::User(current.user.clone());
-    authorize(&state, &principal, chain, Role::Member).await?;
+    authorize(&state, &principal, chain, cap!("my_virtual_key", Create)).await?;
 
     let (key, key_hash, key_prefix) = generate_virtual_key(&key_pepper());
     let row = VirtualKeyRepo(pool(&state))

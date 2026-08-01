@@ -16,7 +16,8 @@ use rolter_store::postgres::models::SecuritySettings;
 use rolter_store::postgres::repo::{AuditLogRepo, SecuritySettingsRepo};
 
 use crate::crud::{pool, publish_config_change, ApiError, ApiResult, SafeJson};
-use crate::rbac::{require_superadmin, Principal};
+use crate::rbac::{authorize_superadmin, Principal};
+use crate::rbac_matrix::superadmin_cap;
 use crate::ControlState;
 
 pub(crate) fn router() -> Router<ControlState> {
@@ -30,7 +31,7 @@ async fn get_security_settings(
     principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<SecuritySettings>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("security_settings", Read))?;
     Ok(Json(SecuritySettingsRepo(pool(&state)).get().await?))
 }
 
@@ -154,7 +155,7 @@ async fn update_security_settings(
     State(state): State<ControlState>,
     SafeJson(body): SafeJson<UpdateSecuritySettings>,
 ) -> ApiResult<Json<SecuritySettings>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("security_settings", Update))?;
     validate_settings(&body)?;
     let dashboard_secret = body
         .managed_dashboard_secret

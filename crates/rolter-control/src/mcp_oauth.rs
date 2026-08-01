@@ -24,13 +24,13 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use rolter_auth::Role;
 use rolter_core::Error;
 use rolter_store::postgres::models::{McpOAuthGrant, McpOAuthSession, McpServer};
 use rolter_store::postgres::repo::{McpOAuthRepo, McpServerRepo};
 
 use crate::crud::{log_audit, pool, require_non_empty, ApiError, ApiResult, SafeJson};
-use crate::rbac::{authorize, Principal, ScopeChain};
+use crate::rbac::{authorize, holds_admin, Principal, ScopeChain};
+use crate::rbac_matrix::{cap, Requirement};
 use crate::ControlState;
 
 /// MCP transports a registered server may speak. Mirrors the set the tool-call
@@ -56,17 +56,14 @@ fn invalid(message: impl Into<String>) -> ApiError {
 
 /// Whether the caller holds org admin. Used to decide between "everything in
 /// the org" and "only what I own"; a caller who is neither is rejected by the
-/// viewer check that runs first.
+/// viewer check that runs first. A question, not a guard — the guard is the
+/// capability the handler names.
 async fn is_org_admin(
     state: &ControlState,
     principal: &Principal,
     org_id: Uuid,
 ) -> ApiResult<bool> {
-    match authorize(state, principal, ScopeChain::org(org_id), Role::Admin).await {
-        Ok(()) => Ok(true),
-        Err(ApiError::Forbidden) => Ok(false),
-        Err(err) => Err(err),
-    }
+    holds_admin(state, principal, ScopeChain::org(org_id)).await
 }
 
 /// The owner filter for a listing: `None` means "no filter" (org admins),
@@ -75,9 +72,10 @@ async fn owner_filter(
     state: &ControlState,
     principal: &Principal,
     org_id: Uuid,
+    requirement: Requirement,
 ) -> ApiResult<Option<Uuid>> {
     // any membership at the org is required before anything is listed
-    authorize(state, principal, ScopeChain::org(org_id), Role::Viewer).await?;
+    authorize(state, principal, ScopeChain::org(org_id), requirement).await?;
     if is_org_admin(state, principal, org_id).await? {
         return Ok(None);
     }
@@ -92,7 +90,13 @@ async fn list_servers(
     State(state): State<ControlState>,
     Path(org_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<McpServer>>> {
-    authorize(&state, &principal, ScopeChain::org(org_id), Role::Viewer).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(org_id),
+        cap!("mcp_server", Read),
+    )
+    .await?;
     Ok(Json(McpServerRepo(pool(&state)).list(org_id).await?))
 }
 
@@ -111,7 +115,13 @@ async fn create_server(
     Path(org_id): Path<Uuid>,
     SafeJson(body): SafeJson<CreateMcpServer>,
 ) -> ApiResult<Json<McpServer>> {
-    authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(org_id),
+        cap!("mcp_server", Create),
+    )
+    .await?;
     require_non_empty(&body.name, "name")?;
     require_non_empty(&body.slug, "slug")?;
     require_non_empty(&body.url, "url")?;
@@ -154,7 +164,7 @@ async fn delete_server(
         &state,
         &principal,
         ScopeChain::org(server.org_id),
-        Role::Admin,
+        cap!("mcp_server", Delete),
     )
     .await?;
     repo.delete(id).await?;
@@ -192,7 +202,7 @@ async fn list_grants(
     State(state): State<ControlState>,
     Path(org_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<GrantView>>> {
-    let owner = owner_filter(&state, &principal, org_id).await?;
+    let owner = owner_filter(&state, &principal, org_id, cap!("mcp_oauth_grant", Read)).await?;
     Ok(Json(
         McpOAuthRepo(pool(&state))
             .list_grants(org_id, owner)
@@ -211,11 +221,12 @@ async fn may_revoke(
     principal: &Principal,
     org_id: Uuid,
     owner_id: Uuid,
+    requirement: Requirement,
 ) -> ApiResult<()> {
     if is_org_admin(state, principal, org_id).await? {
         return Ok(());
     }
-    authorize(state, principal, ScopeChain::org(org_id), Role::Viewer).await?;
+    authorize(state, principal, ScopeChain::org(org_id), requirement).await?;
     match principal {
         Principal::Superadmin => Ok(()),
         Principal::User(user) if user.id == owner_id => Ok(()),
@@ -231,7 +242,14 @@ async fn revoke_grant(
     let repo = McpOAuthRepo(pool(&state));
     let grant = repo.get_grant(id).await?;
     let server = McpServerRepo(pool(&state)).get(grant.server_id).await?;
-    may_revoke(&state, &principal, server.org_id, grant.user_id).await?;
+    may_revoke(
+        &state,
+        &principal,
+        server.org_id,
+        grant.user_id,
+        cap!("mcp_oauth_grant", Delete),
+    )
+    .await?;
     let actor = match &principal {
         Principal::User(user) => Some(user.id),
         Principal::Superadmin => None,
@@ -256,7 +274,7 @@ async fn list_sessions(
     State(state): State<ControlState>,
     Path(org_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<McpOAuthSession>>> {
-    let owner = owner_filter(&state, &principal, org_id).await?;
+    let owner = owner_filter(&state, &principal, org_id, cap!("mcp_oauth_session", Read)).await?;
     Ok(Json(
         McpOAuthRepo(pool(&state))
             .list_sessions(org_id, owner)
@@ -273,7 +291,14 @@ async fn revoke_session(
     let session = repo.get_session(id).await?;
     let grant = repo.get_grant(session.grant_id).await?;
     let server = McpServerRepo(pool(&state)).get(grant.server_id).await?;
-    may_revoke(&state, &principal, server.org_id, grant.user_id).await?;
+    may_revoke(
+        &state,
+        &principal,
+        server.org_id,
+        grant.user_id,
+        cap!("mcp_oauth_session", Delete),
+    )
+    .await?;
     let revoked = repo.revoke_session(id).await?;
     log_audit(
         &state,

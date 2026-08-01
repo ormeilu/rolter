@@ -36,7 +36,6 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use rolter_auth::Role;
 use rolter_store::postgres::crypto::Kek;
 use rolter_store::postgres::models::{Membership, SsoGroupMapping, SsoProvider, User};
 use rolter_store::postgres::repo::{
@@ -46,6 +45,7 @@ use rolter_store::postgres::repo::{
 use crate::auth::session_pepper;
 use crate::crud::{log_audit, pool, require_non_empty, ApiError, ApiResult, SafeJson};
 use crate::rbac::{authorize, Principal, ScopeChain};
+use crate::rbac_matrix::cap;
 use crate::ControlState;
 
 /// How long an in-flight login may take. Long enough for a password + MFA
@@ -632,7 +632,13 @@ async fn create_provider(
     Path(org_id): Path<Uuid>,
     SafeJson(body): SafeJson<CreateSsoProvider>,
 ) -> ApiResult<Json<SsoProvider>> {
-    authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(org_id),
+        cap!("sso_provider", Create),
+    )
+    .await?;
     require_non_empty(&body.name, "name")?;
     require_non_empty(&body.slug, "slug")?;
     require_non_empty(&body.issuer, "issuer")?;
@@ -693,7 +699,13 @@ async fn list_providers(
     State(state): State<ControlState>,
     Path(org_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<SsoProvider>>> {
-    authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(org_id),
+        cap!("sso_provider", Read),
+    )
+    .await?;
     Ok(Json(SsoRepo(pool(&state)).list_providers(org_id).await?))
 }
 
@@ -708,7 +720,7 @@ async fn delete_provider(
         &state,
         &principal,
         ScopeChain::org(provider.org_id),
-        Role::Admin,
+        cap!("sso_provider", Delete),
     )
     .await?;
     repo.delete_provider(id).await?;
@@ -749,7 +761,7 @@ async fn create_mapping(
         &state,
         &principal,
         ScopeChain::org(provider.org_id),
-        Role::Admin,
+        cap!("sso_group_mapping", Create),
     )
     .await?;
     require_non_empty(&body.group_name, "group_name")?;
@@ -808,7 +820,7 @@ async fn list_mappings(
         &state,
         &principal,
         ScopeChain::org(provider.org_id),
-        Role::Admin,
+        cap!("sso_group_mapping", Read),
     )
     .await?;
     Ok(Json(repo.list_mappings(provider_id).await?))
@@ -827,7 +839,7 @@ async fn delete_mapping(
         &state,
         &principal,
         ScopeChain::org(provider.org_id),
-        Role::Admin,
+        cap!("sso_group_mapping", Delete),
     )
     .await?;
     repo.delete_mapping(id).await?;

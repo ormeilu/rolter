@@ -10,7 +10,8 @@ use rolter_store::postgres::models::RuntimePolicy;
 use rolter_store::postgres::repo::{AuditLogRepo, RuntimePolicyRepo};
 
 use crate::crud::{pool, publish_config_change, ApiError, ApiResult, SafeJson};
-use crate::rbac::{require_superadmin, Principal};
+use crate::rbac::{authorize_superadmin, Principal};
+use crate::rbac_matrix::superadmin_cap;
 use crate::ControlState;
 
 pub(crate) fn router() -> Router<ControlState> {
@@ -24,7 +25,7 @@ async fn get_runtime_policy(
     principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<RuntimePolicy>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("runtime_policy", Read))?;
     Ok(Json(RuntimePolicyRepo(pool(&state)).get().await?))
 }
 
@@ -89,7 +90,7 @@ async fn update_runtime_policy(
     State(state): State<ControlState>,
     SafeJson(body): SafeJson<UpdateRuntimePolicy>,
 ) -> ApiResult<Json<RuntimePolicy>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("runtime_policy", Update))?;
     validate_policy(&body)?;
     let row = RuntimePolicyRepo(pool(&state))
         .update(

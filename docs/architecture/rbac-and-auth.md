@@ -48,16 +48,34 @@ flowchart LR
   Caps --> Action{allowed?}
 ```
 
-### The capability matrix is server-owned
+### The capability table is the only source of truth
 
-Two read-only endpoints publish the rules the guard enforces, so a dashboard never assembles a permission matrix of its own:
+`CAPABILITIES` in `crates/rolter-control/src/rbac_matrix.rs` records, for every resource, what each of `read` / `create` / `update` / `delete` takes — a minimum scoped role, superadmin-only, or that the resource has no such action at all. **Both** the published matrix and the guard read it, so they cannot drift.
+
+A guarded handler names a `(resource, action)` pair instead of a role:
+
+```rust
+authorize(&state, &principal, ScopeChain::org(org_id), cap!("provider", Create)).await?;
+// deployment-wide, no scope to hold a role in:
+authorize_superadmin(&principal, superadmin_cap!("feature_flags", Update))?;
+```
+
+`cap!` resolves the requirement through a `const fn`, so naming a resource the table does not define — or an action it marks as unsupported — is a **compile error**, and `superadmin_cap!` additionally fails to compile unless the table says the pair is superadmin-only. No handler names a `Role`; unit tests in `rbac_matrix.rs` scan every control-plane module to keep it that way, check the module list against `src/` so a new file cannot slip past, and assert that every row in the table is claimed by at least one guard.
+
+Two read-only endpoints publish that table, so a dashboard never assembles a permission matrix of its own:
 
 - `GET /api/v1/rbac/matrix` — every role and, per resource, the minimum role each action takes (or that the action is superadmin-only, or unsupported entirely). Any authenticated caller may read it; it describes rules, not anyone's access.
 - `GET /api/v1/rbac/effective?org_id=&team_id=&project_id=` — the calling principal's resolved role at that scope chain and the concrete `resource:action` pairs they may perform, evaluated from their memberships.
 
 `effective` is advisory to the client and authoritative only on the server: a caller that ignores it and issues the request anyway gets the same `403`. Scope precedence is unchanged — a project-scoped grant authorizes that project, not the whole org.
 
-Read access is a viewer's, mutations are an admin's, and deployment-wide policy objects (feature flags, runtime/compatibility/adaptive policy, logging settings, cluster nodes, security settings) have no tenancy scope to be a member of, so they stay superadmin-only.
+Read access is a viewer's and mutations are an admin's, with three deliberate exceptions:
+
+- **deployment-wide policy** (feature flags, runtime/compatibility/adaptive policy, logging settings, cluster nodes, security settings, alerting, MCP tool-call logs) has no tenancy scope to be a member of, so it is superadmin-only;
+- **global account lifecycle** — creating an org, editing or deleting a user account, and the model/pricing catalog — reaches across orgs, so it is superadmin-only too, while inviting a user *into* an org stays an org admin's;
+- **a user's own things** — minting a virtual key for yourself takes `member` (a viewer cannot), and revoking your own MCP OAuth grant or session takes only a viewer membership plus ownership, which the handler checks after the guard.
+
+Listing the pricing catalog (`GET /api/v1/model-prices`) and the effective model list (`GET /api/v1/models`) are not guarded at all today: any authenticated principal may read them. The table records `viewer` as the nominal floor for those reads; tightening them is tracked in #766.
 
 ## Roadmap
 
