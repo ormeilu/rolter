@@ -496,7 +496,6 @@ mod tests {
             stage: GuardStage::PreCall,
             action: GuardAction::Redact,
             replacement: None,
-            default_on: true,
             include_system: false,
         }
     }

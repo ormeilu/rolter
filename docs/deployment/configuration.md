@@ -161,6 +161,10 @@ See [Custom CA bundles](custom-ca-bundles.md) for rotation behavior and Docker/K
   - `weight` (u32, default `1`) — relative traffic share for the primary draw
   - `[[routes.variants.targets]]` — same shape as `[[routes.targets]]`
   - `[routes.variants.params]` (table, optional) — variant-scoped param defaults, layered over `[routes.params]` (the variant wins) under the route's `param_policy`
+- `[routes.advanced.guardrails]` (optional) — per-route selection layered over the global [`[guardrails]`](#guardrails) rule set. Rules are named, so adding one globally still reaches every route that has not opted out of it by name.
+  - `disable` (string[], default `[]`) — rules that do not apply on this route
+  - `enable` (string[], default `[]`) — rules that apply on this route; wins over `disable` on a conflict
+  - a name matching no configured rule fails validation rather than being ignored — a typo in `disable` would otherwise read as "this rule is off here" while the rule kept running
 
 ### `[[virtual_keys]]`
 - `key` (string) — the bearer token clients present
@@ -211,8 +215,14 @@ Each `[[guardrails.rules]]` entry:
 - `stage` (string, default `pre_call`) — `pre_call` scans request content before proxying; `post_call` masks the response body before it reaches the client
 - `action` (string, default `annotate`) — `annotate` (count only, forward unchanged), `block` (reject with an OpenAI-compatible `guardrail_blocked` error), or `redact` (replace each match with `replacement`)
 - `replacement` (string) — redaction token; defaults to the built-in entity token (e.g. `[REDACTED:EMAIL]`) or `[REDACTED]`
-- `default_on` (bool, default `false`) — apply without a client opt-in
 - `include_system` (bool, default `false`) — also scan operator-authored `system`/`developer` messages; excluded by default
+
+> `default_on` was removed. It documented a per-request client opt-in that was
+> never implemented, so it never selected anything: every configured rule
+> applied regardless of its value. Existing configs that still set it keep
+> loading — the key is ignored — and behaviour is unchanged. To turn a rule off
+> somewhere, name it in that route's `[routes.advanced.guardrails]` `disable`
+> list (see [`[[routes]]`](#routes)).
 
 Patterns use the linear-time (RE2-style) `regex` engine with no catastrophic backtracking, and are compiled under a bounded program size during config validation — an invalid or unbounded pattern fails at startup/snapshot validation, never on the request path. The request path never logs raw matched values; metrics expose `rolter_guardrail_blocks_total` and `rolter_guardrail_redactions_total` only.
 
@@ -226,13 +236,11 @@ enabled = true
 name = "email"
 builtin = "email"
 action = "redact"
-default_on = true
 
 [[guardrails.rules]]
 name = "card"
 builtin = "payment_card"
 action = "block"
-default_on = true
 
 [[guardrails.rules]]
 name = "leaked-key"

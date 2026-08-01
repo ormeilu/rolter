@@ -477,14 +477,11 @@ disabled = false # revoke without deleting
 #                                 # the (non-streamed) response before delivery
 # action = "redact"               # annotate | block | redact
 # replacement = "[REDACTED:EMAIL]"  # defaults to the built-in entity token
-# default_on = true               # reserved: client opt-in is not implemented,
-#                                 # so every configured rule currently applies
 # include_system = false          # also scan system/developer messages
 # [[guardrails.rules]]
 # name = "card"
 # builtin = "payment_card"        # email | phone | api_token | payment_card
 # action = "block"                # reject with an OpenAI-compatible error
-# default_on = true
 # [[guardrails.rules]]
 # name = "leaked-key"             # output stage: mask anything key-shaped the
 # builtin = "api_token"           # model echoes back, before the client sees it
