@@ -173,6 +173,7 @@ export function OAuthGrants() {
   const queryClient = useQueryClient();
   const { servers, grants, sessions, users } = useOrgOAuth(scope.orgId);
   const [confirming, setConfirming] = React.useState<McpOAuthGrantRow | null>(null);
+  const now = Date.now();
 
   const revoke = useMutation({
     mutationFn: (id: string) => revokeMcpGrant(id),
@@ -189,11 +190,11 @@ export function OAuthGrants() {
   const liveByGrant = React.useMemo(() => {
     const counts = new Map<string, number>();
     for (const s of sessions.data ?? []) {
-      if (s.revoked_at) continue;
+      if (s.revoked_at || Date.parse(s.expires_at) <= now) continue;
       counts.set(s.grant_id, (counts.get(s.grant_id) ?? 0) + 1);
     }
     return counts;
-  }, [sessions.data]);
+  }, [now, sessions.data]);
 
   if (!scope.isLoading && !scope.orgId) return <NoOrgNote noun="OAuth grants" />;
   if (grants.isLoading || scope.isLoading) return <LoadingBody />;

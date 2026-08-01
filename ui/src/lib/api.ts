@@ -1842,7 +1842,7 @@ export function fetchMcpLogDetail(eventId: string): Promise<McpLogDetail> {
 // `has_refresh_token`, never a token); a grant is the unit of consent, so
 // revoking one revokes its sessions in the same transaction; and a listing is
 // owner-scoped — an org admin sees the whole org, everyone else sees only the
-// rows they own.
+// rows they own
 
 export interface McpServerRow {
   id: string;
@@ -1862,13 +1862,11 @@ export interface McpOAuthGrantRow {
   granted_at: string;
   revoked_at: string | null;
   revoked_by: string | null;
-  /// resolved server-side from `revoked_at`, so a client never infers the
-  /// live/dead state from a nullable timestamp
+  /** Resolved server-side so clients never infer state from a nullable timestamp. */
   active: boolean;
 }
 
-/// session metadata for a grant. There is deliberately no token field: the
-/// sealed access/refresh tokens are only readable inside the control plane.
+/** Session metadata for a grant without exposing sealed token material. */
 export interface McpOAuthSessionRow {
   id: string;
   grant_id: string;
@@ -1878,8 +1876,7 @@ export interface McpOAuthSessionRow {
   revoked_at: string | null;
   created_at: string;
   last_used_at: string | null;
-  /// whether a refresh token is stored, so the UI can show renewability
-  /// without the token itself ever being handed out
+  /** Whether a stored refresh token makes this session renewable. */
   has_refresh_token: boolean;
 }
 

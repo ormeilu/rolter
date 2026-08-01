@@ -176,6 +176,8 @@ export const GrantsLoaded: Story = {
     // the revoked consent is kept so the audit trail survives
     await expect(canvas.getByText("REVOKED")).toBeVisible();
     await expect(canvas.getByText("2 live")).toBeVisible();
+    // expired sessions are historical rows, not live revoke impact
+    await expect(canvas.getByText("0 live")).toBeVisible();
   },
 };
 
