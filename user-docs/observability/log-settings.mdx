@@ -40,6 +40,17 @@ The two halves of the log expire on separate clocks:
 
 Payloads cannot outlive the metadata they belong to. `payload_retention_hours` must not exceed `retention_days × 24`, and both the dashboard and the API reject a policy that breaks it — otherwise raw prompt content would survive past the point an operator meant it to expire.
 
+### How expiry is enforced
+
+There is no purge job. Rolter translates the policy into a ClickHouse **table TTL** (`alter table request_logs modify ttl …`, and the same for `request_payloads`), and ClickHouse drops expired parts itself during merges. Deletion is therefore eventual, not instant: a row past its TTL may survive until its part is next merged.
+
+The TTL is written in two places, so a control plane that could not reach ClickHouse does not end up enforcing a policy different from the one it reports:
+
+- **on update** — immediately after the policy is saved. If ClickHouse is unreachable the saved policy still stands and the API still returns `200`; losing the operator's setting because the log store was briefly down would be the worse failure.
+- **at control-plane startup** — the stored policy is re-applied. This is what converges the two after an update that could not reach ClickHouse, and after a ClickHouse restored from backup or provisioned later, either of which would otherwise sit on the schema defaults (90 days / 7 days) indefinitely.
+
+Re-applying an unchanged policy is a no-op, so the startup pass is safe on every boot. It runs in the background and never delays serving traffic.
+
 ---
 
 ## API
