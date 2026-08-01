@@ -35,6 +35,18 @@ pub trait Scorer: Send + Sync {
     fn observe(&self, _target: usize, _ctx: &RouteContext) {}
 }
 
+/// One scorer's contribution to a [`Pipeline`]'s blended score, over every
+/// target of the route rather than a request's candidate set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Component {
+    /// the scorer's stable identifier ("fastest", "cheapest", ...)
+    pub name: &'static str,
+    /// the weight it carries in the blend
+    pub weight: f32,
+    /// its score per target, route-order aligned
+    pub scores: Vec<f32>,
+}
+
 /// A weighted stack of [`Scorer`]s selecting one target by argmax of the
 /// weighted-sum score over the eligible candidates.
 pub struct Pipeline {
@@ -101,6 +113,23 @@ impl Pipeline {
         }
         // stage 3: argmax, ties broken randomly
         Some(candidates[argmax_tiebreak(&totals)])
+    }
+
+    /// Score every target with every scorer, without picking one. This is the
+    /// read-only half of [`Pipeline::select`]: no filtering, no argmax and no
+    /// tiebreak randomness, so the same call twice on an idle route returns
+    /// the same numbers. Used by telemetry to explain *why* a route ranks its
+    /// targets the way it does; never on the pick path.
+    pub fn components(&self, ctx: &RouteContext, loads: &[u64]) -> Vec<Component> {
+        let targets: Vec<usize> = (0..self.n).collect();
+        self.scorers
+            .iter()
+            .map(|(scorer, weight)| Component {
+                name: scorer.name(),
+                weight: *weight,
+                scores: scorer.score(ctx, &targets, loads),
+            })
+            .collect()
     }
 
     /// Fan an `observe` out to every scorer so learners update.

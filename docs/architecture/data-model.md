@@ -31,6 +31,15 @@ erDiagram
 
 `config_version` holds a single monotonic counter the gateways watch for reload-free updates ([config-and-hot-reload.md](config-and-hot-reload.md)). `audit_log` records who changed what.
 
+## Data written *by* the data plane
+
+Most tables flow control plane → gateway. Two flow the other way, written from the channel the gateway already holds and never read back by it:
+
+- `cluster_nodes` — one row per node, upserted from the snapshot poll (#543).
+- `adaptive_routing_telemetry` — one row per `(node, model)` holding the newest adaptive-routing sample that node pushed (#751): the decision split, the sanitized policy it runs, and a JSON document of per-target scores and signals. A scoreboard, not history — every report overwrites the row, so the table is the size of the fleet rather than of the traffic.
+
+Neither carries a `bump_config_version()` trigger, and neither may grow one: the data plane does not consume them, and a version bump on every heartbeat or sample would make routine bookkeeping look like a config change and wake the whole fleet.
+
 ## Migrations are append-only
 
 Migrations are embedded with `sqlx::migrate!` and sqlx stores a checksum of every

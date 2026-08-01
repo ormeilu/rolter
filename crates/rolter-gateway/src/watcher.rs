@@ -135,7 +135,7 @@ const NODE_STATE_HEADER: &str = "x-rolter-node-state";
 /// deployment's own name for the replica), otherwise the hostname, otherwise
 /// nothing — an unidentified node polls exactly as before and stays out of the
 /// inventory rather than churning it with a per-restart id.
-fn node_id() -> Option<String> {
+pub(crate) fn node_id() -> Option<String> {
     for key in ["ROLTER_NODE_ID", "HOSTNAME"] {
         if let Ok(value) = std::env::var(key) {
             let value = value.trim().to_string();

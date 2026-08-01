@@ -297,6 +297,27 @@ pub struct ClusterNode {
     pub last_seen_at: DateTime<Utc>,
 }
 
+/// the latest adaptive-routing state one node reported for one route (#751).
+/// A scoreboard row, overwritten by every report rather than appended to.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AdaptiveRoutingTelemetry {
+    pub node_id: String,
+    /// public model name of the route
+    pub model: String,
+    /// whether the blend was routing at sample time
+    pub engaged: bool,
+    /// picks the route observed since that node built its balancer
+    pub observed: i64,
+    pub blend_picks: i64,
+    pub exploration_picks: i64,
+    pub fallback_picks: i64,
+    /// the sanitized policy that node actually applies
+    pub policy: serde_json::Value,
+    /// per-target signals and scores, target-order aligned with the route
+    pub targets: serde_json::Value,
+    pub reported_at: DateTime<Utc>,
+}
+
 /// singleton persisted cross-dialect compatibility policy projected into
 /// snapshots
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

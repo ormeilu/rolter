@@ -45,6 +45,16 @@ The policy is also owned by the control plane: `GET`/`PUT /api/v1/adaptive-routi
 
 Once engaged, an `exploration_ratio` share of picks is made uniformly at random so a target the blend has learned to avoid keeps producing fresh latency samples instead of going dark. Operator input is clamped on the way in: negative weights become zero and exploration never exceeds half the traffic.
 
+### Telemetry
+
+The scores the blend ranks on live in the balancer, which lives in the gateway process, so the control plane cannot read them directly. Each gateway therefore **pushes** a sample every 15s to `POST /internal/adaptive-telemetry` on the control plane — the same internal token and the same `x-rolter-node-id` identity as the snapshot poll, so one node is one row here and in the cluster inventory (#543). Nothing is written on the request path: the sample is taken by a background task, and a pick costs two relaxed atomics for per-target attribution.
+
+Per route and target the sample carries the blended score, its latency/cost/load components, the raw signals behind them (smoothed latency in ms, catalog price, in-flight count), how many picks that target has served and how long ago the last one was — plus the decision split, and the *sanitized policy that node actually runs*, which can lag the stored policy until the node converges.
+
+The control plane keeps the newest sample per `(node, model)` in `adaptive_routing_telemetry` and serves `GET /api/v1/adaptive-routing-telemetry` (superadmin only), grouped by route with one entry per reporting node. Samples older than 60s are excluded as no longer current, and rows are pruned after an hour so a scaled-down node leaves the scoreboard.
+
+This is deliberately **current state, not history**: one row per node and route, overwritten on every report, so the table is the size of the fleet rather than of the traffic. A time series belongs in the request log, and would be a separate endpoint rather than a change to this one. Prometheus deployments get the same per-target scores without the dashboard from `rolter_adaptive_routing_target_score{model,target}`.
+
 ## Choosing a strategy
 
 | Use case | Strategy |

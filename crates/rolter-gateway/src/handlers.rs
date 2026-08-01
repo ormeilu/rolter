@@ -87,12 +87,29 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
         "# HELP rolter_adaptive_routing_engaged whether the adaptive blend is currently routing\n",
     );
     body.push_str("# TYPE rolter_adaptive_routing_engaged gauge\n");
+    body.push_str(
+        "# HELP rolter_adaptive_routing_target_score blended adaptive score per route target\n",
+    );
+    body.push_str("# TYPE rolter_adaptive_routing_target_score gauge\n");
     let snap = state.snapshot.load();
     for (model, entry) in snap.routes.iter() {
         let Some(counts) = entry.balancer.decisions() else {
             continue;
         };
         let label = model.replace('\\', "\\\\").replace('"', "\\\"");
+        // the same per-target scores the control plane serves (#751), so a
+        // deployment that scrapes prometheus does not need the dashboard to
+        // see why a route ranks its targets the way it does
+        let loads = state.loads.snapshot(model, entry.route.targets.len());
+        if let Some(telemetry) = entry.balancer.telemetry(&loads) {
+            for target in &telemetry.targets {
+                let _ = writeln!(
+                    body,
+                    "rolter_adaptive_routing_target_score{{model=\"{label}\",target=\"{}\"}} {}",
+                    target.target, target.score
+                );
+            }
+        }
         for (mode, value) in [
             ("blend", counts.blend),
             ("exploration", counts.exploration),

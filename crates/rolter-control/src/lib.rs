@@ -11,6 +11,8 @@
 #[cfg(feature = "postgres")]
 mod adaptive_policy;
 #[cfg(feature = "postgres")]
+mod adaptive_telemetry;
+#[cfg(feature = "postgres")]
 mod alerting;
 mod analytics;
 #[cfg(feature = "postgres")]
@@ -393,6 +395,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(runtime_policy::router())
             .merge(compatibility_policy::router())
             .merge(adaptive_policy::router())
+            .merge(adaptive_telemetry::router())
             .merge(rbac_matrix::router())
             .merge(scim::router())
             .merge(sso::router())
@@ -411,12 +414,18 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
 /// can be served on their own listener instead of the public API port — see
 /// [`Args::internal_addr`].
 fn internal_routes(state: &ControlState) -> Router<ControlState> {
-    Router::new()
-        .route("/internal/snapshot", get(get_snapshot))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            require_internal_token,
-        ))
+    #[allow(unused_mut)]
+    let mut routes = Router::new().route("/internal/snapshot", get(get_snapshot));
+    // the reverse direction of the same channel: gateways push adaptive-routing
+    // samples the dashboard reads back out of the control plane (#751)
+    #[cfg(feature = "postgres")]
+    {
+        routes = routes.merge(adaptive_telemetry::internal_router());
+    }
+    routes.layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        require_internal_token,
+    ))
 }
 
 /// Reject requests to `/internal/*` lacking the internal bearer token.

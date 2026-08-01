@@ -18,6 +18,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
+use std::time::Instant;
 
 use rand::RngExt;
 use rolter_core::AdaptiveRoutingConfig;
@@ -25,7 +26,7 @@ use rolter_core::AdaptiveRoutingConfig;
 use crate::scorer::{
     CheapestScorer, FastestScorer, LatencySource, LeastLoadScorer, Pipeline, Scorer,
 };
-use crate::{DecisionCounts, LoadBalancer, RouteContext};
+use crate::{AdaptiveTelemetry, DecisionCounts, LoadBalancer, RouteContext, TargetTelemetry};
 
 /// Latency samples needed before the blend is trusted to rank targets: ranking
 /// is relative, so a single sampled target says nothing about the others.
@@ -51,6 +52,17 @@ pub struct Adaptive {
     fallback_picks: AtomicU64,
     /// whether the last pick found the blend engaged
     engaged_now: AtomicBool,
+    /// catalog price per target, kept so telemetry can report the raw signal
+    /// next to the score derived from it
+    costs: Vec<f64>,
+    /// picks each target has served, index-aligned with the route targets
+    target_samples: Vec<AtomicU64>,
+    /// milliseconds since [`Adaptive::built`] at each target's last pick;
+    /// meaningless until that target's sample count is non-zero
+    target_last_seen: Vec<AtomicU64>,
+    /// baseline for the ages above. Monotonic, so telemetry stays honest
+    /// across a wall-clock adjustment
+    built: Instant,
 }
 
 impl Adaptive {
@@ -64,6 +76,8 @@ impl Adaptive {
     ) -> Self {
         let cfg = cfg.sanitized();
         let n = weights.len();
+        let mut costs = costs.to_vec();
+        costs.resize(n, 0.0);
         let mut blend = Pipeline::new(n).named("adaptive");
         if let (Some(source), true) = (latency.as_ref(), cfg.latency_weight > 0.0) {
             blend = blend.with(
@@ -72,8 +86,6 @@ impl Adaptive {
             );
         }
         if cfg.cost_weight > 0.0 {
-            let mut costs = costs.to_vec();
-            costs.resize(n, 0.0);
             blend = blend.with(Box::new(CheapestScorer::new(&costs)), cfg.cost_weight);
         }
         if cfg.load_weight > 0.0 {
@@ -90,6 +102,73 @@ impl Adaptive {
             exploration_picks: AtomicU64::new(0),
             fallback_picks: AtomicU64::new(0),
             engaged_now: AtomicBool::new(false),
+            costs,
+            target_samples: (0..n).map(|_| AtomicU64::new(0)).collect(),
+            target_last_seen: (0..n).map(|_| AtomicU64::new(0)).collect(),
+            built: Instant::now(),
+        }
+    }
+
+    /// Per-target signals as the blend currently sees them (#751).
+    ///
+    /// Sampled, not recorded: everything here is read off live state at call
+    /// time, so nothing is written on the request path beyond the two atomics
+    /// [`LoadBalancer::observe`] already touches. `loads` is the same
+    /// in-flight slice [`LoadBalancer::pick`] takes.
+    pub fn telemetry(&self, loads: &[u64]) -> AdaptiveTelemetry {
+        // the blend's scorers rank on latency/cost/load only — none of them
+        // reads the request context — so a default one describes the route
+        let ctx = RouteContext::default();
+        let components = self.blend.components(&ctx, loads);
+        let elapsed = self.built.elapsed().as_millis() as u64;
+        let targets = (0..self.n)
+            .map(|i| {
+                let mut target = TargetTelemetry {
+                    target: i,
+                    latency_ms: self
+                        .latency
+                        .as_ref()
+                        .and_then(|source| source.latencies(self.n).get(i).copied())
+                        .unwrap_or_default(),
+                    cost_per_mtok: self.costs.get(i).copied().unwrap_or_default(),
+                    in_flight: loads.get(i).copied().unwrap_or_default(),
+                    samples: self.target_samples[i].load(Relaxed),
+                    ..Default::default()
+                };
+                if target.samples > 0 {
+                    // saturating: `elapsed` is read after the timestamp, but a
+                    // concurrent `observe` can still land in between
+                    target.last_sample_age_ms =
+                        Some(elapsed.saturating_sub(self.target_last_seen[i].load(Relaxed)));
+                }
+                for component in &components {
+                    let score = component.scores.get(i).copied().unwrap_or_default();
+                    target.score += component.weight * score;
+                    match component.name {
+                        "fastest" => target.latency_score = score,
+                        "cheapest" => target.cost_score = score,
+                        "least_load" => target.load_score = score,
+                        _ => {}
+                    }
+                }
+                target
+            })
+            .collect();
+        AdaptiveTelemetry {
+            engaged: self.engaged(),
+            observed: self.served.load(Relaxed),
+            decisions: self.decision_counts(),
+            policy: self.cfg.clone(),
+            targets,
+        }
+    }
+
+    fn decision_counts(&self) -> DecisionCounts {
+        DecisionCounts {
+            blend: self.blend_picks.load(Relaxed),
+            exploration: self.exploration_picks.load(Relaxed),
+            fallback: self.fallback_picks.load(Relaxed),
+            engaged: self.engaged_now.load(Relaxed),
         }
     }
 
@@ -148,16 +227,24 @@ impl LoadBalancer for Adaptive {
     }
 
     fn decisions(&self) -> Option<DecisionCounts> {
-        Some(DecisionCounts {
-            blend: self.blend_picks.load(Relaxed),
-            exploration: self.exploration_picks.load(Relaxed),
-            fallback: self.fallback_picks.load(Relaxed),
-            engaged: self.engaged_now.load(Relaxed),
-        })
+        Some(self.decision_counts())
+    }
+
+    fn telemetry(&self, loads: &[u64]) -> Option<AdaptiveTelemetry> {
+        Some(Adaptive::telemetry(self, loads))
     }
 
     fn observe(&self, target: usize, ctx: &RouteContext) {
         self.served.fetch_add(1, Relaxed);
+        // per-target attribution for telemetry: two relaxed atomics on a path
+        // that already walks the scorer stack
+        if let (Some(samples), Some(last_seen)) = (
+            self.target_samples.get(target),
+            self.target_last_seen.get(target),
+        ) {
+            samples.fetch_add(1, Relaxed);
+            last_seen.store(self.built.elapsed().as_millis() as u64, Relaxed);
+        }
         // the fallback stack keeps learning while the blend is engaged, so a
         // config change that disengages adaptive routing lands on a warm
         // session/prefix cache rather than a cold one
@@ -344,6 +431,87 @@ mod tests {
             counts.exploration > 0 && counts.blend > 0,
             "expected both modes to be exercised: {counts:?}"
         );
+    }
+
+    #[test]
+    fn telemetry_reports_the_signals_behind_the_ranking() {
+        let lb = lopsided(&cfg(true, 0));
+        let telemetry = lb.telemetry(&[3, 1]);
+        assert_eq!(telemetry.targets.len(), 2);
+        let (slow, fast) = (&telemetry.targets[0], &telemetry.targets[1]);
+        // raw observations travel with the scores they produced
+        assert_eq!((slow.latency_ms, fast.latency_ms), (500.0, 10.0));
+        assert_eq!((slow.cost_per_mtok, fast.cost_per_mtok), (10.0, 1.0));
+        assert_eq!((slow.in_flight, fast.in_flight), (3, 1));
+        // and the cheaper, faster, less loaded target outranks the other on
+        // every component as well as on the blend
+        assert!(fast.latency_score > slow.latency_score);
+        assert!(fast.cost_score > slow.cost_score);
+        assert!(fast.load_score > slow.load_score);
+        assert!(fast.score > slow.score);
+        // the reported policy is the sanitized one the balancer actually runs
+        assert_eq!(telemetry.policy, lb.cfg);
+    }
+
+    #[test]
+    fn telemetry_attributes_samples_to_the_target_that_served_them() {
+        let lb = lopsided(&cfg(true, 0));
+        // a target nothing has been routed to has no sample and no age
+        let cold = lb.telemetry(&[]);
+        assert!(cold.targets.iter().all(|t| t.samples == 0));
+        assert!(cold.targets.iter().all(|t| t.last_sample_age_ms.is_none()));
+        assert_eq!(cold.observed, 0);
+
+        for _ in 0..3 {
+            lb.observe(1, &RouteContext::default());
+        }
+        lb.observe(0, &RouteContext::default());
+        let warm = lb.telemetry(&[]);
+        assert_eq!(warm.observed, 4);
+        assert_eq!(warm.targets[0].samples, 1);
+        assert_eq!(warm.targets[1].samples, 3);
+        assert!(warm.targets.iter().all(|t| t.last_sample_age_ms.is_some()));
+    }
+
+    #[test]
+    fn telemetry_carries_the_decision_split_and_engagement() {
+        let lb = lopsided(&cfg(true, 5));
+        for _ in 0..3 {
+            lb.pick(&RouteContext::default(), &[]);
+        }
+        // still warming up: the fallback stack is serving and the blend is off
+        let cold = lb.telemetry(&[]);
+        assert!(!cold.engaged);
+        assert_eq!(cold.decisions.fallback, 3);
+
+        warm(&lb, 5);
+        lb.pick(&RouteContext::default(), &[]);
+        let hot = lb.telemetry(&[]);
+        assert!(hot.engaged);
+        assert_eq!(hot.decisions.blend, 1);
+    }
+
+    #[test]
+    fn a_zero_weight_signal_scores_zero_in_the_blend() {
+        let policy = AdaptiveRoutingConfig {
+            enabled: true,
+            latency_weight: 0.0,
+            load_weight: 0.0,
+            min_samples: 0,
+            ..Default::default()
+        };
+        let telemetry = lopsided(&policy).telemetry(&[9, 0]);
+        // a signal carrying no weight is not built into the blend at all, so
+        // it reports zero rather than a score nothing acts on
+        assert!(telemetry
+            .targets
+            .iter()
+            .all(|t| t.latency_score == 0.0 && t.load_score == 0.0));
+        assert!(telemetry.targets[1].cost_score > telemetry.targets[0].cost_score);
+        // ...while the raw signals are still reported, because the operator
+        // may be deciding whether to give them weight
+        assert_eq!(telemetry.targets[0].latency_ms, 500.0);
+        assert_eq!(telemetry.targets[0].in_flight, 9);
     }
 
     #[test]

@@ -301,6 +301,15 @@ const CAPABILITIES: &[Capability] = &[
         unsupported: &[Action::Create, Action::Delete],
     },
     Capability {
+        // read-only: the data plane writes it over the internal channel, and
+        // no operator role edits a measurement
+        resource: "adaptive_routing_telemetry",
+        scope: "deployment",
+        read: S,
+        write: S,
+        unsupported: &[Action::Create, Action::Update, Action::Delete],
+    },
+    Capability {
         resource: "cluster_node",
         scope: "deployment",
         read: S,
