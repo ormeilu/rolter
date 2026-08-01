@@ -1,0 +1,91 @@
+---
+title: "Gemini Interactions: Stateful Threads Through Rolter"
+sidebarTitle: "Gemini Interactions"
+description: "Configure the gemini_interactions provider kind, which maps OpenAI Chat, OpenAI Responses and Anthropic Messages requests onto Google's stateful Gemini Interactions API."
+---
+
+Google exposes Gemini through three different surfaces. Rolter has a provider kind for each:
+
+| Kind | Upstream surface | When to use it |
+| --- | --- | --- |
+| `gemini` | The hosted OpenAI-compatible shim | Simplest option; no translation at all |
+| `gemini_native` | `:generateContent` / `:streamGenerateContent` | Native features the shim does not expose |
+| `gemini_interactions` | `POST {api_base}/interactions` | Stateful, agentic threads with server-side history |
+
+This page covers `gemini_interactions`.
+
+---
+
+## Configuration
+
+```toml
+[[providers]]
+name = "gemini-interactions"
+kind = "gemini_interactions"
+api_base = "https://generativelanguage.googleapis.com/v1beta"
+api_key_env = "GEMINI_API_KEY"
+```
+
+`api_base` points at the API **version root** — no `/openai` suffix and no `/interactions` suffix, Rolter appends that itself. The key is read from the environment (inline keys are rejected) and sent as `x-goog-api-key`, exactly as for `gemini_native`.
+
+---
+
+## What Rolter translates
+
+Clients keep speaking their usual dialect. `POST /v1/chat/completions`, `POST /v1/responses` and `POST /v1/messages` are all mapped onto the single `interactions` endpoint.
+
+**Request**
+
+| Client field | Interactions field |
+| --- | --- |
+| `messages` / `input` turns | `input` items with `role` `user` / `model` and typed `content` parts |
+| `system` / `developer` messages, `instructions` | `system_instruction` |
+| assistant `tool_calls` | `function_call` input items (`call_id`, `name`, `arguments`) |
+| `tool` messages / `function_call_output` | `function_result` input items |
+| `temperature`, `top_p`, `max_tokens`, `stop`, `tool_choice` | `generation_config` |
+| `tools` | flat `tools` entries (`type: "function"`, `name`, `description`, `parameters`) |
+| `stream` | `stream` |
+
+**Response**
+
+The interaction's `steps[]` are folded back into the client's shape: `model_output` steps become assistant text, `function_call` steps become tool calls, and thought steps are dropped — reasoning traces are never surfaced as output. `usage` maps to the client's token counters.
+
+Streaming works the same way: `interaction.created`, `step.start`, `step.delta` and `interaction.completed` events are converted into OpenAI chunks, Anthropic message events, or Responses events depending on the endpoint the client called.
+
+---
+
+## Threading a conversation
+
+The Interactions API keeps conversation history server-side. Rolter does **not** store interaction ids — the thread is client-driven, which keeps the gateway stateless and lets any replica serve the next turn.
+
+The interaction id comes back as the response `id`. Send it on the next request as:
+
+- `previous_response_id` — OpenAI Responses clients, where this field already exists
+- `previous_interaction_id` — any dialect, passed through verbatim
+
+```bash
+# first turn
+curl -H "Authorization: Bearer $ROLTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemini-3.6-flash","input":"Hi, my name is Phil."}' \
+  https://gateway.example.com/v1/responses
+# -> {"id": "int_123", ...}
+
+# second turn, resuming the same interaction
+curl -H "Authorization: Bearer $ROLTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemini-3.6-flash","previous_response_id":"int_123","input":"What is my name?"}' \
+  https://gateway.example.com/v1/responses
+```
+
+`store` is forwarded when set, so a client that opts out of retention keeps that control.
+
+<Note>
+Because the thread lives upstream, a route that load-balances a `gemini_interactions` provider against providers of other kinds will lose the thread on failover. Keep interaction-threaded traffic on a route whose members are all `gemini_interactions`.
+</Note>
+
+---
+
+## Unsupported endpoints
+
+The Interactions API only serves chat-shaped traffic. Requests to endpoints with no interactions equivalent — embeddings, audio — are rejected with a `gemini_interactions_unsupported` configuration error rather than being forwarded to an endpoint that cannot answer them. Route those models to a `gemini` or `gemini_native` provider instead.

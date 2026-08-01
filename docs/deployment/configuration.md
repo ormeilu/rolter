@@ -14,7 +14,7 @@ The gateway boots from a TOML file (`--config`, default `rolter.toml`); see [`ro
 
 ### `[[providers]]`
 - `name` (string, unique) — referenced by route targets
-- `kind` (`openai` | `anthropic` | `openai_compatible` | `ollama` | `ollama_cloud` | `llama_cpp` | `openrouter` | `tei` | `azure_openai` | `bedrock` | `vertex` | `gemini` | `gemini_native` | `mistral` | `groq` | `xai` | `meta_llama_api` | `cohere` | `perplexity` | `together` | `fireworks` | `databricks` | `aleph_alpha` | `nebius` | `ovhcloud` | `scaleway` | `deepseek` | `qwen` | `zhipu` | `kimi` | `ernie` | `doubao` | `hunyuan` | `yi` | `minimax` | `baichuan` | `gigachat` | `yandex_gpt` | `cloud_ru` | `mts_ai` | `naver` | `upstage` | `rinna` | `rakuten` | `sarvam` | `krutrim` | `falcon`)
+- `kind` (`openai` | `anthropic` | `openai_compatible` | `ollama` | `ollama_cloud` | `llama_cpp` | `openrouter` | `tei` | `azure_openai` | `bedrock` | `vertex` | `gemini` | `gemini_native` | `gemini_interactions` | `mistral` | `groq` | `xai` | `meta_llama_api` | `cohere` | `perplexity` | `together` | `fireworks` | `databricks` | `aleph_alpha` | `nebius` | `ovhcloud` | `scaleway` | `deepseek` | `qwen` | `zhipu` | `kimi` | `ernie` | `doubao` | `hunyuan` | `yi` | `minimax` | `baichuan` | `gigachat` | `yandex_gpt` | `cloud_ru` | `mts_ai` | `naver` | `upstage` | `rinna` | `rakuten` | `sarvam` | `krutrim` | `falcon`)
 - `api_base` (string) — base URL, no trailing slash
 - `api_key` (string, optional) — prefer `api_key_env`
 - `api_key_env` (string, optional) — environment variable to read the key from
@@ -94,6 +94,19 @@ usual protocol. The model and method are embedded in the URL
 for streaming), the key is sent as `x-goog-api-key`, and `api_base` points at the
 version root with no `/openai` suffix.
 
+`gemini_interactions` targets Gemini's stateful Interactions API. Every
+chat-shaped request is translated onto the single `{api_base}/interactions`
+endpoint: turns become `input` items, system/developer messages become
+`system_instruction`, tool calls and tool results become `function_call` /
+`function_result` items, and sampling parameters become `generation_config`. The
+response `steps[]` (and the `interaction.created` / `step.delta` /
+`interaction.completed` SSE events) are converted back into the client's dialect.
+The thread is client-driven: the interaction id is returned as the response `id`,
+and a client resumes it by sending `previous_response_id` (OpenAI Responses) or
+`previous_interaction_id` — rolter keeps no interaction state of its own. Auth is
+`x-goog-api-key`, and `api_base` points at the version root. Endpoints with no
+interactions equivalent (embeddings, audio) are rejected rather than forwarded.
+
 ```toml
 [[providers]]
 name = "gemini"
@@ -105,6 +118,13 @@ api_key_env = "GEMINI_API_KEY"
 [[providers]]
 name = "gemini-native"
 kind = "gemini_native"
+api_base = "https://generativelanguage.googleapis.com/v1beta"
+api_key_env = "GEMINI_API_KEY"
+
+# stateful Interactions API (translated from OpenAI/Anthropic/Responses)
+[[providers]]
+name = "gemini-interactions"
+kind = "gemini_interactions"
 api_base = "https://generativelanguage.googleapis.com/v1beta"
 api_key_env = "GEMINI_API_KEY"
 

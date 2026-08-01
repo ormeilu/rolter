@@ -1008,6 +1008,25 @@ mod tests {
     }
 
     #[test]
+    fn gemini_interactions_targets_the_single_interactions_endpoint() {
+        let provider = provider(
+            ProviderKind::GeminiInteractions,
+            "https://generativelanguage.googleapis.com/v1beta".to_string(),
+        );
+        for path in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
+            let plan = TranslationPlan::resolve(
+                path,
+                ProviderKind::GeminiInteractions,
+                rolter_core::RoleProfile::Openai,
+            );
+            assert_eq!(
+                provider_url(&provider, plan.upstream_path(path)),
+                "https://generativelanguage.googleapis.com/v1beta/interactions"
+            );
+        }
+    }
+
+    #[test]
     fn gemini_interactions_uses_goog_api_key_auth() {
         let provider = provider(
             ProviderKind::GeminiInteractions,
