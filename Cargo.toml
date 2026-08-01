@@ -90,6 +90,8 @@ rand = "0.10"
 ahash = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
 subtle = "2"
+# unix signals, used only by the gateway SIGTERM-drain test
+libc = "0.2"
 
 # oidc single sign-on (rolter-control): id-token verification against the
 # provider's published jwks. default features drop the pem parser we do not use

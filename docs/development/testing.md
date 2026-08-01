@@ -40,6 +40,40 @@ clobbering each other.
 - **DB tests** for `rolter-store` Postgres backend behind a feature, using a disposable container.
 - **Load tests** (`oha`/`k6`) against a mock upstream to track added latency and max RPS (see [performance.md](../architecture/performance.md)).
 
+## Chaos & resilience contracts
+
+Resilience is asserted in two places, split by what each harness can drive
+deterministically.
+
+The **e2e chaos suite** (`integration/e2e/tests/test_chaos.py`, compose `chaos`
+profile) drives a static-config gateway against mock upstreams whose failure mode
+is fixed by an env var. It covers what is observable purely over the wire: retry
+and failover on 5xx/429, a clean 5xx when every target is down, the request
+timeout bound on a slow upstream, the circuit breaker's OPEN transition (asserted
+via `rolter_breaker_opened_total`) and flap degrade/recovery.
+
+The **gateway chaos tests** (`crates/rolter-gateway/tests/chaos.rs`) cover the two
+contracts that need a request pinned at a known point inside the gateway, which a
+black-box harness can only approximate with sleeps:
+
+- **bounded-queue backpressure** — with `queue.capacity = 1`, `queue.workers = 1`
+  and `backpressure = "error"`, one request pins the sole worker, exactly one
+  surplus request takes the queue slot, and the rest must come back as
+  `429` with `error.code = "queue_full"` while
+  `rolter_provider_queue_rejections_total` advances. Memory is bounded by the
+  queue, not by client burst size.
+- **graceful SIGTERM drain** — a real `rolter-gateway` child process is sent
+  `SIGTERM` while a request is pinned upstream. The in-flight request must still
+  return `200`, new connections must be refused, and the process must exit `0`.
+
+Both use a mock upstream that blocks on a semaphore the test owns, so every step
+is driven by a signal rather than by elapsed time — there are no sleeps to race.
+Run them with:
+
+```bash
+cargo test -p rolter-gateway --test chaos
+```
+
 ## Benchmarks
 
 Hot-path micro-benchmarks run under [criterion](https://github.com/criterion-rs/criterion.rs). They live in `crates/<crate>/benches/` with a `[[bench]] harness = false` entry per file, and cover the per-request cost that shows up as pure gateway overhead:

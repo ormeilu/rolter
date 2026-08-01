@@ -2668,6 +2668,7 @@ dependencies = [
  "crossbeam-queue",
  "dashmap",
  "futures-util",
+ "libc",
  "parking_lot",
  "redis",
  "reqwest 0.12.28",

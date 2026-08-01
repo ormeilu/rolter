@@ -43,6 +43,32 @@ The three backpressure policies:
 - **`block`** — wait for capacity until `queue_block_ms` expires. This requires a non-zero timeout; blocking forever would park callers indefinitely, so the combination is rejected.
 - **`error`** — return a structured `queue_full` error immediately. This is the default.
 
+Shed requests never fail over to a sibling target and never retry: admission
+backpressure is a signal to the caller, not an upstream fault. Each policy has a
+fixed wire shape:
+
+| Policy | HTTP status | `error.code` | `error.type` |
+|---|---|---|---|
+| `drop` | 503 | `queue_dropped` | `overloaded_error` |
+| `block` (timed out) | 429 | `queue_timeout` | `rate_limit_error` |
+| `error` | 429 | `queue_full` | `rate_limit_error` |
+
+```json
+{
+  "error": {
+    "message": "provider queue full",
+    "type": "rate_limit_error",
+    "param": null,
+    "code": "queue_full"
+  }
+}
+```
+
+Rejections and timeouts are counted separately on the gateway metrics endpoint as
+`rolter_provider_queue_rejections_total` and
+`rolter_provider_queue_timeouts_total`, so backpressure is visible as a real
+counter rather than only as a client-side status code.
+
 ---
 
 ## API

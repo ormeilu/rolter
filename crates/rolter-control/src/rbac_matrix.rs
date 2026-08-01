@@ -378,9 +378,10 @@ const CAPABILITIES: &[Capability] = &[
         // no operator role edits a measurement
         resource: "adaptive_routing_telemetry",
         scope: "deployment",
-        read: S,
-        write: S,
-        unsupported: &[Action::Create, Action::Update, Action::Delete],
+        read: SUPER,
+        create: NA,
+        update: NA,
+        delete: NA,
     },
     Capability {
         resource: "cluster_node",
@@ -747,6 +748,10 @@ mod tests {
     /// the checks below see exactly the source that shipped.
     const MODULES: &[(&str, &str)] = &[
         ("adaptive_policy.rs", include_str!("adaptive_policy.rs")),
+        (
+            "adaptive_telemetry.rs",
+            include_str!("adaptive_telemetry.rs"),
+        ),
         ("alerting.rs", include_str!("alerting.rs")),
         ("analytics.rs", include_str!("analytics.rs")),
         ("auth.rs", include_str!("auth.rs")),
@@ -858,11 +863,17 @@ mod tests {
     #[test]
     fn every_capability_is_named_by_a_guard() {
         for capability in CAPABILITIES {
-            let scoped = format!("cap!(\"{}\", ", capability.resource);
+            let scoped = format!("cap!(\"{}\",", capability.resource);
             let named = MODULES
                 .iter()
                 .filter(|(name, _)| *name != "rbac_matrix.rs")
-                .any(|(_, source)| source.contains(&scoped));
+                .any(|(_, source)| {
+                    source
+                        .chars()
+                        .filter(|c| !c.is_whitespace())
+                        .collect::<String>()
+                        .contains(&scoped)
+                });
             assert!(
                 named,
                 "no guard names '{}'; either guard a route with it or drop the row",

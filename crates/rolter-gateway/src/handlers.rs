@@ -627,7 +627,7 @@ fn upstream_error_response(message: &str) -> Response {
             .with_param("messages")
             .into_response();
     }
-    if message.starts_with("provider queue") {
+    if let Some(message) = queue_admission_message(message) {
         let (status, code) = if message.contains("dropped") {
             (StatusCode::SERVICE_UNAVAILABLE, "queue_dropped")
         } else if message.contains("timed out") {
@@ -642,8 +642,17 @@ fn upstream_error_response(message: &str) -> Response {
     error_json(StatusCode::BAD_GATEWAY, message)
 }
 
+/// Recognize a queue-admission failure and hand back its bare message.
+/// `Error::Upstream` renders as `upstream error: <message>`, so the forwarding
+/// loop sees the wrapped form; matching on the raw prefix alone silently
+/// downgraded every shed request to a generic 502 (#639).
+fn queue_admission_message(message: &str) -> Option<&str> {
+    let bare = message.strip_prefix("upstream error: ").unwrap_or(message);
+    bare.starts_with("provider queue").then_some(bare)
+}
+
 fn is_queue_admission_error(message: &str) -> bool {
-    message.starts_with("provider queue")
+    queue_admission_message(message).is_some()
 }
 
 /// Shared virtual-key auth check for every `/v1/*` handler. Returns the
@@ -2828,6 +2837,25 @@ mod tests {
         assert_eq!(dropped.status(), StatusCode::SERVICE_UNAVAILABLE);
         let upstream = upstream_error_response("connection refused");
         assert_eq!(upstream.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn queue_admission_errors_survive_the_upstream_error_wrapper() {
+        // the forwarding loop only ever sees `Error::Upstream`'s Display form,
+        // so the wrapped message is what must classify (#639)
+        let wrapped = "upstream error: provider queue full";
+        assert!(is_queue_admission_error(wrapped));
+        assert_eq!(
+            queue_admission_message(wrapped),
+            Some("provider queue full")
+        );
+        assert_eq!(
+            upstream_error_response(wrapped).status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert!(!is_queue_admission_error(
+            "upstream error: connection refused"
+        ));
     }
 
     #[test]
