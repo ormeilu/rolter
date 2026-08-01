@@ -8,8 +8,13 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
+# commit-driven runs supersede each other, but an `edited` run must not: it
+# skips `quality` (see below) on the assumption the gate already ran for this
+# commit, and cancelling an in-flight gate makes that assumption false — the
+# result is `ci-ok` green with no quality signal at all (#767). Giving `edited`
+# its own per-run group means it cancels nothing.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event.action == 'edited' && github.run_id || 'gate' }}
   cancel-in-progress: true
 
 # least-privilege GITHUB_TOKEN by default; jobs widen their own scope as needed.
@@ -23,7 +28,9 @@ jobs:
   # enforce the exact same checks on a commit.
   quality:
     # a title-only edit reruns pr-title/ci-ok only; the heavy gate already ran
-    # on this commit and never needs re-running for a metadata change
+    # (or is still running — see the concurrency group above, which keeps an
+    # `edited` run from cancelling it) and never needs re-running for a
+    # metadata change
     if: github.event.action != 'edited'
     uses: ./.github/workflows/quality.yml
 
