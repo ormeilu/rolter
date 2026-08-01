@@ -325,7 +325,7 @@ async fn event_detail(
     };
     let sql = "select ts, event_id, server, tool, transport, status, latency_ms, org_id, team_id, project_id, \
                       virtual_key_id, user_id, request_id, trace_id, arguments, result, error \
-               from mcp_tool_call_logs where event_id = {event_id:String} \
+               from mcp_tool_call_logs where event_id = {param_event_id:String} \
                order by ts desc limit 1 format JSON";
     match ch
         .query(sql, &[("param_event_id".to_string(), event_id)])
