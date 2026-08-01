@@ -77,8 +77,8 @@ pub enum GuardAction {
 }
 
 /// A safe starter rule shipped with the gateway. All are opt-in: an operator must
-/// list the rule explicitly (or enable it via `default_on`); nothing scans by
-/// default. Patterns are intentionally conservative to limit false positives.
+/// list the rule explicitly; nothing scans by default. Patterns are
+/// intentionally conservative to limit false positives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinRule {
@@ -138,9 +138,6 @@ pub struct GuardrailRule {
     /// (or a generic `[REDACTED]`) when omitted
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement: Option<String>,
-    /// apply this rule without requiring a client opt-in
-    #[serde(default)]
-    pub default_on: bool,
     /// also scan system messages. Off by default: operator-authored system
     /// instructions are trusted and excluded from scanning unless opted in.
     #[serde(default)]
@@ -223,7 +220,6 @@ pub struct CompiledRule {
     pub stage: GuardStage,
     pub action: GuardAction,
     token: String,
-    pub default_on: bool,
     pub include_system: bool,
 }
 
@@ -244,7 +240,6 @@ impl CompiledRule {
             stage: rule.stage,
             action: rule.action,
             token,
-            default_on: rule.default_on,
             include_system: rule.include_system,
         })
     }
@@ -554,7 +549,6 @@ mod tests {
             stage: GuardStage::PreCall,
             action,
             replacement: None,
-            default_on: true,
             include_system: false,
         }
     }
@@ -566,6 +560,31 @@ mod tests {
             streaming_post_call: StreamingPostCall::default(),
             rules,
         })
+    }
+
+    // `default_on` was removed in #665: it gated a client opt-in that never
+    // existed, so every rule applied whatever it was set to. Configs still
+    // carrying the key must keep loading, and keep scanning, unchanged
+    #[test]
+    fn legacy_default_on_key_is_ignored_not_rejected() {
+        let cfg: GuardrailsConfig = toml::from_str(
+            r#"
+            enabled = true
+            [[rules]]
+            name = "email"
+            builtin = "email"
+            action = "redact"
+            default_on = false
+            "#,
+        )
+        .expect("a config carrying the removed key still deserializes");
+        assert!(cfg.validate().is_empty());
+
+        let g = CompiledGuardrails::from_config(&cfg);
+        let mut budget = g.scan_budget();
+        let mut report = GuardrailReport::default();
+        let out = g.scan_segment("a.b@example.com", false, &mut budget, &mut report);
+        assert_eq!(out, ScanOutcome::Redacted("[REDACTED:EMAIL]".to_string()));
     }
 
     #[test]
@@ -747,7 +766,6 @@ mod tests {
                 stage: GuardStage::PreCall,
                 action: GuardAction::Block,
                 replacement: None,
-                default_on: false,
                 include_system: false,
             }],
         };
@@ -813,7 +831,6 @@ mod tests {
                 stage: GuardStage::PreCall,
                 action: GuardAction::Block,
                 replacement: None,
-                default_on: false,
                 include_system: false,
             }],
         };

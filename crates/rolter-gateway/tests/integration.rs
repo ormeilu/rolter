@@ -2383,7 +2383,6 @@ fn config_with_output_rule(
             stage: rolter_core::GuardStage::PostCall,
             action,
             replacement: None,
-            default_on: true,
             include_system: false,
         }],
     };
