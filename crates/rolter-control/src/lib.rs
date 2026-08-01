@@ -308,6 +308,15 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         gateway_url,
     };
 
+    // converge the clickhouse ttl with the stored retention policy. spawned
+    // rather than awaited: clickhouse is optional and may be slower to come up
+    // than the control plane, and serving traffic must not wait on it
+    #[cfg(feature = "postgres")]
+    {
+        let state = state.clone();
+        tokio::spawn(async move { logging_settings::reconcile_retention(&state).await });
+    }
+
     // when the operator gave /internal/* its own socket, it is not mounted on
     // the public router at all — the plaintext-credential channel is absent
     // from that surface rather than merely gated on it

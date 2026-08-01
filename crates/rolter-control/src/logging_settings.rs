@@ -171,6 +171,50 @@ async fn update_logging_settings(
     Ok(Json(row))
 }
 
+/// Push the stored retention policy at ClickHouse once, at startup.
+///
+/// The TTL is otherwise only written by [`update_logging_settings`], and that
+/// call deliberately does not fail the admin write when ClickHouse is
+/// unreachable — losing the policy because the log store was briefly down is
+/// worse than a stale TTL. The cost is that the two can diverge permanently:
+/// once the PUT has returned, nothing ever retries. A ClickHouse restored from
+/// a backup, or provisioned after the policy was set, keeps the schema default
+/// (90 days / 7 days) while the dashboard reports whatever the operator chose.
+///
+/// Reconciling at boot converges that. `alter table … modify ttl` is
+/// idempotent, so re-applying an unchanged policy is a no-op.
+#[cfg(feature = "postgres")]
+pub(crate) async fn reconcile_retention(state: &ControlState) {
+    let Some(clickhouse) = state.clickhouse.clone() else {
+        return;
+    };
+    let settings = match LoggingSettingsRepo(pool(state)).get().await {
+        Ok(settings) => settings,
+        Err(err) => {
+            tracing::warn!(error = %err, "could not read logging settings to reconcile log retention");
+            return;
+        }
+    };
+    match clickhouse
+        .apply_log_retention(
+            settings.retention_days as u32,
+            settings.payload_retention_hours as u32,
+        )
+        .await
+    {
+        Ok(()) => tracing::info!(
+            retention_days = settings.retention_days,
+            payload_retention_hours = settings.payload_retention_hours,
+            "reconciled clickhouse log retention with the stored policy"
+        ),
+        // startup must not depend on clickhouse being up; the next successful
+        // settings write reconciles, as does the next restart
+        Err(err) => {
+            tracing::warn!(error = %err, "could not reconcile clickhouse log retention at startup")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

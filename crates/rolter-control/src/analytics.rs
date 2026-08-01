@@ -69,14 +69,7 @@ impl ClickHouseClient {
         retention_days: u32,
         payload_retention_hours: u32,
     ) -> anyhow::Result<()> {
-        for statement in [
-            format!(
-                "alter table request_logs modify ttl toDateTime(ts) + interval {retention_days} day"
-            ),
-            format!(
-                "alter table request_payloads modify ttl toDateTime(ts) + interval {payload_retention_hours} hour"
-            ),
-        ] {
+        for statement in retention_statements(retention_days, payload_retention_hours) {
             let response = self
                 .client
                 .post(format!("{}/", self.base))
@@ -425,6 +418,24 @@ async fn invocations(
     run(ch.query(&sql, &params).await)
 }
 
+/// The two `alter table … modify ttl` statements that put the admin-configured
+/// retention clocks on the log tables.
+///
+/// ClickHouse does not accept query parameters in an `alter table`, so both
+/// bounds are formatted straight into the DDL. They are `u32` and range-checked
+/// by `logging_settings::validate_settings` before they get here, so no
+/// caller-controlled text ever reaches this SQL (#537).
+fn retention_statements(retention_days: u32, payload_retention_hours: u32) -> [String; 2] {
+    [
+        format!(
+            "alter table request_logs modify ttl toDateTime(ts) + interval {retention_days} day"
+        ),
+        format!(
+            "alter table request_payloads modify ttl toDateTime(ts) + interval {payload_retention_hours} hour"
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,6 +501,23 @@ mod tests {
             None
         );
         assert_eq!(attribution_column(""), None);
+    }
+
+    #[test]
+    fn retention_statements_carry_both_clocks() {
+        let [logs, payloads] = retention_statements(30, 24);
+        assert_eq!(
+            logs,
+            "alter table request_logs modify ttl toDateTime(ts) + interval 30 day"
+        );
+        assert_eq!(
+            payloads,
+            "alter table request_payloads modify ttl toDateTime(ts) + interval 24 hour"
+        );
+        // the bounds are numeric all the way down, so there is no shape of
+        // input that could close the interval and append another statement
+        let [logs, _] = retention_statements(u32::MAX, 1);
+        assert!(logs.ends_with(&format!("interval {} day", u32::MAX)));
     }
 
     #[test]
