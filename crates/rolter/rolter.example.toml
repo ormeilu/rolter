@@ -455,6 +455,23 @@ disabled = false # revoke without deleting
 # flush_ms = 1000         # also flush a partial batch at least this often
 # queue_capacity = 10000  # rows are dropped (and counted) when this queue is full
 
+# Where the gateway may send upstream traffic. A provider's api_base is
+# operator-supplied, so without a destination policy a crafted or compromised
+# provider row turns the gateway into an SSRF primitive aimed at whatever sits
+# inside its network position — cloud instance metadata being the classic
+# target. IP literals are classified at config validation; hostnames are
+# classified at connect time against the address DNS actually returned, which
+# is what makes this rebinding-safe.
+# [egress]
+# block_link_local = true         # 169.254.0.0/16, fe80::/10 — cloud instance
+#                                 # metadata. on by default
+# block_loopback = false          # 127.0.0.0/8, ::1. off by default: sidecar and
+#                                 # single-host deployments serve on localhost
+# block_private = false           # 10/8, 172.16/12, 192.168/16, fc00::/7. off by
+#                                 # default: on-prem clusters are the common case
+# allow_hosts = ["vllm.internal.example.com"]  # exempt from every check above,
+#                                 # matched verbatim on the url host
+
 # Built-in regex guardrails and PII redaction, evaluated in-gateway with no
 # external service. Disabled by default; a disabled block adds no hot-path cost.
 # Patterns use the linear-time (RE2-style) engine and are compiled with bounded
