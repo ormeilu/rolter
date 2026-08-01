@@ -19,9 +19,10 @@ what is asserted, over the wire:
 - a flapping target degrades gracefully and is re-admitted (recovery), never
   permanently parked
 
-not covered here (need signals this black-box harness can't drive): graceful
-SIGTERM drain of in-flight requests, and per-provider bounded-queue backpressure
-under OOM pressure — tracked as a follow-up.
+graceful SIGTERM drain and per-provider bounded-queue backpressure need a
+request pinned at a known point inside the gateway, which this black-box
+harness can only approximate with sleeps. they are asserted deterministically
+in crates/rolter-gateway/tests/chaos.rs instead (#639).
 """
 
 from __future__ import annotations
