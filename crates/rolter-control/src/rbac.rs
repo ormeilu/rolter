@@ -48,6 +48,7 @@ use uuid::Uuid;
 
 use crate::auth::{bearer_token, session_pepper};
 use crate::crud::{pool, ApiError, ApiResult};
+use crate::rbac_matrix::Requirement;
 use crate::ControlState;
 
 /// The authenticated caller behind a control-plane mutation.
@@ -261,25 +262,48 @@ fn user_authorized(memberships: &[Membership], chain: ScopeChain, required: Role
     }
 }
 
-/// Require `principal` to hold at least `required` at `chain`. Superadmin (and
-/// therefore open mode) always passes; a `User` is checked via
-/// [`user_authorized`] against their memberships. Maps insufficient authority to
-/// `403`.
+/// Require `principal` to satisfy `requirement` at `chain`.
+///
+/// `requirement` comes from the capability table via [`crate::rbac_matrix::cap`]
+/// — never a literal — so the rule the guard enforces is the rule
+/// `GET /api/v1/rbac/matrix` publishes. Superadmin (and therefore open mode)
+/// always passes; a `User` is checked via [`user_authorized`] against their
+/// memberships. Maps insufficient authority to `403`.
 pub(crate) async fn authorize(
     state: &ControlState,
     principal: &Principal,
     chain: ScopeChain,
-    required: Role,
+    requirement: Requirement,
 ) -> ApiResult<()> {
     let user = match principal {
         Principal::Superadmin => return Ok(()),
         Principal::User(user) => user,
+    };
+    // a superadmin-only capability has no scope a membership could satisfy, so
+    // a plain user is refused without touching the database
+    let Requirement::Role(required) = requirement else {
+        return Err(ApiError::Forbidden);
     };
     let memberships = MembershipRepo(pool(state)).list_for_user(user.id).await?;
     if user_authorized(&memberships, chain, required) {
         Ok(())
     } else {
         Err(ApiError::Forbidden)
+    }
+}
+
+/// Whether `principal` holds admin at `chain`, as a question rather than a
+/// guard. Used where the answer selects *what* a caller sees (their own rows
+/// vs. the whole org) after a weaker guard has already run.
+pub(crate) async fn holds_admin(
+    state: &ControlState,
+    principal: &Principal,
+    chain: ScopeChain,
+) -> ApiResult<bool> {
+    match authorize(state, principal, chain, Requirement::Role(Role::Admin)).await {
+        Ok(()) => Ok(true),
+        Err(ApiError::Forbidden) => Ok(false),
+        Err(err) => Err(err),
     }
 }
 
@@ -328,11 +352,28 @@ pub(crate) async fn policy_allows(
 
 /// Require `principal` to be a superadmin. Used for global resources with no
 /// org/team/project scope (the model-pricing catalog, cross-project model
-/// deletion).
-pub(crate) fn require_superadmin(principal: &Principal) -> ApiResult<()> {
+/// deletion). Not called from a handler directly — handlers go through
+/// [`authorize_superadmin`] so their requirement comes from the capability
+/// table.
+fn require_superadmin(principal: &Principal) -> ApiResult<()> {
     match principal {
         Principal::Superadmin => Ok(()),
         Principal::User(_) => Err(ApiError::Forbidden),
+    }
+}
+
+/// Guard for a capability with no tenancy scope to resolve a role in.
+///
+/// `requirement` comes from [`crate::rbac_matrix::superadmin_cap`], which is a
+/// compile error unless the table records the pair as superadmin-only; the
+/// scoped arm is therefore unreachable and denies rather than widening.
+pub(crate) fn authorize_superadmin(
+    principal: &Principal,
+    requirement: Requirement,
+) -> ApiResult<()> {
+    match requirement {
+        Requirement::Superadmin => require_superadmin(principal),
+        Requirement::Role(_) => Err(ApiError::Forbidden),
     }
 }
 
@@ -700,6 +741,23 @@ mod tests {
         let user = Principal::User(user_with_superadmin(false));
         assert!(matches!(
             require_superadmin(&user),
+            Err(ApiError::Forbidden)
+        ));
+    }
+
+    /// The deployment guard passes a superadmin through and refuses everyone
+    /// else — including, defensively, a scoped requirement that `superadmin_cap!`
+    /// would have rejected at compile time.
+    #[test]
+    fn authorize_superadmin_denies_users_and_scoped_requirements() {
+        let user = Principal::User(user_with_superadmin(false));
+        assert!(authorize_superadmin(&Principal::Superadmin, Requirement::Superadmin).is_ok());
+        assert!(matches!(
+            authorize_superadmin(&user, Requirement::Superadmin),
+            Err(ApiError::Forbidden)
+        ));
+        assert!(matches!(
+            authorize_superadmin(&Principal::Superadmin, Requirement::Role(Role::Viewer)),
             Err(ApiError::Forbidden)
         ));
     }

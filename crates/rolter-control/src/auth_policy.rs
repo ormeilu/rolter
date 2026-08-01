@@ -27,9 +27,9 @@ use rolter_store::postgres::models::OrgAuthPolicy;
 use rolter_store::postgres::repo::{OrgAuthPolicyRepo, SsoRepo};
 
 use crate::crud::{log_audit, pool, ApiError, ApiResult, SafeJson};
-use rolter_auth::Role;
 
 use crate::rbac::{authorize, Principal, ScopeChain};
+use crate::rbac_matrix::cap;
 use crate::ControlState;
 
 pub fn router() -> Router<ControlState> {
@@ -86,7 +86,13 @@ async fn get_policy(
     State(state): State<ControlState>,
     Path(org_id): Path<Uuid>,
 ) -> ApiResult<Json<OrgAuthPolicy>> {
-    authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(org_id),
+        cap!("org_auth_policy", Read),
+    )
+    .await?;
     Ok(Json(OrgAuthPolicyRepo(pool(&state)).get(org_id).await?))
 }
 
@@ -102,7 +108,13 @@ async fn set_policy(
     Path(org_id): Path<Uuid>,
     SafeJson(body): SafeJson<SetPolicy>,
 ) -> ApiResult<Json<OrgAuthPolicy>> {
-    authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(org_id),
+        cap!("org_auth_policy", Update),
+    )
+    .await?;
     if !body.allow_password_login && !body.allow_sso {
         // both off is not a policy, it is an outage
         return Err(ApiError::Conflict(

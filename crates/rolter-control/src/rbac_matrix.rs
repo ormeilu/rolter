@@ -1,17 +1,20 @@
-//! The RBAC capability matrix, served from the server's own rules (#534).
+//! The RBAC capability matrix — the single source of truth for what each
+//! guarded route takes (#534, #704).
 //!
 //! The dashboard's Roles & Permissions screen rendered a hardcoded matrix, so
 //! what it showed and what the control plane enforced could drift silently.
 //! This module makes the matrix a server-owned artifact: [`CAPABILITIES`] is
-//! the single table both `GET /api/v1/rbac/matrix` (what roles *can* do) and
-//! `GET /api/v1/rbac/effective` (what *this caller* can do, at a scope) read
-//! from.
+//! the one table that backs `GET /api/v1/rbac/matrix` (what roles *can* do),
+//! `GET /api/v1/rbac/effective` (what *this caller* can do, at a scope) **and**
+//! the guard itself.
 //!
-//! Nothing here decides an individual request — [`crate::rbac::authorize`]
-//! still does that at each handler. The endpoints are read-only and describe
-//! the same rule set, so a UI can render and pre-check without ever being
-//! trusted: a client that ignores `effective` and calls the endpoint anyway
-//! gets the same `403` it always did.
+//! Every guarded handler names a `(resource, action)` pair through the [`cap!`]
+//! macro and hands the resulting [`Requirement`] to [`crate::rbac::authorize`]
+//! (or [`crate::rbac::authorize_superadmin`]); no handler names a [`Role`]
+//! directly. Because [`requirement_for`] is a `const fn` and [`cap!`] forces it
+//! into a `const` item, a pair the table does not define is a **compile
+//! error**, and the published matrix is by construction the rule set the guard
+//! enforces.
 
 use axum::extract::{Query, State};
 use axum::routing::get;
@@ -47,7 +50,7 @@ impl Action {
     const ALL: [Action; 4] = [Action::Read, Action::Create, Action::Update, Action::Delete];
 }
 
-/// What a role needs to hold for an action, or that no role suffices.
+/// What a caller must hold for an action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Requirement {
     /// the minimum scoped role that authorizes the action
@@ -56,188 +59,250 @@ pub(crate) enum Requirement {
     Superadmin,
 }
 
-/// One resource and the authority each action on it takes. Read access is a
-/// viewer's; mutations are an admin's; deployment-wide policy objects have no
-/// scope to be a member of and so are superadmin-only.
+impl Requirement {
+    /// const-friendly discriminant test, so [`superadmin_cap!`] can reject a
+    /// scoped requirement at compile time
+    pub(crate) const fn is_superadmin(self) -> bool {
+        matches!(self, Requirement::Superadmin)
+    }
+}
+
+/// One resource and the authority each action on it takes. `None` means the
+/// action does not exist for the resource at all (an audit log is append-only,
+/// orgs have no update route), reported so a UI does not render a cell that can
+/// never be true for anyone.
 struct Capability {
     resource: &'static str,
     /// scope the resource lives under, surfaced so a UI can ask for the right
     /// `org_id`/`team_id`/`project_id` when checking effective permissions
     scope: &'static str,
-    read: Requirement,
-    write: Requirement,
-    /// actions this resource does not support at all (e.g. an audit log is
-    /// append-only), reported so a UI does not render a cell that can never
-    /// be true for anyone
-    unsupported: &'static [Action],
+    read: Option<Requirement>,
+    create: Option<Requirement>,
+    update: Option<Requirement>,
+    delete: Option<Requirement>,
 }
 
-const R: Requirement = Requirement::Role(Role::Viewer);
-const W: Requirement = Requirement::Role(Role::Admin);
-const S: Requirement = Requirement::Superadmin;
+const VIEWER: Option<Requirement> = Some(Requirement::Role(Role::Viewer));
+const MEMBER: Option<Requirement> = Some(Requirement::Role(Role::Member));
+const ADMIN: Option<Requirement> = Some(Requirement::Role(Role::Admin));
+const SUPER: Option<Requirement> = Some(Requirement::Superadmin);
+/// the resource has no such action
+const NA: Option<Requirement> = None;
 
-/// The capability table. Mirrors the `authorize(...)` calls in
-/// [`crate::crud`] and the `require_superadmin` guards on the global policy
-/// modules; a resource added there belongs here too.
+/// The capability table. Read access is a viewer's, mutations are an admin's,
+/// and anything without a tenancy scope to be a member of is superadmin-only.
+/// Each entry is what the guard on the corresponding route actually requires —
+/// the routes read it from here, so the two cannot disagree.
 const CAPABILITIES: &[Capability] = &[
+    // an org is created out of band (seeding / the admin token) because there
+    // is no wider scope to be an admin of; deleting one is its own admin's
     Capability {
         resource: "org",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[Action::Create],
+        read: VIEWER,
+        create: SUPER,
+        update: NA,
+        delete: ADMIN,
     },
     Capability {
         resource: "team",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
     },
     Capability {
         resource: "project",
         scope: "team",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
     },
     Capability {
         resource: "provider",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: ADMIN,
+        delete: ADMIN,
     },
     Capability {
         resource: "provider_group",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: ADMIN,
+        delete: ADMIN,
     },
     Capability {
         resource: "route",
         scope: "project",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: ADMIN,
+        delete: ADMIN,
     },
     Capability {
         resource: "virtual_key",
         scope: "project",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: ADMIN,
+        delete: ADMIN,
+    },
+    // a key a user mints for themself in a project they belong to: `member`,
+    // not `admin`, so read-only viewers still cannot mint one
+    Capability {
+        resource: "my_virtual_key",
+        scope: "project",
+        read: NA,
+        create: MEMBER,
+        update: NA,
+        delete: NA,
     },
     Capability {
         resource: "budget",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
     },
     Capability {
         resource: "rate_limit",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
     },
+    // the pricing catalog and the effective model list are global (unscoped),
+    // so their mutations are superadmin-only. their reads are not guarded at
+    // all today — any authenticated principal may list them — and `viewer` is
+    // recorded here as the nominal floor (#766)
     Capability {
         resource: "model_price",
-        scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[],
+        scope: "deployment",
+        read: VIEWER,
+        create: NA,
+        update: SUPER,
+        delete: SUPER,
+    },
+    Capability {
+        resource: "model",
+        scope: "deployment",
+        read: VIEWER,
+        create: NA,
+        update: NA,
+        delete: SUPER,
     },
     Capability {
         resource: "business_unit",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: ADMIN,
+        delete: ADMIN,
     },
     Capability {
         resource: "customer",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: ADMIN,
+        delete: ADMIN,
     },
     Capability {
         resource: "prompt_template",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: ADMIN,
+        delete: ADMIN,
     },
     Capability {
         resource: "skill",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: ADMIN,
+        delete: ADMIN,
     },
+    // account lifecycle vs. role assignment are split by authority: inviting a
+    // user into an org is an org admin's, but editing or deleting the global
+    // account (which reaches every org, and can grant the superadmin bit) is
+    // superadmin-only
     Capability {
         resource: "user",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[],
+        read: VIEWER,
+        create: ADMIN,
+        update: SUPER,
+        delete: SUPER,
     },
     Capability {
         resource: "membership",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[Action::Update],
+        read: VIEWER,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
     },
     // listing provisioning tokens is an admin read: the rows name the IdPs a
     // tenant trusts, which is not viewer-grade information
     Capability {
         resource: "scim_token",
         scope: "org",
-        read: Requirement::Role(Role::Admin),
-        write: W,
-        unsupported: &[Action::Update],
+        read: ADMIN,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
     },
     Capability {
         resource: "mcp_server",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[Action::Update],
+        read: VIEWER,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
     },
     // a grant or session belongs to a user: an org admin sees and revokes any,
-    // a member only their own, and nobody creates one through the API — they
-    // are minted by the OAuth exchange
+    // a member only their own — so the floor is a viewer membership at the org
+    // and the handler narrows it to the owner. nobody creates one through the
+    // API; they are minted by the OAuth exchange
     Capability {
         resource: "mcp_oauth_grant",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[Action::Create, Action::Update],
+        read: VIEWER,
+        create: NA,
+        update: NA,
+        delete: VIEWER,
     },
     Capability {
         resource: "mcp_oauth_session",
         scope: "org",
-        read: R,
-        write: W,
-        unsupported: &[Action::Create, Action::Update],
+        read: VIEWER,
+        create: NA,
+        update: NA,
+        delete: VIEWER,
     },
     Capability {
         resource: "audit_log",
         scope: "org",
-        read: Requirement::Role(Role::Admin),
-        write: S,
-        unsupported: &[Action::Create, Action::Update, Action::Delete],
+        read: ADMIN,
+        create: NA,
+        update: NA,
+        delete: NA,
     },
     Capability {
         resource: "invitation",
         scope: "org",
-        read: Requirement::Role(Role::Admin),
-        write: Requirement::Role(Role::Admin),
-        unsupported: &[Action::Update],
+        read: ADMIN,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
     },
     // single sign-on: registering an identity provider or mapping its groups to
     // roles is a way to grant roles, so it needs the same admin bar as granting
@@ -245,60 +310,68 @@ const CAPABILITIES: &[Capability] = &[
     Capability {
         resource: "sso_provider",
         scope: "org",
-        read: Requirement::Role(Role::Admin),
-        write: Requirement::Role(Role::Admin),
-        unsupported: &[Action::Update],
+        read: ADMIN,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
     },
     Capability {
         resource: "sso_group_mapping",
         scope: "org",
-        read: Requirement::Role(Role::Admin),
-        write: Requirement::Role(Role::Admin),
-        unsupported: &[Action::Update],
+        read: ADMIN,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
     },
     Capability {
         resource: "org_auth_policy",
         scope: "org",
-        read: Requirement::Role(Role::Admin),
-        write: Requirement::Role(Role::Admin),
-        unsupported: &[Action::Create, Action::Delete],
+        read: ADMIN,
+        create: NA,
+        update: ADMIN,
+        delete: NA,
     },
     // deployment-wide policy: no tenancy scope exists to be a member of, so
     // these are the admin token's (or a superadmin's) alone
     Capability {
         resource: "feature_flags",
         scope: "deployment",
-        read: S,
-        write: S,
-        unsupported: &[Action::Create, Action::Delete],
+        read: SUPER,
+        create: NA,
+        update: SUPER,
+        delete: NA,
     },
     Capability {
         resource: "runtime_policy",
         scope: "deployment",
-        read: S,
-        write: S,
-        unsupported: &[Action::Create, Action::Delete],
+        read: SUPER,
+        create: NA,
+        update: SUPER,
+        delete: NA,
     },
     Capability {
         resource: "logging_settings",
         scope: "deployment",
-        read: S,
-        write: S,
-        unsupported: &[Action::Create, Action::Delete],
+        read: SUPER,
+        create: NA,
+        update: SUPER,
+        delete: NA,
     },
     Capability {
         resource: "compatibility_policy",
         scope: "deployment",
-        read: S,
-        write: S,
-        unsupported: &[Action::Create, Action::Delete],
+        read: SUPER,
+        create: NA,
+        update: SUPER,
+        delete: NA,
     },
     Capability {
         resource: "adaptive_routing_policy",
         scope: "deployment",
-        read: S,
-        write: S,
-        unsupported: &[Action::Create, Action::Delete],
+        read: SUPER,
+        create: NA,
+        update: SUPER,
+        delete: NA,
     },
     Capability {
         // read-only: the data plane writes it over the internal channel, and
@@ -312,30 +385,129 @@ const CAPABILITIES: &[Capability] = &[
     Capability {
         resource: "cluster_node",
         scope: "deployment",
-        read: S,
-        write: S,
-        unsupported: &[Action::Create],
+        read: SUPER,
+        create: NA,
+        update: SUPER,
+        delete: SUPER,
     },
     Capability {
         resource: "security_settings",
         scope: "deployment",
-        read: S,
-        write: S,
-        unsupported: &[Action::Create, Action::Delete],
+        read: SUPER,
+        create: NA,
+        update: SUPER,
+        delete: NA,
+    },
+    Capability {
+        resource: "alert_channel",
+        scope: "deployment",
+        read: SUPER,
+        create: SUPER,
+        update: SUPER,
+        delete: SUPER,
+    },
+    Capability {
+        resource: "alert_rule",
+        scope: "deployment",
+        read: SUPER,
+        create: SUPER,
+        update: SUPER,
+        delete: SUPER,
+    },
+    // notification history is append-only; "create" is asking the deployment to
+    // evaluate a rule now, which can emit one
+    Capability {
+        resource: "alert_history",
+        scope: "deployment",
+        read: SUPER,
+        create: SUPER,
+        update: NA,
+        delete: NA,
+    },
+    // MCP tool-call telemetry: written by the gateway, read by an operator
+    Capability {
+        resource: "mcp_log",
+        scope: "deployment",
+        read: SUPER,
+        create: SUPER,
+        update: NA,
+        delete: NA,
     },
 ];
 
 impl Capability {
-    fn requirement(&self, action: Action) -> Option<Requirement> {
-        if self.unsupported.contains(&action) {
-            return None;
-        }
-        Some(match action {
+    const fn requirement(&self, action: Action) -> Option<Requirement> {
+        match action {
             Action::Read => self.read,
-            _ => self.write,
-        })
+            Action::Create => self.create,
+            Action::Update => self.update,
+            Action::Delete => self.delete,
+        }
     }
 }
+
+/// const-evaluable string equality (`str::eq` is not `const`)
+const fn str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// The requirement the table records for `(resource, action)`.
+///
+/// A `const fn`, so [`cap!`] turns an unknown resource or an action the
+/// resource does not support into a compile error at the call site rather than
+/// a guard that silently disagrees with the published matrix.
+pub(crate) const fn requirement_for(resource: &str, action: Action) -> Requirement {
+    let mut i = 0;
+    while i < CAPABILITIES.len() {
+        if str_eq(CAPABILITIES[i].resource, resource) {
+            return match CAPABILITIES[i].requirement(action) {
+                Some(requirement) => requirement,
+                None => panic!(
+                    "the rbac capability table marks this action unsupported for this resource"
+                ),
+            };
+        }
+        i += 1;
+    }
+    panic!("this resource is not in the rbac capability table (crates/rolter-control/src/rbac_matrix.rs)")
+}
+
+/// The [`Requirement`] a guarded route takes, resolved from [`CAPABILITIES`] at
+/// compile time: `cap!("provider", Create)`.
+macro_rules! cap {
+    ($resource:literal, $action:ident) => {{
+        const REQUIREMENT: $crate::rbac_matrix::Requirement =
+            $crate::rbac_matrix::requirement_for($resource, $crate::rbac_matrix::Action::$action);
+        REQUIREMENT
+    }};
+}
+
+/// Same as [`cap!`], for a guard that has no scope to resolve a role in: also a
+/// compile error unless the table says the pair is superadmin-only.
+macro_rules! superadmin_cap {
+    ($resource:literal, $action:ident) => {{
+        const REQUIREMENT: $crate::rbac_matrix::Requirement =
+            $crate::rbac_matrix::requirement_for($resource, $crate::rbac_matrix::Action::$action);
+        const _: () = assert!(
+            REQUIREMENT.is_superadmin(),
+            "this guard requires a superadmin but the capability table does not"
+        );
+        REQUIREMENT
+    }};
+}
+
+pub(crate) use {cap, superadmin_cap};
 
 #[derive(Debug, Serialize)]
 struct ActionView {
@@ -488,18 +660,25 @@ mod tests {
         assert!(allowed.contains(&"provider:read".to_string()));
         assert!(allowed.contains(&"route:read".to_string()));
         assert!(!allowed.iter().any(|a| a.ends_with(":create")));
-        assert!(!allowed.iter().any(|a| a.ends_with(":delete")));
         // the audit log is an admin read, not a viewer one
         assert!(!allowed.contains(&"audit_log:read".to_string()));
+        // the only delete a viewer reaches is revoking their own OAuth grant,
+        // which the handler narrows to the owner
+        assert_eq!(
+            allowed
+                .iter()
+                .filter(|a| a.ends_with(":delete"))
+                .collect::<Vec<_>>(),
+            vec!["mcp_oauth_grant:delete", "mcp_oauth_session:delete"],
+        );
     }
 
     #[test]
-    fn a_member_is_not_yet_a_writer() {
-        // member sits between viewer and admin but no CRUD endpoint requires
-        // exactly member today; the matrix must say so rather than imply it
+    fn a_member_may_mint_their_own_key_and_nothing_more() {
         let member = allowed_for(false, Some(Role::Member));
         let viewer = allowed_for(false, Some(Role::Viewer));
-        assert_eq!(member, viewer);
+        let extra: Vec<_> = member.iter().filter(|a| !viewer.contains(a)).collect();
+        assert_eq!(extra, vec!["my_virtual_key:create"]);
     }
 
     #[test]
@@ -513,6 +692,9 @@ mod tests {
         assert!(!allowed
             .iter()
             .any(|a| a.starts_with("adaptive_routing_policy:")));
+        // and neither is the global account lifecycle
+        assert!(!allowed.contains(&"user:update".to_string()));
+        assert!(!allowed.contains(&"user:delete".to_string()));
     }
 
     #[test]
@@ -543,8 +725,8 @@ mod tests {
         ] {
             // an audit log is append-only; nobody deletes one through the API
             assert!(!allowed.contains(&"audit_log:delete".to_string()));
-            // and orgs are created out of band (seeding), not through CRUD
-            assert!(!allowed.contains(&"org:create".to_string()));
+            // and an org has no update route
+            assert!(!allowed.contains(&"org:update".to_string()));
         }
     }
 
@@ -555,5 +737,148 @@ mod tests {
         let mut deduped = names.clone();
         deduped.dedup();
         assert_eq!(names, deduped, "duplicate resource in the capability table");
+    }
+
+    // ------------------------------------------------------------------- //
+    // drift guards (#704): the table is the only place a requirement lives //
+    // ------------------------------------------------------------------- //
+
+    /// Every control-plane module, as `(file name, contents)`. Compiled in, so
+    /// the checks below see exactly the source that shipped.
+    const MODULES: &[(&str, &str)] = &[
+        ("adaptive_policy.rs", include_str!("adaptive_policy.rs")),
+        ("alerting.rs", include_str!("alerting.rs")),
+        ("analytics.rs", include_str!("analytics.rs")),
+        ("auth.rs", include_str!("auth.rs")),
+        ("auth_policy.rs", include_str!("auth_policy.rs")),
+        ("cluster.rs", include_str!("cluster.rs")),
+        (
+            "compatibility_policy.rs",
+            include_str!("compatibility_policy.rs"),
+        ),
+        ("crud.rs", include_str!("crud.rs")),
+        ("feature_flags.rs", include_str!("feature_flags.rs")),
+        ("health.rs", include_str!("health.rs")),
+        ("invitations.rs", include_str!("invitations.rs")),
+        ("lib.rs", include_str!("lib.rs")),
+        ("logging_settings.rs", include_str!("logging_settings.rs")),
+        ("main.rs", include_str!("main.rs")),
+        ("mcp_logs.rs", include_str!("mcp_logs.rs")),
+        ("mcp_oauth.rs", include_str!("mcp_oauth.rs")),
+        ("me.rs", include_str!("me.rs")),
+        ("proxy.rs", include_str!("proxy.rs")),
+        ("rbac.rs", include_str!("rbac.rs")),
+        ("rbac_matrix.rs", include_str!("rbac_matrix.rs")),
+        ("runtime_policy.rs", include_str!("runtime_policy.rs")),
+        ("scim.rs", include_str!("scim.rs")),
+        ("security.rs", include_str!("security.rs")),
+        ("seed.rs", include_str!("seed.rs")),
+        ("sso.rs", include_str!("sso.rs")),
+    ];
+
+    /// A module the checks below skip, and why.
+    const EXEMPT: &[(&str, &str)] = &[
+        ("rbac.rs", "owns the role ordering and the guard itself"),
+        ("rbac_matrix.rs", "is the capability table"),
+        (
+            "lib.rs",
+            "only enumerates the roles for `GET /api/v1/roles`",
+        ),
+    ];
+
+    fn is_exempt(name: &str) -> bool {
+        EXEMPT.iter().any(|(exempt, _)| *exempt == name)
+    }
+
+    /// Whether `source` mentions `Role::` other than as the tail of a longer
+    /// path — `DecoratorRole::System` in a seed fixture is a different enum.
+    fn names_a_role(source: &str) -> bool {
+        source.match_indices("Role::").any(|(at, _)| {
+            !source[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+    }
+
+    /// The module list must match what is actually on disk, so a new module
+    /// cannot quietly escape the checks below.
+    #[test]
+    fn the_module_list_covers_the_whole_control_plane() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut on_disk: Vec<String> = std::fs::read_dir(dir)
+            .expect("src/ is readable")
+            .filter_map(|entry| {
+                let name = entry.ok()?.file_name().to_string_lossy().into_owned();
+                name.ends_with(".rs").then_some(name)
+            })
+            .collect();
+        on_disk.sort();
+        let mut listed: Vec<String> = MODULES.iter().map(|(name, _)| name.to_string()).collect();
+        listed.sort();
+        assert_eq!(
+            listed, on_disk,
+            "add the new module to MODULES so its guards are checked",
+        );
+    }
+
+    /// No handler names a `Role` — every guarded route resolves its requirement
+    /// from [`CAPABILITIES`] through `cap!` / `superadmin_cap!`. This is what
+    /// makes `GET /api/v1/rbac/matrix` provably the rule set the guard enforces.
+    #[test]
+    fn no_guard_names_a_role_literal() {
+        for (name, source) in MODULES {
+            if is_exempt(name) {
+                continue;
+            }
+            assert!(
+                !names_a_role(source),
+                "{name} names a role directly; use cap!(\"resource\", Action) instead",
+            );
+        }
+    }
+
+    /// And none bypasses the table with a bare superadmin guard.
+    #[test]
+    fn no_guard_calls_require_superadmin_directly() {
+        for (name, source) in MODULES {
+            if is_exempt(name) {
+                continue;
+            }
+            assert!(
+                !source.contains("require_superadmin("),
+                "{name} guards on superadmin directly; use \
+                 authorize_superadmin(&principal, superadmin_cap!(...)) instead",
+            );
+        }
+    }
+
+    /// Every row in the table is claimed by at least one guard, so the matrix
+    /// cannot publish a resource nothing enforces.
+    #[test]
+    fn every_capability_is_named_by_a_guard() {
+        for capability in CAPABILITIES {
+            let scoped = format!("cap!(\"{}\", ", capability.resource);
+            let named = MODULES
+                .iter()
+                .filter(|(name, _)| *name != "rbac_matrix.rs")
+                .any(|(_, source)| source.contains(&scoped));
+            assert!(
+                named,
+                "no guard names '{}'; either guard a route with it or drop the row",
+                capability.resource,
+            );
+        }
+    }
+
+    #[test]
+    fn the_macro_resolves_the_same_requirement_the_matrix_publishes() {
+        assert_eq!(cap!("provider", Read), Requirement::Role(Role::Viewer));
+        assert_eq!(cap!("provider", Delete), Requirement::Role(Role::Admin));
+        assert_eq!(cap!("feature_flags", Update), Requirement::Superadmin);
+        assert_eq!(
+            superadmin_cap!("cluster_node", Delete),
+            Requirement::Superadmin
+        );
     }
 }

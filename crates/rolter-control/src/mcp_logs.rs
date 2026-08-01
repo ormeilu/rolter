@@ -14,7 +14,8 @@ use serde_json::{json, Value};
 
 use crate::analytics::{clamp_limit, client_or_503, window_params, WindowQuery, WHERE_WINDOW};
 use crate::crud::{ApiError, ApiResult};
-use crate::rbac::{require_superadmin, Principal};
+use crate::rbac::{authorize_superadmin, Principal};
+use crate::rbac_matrix::superadmin_cap;
 use crate::ControlState;
 
 const MCP_TRANSPORTS: &[&str] = &["stdio", "sse", "streamable_http", "websocket"];
@@ -145,7 +146,7 @@ async fn ingest_event(
     State(state): State<ControlState>,
     Json(event): Json<IngestEvent>,
 ) -> ApiResult<StatusCode> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("mcp_log", Create))?;
     validate_event(&event)
         .map_err(|message| ApiError::Core(rolter_core::Error::Config(message)))?;
     let logging = state.store.load().await?.logging;
@@ -219,7 +220,7 @@ async fn list_events(
     State(state): State<ControlState>,
     Query(q): Query<McpLogsQuery>,
 ) -> Response {
-    if let Err(error) = require_superadmin(&principal) {
+    if let Err(error) = authorize_superadmin(&principal, superadmin_cap!("mcp_log", Read)) {
         return error.into_response();
     }
     for (value, label) in [
@@ -309,7 +310,7 @@ async fn event_detail(
     State(state): State<ControlState>,
     Path(event_id): Path<String>,
 ) -> Response {
-    if let Err(error) = require_superadmin(&principal) {
+    if let Err(error) = authorize_superadmin(&principal, superadmin_cap!("mcp_log", Read)) {
         return error.into_response();
     }
     if let Err(message) = validate_filter(Some(&event_id), "event_id") {
@@ -348,7 +349,7 @@ async fn summary(
     State(state): State<ControlState>,
     Query(q): Query<WindowQuery>,
 ) -> Response {
-    if let Err(error) = require_superadmin(&principal) {
+    if let Err(error) = authorize_superadmin(&principal, superadmin_cap!("mcp_log", Read)) {
         return error.into_response();
     }
     let ch = match client_or_503(&state) {

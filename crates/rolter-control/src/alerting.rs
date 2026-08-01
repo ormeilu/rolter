@@ -14,7 +14,8 @@ use rolter_store::postgres::repo::AuditLogRepo;
 
 use crate::analytics::client_or_503;
 use crate::crud::{pool, ApiError, ApiResult};
-use crate::rbac::{require_superadmin, Principal};
+use crate::rbac::{authorize_superadmin, Principal};
+use crate::rbac_matrix::superadmin_cap;
 use crate::ControlState;
 
 const SIGNALS: &[&str] = &[
@@ -189,7 +190,7 @@ async fn list_channels(
     principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<Vec<Channel>>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("alert_channel", Read))?;
     Ok(Json(
         sqlx::query_as(&format!(
             "select {} from alert_channels order by name",
@@ -206,7 +207,7 @@ async fn create_channel(
     State(state): State<ControlState>,
     Json(input): Json<ChannelInput>,
 ) -> ApiResult<Json<Channel>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("alert_channel", Create))?;
     validate_channel(&input)?;
     let secret = input.managed_secret.as_deref().map(seal).transpose()?;
     let channel: Channel = sqlx::query_as(&format!(
@@ -231,7 +232,7 @@ async fn update_channel(
     Path(id): Path<Uuid>,
     Json(input): Json<ChannelInput>,
 ) -> ApiResult<Json<Channel>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("alert_channel", Update))?;
     validate_channel(&input)?;
     let secret = input.managed_secret.as_deref().map(seal).transpose()?;
     let channel: Channel = sqlx::query_as(&format!(
@@ -256,7 +257,7 @@ async fn delete_channel(
     State(state): State<ControlState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("alert_channel", Delete))?;
     if sqlx::query("delete from alert_channels where id=$1")
         .bind(id)
         .execute(pool(&state))
@@ -284,7 +285,7 @@ async fn list_rules(
     principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<Vec<Rule>>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("alert_rule", Read))?;
     Ok(Json(
         sqlx::query_as(&format!(
             "select {} from alert_rules order by name",
@@ -301,7 +302,7 @@ async fn create_rule(
     State(state): State<ControlState>,
     Json(input): Json<RuleInput>,
 ) -> ApiResult<Json<Rule>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("alert_rule", Create))?;
     validate_rule(&input)?;
     let rule: Rule = sqlx::query_as(&format!("insert into alert_rules (name, signal, threshold, window_secs, channel_id, enabled) values ($1,$2,$3,$4,$5,$6) returning {}", rule_columns()))
         .bind(input.name.trim()).bind(&input.signal).bind(input.threshold).bind(input.window_secs).bind(input.channel_id).bind(input.enabled)
@@ -323,7 +324,7 @@ async fn update_rule(
     Path(id): Path<Uuid>,
     Json(input): Json<RuleInput>,
 ) -> ApiResult<Json<Rule>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("alert_rule", Update))?;
     validate_rule(&input)?;
     let rule: Rule = sqlx::query_as(&format!("update alert_rules set name=$2, signal=$3, threshold=$4, window_secs=$5, channel_id=$6, enabled=$7, updated_at=now() where id=$1 returning {}", rule_columns()))
         .bind(id).bind(input.name.trim()).bind(&input.signal).bind(input.threshold).bind(input.window_secs).bind(input.channel_id).bind(input.enabled)
@@ -345,7 +346,7 @@ async fn delete_rule(
     State(state): State<ControlState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("alert_rule", Delete))?;
     if sqlx::query("delete from alert_rules where id=$1")
         .bind(id)
         .execute(pool(&state))
@@ -377,7 +378,7 @@ async fn list_history(
     State(state): State<ControlState>,
     Query(query): Query<HistoryQuery>,
 ) -> ApiResult<Json<Vec<Notification>>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("alert_history", Read))?;
     let history = sqlx::query_as("select id, rule_id, channel_id, state, delivery_status, detail, sent_at from alert_notification_history where ($1::uuid is null or rule_id=$1) order by sent_at desc limit $2")
         .bind(query.rule_id).bind(query.limit.unwrap_or(100).clamp(1, 500)).fetch_all(pool(&state)).await.map_err(|e| Error::Store(e.to_string()))?;
     Ok(Json(history))
@@ -393,7 +394,7 @@ async fn evaluate(
     State(state): State<ControlState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Evaluation>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("alert_history", Create))?;
     let previous: Rule = sqlx::query_as(&format!(
         "select {} from alert_rules where id=$1",
         rule_columns()

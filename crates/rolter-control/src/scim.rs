@@ -27,7 +27,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use rolter_auth::Role;
 use rolter_store::postgres::models::{ScimIdentity, ScimToken, User};
 use rolter_store::postgres::repo::{
     MembershipRepo, ScimIdentityRepo, ScimTokenRepo, SessionRepo, UserRepo,
@@ -36,6 +35,7 @@ use rolter_store::postgres::repo::{
 use crate::auth::session_pepper;
 use crate::crud::{log_audit, pool, require_non_empty, ApiError, ApiResult, SafeJson};
 use crate::rbac::{authorize, Principal, ScopeChain};
+use crate::rbac_matrix::cap;
 use crate::ControlState;
 
 const USER_SCHEMA: &str = "urn:ietf:params:scim:schemas:core:2.0:User";
@@ -620,7 +620,13 @@ async fn create_token(
     Path(org_id): Path<Uuid>,
     SafeJson(body): SafeJson<CreateScimToken>,
 ) -> ApiResult<Json<CreatedScimToken>> {
-    authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(org_id),
+        cap!("scim_token", Create),
+    )
+    .await?;
     require_non_empty(&body.name, "name")?;
     let (secret, hash) = generate_scim_token(&session_pepper());
     let actor = match &principal {
@@ -648,7 +654,13 @@ async fn list_tokens(
     State(state): State<ControlState>,
     Path(org_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<ScimToken>>> {
-    authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(org_id),
+        cap!("scim_token", Read),
+    )
+    .await?;
     Ok(Json(ScimTokenRepo(pool(&state)).list(org_id).await?))
 }
 
@@ -663,7 +675,7 @@ async fn revoke_token(
         &state,
         &principal,
         ScopeChain::org(token.org_id),
-        Role::Admin,
+        cap!("scim_token", Delete),
     )
     .await?;
     let revoked = repo.revoke(id).await?;

@@ -11,7 +11,8 @@ use rolter_store::postgres::models::CompatibilityPolicy;
 use rolter_store::postgres::repo::{AuditLogRepo, CompatibilityPolicyRepo};
 
 use crate::crud::{pool, publish_config_change, ApiError, ApiResult, SafeJson};
-use crate::rbac::{require_superadmin, Principal};
+use crate::rbac::{authorize_superadmin, Principal};
+use crate::rbac_matrix::superadmin_cap;
 use crate::ControlState;
 
 pub(crate) fn router() -> Router<ControlState> {
@@ -44,7 +45,7 @@ async fn get_compatibility_policy(
     principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<CompatibilityPolicyView>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("compatibility_policy", Read))?;
     Ok(Json(
         CompatibilityPolicyRepo(pool(&state)).get().await?.into(),
     ))
@@ -89,7 +90,7 @@ async fn update_compatibility_policy(
     State(state): State<ControlState>,
     SafeJson(body): SafeJson<UpdateCompatibilityPolicy>,
 ) -> ApiResult<Json<CompatibilityPolicyView>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("compatibility_policy", Update))?;
     validate_policy(&body)?;
     let row = CompatibilityPolicyRepo(pool(&state))
         .update(&body.anthropic_version, body.default_max_tokens)

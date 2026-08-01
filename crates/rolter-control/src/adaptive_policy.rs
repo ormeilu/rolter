@@ -11,7 +11,8 @@ use rolter_store::postgres::models::AdaptiveRoutingPolicy;
 use rolter_store::postgres::repo::{AdaptiveRoutingPolicyRepo, AuditLogRepo, RouteRepo};
 
 use crate::crud::{pool, publish_config_change, ApiError, ApiResult, SafeJson};
-use crate::rbac::{require_superadmin, Principal};
+use crate::rbac::{authorize_superadmin, Principal};
+use crate::rbac_matrix::superadmin_cap;
 use crate::ControlState;
 
 /// Upper bound on a blend weight. The blend is a weighted sum of signals each
@@ -43,7 +44,7 @@ async fn get_policy(
     principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<AdaptiveRoutingPolicyView>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("adaptive_routing_policy", Read))?;
     let policy = AdaptiveRoutingPolicyRepo(pool(&state)).get().await?;
     Ok(Json(AdaptiveRoutingPolicyView {
         policy,
@@ -107,7 +108,10 @@ async fn update_policy(
     State(state): State<ControlState>,
     SafeJson(body): SafeJson<UpdateAdaptiveRoutingPolicy>,
 ) -> ApiResult<Json<AdaptiveRoutingPolicyView>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(
+        &principal,
+        superadmin_cap!("adaptive_routing_policy", Update),
+    )?;
     validate(&body)?;
     let policy = AdaptiveRoutingPolicyRepo(pool(&state))
         .update(

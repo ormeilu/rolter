@@ -10,7 +10,8 @@ use rolter_store::postgres::models::FeatureFlags;
 use rolter_store::postgres::repo::{AuditLogRepo, FeatureFlagsRepo};
 
 use crate::crud::{pool, publish_config_change, ApiError, ApiResult, SafeJson};
-use crate::rbac::{require_superadmin, Principal};
+use crate::rbac::{authorize_superadmin, Principal};
+use crate::rbac_matrix::superadmin_cap;
 use crate::ControlState;
 
 pub(crate) fn router() -> Router<ControlState> {
@@ -80,7 +81,7 @@ async fn get_feature_flags(
     principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<FeatureFlagsView>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("feature_flags", Read))?;
     let flags = FeatureFlagsRepo(pool(&state)).get().await?;
     let (redis, cache_aware) = deployment_capabilities(&state).await;
     Ok(Json(FeatureFlagsView {
@@ -123,7 +124,7 @@ async fn update_feature_flags(
     State(state): State<ControlState>,
     SafeJson(body): SafeJson<UpdateFeatureFlags>,
 ) -> ApiResult<Json<FeatureFlagsView>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(&principal, superadmin_cap!("feature_flags", Update))?;
     let (redis, cache_aware) = deployment_capabilities(&state).await;
     let unavailable = unavailable_flags(redis, cache_aware);
     reject_unavailable(&body, &unavailable)?;

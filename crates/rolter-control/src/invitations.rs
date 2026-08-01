@@ -23,7 +23,6 @@ use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use rolter_auth::Role;
 use rolter_store::postgres::models::{Invitation, User};
 use rolter_store::postgres::repo::{
     InvitationRepo, MembershipRepo, OrgRepo, SessionRepo, UserRepo,
@@ -34,6 +33,7 @@ use crate::crud::{
     hash_password, log_audit, pool, validate_email, validate_role, ApiError, ApiResult, SafeJson,
 };
 use crate::rbac::{authorize, Principal, ScopeChain};
+use crate::rbac_matrix::cap;
 use crate::ControlState;
 
 /// how long an invite link stays usable. long enough to survive a weekend,
@@ -109,7 +109,7 @@ async fn create_invitation(
     }
     // inviting someone into a scope is granting a role there, so it takes the
     // same admin bar as granting one directly
-    authorize(&state, &principal, chain, Role::Admin).await?;
+    authorize(&state, &principal, chain, cap!("invitation", Create)).await?;
 
     let (token, token_hash) = generate_invite_token();
     let invited_by = match &principal {
@@ -152,7 +152,13 @@ async fn list_invitations(
     State(state): State<ControlState>,
     Path(org_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<Invitation>>> {
-    authorize(&state, &principal, ScopeChain::org(org_id), Role::Admin).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(org_id),
+        cap!("invitation", Read),
+    )
+    .await?;
     Ok(Json(InvitationRepo(pool(&state)).list(org_id).await?))
 }
 
@@ -166,7 +172,7 @@ async fn revoke(
         &state,
         &principal,
         ScopeChain::org(existing.org_id),
-        Role::Admin,
+        cap!("invitation", Delete),
     )
     .await?;
     let invitation = InvitationRepo(pool(&state)).revoke(id).await?;
