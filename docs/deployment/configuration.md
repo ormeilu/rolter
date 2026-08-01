@@ -200,6 +200,24 @@ Guardrails for persistent `/v1/realtime` WebSocket sessions. All limits are per 
 - `max_session_secs` (u64, default `3600`) — hard session-duration limit
 - `idle_timeout_secs` (u64, default `300`) — closes a session when neither side sends a frame
 
+### `[egress]`
+
+Where the gateway may send upstream traffic. A provider's `api_base` (and any `egress_proxy`) is operator-supplied, so without a destination policy a crafted or compromised provider row turns the gateway into an SSRF primitive pointed at whatever sits inside its network position — cloud instance metadata being the classic target.
+
+- `block_link_local` (bool, default `true`) — deny `169.254.0.0/16` and `fe80::/10`. This is the cloud instance-metadata range; leave it on unless you have a concrete reason
+- `block_loopback` (bool, default `false`) — deny `127.0.0.0/8` and `::1`. Off by default because sidecar and single-host deployments legitimately serve models on localhost
+- `block_private` (bool, default `false`) — deny `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `fc00::/7`. Off by default because on-prem clusters are the common case
+- `allow_hosts` (string[], default `[]`) — hosts exempt from every check above, matched verbatim against the URL host (an IP literal or a hostname). The escape hatch for a deployment that must reach one otherwise-denied address
+
+Enforcement happens twice. IP literals are classified during config validation, so a bad `api_base` is rejected at startup or when the control plane writes it. Hostnames are classified **at connect time**, against the address DNS actually returned — validation never resolves DNS itself (that would make config validation depend on a live resolver and break air-gapped deployments), and a connect-time check is what makes the policy DNS-rebinding-safe. A denied address fails the request; it is not silently retried elsewhere.
+
+```toml
+[egress]
+block_link_local = true
+block_private = true
+allow_hosts = ["vllm.internal.example.com"]  # the one private upstream we mean to reach
+```
+
 ### `[guardrails]`
 
 Built-in, zero-dependency regex guardrails and PII redaction, evaluated inside the gateway with no external service and no network hop. Disabled by default; a disabled or empty block adds no hot-path cost. Complements — never replaces — the custom guardrail webhook (ROL-257) and external PII engines (ROL-258).
