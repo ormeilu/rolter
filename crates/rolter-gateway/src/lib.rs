@@ -7,6 +7,7 @@
 //! The binary is a thin wrapper over [`run`]; the unified `rolter` launcher
 //! reuses the same entrypoint as its `gateway` subcommand.
 
+mod adaptive_telemetry;
 mod admin_proxy;
 mod breaker;
 mod budgets;
@@ -150,6 +151,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
 
     // start the reload-free config watcher when a control plane is configured
     if let Some(snapshot_url) = args.snapshot_url {
+        let telemetry_snapshot_url = snapshot_url.clone();
         let period = std::time::Duration::from_secs(args.snapshot_poll_secs.max(1));
         tracing::info!(%snapshot_url, poll_secs = args.snapshot_poll_secs, pubsub = args.redis_url.is_some(), "config watcher enabled");
         watcher::spawn(
@@ -160,6 +162,16 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
             // the snapshot channel carries decrypted provider credentials, so
             // the control plane can gate it on a token separate from the
             // operator's; prefer that one and fall back to the admin token
+            args.internal_token
+                .clone()
+                .or_else(|| args.admin_token.clone()),
+        );
+        // sample the adaptive balancers over the same channel, so the control
+        // plane can serve the routing dashboard without reaching into the data
+        // plane itself (#751)
+        adaptive_telemetry::spawn(
+            state.clone(),
+            &telemetry_snapshot_url,
             args.internal_token
                 .clone()
                 .or_else(|| args.admin_token.clone()),

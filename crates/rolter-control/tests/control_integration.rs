@@ -4446,3 +4446,148 @@ async fn invitations_onboard_accounts_once_and_expire_closed() {
     assert!(actions.iter().any(|a| a == "invitation.accept"));
     assert!(actions.iter().any(|a| a == "invitation.revoke"));
 }
+
+#[tokio::test]
+async fn adaptive_routing_telemetry_round_trips_from_the_data_plane() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // the report a gateway posts, in the shape rolter-gateway serializes
+    let report = json!({
+        "routes": [{
+            "model": "gpt-4o",
+            "engaged": true,
+            "observed": 120,
+            "decisions": {"blend": 100, "exploration": 5, "fallback": 15, "engaged": true},
+            "policy": {"enabled": true, "latency_weight": 1.0},
+            "targets": [
+                {"target": 0, "score": 0.4, "latency_ms": 500.0, "samples": 40},
+                {"target": 1, "score": 1.2, "latency_ms": 20.0, "samples": 80}
+            ],
+            "target_labels": [
+                {"provider": "openai", "upstream_model": "gpt-4o"},
+                {"provider": "azure", "upstream_model": "gpt-4o-2024"}
+            ]
+        }]
+    });
+
+    // an unidentified node is accepted and ignored, exactly like an anonymous
+    // snapshot poll: it never lands in the scoreboard
+    let anonymous = client
+        .post(format!("{base}/internal/adaptive-telemetry"))
+        .bearer_auth("sekrit")
+        .json(&report)
+        .send()
+        .await
+        .unwrap();
+    assert!(anonymous.status().is_success());
+    let empty: Value = client
+        .get(format!("{base}/api/v1/adaptive-routing-telemetry"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(empty["routes"].as_array().unwrap().len(), 0);
+
+    // the internal channel is token-gated
+    let unauthorized = client
+        .post(format!("{base}/internal/adaptive-telemetry"))
+        .header("x-rolter-node-id", "gw-1")
+        .json(&report)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), 401);
+
+    for node in ["gw-1", "gw-2"] {
+        let accepted = client
+            .post(format!("{base}/internal/adaptive-telemetry"))
+            .bearer_auth("sekrit")
+            .header("x-rolter-node-id", node)
+            .json(&report)
+            .send()
+            .await
+            .unwrap();
+        assert!(accepted.status().is_success());
+    }
+
+    // reading it back is superadmin-only
+    let denied = client
+        .get(format!("{base}/api/v1/adaptive-routing-telemetry"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    let view: Value = client
+        .get(format!("{base}/api/v1/adaptive-routing-telemetry"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let routes = view["routes"].as_array().unwrap();
+    assert_eq!(routes.len(), 1, "both nodes report the same route");
+    assert_eq!(routes[0]["model"], "gpt-4o");
+    assert_eq!(routes[0]["engaged"], true);
+    let nodes = routes[0]["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[0]["node_id"], "gw-1");
+    assert_eq!(nodes[0]["decisions"]["blend"], 100);
+    // the target labels were folded into the signals they describe
+    assert_eq!(nodes[0]["targets"][1]["provider"], "azure");
+    assert_eq!(nodes[0]["targets"][1]["score"], 1.2);
+
+    // a node that stops balancing a route drops it from the scoreboard on its
+    // very next report, rather than leaving a stale row behind
+    let emptied = client
+        .post(format!("{base}/internal/adaptive-telemetry"))
+        .bearer_auth("sekrit")
+        .header("x-rolter-node-id", "gw-1")
+        .json(&json!({"routes": []}))
+        .send()
+        .await
+        .unwrap();
+    assert!(emptied.status().is_success());
+    let view: Value = client
+        .get(format!("{base}/api/v1/adaptive-routing-telemetry"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let nodes = view["routes"][0]["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0]["node_id"], "gw-2");
+
+    // a sample older than the freshness window is not current state
+    sqlx::query(
+        "update adaptive_routing_telemetry set reported_at = now() - interval '10 minutes'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let stale: Value = client
+        .get(format!("{base}/api/v1/adaptive-routing-telemetry"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(stale["routes"].as_array().unwrap().len(), 0);
+}

@@ -12,13 +12,13 @@ use uuid::Uuid;
 use rolter_core::{Error, Result};
 
 use super::models::{
-    AdaptiveRoutingPolicy, AuditLogEntry, Budget, BusinessUnit, ClusterNode, CompatibilityPolicy,
-    Customer, FeatureFlags, Invitation, LoggingSettings, McpOAuthGrant, McpOAuthSession, McpServer,
-    Membership, ModelPrice, Org, OrgAuthPolicy, OwnedVirtualKey, Project, PromptTemplate,
-    PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember,
-    RateLimit, Route, RouteTarget, RuntimePolicy, ScimIdentity, ScimToken, SecuritySettings,
-    Session, Skill, SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider, Team, User,
-    VirtualKey,
+    AdaptiveRoutingPolicy, AdaptiveRoutingTelemetry, AuditLogEntry, Budget, BusinessUnit,
+    ClusterNode, CompatibilityPolicy, Customer, FeatureFlags, Invitation, LoggingSettings,
+    McpOAuthGrant, McpOAuthSession, McpServer, Membership, ModelPrice, Org, OrgAuthPolicy,
+    OwnedVirtualKey, Project, PromptTemplate, PromptTemplateScope, PromptTemplateVersion, Provider,
+    ProviderGroup, ProviderGroupMember, RateLimit, Route, RouteTarget, RuntimePolicy, ScimIdentity,
+    ScimToken, SecuritySettings, Session, Skill, SkillVersion, SsoGroupMapping, SsoLoginState,
+    SsoProvider, Team, User, VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -2900,6 +2900,103 @@ impl ClusterNodeRepo<'_> {
             return Err(Error::NotFound(format!("cluster node {id}")));
         }
         Ok(())
+    }
+}
+
+/// Adaptive-routing telemetry: the newest sample each gateway node has pushed
+/// for each route it balances adaptively (#751).
+pub struct AdaptiveRoutingTelemetryRepo<'a>(pub &'a PgPool);
+
+/// One route's sample as a node reports it. The `policy` and `targets`
+/// documents are stored as sent: the control plane owns the API shape, and the
+/// gateway owns what a target signal means.
+pub struct AdaptiveRoutingSample<'a> {
+    pub model: &'a str,
+    pub engaged: bool,
+    pub observed: i64,
+    pub blend_picks: i64,
+    pub exploration_picks: i64,
+    pub fallback_picks: i64,
+    pub policy: serde_json::Value,
+    pub targets: serde_json::Value,
+}
+
+impl AdaptiveRoutingTelemetryRepo<'_> {
+    /// Replace everything `node_id` has reported with `samples`, atomically.
+    /// A route the node no longer balances adaptively disappears in the same
+    /// transaction that records the rest, so the scoreboard cannot show a
+    /// route that has been switched off or deleted.
+    pub async fn report(&self, node_id: &str, samples: &[AdaptiveRoutingSample<'_>]) -> Result<()> {
+        let models: Vec<String> = samples.iter().map(|s| s.model.to_string()).collect();
+        let mut tx = self.0.begin().await.map_err(store_err)?;
+        sqlx::query(
+            "delete from adaptive_routing_telemetry \
+             where node_id = $1 and model <> all($2)",
+        )
+        .bind(node_id)
+        .bind(&models)
+        .execute(&mut *tx)
+        .await
+        .map_err(store_err)?;
+        for sample in samples {
+            sqlx::query(
+                "insert into adaptive_routing_telemetry \
+                    (node_id, model, engaged, observed, blend_picks, exploration_picks, \
+                     fallback_picks, policy, targets, reported_at) \
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now()) \
+                 on conflict (node_id, model) do update set \
+                    engaged = excluded.engaged, observed = excluded.observed, \
+                    blend_picks = excluded.blend_picks, \
+                    exploration_picks = excluded.exploration_picks, \
+                    fallback_picks = excluded.fallback_picks, \
+                    policy = excluded.policy, targets = excluded.targets, \
+                    reported_at = now()",
+            )
+            .bind(node_id)
+            .bind(sample.model)
+            .bind(sample.engaged)
+            .bind(sample.observed)
+            .bind(sample.blend_picks)
+            .bind(sample.exploration_picks)
+            .bind(sample.fallback_picks)
+            .bind(&sample.policy)
+            .bind(&sample.targets)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err)?;
+        }
+        tx.commit().await.map_err(store_err)
+    }
+
+    /// Every sample reported within `max_age_secs`. Older rows are left in
+    /// place — a node that stopped reporting is a fact the caller may want to
+    /// see — but they are never served as if they were current.
+    pub async fn list_fresh(&self, max_age_secs: i64) -> Result<Vec<AdaptiveRoutingTelemetry>> {
+        sqlx::query_as(
+            "select node_id, model, engaged, observed, blend_picks, exploration_picks, \
+                    fallback_picks, policy, targets, reported_at \
+             from adaptive_routing_telemetry \
+             where reported_at > now() - make_interval(secs => $1::double precision) \
+             order by model, node_id",
+        )
+        .bind(max_age_secs as f64)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    /// Drop samples older than `max_age_secs`, so a node that is scaled down
+    /// eventually leaves the scoreboard instead of lingering forever.
+    pub async fn prune(&self, max_age_secs: i64) -> Result<u64> {
+        let res = sqlx::query(
+            "delete from adaptive_routing_telemetry \
+             where reported_at < now() - make_interval(secs => $1::double precision)",
+        )
+        .bind(max_age_secs as f64)
+        .execute(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(res.rows_affected())
     }
 }
 

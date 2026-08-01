@@ -44,9 +44,64 @@ A **disabled policy still has to be well-formed**. Switching the kill switch off
 
 ---
 
+## Seeing what it is doing
+
+The scores live in the gateway, so each gateway pushes a sample to the control plane every 15 seconds over the same internal channel it polls its config on. Nothing is written per request.
+
+`GET /api/v1/adaptive-routing-telemetry` returns the current state, grouped by route with one entry per reporting gateway node:
+
+```json
+{
+  "generated_at": "2026-08-01T10:00:00Z",
+  "fresh_window_secs": 60,
+  "routes": [
+    {
+      "model": "gpt-4o",
+      "engaged": true,
+      "nodes": [
+        {
+          "node_id": "gw-1",
+          "engaged": true,
+          "observed": 1204,
+          "decisions": { "blend": 1100, "exploration": 60, "fallback": 44 },
+          "policy": { "enabled": true, "latency_weight": 1.0, "cost_weight": 0.5 },
+          "targets": [
+            {
+              "target": 0,
+              "provider": "openai",
+              "upstream_model": "gpt-4o",
+              "score": 1.32,
+              "latency_score": 0.9,
+              "cost_score": 0.4,
+              "load_score": 1.0,
+              "latency_ms": 412.7,
+              "cost_per_mtok": 2.5,
+              "in_flight": 3,
+              "samples": 806,
+              "last_sample_age_ms": 240
+            }
+          ],
+          "reported_at": "2026-08-01T09:59:52Z"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Notes worth knowing before you build on it:
+
+- It is **current state, not history**. Each report overwrites the last; nothing accumulates. A sample older than `fresh_window_secs` is left out rather than served as if it were live.
+- `policy` is what *that node* is running. It can lag the stored policy for a poll interval after a change, which is how you tell a node that has not converged from one that has.
+- A route missing from the response is a route no node is currently balancing adaptively.
+- `score` is the weighted sum of the components below it; a signal with zero weight scores `0`, while its raw value (`latency_ms`, `cost_per_mtok`, `in_flight`) is still reported so you can judge whether to give it weight.
+- Prometheus users get the same blended score as `rolter_adaptive_routing_target_score{model,target}` on the gateway's `/metrics`.
+
+---
+
 ## API
 
-Both endpoints are **superadmin only**, updates are audited, and a successful update bumps `config_version` so the change reaches the data plane through the snapshot without a restart.
+All three endpoints are **superadmin only**, policy updates are audited, and a successful update bumps `config_version` so the change reaches the data plane through the snapshot without a restart.
 
 ```bash
 curl -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
@@ -57,4 +112,7 @@ curl -X PUT -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
   -d '{"enabled": true, "latency_weight": 1.0, "cost_weight": 0.5,
        "load_weight": 0.25, "exploration_ratio": 0.05, "min_samples": 50}' \
   https://control.example.com/api/v1/adaptive-routing-policy
+
+curl -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  https://control.example.com/api/v1/adaptive-routing-telemetry
 ```

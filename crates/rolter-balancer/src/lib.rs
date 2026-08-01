@@ -50,12 +50,22 @@ pub trait LoadBalancer: Send + Sync {
     fn decisions(&self) -> Option<DecisionCounts> {
         None
     }
+
+    /// Read-only view of the per-target signals the strategy currently ranks
+    /// on, for the dashboard and the control plane (#751). `loads[i]` is the
+    /// in-flight count for target `i`, exactly as [`LoadBalancer::pick`] takes
+    /// it; an empty slice means unknown. Only [`adaptive::Adaptive`] reports
+    /// today. Never called on the request path — it recomputes every scorer,
+    /// so callers must sample it on a timer instead.
+    fn telemetry(&self, _loads: &[u64]) -> Option<AdaptiveTelemetry> {
+        None
+    }
 }
 
 /// How a route's picks were split between the strategy's modes, cumulative
 /// since the balancer was built (a config reload rebuilds it, so a Prometheus
 /// counter reset lines up with a config-version bump).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DecisionCounts {
     /// picks made by the adaptive blend
     pub blend: u64,
@@ -65,6 +75,51 @@ pub struct DecisionCounts {
     pub fallback: u64,
     /// whether the blend was engaged at the last pick
     pub engaged: bool,
+}
+
+/// What the adaptive blend currently knows about one target, sampled off the
+/// live balancer. Scores are the `[0, 1]` signal values the blend ranks on;
+/// the raw observations they were derived from travel alongside them so a
+/// reader can tell "slowest of three" from "slow".
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TargetTelemetry {
+    /// index into the route's targets, which is also the order they are listed
+    pub target: usize,
+    /// blended score: the weighted sum of the components below
+    pub score: f32,
+    /// observed-latency component, `0.0` when the signal carries no weight
+    pub latency_score: f32,
+    /// catalog-cost component
+    pub cost_score: f32,
+    /// in-flight-load component
+    pub load_score: f32,
+    /// smoothed observed latency in milliseconds; `0.0` = never sampled
+    pub latency_ms: f64,
+    /// catalog price in the deployment's base currency; `<= 0` = unknown
+    pub cost_per_mtok: f64,
+    /// requests in flight against this target at sample time
+    pub in_flight: u64,
+    /// picks this target has served since the balancer was built
+    pub samples: u64,
+    /// milliseconds since this target last served a pick; `None` = never
+    pub last_sample_age_ms: Option<u64>,
+}
+
+/// A route's adaptive-routing state at one instant: the effective policy, how
+/// its picks were split, and the per-target signals behind them.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AdaptiveTelemetry {
+    /// whether the blend is routing right now, rather than the fallback stack
+    pub engaged: bool,
+    /// picks the route has observed since the balancer was built
+    pub observed: u64,
+    /// pick split by mode
+    pub decisions: DecisionCounts,
+    /// the *sanitized* policy this balancer applies, which is what the node
+    /// actually runs — it can lag the stored policy until the node converges
+    pub policy: rolter_core::AdaptiveRoutingConfig,
+    /// per-target signals, route-order aligned
+    pub targets: Vec<TargetTelemetry>,
 }
 
 /// Build-time, per-target signals for strategies that rank on more than
