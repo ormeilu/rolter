@@ -1,0 +1,59 @@
+---
+title: "MCP OAuth Grants and Auth Sessions"
+sidebarTitle: "MCP OAuth"
+description: "How Rolter records user consent for MCP servers, what a session holds, why revoking a grant revokes its sessions, and who can see which rows."
+---
+
+When an MCP server needs to act on a user's behalf — read their repositories, file their tickets — that user completes an OAuth flow once. Rolter records the result in two places: a **grant**, which is the consent itself, and one or more **sessions**, which are the tokens minted under that consent. The dashboard exposes both under **MCP Gateway → OAuth Grants** and **MCP Gateway → Auth Sessions**.
+
+## No token material leaves the control plane
+
+Access and refresh tokens are sealed with the deployment key encryption key and stored alongside the session row. They are readable by exactly one internal code path — the one that attaches a token to an outbound MCP call. No API response, and therefore no dashboard screen, ever carries a token value.
+
+What you see instead is metadata: when the session was created, when it expires, when it was last used, and a `has_refresh_token` flag rendered as a **RENEWABLE** badge. That flag is enough to answer "will this keep working tomorrow?" without the token ever being serialised out of the control plane.
+
+<Warning>
+  If a screen or an integration ever appears to show you an MCP access token, that is a bug worth reporting — the API surface has no field to carry one.
+</Warning>
+
+## A grant is the unit of consent
+
+A grant ties one user to one MCP server, with the scopes they agreed to. Sessions hang off the grant: a session can expire, be refreshed, or be revoked on its own without disturbing the consent behind it.
+
+That asymmetry is deliberate, and it decides which action you want:
+
+<CardGroup cols={2}>
+  <Card title="Revoke a session" icon="key">
+    Kills one set of tokens. The consent stands, so a fresh session can be minted for the same user and server without asking them again. Use this to boot a leaked or stale token.
+  </Card>
+
+  <Card title="Revoke a grant" icon="shield-off">
+    Withdraws the consent **and** revokes every session under it, in a single database transaction. The user must go through the OAuth flow again before that server can act for them. Use this when access should end, not merely restart.
+  </Card>
+</CardGroup>
+
+Because the cascade is the point, the dashboard names it before you commit: the confirmation on a grant tells you how many live sessions will be revoked along with it. Withdrawn consent can never leave a live token behind — the grant and its sessions are revoked together or not at all.
+
+Revoked grants are not deleted. The row stays with its `revoked_at` and `revoked_by` fields set, so the audit trail of who consented, and who withdrew it, survives.
+
+## Who sees which rows
+
+Both listings are scoped by ownership, and the dashboard says so on the page rather than implying the table is the whole org:
+
+<Steps>
+  <Step title="Org admins">
+    See every grant and every session in the org, and may revoke any of them.
+  </Step>
+  <Step title="Members and viewers">
+    See only the grants and sessions they own, and may revoke only those.
+  </Step>
+  <Step title="Everyone else">
+    Gets a `403`. Every listing is joined through the org, so a caller without a membership cannot read another tenant's rows even by guessing an id.
+  </Step>
+</Steps>
+
+Both screens surface that `403` as a plain message rather than an empty table, so "nothing here" is never confused with "not allowed".
+
+## Audit
+
+Every revocation is written to the audit log as `mcp_oauth_grant.revoke` or `mcp_oauth_session.revoke`, with the acting principal, the org, and the affected user. See [Audit Logs](/security/rbac) for how audit entries are scoped and queried.
