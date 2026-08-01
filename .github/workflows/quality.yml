@@ -46,8 +46,12 @@ jobs:
         run: cargo fmt --all --check
       - name: clippy (default features)
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # rolter-control as well as rolter-store: most of the postgres-gated code
+      # (crud, sso, scim, the policy modules) lives in control, and linting only
+      # the store left all of it unchecked under the feature it is written for
       - name: clippy (postgres feature)
-        run: cargo clippy -p rolter-store --all-targets --features postgres -- -D warnings
+        run: |
+          cargo clippy -p rolter-store -p rolter-control --all-targets --features postgres -- -D warnings
 
   # ── rust: tests ─────────────────────────────────────────────────────────────
   # nextest for the unit/integration tests (per-test isolation, faster) plus an
