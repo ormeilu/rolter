@@ -19,6 +19,10 @@ extend-ignore-re = [
   # dictionary reads as words (e.g. "ba" inside a span/trace id)
   "00f067aa0ba902b7",
   "80f198ee56343ba864fe8b2a57d3eff7",
+  # "Hel": the first half of "Hello" split across two SSE frames in the gemini
+  # interactions streaming test, which exists to prove a token can straddle
+  # frame boundaries. completing the word would delete the test's subject
+  '\\"Hel\\"',
   # DER-encoded local TLS certificates in proxy integration tests: base64 spans
   # happen to form dictionary words.
   "0jAer87tnJgSEHH",

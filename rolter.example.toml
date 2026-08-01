@@ -93,6 +93,16 @@ api_key_env = "OPENROUTER_API_KEY"
 # api_base = "https://generativelanguage.googleapis.com/v1beta"
 # api_key_env = "GEMINI_API_KEY"
 #
+# gemini_interactions talks Gemini's stateful Interactions API: rolter maps
+# OpenAI/Anthropic/Responses requests onto `{api_base}/interactions` and back.
+# The interaction id comes back as the response id; resume a thread with
+# `previous_response_id` (Responses) or `previous_interaction_id`.
+# [[providers]]
+# name = "gemini-interactions"
+# kind = "gemini_interactions"
+# api_base = "https://generativelanguage.googleapis.com/v1beta"
+# api_key_env = "GEMINI_API_KEY"
+#
 # [[providers]]
 # name = "mistral"
 # kind = "mistral"

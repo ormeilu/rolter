@@ -56,7 +56,8 @@
               "configuration/environment-variables",
               "configuration/hot-reload",
               "configuration/feature-flags",
-              "configuration/compatibility"
+              "configuration/compatibility",
+              "configuration/gemini-interactions"
             ]
           },
           {
