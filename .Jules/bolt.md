@@ -15,3 +15,7 @@ To solve this, we can pre-collect all the keys required into a `Vec<String>`, pe
 
 - Replaced sequential `INCR` and `EXPIRE` Redis calls inside loops with `redis::pipe()` in `crates/rolter-gateway/src/rate_limits.rs` for both request limits and token limits.
 - Benchmarks showed a latency drop from ~35ms to ~1ms for 100 iterations of batched calls by avoiding round-trips.
+
+## 2026-07-30 - Iterator to String allocation avoidance
+**Learning:** Avoid `collect::<Vec<_>>().join("\n")` when working with iterators yielding strings, especially in hot paths like SSE frame processing. This pattern allocates an intermediate `Vec` on the heap and then allocates the final `String`.
+**Action:** Extract a helper that pre-allocates a `String::with_capacity` based on a heuristic or known upper bound (like the length of the source buffer) and iterates to `push_str()` directly, bypassing the intermediate vector entirely.
