@@ -178,7 +178,7 @@ export function SortLabel({
       type="button"
       onClick={() => onCycle(col)}
       className={cn(
-        "flex select-none items-center gap-[3px] uppercase tracking-[0.07em] transition-colors hover:text-[color:var(--text-secondary)]",
+        "flex select-none items-center gap-[3px] uppercase tracking-[0.07em] transition-colors hover:text-[color:var(--text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         active ? "text-[color:var(--text-secondary)]" : "text-[color:var(--text-subtle)]",
       )}
       style={{ justifyContent: justify }}
@@ -204,7 +204,7 @@ export function RowIconButton({
     <button
       type="button"
       className={cn(
-        "flex flex-none items-center justify-center rounded-[6px] border border-[color:var(--border-subtle)] bg-transparent p-[5px] transition-colors",
+        "flex flex-none items-center justify-center rounded-[6px] border border-[color:var(--border-subtle)] bg-transparent p-[5px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         danger
           ? "text-[color:var(--status-danger)] hover:bg-[color:var(--red-tint)]"
           : "text-muted-foreground hover:text-foreground",
