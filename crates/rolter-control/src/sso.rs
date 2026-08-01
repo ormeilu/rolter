@@ -777,8 +777,10 @@ async fn create_mapping(
         .add_mapping(
             provider_id,
             &body.group_name,
-            Some(body.org_id.unwrap_or(provider.org_id))
-                .filter(|_| body.team_id.is_none() && body.project_id.is_none()),
+            // an org-scoped grant only when the mapping names neither a team
+            // nor a project; a narrower scope carries the org implicitly
+            (body.team_id.is_none() && body.project_id.is_none())
+                .then(|| body.org_id.unwrap_or(provider.org_id)),
             body.team_id,
             body.project_id,
             &body.role,
