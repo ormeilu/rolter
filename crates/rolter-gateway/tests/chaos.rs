@@ -296,7 +296,7 @@ provider = "hold"
         });
         arrivals.recv().await.unwrap();
 
-        // SIGTERM is what orchestrators send on rollout / scale-down
+        // sigterm is what orchestrators send on rollout / scale-down
         let pid = child.id() as libc::pid_t;
         assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
 

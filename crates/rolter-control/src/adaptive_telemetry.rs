@@ -25,7 +25,8 @@ use rolter_store::postgres::repo::{AdaptiveRoutingSample, AdaptiveRoutingTelemet
 
 use crate::cluster::NODE_ID_HEADER;
 use crate::crud::{pool, ApiResult, SafeJson};
-use crate::rbac::{require_superadmin, Principal};
+use crate::rbac::{authorize_superadmin, Principal};
+use crate::rbac_matrix::superadmin_cap;
 use crate::ControlState;
 
 /// A sample older than this is not current state any more. Nodes report every
@@ -214,7 +215,10 @@ async fn get_telemetry(
     principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<TelemetryView>> {
-    require_superadmin(&principal)?;
+    authorize_superadmin(
+        &principal,
+        superadmin_cap!("adaptive_routing_telemetry", Read),
+    )?;
     let rows = AdaptiveRoutingTelemetryRepo(pool(&state))
         .list_fresh(FRESH_WINDOW_SECS)
         .await?;

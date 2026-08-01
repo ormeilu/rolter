@@ -645,7 +645,7 @@ fn upstream_error_response(message: &str) -> Response {
 /// Recognize a queue-admission failure and hand back its bare message.
 /// `Error::Upstream` renders as `upstream error: <message>`, so the forwarding
 /// loop sees the wrapped form; matching on the raw prefix alone silently
-/// downgraded every shed request to a generic 502 (#639)
+/// downgraded every shed request to a generic 502 (#639).
 fn queue_admission_message(message: &str) -> Option<&str> {
     let bare = message.strip_prefix("upstream error: ").unwrap_or(message);
     bare.starts_with("provider queue").then_some(bare)
