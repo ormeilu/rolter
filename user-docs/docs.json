@@ -46,7 +46,9 @@
               "concepts/virtual-keys",
               "concepts/load-balancing",
               "concepts/cache-aware-routing",
-              "concepts/adaptive-routing"
+              "concepts/adaptive-routing",
+              "concepts/prompt-templates",
+              "concepts/skills-repository"
             ]
           },
           {

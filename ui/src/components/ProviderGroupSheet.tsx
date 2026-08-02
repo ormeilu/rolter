@@ -150,8 +150,9 @@ function MemberEditor({
           <button
             type="button"
             title="Remove member"
+            aria-label="Remove member"
             onClick={() => remove(i)}
-            className="flex flex-none items-center justify-center rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)]"
+            className="flex flex-none items-center justify-center rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <X className="h-3.5 w-3.5" />
           </button>
