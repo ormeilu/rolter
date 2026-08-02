@@ -3020,7 +3020,11 @@ async fn mcp_oauth_grants_and_sessions_are_owner_scoped_and_revocable() {
     let server: Value = client
         .post(format!("{base}/api/v1/orgs/{org_id}/mcp-servers"))
         .bearer_auth("admintok")
-        .json(&json!({"name": "Docs", "slug": "docs", "url": "https://mcp.example.com"}))
+        .json(&json!({
+            "name": "Docs",
+            "slug": "docs",
+            "url": "https://mcp.example.com"
+        }))
         .send()
         .await
         .unwrap()
@@ -3029,6 +3033,17 @@ async fn mcp_oauth_grants_and_sessions_are_owner_scoped_and_revocable() {
         .unwrap();
     assert_eq!(server["transport"], "streamable_http");
     let server_uuid: uuid::Uuid = server["id"].as_str().unwrap().parse().unwrap();
+    let server: Value = client
+        .patch(format!("{base}/api/v1/mcp-servers/{server_uuid}"))
+        .bearer_auth("admintok")
+        .json(&json!({"required_scopes": ["tools:read"]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(server["required_scopes"], json!(["tools:read"]));
 
     // two members of the same org, each with their own grant and session
     let alice = seed_user(&pool, "alice@example.com", false).await;
@@ -3048,6 +3063,18 @@ async fn mcp_oauth_grants_and_sessions_are_owner_scoped_and_revocable() {
         .upsert_grant(server_uuid, bob, &["tools:read".to_string()])
         .await
         .unwrap();
+    let excessive = repo
+        .store_session(
+            &kek,
+            alice_grant.id,
+            "must-not-store",
+            None,
+            &["tools:write".to_string()],
+            chrono::Utc::now() + chrono::Duration::hours(1),
+            None,
+        )
+        .await;
+    assert!(excessive.is_err(), "session exceeded the consent grant");
     let alice_session = repo
         .store_session(
             &kek,
@@ -3071,6 +3098,22 @@ async fn mcp_oauth_grants_and_sessions_are_owner_scoped_and_revocable() {
     )
     .await
     .unwrap();
+
+    // the protected snapshot carries only the newest live, scope-valid session
+    // for each user/server pair and opens access tokens with the deployment KEK
+    let snapshot_store =
+        rolter_store::PostgresConfigStore::with_kek(pool.clone(), Some(kek.clone()));
+    let snapshot = rolter_store::ConfigStore::load(&snapshot_store)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.mcp_servers.len(), 1);
+    assert_eq!(snapshot.mcp_servers[0].required_scopes, ["tools:read"]);
+    assert_eq!(snapshot.mcp_oauth_sessions.len(), 2);
+    assert!(snapshot
+        .mcp_oauth_sessions
+        .iter()
+        .any(|session| session.user_id == alice.to_string()
+            && session.access_token == "at-alice-secret"));
 
     // the admin token sees both owners
     let all: Value = client

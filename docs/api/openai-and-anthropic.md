@@ -27,6 +27,7 @@ When no virtual keys are configured the gateway runs open (useful for local dev)
 | POST | `/v1/audio/transcriptions` | OpenAI speech-to-text; `multipart/form-data` upload |
 | POST | `/v1/audio/translations` | OpenAI audio translation; `multipart/form-data` upload |
 | GET | `/v1/realtime?model=…` | OpenAI-compatible Realtime API; WebSocket relay |
+| GET, POST, DELETE | `/mcp/{server}/{path…}` | authenticated Streamable HTTP/SSE MCP proxy |
 | GET | `/v1/models` | lists configured public model names |
 | GET | `/openapi.json` | OpenAPI 3.1 description of this request surface (self-contained, no external assets) |
 | GET | `/docs` | interactive Scalar API reference (assets embedded in the binary — works air-gapped) |
@@ -45,6 +46,22 @@ wss://gateway.example.com/v1/realtime?model=gpt-realtime
 rolter authenticates and selects an upstream before accepting the client upgrade, then pins that upstream and its selected provider key for the session. Text, binary audio and WebSocket control frames are relayed in both directions without application-level buffering. If the upstream drops, the client must reconnect; rolter does not fail a live session over to another target because replaying audio or tool events is unsafe.
 
 The WebSocket-first implementation supports the OpenAI Realtime event stream, including `session.update`, `input_audio_buffer.*`, `response.*`, and function-call events. WebRTC/browser ephemeral-token handoff is not exposed by the gateway yet.
+
+## MCP gateway
+
+`/mcp/{server}` and any path beneath it proxy an organization-scoped MCP
+server registered in the control plane. The caller supplies a normal rolter
+virtual key. Unlike LLM routes, MCP calls require a database-backed key minted
+by a user: that owner must have a live, unrevoked and unexpired OAuth session
+for the named server, and its scopes must cover the server's
+`required_scopes`. The gateway fails closed before connecting when any owner,
+server or scope check fails.
+
+The caller's virtual key is never forwarded. Rolter replaces it with the
+session's OAuth bearer token and preserves end-to-end MCP headers, body,
+query, status and response stream. Streamable HTTP and legacy SSE registrations
+use this path; stdio and WebSocket registrations currently return
+`mcp_transport_unsupported` rather than bypassing authorization.
 
 ## Routing
 

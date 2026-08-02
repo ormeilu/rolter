@@ -1,0 +1,30 @@
+---
+title: "MCP Proxy"
+sidebarTitle: "MCP"
+description: "Proxy Streamable HTTP and SSE MCP servers with user-bound OAuth authorization."
+---
+
+The gateway exposes registered MCP servers at `/mcp/{server}`. Any suffix and
+query are appended to the registered server URL, which supports MCP servers
+that split messages or resources below one base endpoint.
+
+## Authentication and authorization
+
+Send a rolter virtual key as `Authorization: Bearer ...`. MCP calls require a
+database-backed key minted by a user. Rolter resolves the server inside that
+key's organization, selects the newest live OAuth session owned by the same
+user, and verifies that its scopes cover the server's `required_scopes`.
+
+The virtual key is stripped before forwarding and replaced with the session's
+OAuth bearer. A missing owner, cross-organization server, expired or revoked
+session, or insufficient scope fails before any downstream connection.
+
+## Transport behavior
+
+`GET`, `POST`, and `DELETE` are forwarded for Streamable HTTP and legacy SSE
+servers. Request body, query parameters, MCP protocol/session headers, response
+status, response headers, and streaming body are preserved. Hop-by-hop and
+client authorization headers are removed.
+
+stdio and WebSocket registrations fail with `mcp_transport_unsupported` on
+this HTTP endpoint.

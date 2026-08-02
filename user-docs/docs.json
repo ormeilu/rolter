@@ -110,6 +110,7 @@
               "api/chat-completions",
               "api/completions",
               "api/messages",
+              "api/mcp",
               "api/models",
               "api/health-and-metrics"
             ]

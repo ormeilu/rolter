@@ -46,6 +46,14 @@ pub struct GatewayConfig {
     /// identity (never plaintext). composed from the store, not the toml
     #[serde(default)]
     pub db_virtual_keys: Vec<VirtualKeyRecord>,
+    /// MCP servers projected from the control plane into the protected
+    /// control-to-gateway snapshot channel.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
+    /// live, scope-valid MCP OAuth sessions. Access tokens cross only the
+    /// protected internal snapshot channel and are never exposed publicly.
+    #[serde(default)]
+    pub mcp_oauth_sessions: Vec<McpOAuthSessionConfig>,
     #[serde(default)]
     pub model_prices: Vec<ModelPriceConfig>,
     /// settlement currency and rate table. Budgets and accumulated spend are
@@ -1225,6 +1233,10 @@ pub struct VirtualKeyRecord {
     pub team_id: String,
     #[serde(default)]
     pub project_id: String,
+    /// user who minted the key. MCP OAuth calls require this owner identity;
+    /// admin-created and config-defined keys deliberately have none.
+    #[serde(default)]
+    pub user_id: String,
     #[serde(default)]
     pub models: Vec<String>,
     /// allowed upstream provider names; empty means all providers are allowed
@@ -1243,6 +1255,48 @@ pub struct VirtualKeyRecord {
     /// customer this key's spend is attributed to; empty when unattributed
     #[serde(default)]
     pub customer_id: String,
+}
+
+/// An organization-scoped MCP endpoint available to the gateway.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpServerConfig {
+    pub id: String,
+    pub org_id: String,
+    pub slug: String,
+    pub url: String,
+    pub transport: String,
+    /// OAuth scopes every call through this server must carry.
+    #[serde(default)]
+    pub required_scopes: Vec<String>,
+}
+
+/// A live OAuth session the gateway may spend for one user and MCP server.
+///
+/// This type is serialized only through the internal snapshot endpoint, which
+/// is already the credential-bearing control-to-data-plane channel.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct McpOAuthSessionConfig {
+    pub id: String,
+    pub server_id: String,
+    pub user_id: String,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    pub expires_at: DateTime<Utc>,
+    pub access_token: String,
+}
+
+impl std::fmt::Debug for McpOAuthSessionConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpOAuthSessionConfig")
+            .field("id", &self.id)
+            .field("server_id", &self.server_id)
+            .field("user_id", &self.user_id)
+            .field("scopes", &self.scopes)
+            .field("expires_at", &self.expires_at)
+            .field("access_token", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl VirtualKeyRecord {
@@ -2529,6 +2583,93 @@ impl GatewayConfig {
                         provider.name
                     ));
                 }
+            }
+        }
+
+        let mut mcp_server_keys = std::collections::HashSet::new();
+        let mut mcp_server_ids = std::collections::HashSet::new();
+        let mut mcp_servers_by_id = std::collections::HashMap::new();
+        for server in &self.mcp_servers {
+            if server.id.trim().is_empty()
+                || server.org_id.trim().is_empty()
+                || server.slug.trim().is_empty()
+            {
+                problems.push("MCP server id, org_id and slug must be non-empty".to_string());
+            }
+            if !mcp_server_keys.insert((server.org_id.as_str(), server.slug.as_str())) {
+                problems.push(format!(
+                    "duplicate MCP server slug '{}' in org '{}'",
+                    server.slug, server.org_id
+                ));
+            }
+            if !mcp_server_ids.insert(server.id.as_str()) {
+                problems.push(format!("duplicate MCP server id '{}'", server.id));
+            }
+            if !is_http_url(&server.url) {
+                problems.push(format!(
+                    "MCP server '{}' has an invalid URL '{}'",
+                    server.slug, server.url
+                ));
+            }
+            if let Err(problem) = self
+                .egress
+                .check_url(&server.url, &format!("MCP server '{}' URL", server.slug))
+            {
+                problems.push(problem);
+            }
+            if !matches!(
+                server.transport.as_str(),
+                "stdio" | "sse" | "streamable_http" | "websocket"
+            ) {
+                problems.push(format!(
+                    "MCP server '{}' has unsupported transport '{}'",
+                    server.slug, server.transport
+                ));
+            }
+            let mut scopes = std::collections::HashSet::new();
+            for scope in &server.required_scopes {
+                if scope.trim().is_empty() || !scopes.insert(scope.as_str()) {
+                    problems.push(format!(
+                        "MCP server '{}' required scopes must be non-empty and unique",
+                        server.slug
+                    ));
+                }
+            }
+            mcp_servers_by_id.insert(server.id.as_str(), server);
+        }
+
+        let mut mcp_session_keys = std::collections::HashSet::new();
+        for session in &self.mcp_oauth_sessions {
+            if session.id.trim().is_empty()
+                || session.user_id.trim().is_empty()
+                || session.access_token.is_empty()
+            {
+                problems.push(
+                    "MCP OAuth session id, user_id and access_token must be non-empty".to_string(),
+                );
+            }
+            let Some(server) = mcp_servers_by_id.get(session.server_id.as_str()) else {
+                problems.push(format!(
+                    "MCP OAuth session '{}' references unknown server '{}'",
+                    session.id, session.server_id
+                ));
+                continue;
+            };
+            if !mcp_session_keys.insert((session.server_id.as_str(), session.user_id.as_str())) {
+                problems.push(format!(
+                    "multiple live MCP OAuth sessions exist for server '{}' and user '{}'",
+                    session.server_id, session.user_id
+                ));
+            }
+            if server
+                .required_scopes
+                .iter()
+                .any(|scope| !session.scopes.contains(scope))
+            {
+                problems.push(format!(
+                    "MCP OAuth session '{}' does not cover server '{}' required scopes",
+                    session.id, server.slug
+                ));
             }
         }
 
@@ -4164,5 +4305,52 @@ mod tests {
             problems.iter().any(|p| p.contains("link-local")),
             "{problems:?}"
         );
+    }
+
+    #[test]
+    fn validate_accepts_scope_covered_mcp_session() {
+        let mut config = GatewayConfig::default();
+        config.mcp_servers.push(McpServerConfig {
+            id: "server-1".to_string(),
+            org_id: "org-1".to_string(),
+            slug: "docs".to_string(),
+            url: "https://mcp.example.com".to_string(),
+            transport: "streamable_http".to_string(),
+            required_scopes: vec!["tools:read".to_string()],
+        });
+        config.mcp_oauth_sessions.push(McpOAuthSessionConfig {
+            id: "session-1".to_string(),
+            server_id: "server-1".to_string(),
+            user_id: "user-1".to_string(),
+            scopes: vec!["tools:read".to_string()],
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+            access_token: "secret".to_string(),
+        });
+        assert!(config.validate().is_ok(), "{:?}", config.validate());
+    }
+
+    #[test]
+    fn validate_rejects_mcp_session_missing_required_scope() {
+        let mut config = GatewayConfig::default();
+        config.mcp_servers.push(McpServerConfig {
+            id: "server-1".to_string(),
+            org_id: "org-1".to_string(),
+            slug: "docs".to_string(),
+            url: "https://mcp.example.com".to_string(),
+            transport: "streamable_http".to_string(),
+            required_scopes: vec!["tools:execute".to_string()],
+        });
+        config.mcp_oauth_sessions.push(McpOAuthSessionConfig {
+            id: "session-1".to_string(),
+            server_id: "server-1".to_string(),
+            user_id: "user-1".to_string(),
+            scopes: vec!["tools:read".to_string()],
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+            access_token: "secret".to_string(),
+        });
+        let problems = config.validate().unwrap_err();
+        assert!(problems
+            .iter()
+            .any(|problem| problem.contains("required scopes")));
     }
 }

@@ -433,6 +433,35 @@ impl Forwarder {
         .await
     }
 
+    /// Forward an arbitrary HTTP request with a gateway-owned bearer token.
+    ///
+    /// Used by the MCP gateway path, where the upstream URL is an org-scoped
+    /// server rather than an LLM provider. The caller supplies already-filtered
+    /// end-to-end headers; authorization is always replaced here so a client
+    /// can never choose the downstream credential.
+    pub async fn forward_bearer(
+        &self,
+        method: Method,
+        url: &str,
+        mut headers: reqwest::header::HeaderMap,
+        body: Bytes,
+        bearer: &str,
+    ) -> Result<Response> {
+        headers.remove(reqwest::header::AUTHORIZATION);
+        headers.remove(reqwest::header::HOST);
+        headers.remove(reqwest::header::CONTENT_LENGTH);
+        let client = self.default.load().as_ref().clone();
+        self.await_send(
+            client
+                .request(method, url)
+                .headers(headers)
+                .bearer_auth(bearer)
+                .body(body)
+                .send(),
+        )
+        .await
+    }
+
     /// Await an upstream send under the configured time-to-headers budget. The
     /// body stream is left untouched so long/streamed responses aren't cut off.
     async fn await_send(

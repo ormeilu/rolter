@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rolter_core::{
     BackpressurePolicy, BalancingStrategy, BudgetConfig, BudgetPeriod, BudgetScope, Decorator,
-    Error, FeatureFlagsConfig, GatewayConfig, GroupMember, ModelPriceConfig, ModelRoute,
-    PromptTemplate, PromptTemplateActivationScope, PromptTemplatesConfig, ProviderConfig,
-    ProviderGroupConfig, ProviderKind, RateLimitConfig, Result, Target, TemplateVariable,
-    VirtualKeyRecord,
+    Error, FeatureFlagsConfig, GatewayConfig, GroupMember, McpOAuthSessionConfig, McpServerConfig,
+    ModelPriceConfig, ModelRoute, PromptTemplate, PromptTemplateActivationScope,
+    PromptTemplatesConfig, ProviderConfig, ProviderGroupConfig, ProviderKind, RateLimitConfig,
+    Result, Target, TemplateVariable, VirtualKeyRecord,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool};
@@ -259,8 +259,30 @@ struct VirtualKeyRow {
     project_id: Uuid,
     team_id: Uuid,
     org_id: Uuid,
+    created_by: Option<Uuid>,
     business_unit_id: Option<Uuid>,
     customer_id: Option<Uuid>,
+}
+
+#[derive(FromRow)]
+struct McpServerSnapshotRow {
+    id: Uuid,
+    org_id: Uuid,
+    slug: String,
+    url: String,
+    transport: String,
+    required_scopes: Vec<String>,
+}
+
+#[derive(FromRow)]
+struct McpSessionSnapshotRow {
+    id: Uuid,
+    server_id: Uuid,
+    user_id: Uuid,
+    scopes: Vec<String>,
+    expires_at: DateTime<Utc>,
+    access_ciphertext: Vec<u8>,
+    access_nonce: Vec<u8>,
 }
 
 #[derive(FromRow)]
@@ -515,7 +537,7 @@ impl PostgresConfigStore {
     async fn load_virtual_keys(&self) -> Result<Vec<VirtualKeyRecord>> {
         let rows: Vec<VirtualKeyRow> = sqlx::query_as(
             "select vk.id, vk.key_hash, vk.models, vk.providers, vk.disabled, vk.expires_at, \
-                    vk.cache_enabled, vk.project_id, p.team_id, t.org_id, \
+                    vk.cache_enabled, vk.project_id, p.team_id, t.org_id, vk.created_by, \
                     vk.business_unit_id, vk.customer_id \
              from virtual_keys vk \
              join projects p on p.id = vk.project_id \
@@ -533,6 +555,7 @@ impl PostgresConfigStore {
                 org_id: r.org_id.to_string(),
                 team_id: r.team_id.to_string(),
                 project_id: r.project_id.to_string(),
+                user_id: r.created_by.map(|id| id.to_string()).unwrap_or_default(),
                 models: r.models,
                 providers: r.providers,
                 disabled: r.disabled,
@@ -544,6 +567,77 @@ impl PostgresConfigStore {
                     .unwrap_or_default(),
                 customer_id: r.customer_id.map(|id| id.to_string()).unwrap_or_default(),
             })
+            .collect())
+    }
+
+    async fn load_mcp_servers(&self) -> Result<Vec<McpServerConfig>> {
+        let rows: Vec<McpServerSnapshotRow> = sqlx::query_as(
+            "select id, org_id, slug, url, transport, required_scopes \
+             from mcp_servers order by org_id, slug",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| McpServerConfig {
+                id: row.id.to_string(),
+                org_id: row.org_id.to_string(),
+                slug: row.slug,
+                url: row.url,
+                transport: row.transport,
+                required_scopes: row.required_scopes,
+            })
+            .collect())
+    }
+
+    async fn load_mcp_oauth_sessions(&self) -> Result<Vec<McpOAuthSessionConfig>> {
+        let rows: Vec<McpSessionSnapshotRow> = sqlx::query_as(
+            "select distinct on (g.server_id, g.user_id) \
+                    s.id, g.server_id, g.user_id, s.scopes, s.expires_at, \
+                    s.access_ciphertext, s.access_nonce \
+             from mcp_oauth_sessions s \
+             join mcp_oauth_grants g on g.id = s.grant_id \
+             join mcp_servers srv on srv.id = g.server_id \
+             where s.revoked_at is null and g.revoked_at is null \
+               and s.expires_at > now() and s.scopes <@ g.scopes \
+               and srv.required_scopes <@ s.scopes \
+             order by g.server_id, g.user_id, s.created_at desc",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        let Some(kek) = self.kek.as_ref() else {
+            if !rows.is_empty() {
+                tracing::warn!(
+                    "MCP OAuth sessions exist but {} is unset; omitting them from the snapshot",
+                    crypto::KEK_ENV
+                );
+            }
+            return Ok(Vec::new());
+        };
+        Ok(rows
+            .into_iter()
+            .filter_map(
+                |row| match kek.decrypt(&row.access_ciphertext, &row.access_nonce) {
+                    Ok(access_token) => Some(McpOAuthSessionConfig {
+                        id: row.id.to_string(),
+                        server_id: row.server_id.to_string(),
+                        user_id: row.user_id.to_string(),
+                        scopes: row.scopes,
+                        expires_at: row.expires_at,
+                        access_token,
+                    }),
+                    Err(error) => {
+                        tracing::warn!(
+                            session_id = %row.id,
+                            error = %error,
+                            "stored MCP access token could not be decrypted; omitting the session"
+                        );
+                        None
+                    }
+                },
+            )
             .collect())
     }
 
@@ -838,6 +932,8 @@ impl ConfigStore for PostgresConfigStore {
         let provider_groups = self.load_provider_groups().await?;
         let model_prices = self.load_model_prices().await?;
         let db_virtual_keys = self.load_virtual_keys().await?;
+        let mcp_servers = self.load_mcp_servers().await?;
+        let mcp_oauth_sessions = self.load_mcp_oauth_sessions().await?;
         let budgets = self.load_budgets().await?;
         let rate_limits = self.load_rate_limits().await?;
         let prompt_templates = self.load_prompt_templates().await?;
@@ -847,6 +943,8 @@ impl ConfigStore for PostgresConfigStore {
             provider_groups,
             model_prices,
             db_virtual_keys,
+            mcp_servers,
+            mcp_oauth_sessions,
             budgets,
             rate_limits,
             prompt_templates,

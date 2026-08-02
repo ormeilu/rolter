@@ -1399,7 +1399,8 @@ impl ScimIdentityRepo<'_> {
 /// MCP servers an org has registered.
 pub struct McpServerRepo<'a>(pub &'a PgPool);
 
-const MCP_SERVER_COLUMNS: &str = "id, org_id, name, slug, url, transport, created_at";
+const MCP_SERVER_COLUMNS: &str =
+    "id, org_id, name, slug, url, transport, required_scopes, created_at";
 
 impl McpServerRepo<'_> {
     pub async fn list(&self, org_id: Uuid) -> Result<Vec<McpServer>> {
@@ -1430,19 +1431,38 @@ impl McpServerRepo<'_> {
         slug: &str,
         url: &str,
         transport: &str,
+        required_scopes: &[String],
     ) -> Result<McpServer> {
         sqlx::query_as(&format!(
-            "insert into mcp_servers (org_id, name, slug, url, transport) \
-             values ($1, $2, $3, $4, $5) returning {MCP_SERVER_COLUMNS}"
+            "insert into mcp_servers (org_id, name, slug, url, transport, required_scopes) \
+             values ($1, $2, $3, $4, $5, $6) returning {MCP_SERVER_COLUMNS}"
         ))
         .bind(org_id)
         .bind(name)
         .bind(slug)
         .bind(url)
         .bind(transport)
+        .bind(required_scopes)
         .fetch_one(self.0)
         .await
         .map_err(store_err)
+    }
+
+    pub async fn update_required_scopes(
+        &self,
+        id: Uuid,
+        required_scopes: &[String],
+    ) -> Result<McpServer> {
+        sqlx::query_as(&format!(
+            "update mcp_servers set required_scopes = $2 \
+             where id = $1 returning {MCP_SERVER_COLUMNS}"
+        ))
+        .bind(id)
+        .bind(required_scopes)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("mcp server {id}")))
     }
 
     /// Delete a server. Its grants and sessions cascade, which is the intended
@@ -1577,13 +1597,29 @@ impl McpOAuthRepo<'_> {
         expires_at: DateTime<Utc>,
         refresh_expires_at: Option<DateTime<Utc>>,
     ) -> Result<McpOAuthSession> {
+        let mut tx = self.0.begin().await.map_err(store_err)?;
+        let grant_scopes: Option<Vec<String>> = sqlx::query_scalar(
+            "select scopes from mcp_oauth_grants \
+             where id = $1 and revoked_at is null for share",
+        )
+        .bind(grant_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(store_err)?;
+        let grant_scopes = grant_scopes
+            .ok_or_else(|| Error::Config("MCP OAuth grant is revoked or missing".to_string()))?;
+        if scopes.iter().any(|scope| !grant_scopes.contains(scope)) {
+            return Err(Error::Config(
+                "MCP OAuth session scopes exceed the consent grant".to_string(),
+            ));
+        }
         let (access_ciphertext, access_nonce) = kek.encrypt(access_token)?;
         let refresh = refresh_token.map(|t| kek.encrypt(t)).transpose()?;
         let (refresh_ciphertext, refresh_nonce) = match refresh {
             Some((c, n)) => (Some(c), Some(n)),
             None => (None, None),
         };
-        sqlx::query_as(&format!(
+        let session = sqlx::query_as(&format!(
             "insert into mcp_oauth_sessions (grant_id, access_ciphertext, access_nonce, \
                     refresh_ciphertext, refresh_nonce, scopes, expires_at, refresh_expires_at) \
              values ($1, $2, $3, $4, $5, $6, $7, $8) returning {SESSION_COLUMNS}"
@@ -1596,9 +1632,11 @@ impl McpOAuthRepo<'_> {
         .bind(scopes)
         .bind(expires_at)
         .bind(refresh_expires_at)
-        .fetch_one(self.0)
+        .fetch_one(&mut *tx)
         .await
-        .map_err(store_err)
+        .map_err(store_err)?;
+        tx.commit().await.map_err(store_err)?;
+        Ok(session)
     }
 
     /// Sessions across an org, newest first; `user_id` narrows to one owner.

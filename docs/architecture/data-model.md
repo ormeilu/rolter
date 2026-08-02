@@ -14,12 +14,17 @@ erDiagram
   orgs ||--o{ providers : has
   providers ||--o{ provider_keys : has
   users ||--o{ memberships : has
+  orgs ||--o{ mcp_servers : registers
+  users ||--o{ mcp_oauth_grants : consents
+  mcp_servers ||--o{ mcp_oauth_grants : authorizes
+  mcp_oauth_grants ||--o{ mcp_oauth_sessions : issues
 ```
 
 - **Org → Team → Project → Virtual Key** is the hierarchy. Budgets and rate limits attach at any scope and combine **most-restrictive-wins**.
 - **Providers** are owned at the org level and referenced by route targets. Upstream credentials live in `provider_keys`, **envelope-encrypted** (see [security.md](security.md)).
 - **Routes** belong to a project and map a public `model` to `route_targets` with a `strategy`.
 - **Virtual keys** belong to a project, store only a hash of the key plus a display prefix, and carry an optional model allow-list.
+- **MCP servers** belong to an org and declare required OAuth scopes. Grants bind a user to a server; sealed token sessions belong to a grant. The gateway receives only the newest live, scope-valid session per user/server through the protected snapshot channel.
 
 ## Cost & limits
 
@@ -63,4 +68,4 @@ to the branch's fork point from `master`.
 
 ## Mapping to the gateway
 
-The control plane composes the normalized tables into the same shape as `rolter_core::GatewayConfig` (providers + routes + virtual_keys), which the gateway turns into an immutable `Snapshot`.
+The control plane composes the normalized tables into the same shape as `rolter_core::GatewayConfig` (providers, routes, virtual keys and authorized MCP sessions), which the gateway turns into an immutable `Snapshot`.

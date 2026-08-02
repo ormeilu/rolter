@@ -8,7 +8,7 @@ When an MCP server needs to act on a user's behalf — read their repositories, 
 
 ## No token material leaves the control plane
 
-Access and refresh tokens are sealed with the deployment key encryption key and stored alongside the session row. They are readable by exactly one internal code path — the one that attaches a token to an outbound MCP call. No API response, and therefore no dashboard screen, ever carries a token value.
+Access and refresh tokens are sealed with the deployment key encryption key and stored alongside the session row. Only credential-bearing internal code can open them. The control plane projects the newest live, scope-valid access token per user/server through its separately token-guarded internal snapshot channel; no public API response, and therefore no dashboard screen, ever carries a token value.
 
 What you see instead is metadata: when the session was created, when it expires, when it was last used, and a `has_refresh_token` flag rendered as a **RENEWABLE** badge. That flag is enough to answer "will this keep working tomorrow?" without the token ever being serialised out of the control plane.
 
@@ -53,6 +53,31 @@ Both listings are scoped by ownership, and the dashboard says so on the page rat
 </Steps>
 
 Both screens surface that `403` as a plain message rather than an empty table, so "nothing here" is never confused with "not allowed".
+
+## Calling a server through Rolter
+
+Use your normal user-owned virtual key against the gateway path. The server
+slug is scoped to the key's organization:
+
+```bash
+curl -N https://gateway.example.com/mcp/github \
+  -H "Authorization: Bearer $ROLTER_VIRTUAL_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+Before contacting the server, Rolter verifies that the key has a user owner,
+the server belongs to the same organization, the owner has a live consent and
+session, and the session covers every scope configured on the server. The
+virtual key is replaced with the downstream OAuth bearer token. Streamable
+HTTP and SSE responses stay streamed; stdio and WebSocket transports are not
+served by this HTTP path.
+
+Org admins configure the baseline with `PATCH /api/v1/mcp-servers/{id}` and a
+`{"required_scopes": [...]}` body. Tightening the list immediately invalidates
+sessions that do not cover it; no grant or session needs to be deleted merely
+to change policy.
 
 ## Audit
 

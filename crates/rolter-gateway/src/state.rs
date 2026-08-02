@@ -44,6 +44,8 @@ pub struct KeyMeta {
     pub org_id: String,
     pub team_id: String,
     pub project_id: String,
+    /// user who minted this database-backed key; required for MCP OBO access
+    pub user_id: String,
     pub models: Vec<String>,
     /// provider allow-list; an empty list permits every provider on the route
     pub providers: Vec<String>,
@@ -87,6 +89,10 @@ pub struct Snapshot {
     /// virtual keys indexed by their peppered digest ([`rolter_auth::hash_key`]),
     /// never by plaintext — merges config-defined and database-defined keys
     pub keys: HashMap<String, KeyMeta>,
+    /// MCP servers keyed by `(org_id, slug)` for tenant-safe path resolution
+    pub mcp_servers: HashMap<(String, String), rolter_core::McpServerConfig>,
+    /// newest live session keyed by `(server_id, user_id)`
+    pub mcp_oauth_sessions: HashMap<(String, String), rolter_core::McpOAuthSessionConfig>,
     /// deployment secret used to derive the key digests above
     pub pepper: String,
     /// config override for whether an empty `keys` set still enforces auth.
@@ -334,6 +340,7 @@ impl Snapshot {
                     org_id: k.org_id.clone(),
                     team_id: k.team_id.clone(),
                     project_id: k.project_id.clone(),
+                    user_id: k.user_id.clone(),
                     models: k.models.clone(),
                     providers: k.providers.clone(),
                     disabled: k.disabled,
@@ -344,12 +351,31 @@ impl Snapshot {
                 },
             );
         }
+        let mcp_servers = config
+            .mcp_servers
+            .iter()
+            .cloned()
+            .map(|server| ((server.org_id.clone(), server.slug.clone()), server))
+            .collect();
+        let mcp_oauth_sessions = config
+            .mcp_oauth_sessions
+            .iter()
+            .cloned()
+            .map(|session| {
+                (
+                    (session.server_id.clone(), session.user_id.clone()),
+                    session,
+                )
+            })
+            .collect();
         Self {
             providers,
             providers_by_slug,
             groups_by_slug,
             routes,
             keys,
+            mcp_servers,
+            mcp_oauth_sessions,
             pepper,
             require_auth: config.server.require_auth,
             prices,

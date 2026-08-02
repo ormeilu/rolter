@@ -38,5 +38,8 @@ artifacts/engines/
 # machine-specific Claude Code preview launch config
 .claude/launch.json
 
+# machine-specific Warp terminal state
+.warp/
+
 # macOS Finder metadata
 .DS_Store

@@ -135,6 +135,6 @@ Full-featured hostable web control panel, not a read-only dashboard.
 Beyond the core phased roadmap.
 - [ ] Rust SDK: client library for rolter gateway + control API
 - [ ] Python SDK: client library for rolter gateway + control API
-- [ ] MCP gateway: proxy MCP tool servers through rolter with per-key auth
+- [ ] MCP gateway: proxy MCP tool servers through rolter with per-key auth (Streamable HTTP/SSE with user-bound OAuth is implemented; stdio/WebSocket remain)
 - [ ] A2A gateway: agent-to-agent protocol bridge through rolter
 - [ ] Multi-region deployment: cross-region routing + config sync
