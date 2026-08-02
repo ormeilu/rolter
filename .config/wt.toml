@@ -1,0 +1,8 @@
+# shared Worktrunk settings for every development agent
+
+[forge]
+platform = "github"
+
+# reuse safe build caches without copying secrets such as .env files
+[post-start]
+cache = "wt step copy-ignored --require-include"
