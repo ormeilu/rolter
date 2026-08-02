@@ -36,6 +36,13 @@ erDiagram
 
 `config_version` holds a single monotonic counter the gateways watch for reload-free updates ([config-and-hot-reload.md](config-and-hot-reload.md)). `audit_log` records who changed what.
 
+The guardrail registry is deployment-wide:
+
+- `guardrail_rules` stores the ordered built-in and bounded-regex policy managed by the dashboard. Exactly one of `builtin` or `pattern` is present on every row.
+- `guardrail_providers` stores external webhook endpoints and environment-variable credential references. A partial unique index permits at most one enabled provider because the gateway exposes one vendor-neutral webhook contract.
+
+Both tables bump `config_version` in the write transaction. File-owned rules remain immutable and win name collisions; database rules extend that policy. An enabled file-owned webhook remains authoritative, otherwise the active registry provider supplies the snapshot webhook.
+
 ## Data written *by* the data plane
 
 Most tables flow control plane → gateway. Two flow the other way, written from the channel the gateway already holds and never read back by it:

@@ -7,11 +7,12 @@ pub mod repo;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rolter_core::{
-    BackpressurePolicy, BalancingStrategy, BudgetConfig, BudgetPeriod, BudgetScope, Decorator,
-    Error, FeatureFlagsConfig, GatewayConfig, GroupMember, McpOAuthSessionConfig, McpServerConfig,
-    ModelPriceConfig, ModelRoute, PromptTemplate, PromptTemplateActivationScope,
+    BackpressurePolicy, BalancingStrategy, BudgetConfig, BudgetPeriod, BudgetScope, BuiltinRule,
+    Decorator, Error, FailureMode, FeatureFlagsConfig, GatewayConfig, GroupMember, GuardAction,
+    GuardStage, GuardrailRule, GuardrailWebhookConfig, GuardrailsConfig, McpOAuthSessionConfig,
+    McpServerConfig, ModelPriceConfig, ModelRoute, PromptTemplate, PromptTemplateActivationScope,
     PromptTemplatesConfig, ProviderConfig, ProviderGroupConfig, ProviderKind, RateLimitConfig,
-    Result, Target, TemplateVariable, VirtualKeyRecord,
+    Result, Target, TemplateVariable, VirtualKeyRecord, WebhookAuth, WebhookStage,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool};
@@ -19,8 +20,8 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::postgres::models::{
-    AdaptiveRoutingPolicy, Budget, CompatibilityPolicy, FeatureFlags, LoggingSettings, ModelPrice,
-    RateLimit, RuntimePolicy,
+    AdaptiveRoutingPolicy, Budget, CompatibilityPolicy, FeatureFlags, GuardrailProvider,
+    GuardrailRule as GuardrailRuleRow, LoggingSettings, ModelPrice, RateLimit, RuntimePolicy,
 };
 use crate::ConfigStore;
 
@@ -420,6 +421,88 @@ impl PostgresConfigStore {
         .fetch_one(&self.pool)
         .await
         .map_err(store_err)
+    }
+
+    async fn load_guardrails(&self) -> Result<GuardrailsConfig> {
+        let rows: Vec<GuardrailRuleRow> = sqlx::query_as(
+            "select id, name, enabled, source_type, builtin, pattern, stage, action, replacement, \
+                    include_system, position, created_at, updated_at \
+             from guardrail_rules where enabled order by position, name",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        let rules = rows
+            .into_iter()
+            .map(|row| {
+                let builtin = match row.builtin.as_deref() {
+                    Some("email") => Some(BuiltinRule::Email),
+                    Some("phone") => Some(BuiltinRule::Phone),
+                    Some("api_token") => Some(BuiltinRule::ApiToken),
+                    Some("payment_card") => Some(BuiltinRule::PaymentCard),
+                    _ => None,
+                };
+                GuardrailRule {
+                    name: row.name,
+                    builtin,
+                    pattern: row.pattern,
+                    stage: if row.stage == "post_call" {
+                        GuardStage::PostCall
+                    } else {
+                        GuardStage::PreCall
+                    },
+                    action: match row.action.as_str() {
+                        "block" => GuardAction::Block,
+                        "redact" => GuardAction::Redact,
+                        _ => GuardAction::Annotate,
+                    },
+                    replacement: row.replacement,
+                    include_system: row.include_system,
+                }
+            })
+            .collect::<Vec<_>>();
+        Ok(GuardrailsConfig {
+            enabled: !rules.is_empty(),
+            rules,
+            ..GuardrailsConfig::default()
+        })
+    }
+
+    async fn load_guardrail_webhook(&self) -> Result<GuardrailWebhookConfig> {
+        let row: Option<GuardrailProvider> = sqlx::query_as(
+            "select id, name, enabled, url, stage, timeout_ms, max_retries, failure_mode, \
+                    max_body_bytes, auth_kind, auth_env, created_at, updated_at \
+             from guardrail_providers where enabled limit 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(store_err)?;
+        let Some(row) = row else {
+            return Ok(GuardrailWebhookConfig::default());
+        };
+        let auth = match (row.auth_kind.as_str(), row.auth_env) {
+            ("bearer", Some(token_env)) => Some(WebhookAuth::Bearer { token_env }),
+            ("shared_secret", Some(secret_env)) => Some(WebhookAuth::SharedSecret { secret_env }),
+            _ => None,
+        };
+        Ok(GuardrailWebhookConfig {
+            enabled: true,
+            url: row.url,
+            stage: if row.stage == "post_call" {
+                WebhookStage::PostCall
+            } else {
+                WebhookStage::PreCall
+            },
+            timeout_ms: row.timeout_ms.max(1) as u64,
+            max_retries: row.max_retries.max(0) as u32,
+            failure_mode: if row.failure_mode == "fail_closed" {
+                FailureMode::FailClosed
+            } else {
+                FailureMode::FailOpen
+            },
+            max_body_bytes: row.max_body_bytes.max(1) as usize,
+            auth,
+        })
     }
 
     async fn load_logging_settings(&self) -> Result<LoggingSettings> {
@@ -927,6 +1010,8 @@ impl ConfigStore for PostgresConfigStore {
         let logging = self.load_logging_settings().await?;
         let compatibility = self.load_compatibility_policy().await?;
         let adaptive = self.load_adaptive_routing_policy().await?;
+        let guardrails = self.load_guardrails().await?;
+        let guardrail_webhook = self.load_guardrail_webhook().await?;
         let providers = self.load_providers().await?;
         let routes = self.load_routes().await?;
         let provider_groups = self.load_provider_groups().await?;
@@ -948,6 +1033,8 @@ impl ConfigStore for PostgresConfigStore {
             budgets,
             rate_limits,
             prompt_templates,
+            guardrails,
+            guardrail_webhook,
             feature_flags: FeatureFlagsConfig {
                 response_cache: flags.response_cache,
                 cache_aware_routing: flags.cache_aware_routing,
@@ -1743,6 +1830,55 @@ mod tests {
         assert_eq!(config.adaptive_routing.cost_weight, 0.0);
         assert_eq!(config.adaptive_routing.exploration_ratio, 0.1);
         assert_eq!(config.adaptive_routing.min_samples, 10);
+    }
+
+    #[tokio::test]
+    async fn guardrail_registry_projects_into_snapshot() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        sqlx::query(
+            "insert into guardrail_rules \
+             (name, source_type, builtin, stage, action, replacement, position) \
+             values ('email-redaction', 'builtin', 'email', 'pre_call', 'redact', \
+                     '[MASKED]', 10)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into guardrail_providers \
+             (name, enabled, url, failure_mode, auth_kind, auth_env) \
+             values ('policy-service', true, 'https://guardrails.internal/evaluate', \
+                     'fail_closed', 'bearer', 'ROLTER_GUARDRAIL_TOKEN')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let config = PostgresConfigStore::new(pool).load().await.unwrap();
+        assert!(config.guardrails.enabled);
+        assert_eq!(config.guardrails.rules.len(), 1);
+        assert_eq!(config.guardrails.rules[0].name, "email-redaction");
+        assert!(matches!(
+            config.guardrails.rules[0].builtin,
+            Some(BuiltinRule::Email)
+        ));
+        assert!(config.guardrail_webhook.enabled);
+        assert_eq!(
+            config.guardrail_webhook.url,
+            "https://guardrails.internal/evaluate"
+        );
+        assert!(matches!(
+            config.guardrail_webhook.failure_mode,
+            FailureMode::FailClosed
+        ));
+        assert!(matches!(
+            config.guardrail_webhook.auth,
+            Some(WebhookAuth::Bearer { ref token_env }) if token_env == "ROLTER_GUARDRAIL_TOKEN"
+        ));
     }
 
     // compiled-in translation constants are control-plane owned now, so the
