@@ -2250,3 +2250,63 @@ export const updatePlugin = (id: string, body: PluginInstanceInput) =>
   sendJson<PluginInstanceRow>("PUT", `/api/v1/plugins/${id}`, body);
 export const deletePlugin = (id: string) =>
   sendJson<void>("DELETE", `/api/v1/plugins/${id}`);
+
+// ---------------------------------------------------------------------------
+// deployment-wide guardrail registry
+
+export interface GuardrailRuleRow {
+  id: string;
+  name: string;
+  enabled: boolean;
+  source_type: "builtin" | "pattern";
+  builtin: "email" | "phone" | "api_token" | "payment_card" | null;
+  pattern: string | null;
+  stage: "pre_call" | "post_call";
+  action: "annotate" | "block" | "redact";
+  replacement: string | null;
+  include_system: boolean;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type GuardrailRuleInput = Omit<GuardrailRuleRow, "id" | "created_at" | "updated_at">;
+
+export interface GuardrailProviderRow {
+  id: string;
+  name: string;
+  enabled: boolean;
+  url: string;
+  stage: "pre_call" | "post_call";
+  timeout_ms: number;
+  max_retries: number;
+  failure_mode: "fail_open" | "fail_closed";
+  max_body_bytes: number;
+  auth_kind: "none" | "bearer" | "shared_secret";
+  auth_env: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type GuardrailProviderInput = Omit<
+  GuardrailProviderRow,
+  "id" | "created_at" | "updated_at"
+>;
+
+export const fetchGuardrailRules = () =>
+  getJson<GuardrailRuleRow[]>("/api/v1/guardrails/rules");
+export const createGuardrailRule = (body: GuardrailRuleInput) =>
+  sendJson<GuardrailRuleRow>("POST", "/api/v1/guardrails/rules", body);
+export const updateGuardrailRule = (id: string, body: GuardrailRuleInput) =>
+  sendJson<GuardrailRuleRow>("PUT", `/api/v1/guardrails/rules/${id}`, body);
+export const deleteGuardrailRule = (id: string) =>
+  sendJson<void>("DELETE", `/api/v1/guardrails/rules/${id}`);
+
+export const fetchGuardrailProviders = () =>
+  getJson<GuardrailProviderRow[]>("/api/v1/guardrails/providers");
+export const createGuardrailProvider = (body: GuardrailProviderInput) =>
+  sendJson<GuardrailProviderRow>("POST", "/api/v1/guardrails/providers", body);
+export const updateGuardrailProvider = (id: string, body: GuardrailProviderInput) =>
+  sendJson<GuardrailProviderRow>("PUT", `/api/v1/guardrails/providers/${id}`, body);
+export const deleteGuardrailProvider = (id: string) =>
+  sendJson<void>("DELETE", `/api/v1/guardrails/providers/${id}`);

@@ -13,12 +13,13 @@ use rolter_core::{Error, Result};
 
 use super::models::{
     AdaptiveRoutingPolicy, AdaptiveRoutingTelemetry, AuditLogEntry, Budget, BusinessUnit,
-    ClusterNode, CompatibilityPolicy, Customer, FeatureFlags, Invitation, LoggingSettings,
-    McpOAuthGrant, McpOAuthSession, McpServer, Membership, ModelPrice, Org, OrgAuthPolicy,
-    OwnedVirtualKey, PluginInstance, Project, PromptTemplate, PromptTemplateScope,
-    PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember, RateLimit, Route,
-    RouteTarget, RuntimePolicy, ScimIdentity, ScimToken, SecuritySettings, Session, Skill,
-    SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider, Team, User, VirtualKey,
+    ClusterNode, CompatibilityPolicy, Customer, FeatureFlags, GuardrailProvider, GuardrailRule,
+    Invitation, LoggingSettings, McpOAuthGrant, McpOAuthSession, McpServer, Membership, ModelPrice,
+    Org, OrgAuthPolicy, OwnedVirtualKey, PluginInstance, Project, PromptTemplate,
+    PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember,
+    RateLimit, Route, RouteTarget, RuntimePolicy, ScimIdentity, ScimToken, SecuritySettings,
+    Session, Skill, SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider, Team, User,
+    VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -2972,6 +2973,236 @@ pub struct LoggingSettingsRepo<'a>(pub &'a PgPool);
 pub struct RuntimePolicyRepo<'a>(pub &'a PgPool);
 pub struct CompatibilityPolicyRepo<'a>(pub &'a PgPool);
 pub struct AdaptiveRoutingPolicyRepo<'a>(pub &'a PgPool);
+pub struct GuardrailRepo<'a>(pub &'a PgPool);
+
+const GUARDRAIL_RULE_COLUMNS: &str = "id, name, enabled, source_type, builtin, pattern, stage, \
+    action, replacement, include_system, position, created_at, updated_at";
+const GUARDRAIL_PROVIDER_COLUMNS: &str = "id, name, enabled, url, stage, timeout_ms, max_retries, \
+    failure_mode, max_body_bytes, auth_kind, auth_env, created_at, updated_at";
+
+impl GuardrailRepo<'_> {
+    pub async fn list_rules(&self) -> Result<Vec<GuardrailRule>> {
+        sqlx::query_as(&format!(
+            "select {GUARDRAIL_RULE_COLUMNS} from guardrail_rules order by position, name"
+        ))
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get_rule(&self, id: Uuid) -> Result<GuardrailRule> {
+        sqlx::query_as(&format!(
+            "select {GUARDRAIL_RULE_COLUMNS} from guardrail_rules where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("guardrail rule {id}")))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_rule(
+        &self,
+        name: &str,
+        enabled: bool,
+        source_type: &str,
+        builtin: Option<&str>,
+        pattern: Option<&str>,
+        stage: &str,
+        action: &str,
+        replacement: Option<&str>,
+        include_system: bool,
+        position: i32,
+    ) -> Result<GuardrailRule> {
+        sqlx::query_as(&format!(
+            "insert into guardrail_rules (name, enabled, source_type, builtin, pattern, stage, \
+             action, replacement, include_system, position) values \
+             ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning {GUARDRAIL_RULE_COLUMNS}"
+        ))
+        .bind(name)
+        .bind(enabled)
+        .bind(source_type)
+        .bind(builtin)
+        .bind(pattern)
+        .bind(stage)
+        .bind(action)
+        .bind(replacement)
+        .bind(include_system)
+        .bind(position)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_rule(
+        &self,
+        id: Uuid,
+        name: &str,
+        enabled: bool,
+        source_type: &str,
+        builtin: Option<&str>,
+        pattern: Option<&str>,
+        stage: &str,
+        action: &str,
+        replacement: Option<&str>,
+        include_system: bool,
+        position: i32,
+    ) -> Result<GuardrailRule> {
+        sqlx::query_as(&format!(
+            "update guardrail_rules set name=$2, enabled=$3, source_type=$4, builtin=$5, \
+             pattern=$6, stage=$7, action=$8, replacement=$9, include_system=$10, \
+             position=$11, updated_at=now() where id=$1 returning {GUARDRAIL_RULE_COLUMNS}"
+        ))
+        .bind(id)
+        .bind(name)
+        .bind(enabled)
+        .bind(source_type)
+        .bind(builtin)
+        .bind(pattern)
+        .bind(stage)
+        .bind(action)
+        .bind(replacement)
+        .bind(include_system)
+        .bind(position)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("guardrail rule {id}")))
+    }
+
+    pub async fn delete_rule(&self, id: Uuid) -> Result<()> {
+        let result = sqlx::query("delete from guardrail_rules where id=$1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("guardrail rule {id}")));
+        }
+        Ok(())
+    }
+
+    pub async fn list_providers(&self) -> Result<Vec<GuardrailProvider>> {
+        sqlx::query_as(&format!(
+            "select {GUARDRAIL_PROVIDER_COLUMNS} from guardrail_providers order by enabled desc, name"
+        ))
+        .fetch_all(self.0).await.map_err(store_err)
+    }
+
+    pub async fn get_provider(&self, id: Uuid) -> Result<GuardrailProvider> {
+        sqlx::query_as(&format!(
+            "select {GUARDRAIL_PROVIDER_COLUMNS} from guardrail_providers where id=$1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("guardrail provider {id}")))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_provider(
+        &self,
+        name: &str,
+        enabled: bool,
+        url: &str,
+        stage: &str,
+        timeout_ms: i32,
+        max_retries: i32,
+        failure_mode: &str,
+        max_body_bytes: i32,
+        auth_kind: &str,
+        auth_env: Option<&str>,
+    ) -> Result<GuardrailProvider> {
+        let mut tx = self.0.begin().await.map_err(store_err)?;
+        if enabled {
+            sqlx::query(
+                "update guardrail_providers set enabled=false, updated_at=now() where enabled",
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err)?;
+        }
+        let row = sqlx::query_as(&format!(
+            "insert into guardrail_providers (name, enabled, url, stage, timeout_ms, max_retries, \
+             failure_mode, max_body_bytes, auth_kind, auth_env) values \
+             ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning {GUARDRAIL_PROVIDER_COLUMNS}"
+        ))
+        .bind(name)
+        .bind(enabled)
+        .bind(url)
+        .bind(stage)
+        .bind(timeout_ms)
+        .bind(max_retries)
+        .bind(failure_mode)
+        .bind(max_body_bytes)
+        .bind(auth_kind)
+        .bind(auth_env)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(store_err)?;
+        tx.commit().await.map_err(store_err)?;
+        Ok(row)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_provider(
+        &self,
+        id: Uuid,
+        name: &str,
+        enabled: bool,
+        url: &str,
+        stage: &str,
+        timeout_ms: i32,
+        max_retries: i32,
+        failure_mode: &str,
+        max_body_bytes: i32,
+        auth_kind: &str,
+        auth_env: Option<&str>,
+    ) -> Result<GuardrailProvider> {
+        let mut tx = self.0.begin().await.map_err(store_err)?;
+        if enabled {
+            sqlx::query("update guardrail_providers set enabled=false, updated_at=now() where enabled and id<>$1")
+                .bind(id).execute(&mut *tx).await.map_err(store_err)?;
+        }
+        let row = sqlx::query_as(&format!(
+            "update guardrail_providers set name=$2, enabled=$3, url=$4, stage=$5, timeout_ms=$6, \
+             max_retries=$7, failure_mode=$8, max_body_bytes=$9, auth_kind=$10, auth_env=$11, \
+             updated_at=now() where id=$1 returning {GUARDRAIL_PROVIDER_COLUMNS}"
+        ))
+        .bind(id)
+        .bind(name)
+        .bind(enabled)
+        .bind(url)
+        .bind(stage)
+        .bind(timeout_ms)
+        .bind(max_retries)
+        .bind(failure_mode)
+        .bind(max_body_bytes)
+        .bind(auth_kind)
+        .bind(auth_env)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("guardrail provider {id}")))?;
+        tx.commit().await.map_err(store_err)?;
+        Ok(row)
+    }
+
+    pub async fn delete_provider(&self, id: Uuid) -> Result<()> {
+        let result = sqlx::query("delete from guardrail_providers where id=$1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("guardrail provider {id}")));
+        }
+        Ok(())
+    }
+}
 
 /// Cluster inventory: one row per gateway/control node, upserted from the
 /// snapshot poll each node already performs.

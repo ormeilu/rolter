@@ -166,6 +166,26 @@ impl ConfigStore for MergedConfigStore {
         merged.compatibility = db.compatibility;
         merged.adaptive_routing = db.adaptive_routing;
         merged.logging = db.logging;
+        // file-owned guardrail rules remain immutable and win a name collision;
+        // registry rules extend the ordered policy. This keeps adopting the
+        // dashboard from erasing an existing deployment policy. Likewise, an
+        // enabled file-owned webhook remains authoritative; the registry owns
+        // the effective webhook only when the bootstrap hook is disabled.
+        merged.guardrails.enabled |= db.guardrails.enabled;
+        merged
+            .guardrails
+            .rules
+            .extend(db.guardrails.rules.into_iter().filter(|rule| {
+                !self
+                    .bootstrap
+                    .guardrails
+                    .rules
+                    .iter()
+                    .any(|item| item.name == rule.name)
+            }));
+        if !self.bootstrap.guardrail_webhook.enabled {
+            merged.guardrail_webhook = db.guardrail_webhook;
+        }
         merged.feature_flags = db.feature_flags;
         merged.apply_feature_flags();
         Ok(merged)
@@ -291,6 +311,38 @@ mod tests {
             .map(|g| g.slug.as_deref().unwrap())
             .collect();
         assert_eq!(slugs, vec!["vllm-cluster", "vllm-nsk"]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn merged_store_preserves_file_guardrails_and_extends_registry_rules() {
+        let rule = |name: &str| rolter_core::GuardrailRule {
+            name: name.to_string(),
+            builtin: Some(rolter_core::BuiltinRule::Email),
+            pattern: None,
+            stage: Default::default(),
+            action: Default::default(),
+            replacement: None,
+            include_system: false,
+        };
+        let mut bootstrap = GatewayConfig::default();
+        bootstrap.guardrails.enabled = true;
+        bootstrap.guardrails.rules.push(rule("file-rule"));
+        let mut db = GatewayConfig::default();
+        db.guardrails.enabled = true;
+        db.guardrails.rules.push(rule("file-rule"));
+        db.guardrails.rules.push(rule("registry-rule"));
+
+        let store = MergedConfigStore::new(bootstrap, Arc::new(InMemoryConfigStore::new(db)));
+        let names: Vec<_> = store
+            .load()
+            .await
+            .unwrap()
+            .guardrails
+            .rules
+            .into_iter()
+            .map(|rule| rule.name)
+            .collect();
+        assert_eq!(names, vec!["file-rule", "registry-rule"]);
     }
 
     fn db_vkey(id: &str, hash: &str) -> rolter_core::VirtualKeyRecord {

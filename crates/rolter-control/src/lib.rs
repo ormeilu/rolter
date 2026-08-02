@@ -27,6 +27,8 @@ mod compatibility_policy;
 mod crud;
 #[cfg(feature = "postgres")]
 mod feature_flags;
+#[cfg(feature = "postgres")]
+mod guardrails;
 mod health;
 #[cfg(feature = "postgres")]
 mod invitations;
@@ -394,6 +396,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(mcp_logs::router())
             .merge(mcp_oauth::router())
             .merge(feature_flags::router())
+            .merge(guardrails::router())
             .merge(logging_settings::router())
             .merge(runtime_policy::router())
             .merge(compatibility_policy::router())

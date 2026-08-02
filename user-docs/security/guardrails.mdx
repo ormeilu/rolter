@@ -1,0 +1,43 @@
+---
+title: "Guardrails"
+description: "Manage in-gateway inspection rules and one active external guardrail service without restarting gateways."
+---
+
+Rolter can inspect request or response content with built-in detectors, custom regular expressions, and a self-hosted HTTP guardrail service. Open **Guardrails → Rules** or **Guardrails → Providers** in the dashboard. These screens require superadmin access.
+
+## Inspection rules
+
+Rules run by ascending position. Each rule uses exactly one source:
+
+- **Built-in detector** — email address, phone number, API token, or payment card.
+- **Custom regex** — compiled by Rolter's bounded, linear-time regex engine before the rule is published.
+
+Choose `annotate` to count a match without changing traffic, `block` to reject matching traffic, or `redact` to replace matches. System messages are excluded unless **Inspect system messages** is enabled. A paused rule stays stored and ordered but does not enter gateway snapshots.
+
+The deployment-wide `guardrails` feature flag remains the kill switch. Turning it off pauses every built-in and custom rule without deleting the registry.
+
+## External providers
+
+Register any number of vendor-neutral HTTP services, but activate only one at a time. Activating a provider atomically deactivates the previous provider because each gateway has one external guardrail webhook contract.
+
+Choose the failure policy deliberately:
+
+- **Fail closed** rejects traffic when the provider times out or errors. This favors enforcement.
+- **Fail open** lets traffic continue when the provider cannot decide. This favors availability.
+
+Rolter stores only an environment variable name for bearer or shared-secret authentication. Put the secret value in every gateway's environment; it is never returned by the control-plane API.
+
+## Hot reload and config files
+
+Creating, editing, enabling, or deleting a registry entry increments `config_version`, so gateway snapshots update without a restart. Rules defined in the config file remain immutable and win a name collision; dashboard-managed rules extend them. An enabled config-file webhook remains authoritative. The provider registry supplies the webhook when the config-file hook is disabled.
+
+## API endpoints
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/v1/guardrails/rules` | List or create rules |
+| `PUT`, `DELETE` | `/api/v1/guardrails/rules/{id}` | Update or delete a rule |
+| `GET`, `POST` | `/api/v1/guardrails/providers` | List or register providers |
+| `PUT`, `DELETE` | `/api/v1/guardrails/providers/{id}` | Update or delete a provider |
+
+Every mutation is audit logged. Provider bodies accept `auth_kind` as `none`, `bearer`, or `shared_secret`; `auth_env` is required for the latter two and contains only the environment variable name.
