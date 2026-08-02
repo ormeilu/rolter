@@ -28,7 +28,9 @@ use rolter_core::Error;
 use rolter_store::postgres::models::{McpOAuthGrant, McpOAuthSession, McpServer};
 use rolter_store::postgres::repo::{McpOAuthRepo, McpServerRepo};
 
-use crate::crud::{log_audit, pool, require_non_empty, ApiError, ApiResult, SafeJson};
+use crate::crud::{
+    log_audit, pool, publish_config_change, require_non_empty, ApiError, ApiResult, SafeJson,
+};
 use crate::rbac::{authorize, holds_admin, Principal, ScopeChain};
 use crate::rbac_matrix::{cap, Requirement};
 use crate::ControlState;
@@ -43,7 +45,10 @@ pub(crate) fn router() -> Router<ControlState> {
             "/api/v1/orgs/{org_id}/mcp-servers",
             get(list_servers).post(create_server),
         )
-        .route("/api/v1/mcp-servers/{id}", delete(delete_server))
+        .route(
+            "/api/v1/mcp-servers/{id}",
+            delete(delete_server).patch(update_server),
+        )
         .route("/api/v1/orgs/{org_id}/mcp/grants", get(list_grants))
         .route("/api/v1/mcp/grants/{id}", delete(revoke_grant))
         .route("/api/v1/orgs/{org_id}/mcp/sessions", get(list_sessions))
@@ -52,6 +57,17 @@ pub(crate) fn router() -> Router<ControlState> {
 
 fn invalid(message: impl Into<String>) -> ApiError {
     ApiError::Core(Error::Config(message.into()))
+}
+
+fn validate_required_scopes(scopes: &[String]) -> ApiResult<()> {
+    if scopes.iter().any(|scope| scope.trim().is_empty()) {
+        return Err(invalid("required_scopes must not contain empty values"));
+    }
+    let unique_scopes: std::collections::HashSet<_> = scopes.iter().collect();
+    if unique_scopes.len() != scopes.len() {
+        return Err(invalid("required_scopes must not contain duplicates"));
+    }
+    Ok(())
 }
 
 /// Whether the caller holds org admin. Used to decide between "everything in
@@ -107,6 +123,8 @@ struct CreateMcpServer {
     url: String,
     #[serde(default)]
     transport: Option<String>,
+    #[serde(default)]
+    required_scopes: Vec<String>,
 }
 
 async fn create_server(
@@ -137,9 +155,22 @@ async fn create_server(
     if !(body.url.starts_with("http://") || body.url.starts_with("https://")) {
         return Err(invalid("url must be an http(s) endpoint"));
     }
+    state
+        .egress
+        .check_url(&body.url, "MCP server URL")
+        .map_err(invalid)?;
+    validate_required_scopes(&body.required_scopes)?;
     let server = McpServerRepo(pool(&state))
-        .create(org_id, &body.name, &body.slug, &body.url, transport)
+        .create(
+            org_id,
+            &body.name,
+            &body.slug,
+            &body.url,
+            transport,
+            &body.required_scopes,
+        )
         .await?;
+    publish_config_change(&state).await?;
     log_audit(
         &state,
         &principal,
@@ -148,6 +179,44 @@ async fn create_server(
         "mcp_server",
         server.id,
         serde_json::json!({"slug": server.slug, "transport": server.transport}),
+    )
+    .await;
+    Ok(Json(server))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateMcpServer {
+    required_scopes: Vec<String>,
+}
+
+async fn update_server(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+    SafeJson(body): SafeJson<UpdateMcpServer>,
+) -> ApiResult<Json<McpServer>> {
+    validate_required_scopes(&body.required_scopes)?;
+    let repo = McpServerRepo(pool(&state));
+    let current = repo.get(id).await?;
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(current.org_id),
+        cap!("mcp_server", Update),
+    )
+    .await?;
+    let server = repo
+        .update_required_scopes(id, &body.required_scopes)
+        .await?;
+    publish_config_change(&state).await?;
+    log_audit(
+        &state,
+        &principal,
+        Some(server.org_id),
+        "mcp_server.update",
+        "mcp_server",
+        server.id,
+        serde_json::json!({"required_scopes": server.required_scopes}),
     )
     .await;
     Ok(Json(server))
@@ -168,6 +237,7 @@ async fn delete_server(
     )
     .await?;
     repo.delete(id).await?;
+    publish_config_change(&state).await?;
     log_audit(
         &state,
         &principal,
@@ -256,6 +326,7 @@ async fn revoke_grant(
     };
     // revoking the consent revokes its sessions in the same transaction
     let revoked = repo.revoke_grant(id, actor).await?;
+    publish_config_change(&state).await?;
     log_audit(
         &state,
         &principal,
@@ -300,6 +371,7 @@ async fn revoke_session(
     )
     .await?;
     let revoked = repo.revoke_session(id).await?;
+    publish_config_change(&state).await?;
     log_audit(
         &state,
         &principal,

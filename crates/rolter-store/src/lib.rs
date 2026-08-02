@@ -133,6 +133,11 @@ impl ConfigStore for MergedConfigStore {
                 .into_iter()
                 .filter(|k| !self.bootstrap.db_virtual_keys.iter().any(|c| c.id == k.id)),
         );
+        // MCP authorization is database-owned. Never let a bootstrap file
+        // override server policy or inject credential-bearing sessions into a
+        // control-plane-managed snapshot.
+        merged.mcp_servers = db.mcp_servers;
+        merged.mcp_oauth_sessions = db.mcp_oauth_sessions;
         merged
             .model_prices
             .extend(db.model_prices.into_iter().filter(|p| {
@@ -295,6 +300,7 @@ mod tests {
             org_id: String::new(),
             team_id: String::new(),
             project_id: String::new(),
+            user_id: String::new(),
             models: vec![],
             providers: vec![],
             disabled: false,
@@ -347,6 +353,23 @@ mod tests {
         db.model_prices.push(price_val("gpt-4o", 3.0));
         db.budgets.push(budget("b1"));
         db.rate_limits.push(rate_limit("rl1"));
+        db.mcp_servers.push(rolter_core::McpServerConfig {
+            id: "mcp1".to_string(),
+            org_id: "org1".to_string(),
+            slug: "docs".to_string(),
+            url: "https://mcp.example.com".to_string(),
+            transport: "streamable_http".to_string(),
+            required_scopes: vec!["tools:read".to_string()],
+        });
+        db.mcp_oauth_sessions
+            .push(rolter_core::McpOAuthSessionConfig {
+                id: "session1".to_string(),
+                server_id: "mcp1".to_string(),
+                user_id: "user1".to_string(),
+                scopes: vec!["tools:read".to_string()],
+                expires_at: "2099-01-01T00:00:00Z".parse().unwrap(),
+                access_token: "secret".to_string(),
+            });
 
         let store = MergedConfigStore::new(bootstrap, Arc::new(InMemoryConfigStore::new(db)));
         let merged = store.load().await.unwrap();
@@ -356,6 +379,8 @@ mod tests {
         assert_eq!(merged.model_prices.len(), 1, "db model price dropped");
         assert_eq!(merged.budgets.len(), 1, "db budget dropped");
         assert_eq!(merged.rate_limits.len(), 1, "db rate limit dropped");
+        assert_eq!(merged.mcp_servers.len(), 1, "db MCP server dropped");
+        assert_eq!(merged.mcp_oauth_sessions.len(), 1, "db MCP session dropped");
     }
 
     #[tokio::test(flavor = "current_thread")]

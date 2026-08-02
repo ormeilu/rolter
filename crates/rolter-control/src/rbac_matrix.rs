@@ -265,7 +265,7 @@ const CAPABILITIES: &[Capability] = &[
         scope: "org",
         read: VIEWER,
         create: ADMIN,
-        update: NA,
+        update: ADMIN,
         delete: ADMIN,
     },
     // a grant or session belongs to a user: an org admin sees and revokes any,

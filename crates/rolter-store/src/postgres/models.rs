@@ -413,6 +413,8 @@ pub struct McpServer {
     pub url: String,
     /// one of `stdio` | `sse` | `streamable_http` | `websocket`
     pub transport: String,
+    /// OAuth scopes every proxied call to this server must carry
+    pub required_scopes: Vec<String>,
     pub created_at: DateTime<Utc>,
 }
 

@@ -16,12 +16,13 @@ pub use config::{
     AdaptiveRoutingConfig, AdvancedModelConfig, ApiKeyConfig, BackpressurePolicy,
     BalancingStrategy, BreakerConfig, BudgetConfig, BudgetPeriod, BudgetScope, CacheConfig,
     CompatibilityConfig, CooldownConfig, EgressPolicy, FeatureFlagsConfig, GatewayConfig,
-    GroupMember, HealthConfig, KvEventsConfig, LmCacheConfig, LoggingConfig, MetricsScrapeConfig,
-    ModelLimits, ModelPriceConfig, ModelRoute, ModelUsagePricing, ModelVisibility, OverrideMode,
-    ParamPolicy, PayloadCaptureConfig, ProviderConfig, ProviderGroupConfig, ProviderKind,
-    QueueConfig, RateLimitConfig, RealtimeConfig, ResponsesConfig, RetryConfig, RoleProfile,
-    RouteCache, SemanticCacheConfig, ServerConfig, Target, TimeoutConfig, TlsConfig, Variant,
-    VirtualKeyConfig, VirtualKeyRecord, MAX_EXPLORATION_RATIO, RESERVED_PATHS,
+    GroupMember, HealthConfig, KvEventsConfig, LmCacheConfig, LoggingConfig, McpOAuthSessionConfig,
+    McpServerConfig, MetricsScrapeConfig, ModelLimits, ModelPriceConfig, ModelRoute,
+    ModelUsagePricing, ModelVisibility, OverrideMode, ParamPolicy, PayloadCaptureConfig,
+    ProviderConfig, ProviderGroupConfig, ProviderKind, QueueConfig, RateLimitConfig,
+    RealtimeConfig, ResponsesConfig, RetryConfig, RoleProfile, RouteCache, SemanticCacheConfig,
+    ServerConfig, Target, TimeoutConfig, TlsConfig, Variant, VirtualKeyConfig, VirtualKeyRecord,
+    MAX_EXPLORATION_RATIO, RESERVED_PATHS,
 };
 pub use currency::{CurrencyConfig, CurrencyConverter, StaticRates, DEFAULT_BASE_CURRENCY};
 pub use error::{Error, Result};

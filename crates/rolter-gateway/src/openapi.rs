@@ -152,6 +152,49 @@ pub fn document() -> Value {
                     "responses": {"200": {"description": "model list", "content": {"application/json": {"schema": {"type": "object"}}}}}
                 }
             },
+            "/mcp/{server}": {
+                "parameters": [
+                    {"name":"server","in":"path","required":true,"schema":{"type":"string"},"description":"organization-scoped MCP server slug"}
+                ],
+                "get": {
+                    "summary": "Open an authenticated MCP event stream",
+                    "operationId": "mcpRootGet",
+                    "responses": {"200":{"description":"downstream MCP response or SSE stream"},"401":error_response,"403":error_response,"404":error_response,"502":error_response}
+                },
+                "post": {
+                    "summary": "Send an authenticated MCP message",
+                    "operationId": "mcpRootPost",
+                    "requestBody": {"content":{"application/json":{"schema":{"type":"object"}}}},
+                    "responses": {"200":{"description":"downstream MCP response or SSE stream"},"401":error_response,"403":error_response,"404":error_response,"502":error_response}
+                },
+                "delete": {
+                    "summary": "Close a downstream MCP session or resource",
+                    "operationId": "mcpRootDelete",
+                    "responses": {"200":{"description":"downstream MCP response"},"401":error_response,"403":error_response,"404":error_response,"502":error_response}
+                }
+            },
+            "/mcp/{server}/{path}": {
+                "parameters": [
+                    {"name":"server","in":"path","required":true,"schema":{"type":"string"},"description":"organization-scoped MCP server slug"},
+                    {"name":"path","in":"path","required":true,"schema":{"type":"string"},"description":"optional downstream MCP path; omit the segment to call the registered base URL"}
+                ],
+                "get": {
+                    "summary": "Open an authenticated MCP event stream",
+                    "operationId": "mcpGet",
+                    "responses": {"200":{"description":"downstream MCP response or SSE stream"},"401":error_response,"403":error_response,"404":error_response,"502":error_response}
+                },
+                "post": {
+                    "summary": "Send an authenticated MCP message",
+                    "operationId": "mcpPost",
+                    "requestBody": {"content":{"application/json":{"schema":{"type":"object"}}}},
+                    "responses": {"200":{"description":"downstream MCP response or SSE stream"},"401":error_response,"403":error_response,"404":error_response,"502":error_response}
+                },
+                "delete": {
+                    "summary": "Close a downstream MCP session or resource",
+                    "operationId": "mcpDelete",
+                    "responses": {"200":{"description":"downstream MCP response"},"401":error_response,"403":error_response,"404":error_response,"502":error_response}
+                }
+            },
             "/healthz": {
                 "get": {"summary": "Liveness probe", "operationId": "healthz", "security": [], "responses": {"200": {"description": "ok"}}}
             }
@@ -269,6 +312,8 @@ mod tests {
             "/v1/audio/transcriptions",
             "/v1/audio/translations",
             "/v1/models",
+            "/mcp/{server}",
+            "/mcp/{server}/{path}",
             "/healthz",
         ] {
             assert!(doc["paths"][path].is_object(), "missing path {path}");

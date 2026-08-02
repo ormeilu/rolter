@@ -10,12 +10,12 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::{OriginalUri, Path, State};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
 use rolter_core::{
-    BalancingStrategy, GatewayConfig, ModelRoute, ProviderConfig, ProviderKind, RoleProfile,
-    Target, VirtualKeyConfig,
+    BalancingStrategy, GatewayConfig, McpOAuthSessionConfig, McpServerConfig, ModelRoute,
+    ProviderConfig, ProviderKind, RoleProfile, Target, VirtualKeyConfig, VirtualKeyRecord,
 };
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
@@ -110,6 +110,82 @@ fn config_for(model: &str, providers: Vec<(&str, SocketAddr)>) -> GatewayConfig 
 async fn serve_gateway(config: &GatewayConfig) -> SocketAddr {
     let app = rolter_gateway::build_router_from_config(config);
     serve(app).await
+}
+
+#[tokio::test]
+async fn mcp_proxy_binds_virtual_key_owner_to_server_scopes_and_bearer() {
+    async fn mcp_upstream(
+        OriginalUri(uri): OriginalUri,
+        headers: axum::http::HeaderMap,
+        body: String,
+    ) -> Json<Value> {
+        Json(json!({
+            "authorization": headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            "x_api_key": headers.get("x-api-key").and_then(|value| value.to_str().ok()),
+            "cookie": headers.get("cookie").and_then(|value| value.to_str().ok()),
+            "uri": uri.to_string(),
+            "body": body,
+        }))
+    }
+
+    let upstream = serve(Router::new().route("/{*path}", any(mcp_upstream))).await;
+    let mut config = GatewayConfig::default();
+    config.db_virtual_keys.push(VirtualKeyRecord {
+        key_hash: rolter_auth::hash_key(&config.server.resolve_key_pepper(), "sk-user-owned"),
+        id: "key-1".to_string(),
+        org_id: "org-1".to_string(),
+        team_id: "team-1".to_string(),
+        project_id: "project-1".to_string(),
+        user_id: "user-1".to_string(),
+        models: Vec::new(),
+        providers: Vec::new(),
+        disabled: false,
+        expires_at: None,
+        cache: None,
+        business_unit_id: String::new(),
+        customer_id: String::new(),
+    });
+    config.mcp_servers.push(McpServerConfig {
+        id: "server-1".to_string(),
+        org_id: "org-1".to_string(),
+        slug: "docs".to_string(),
+        url: format!("http://{upstream}/rpc"),
+        transport: "streamable_http".to_string(),
+        required_scopes: vec!["tools:execute".to_string()],
+    });
+    config.mcp_oauth_sessions.push(McpOAuthSessionConfig {
+        id: "session-1".to_string(),
+        server_id: "server-1".to_string(),
+        user_id: "user-1".to_string(),
+        scopes: vec!["tools:execute".to_string()],
+        expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        access_token: "oauth-downstream".to_string(),
+    });
+    let gateway = serve_gateway(&config).await;
+
+    let response: Value = reqwest::Client::new()
+        .post(format!("http://{gateway}/mcp/docs/messages?cursor=next"))
+        .header("x-api-key", "sk-user-owned")
+        .header("cookie", "gateway-session=must-not-leak")
+        .body(r#"{"jsonrpc":"2.0","method":"tools/list"}"#)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        response,
+        json!({
+            "authorization": "Bearer oauth-downstream",
+            "x_api_key": null,
+            "cookie": null,
+            "uri": "/rpc/messages?cursor=next",
+            "body": "{\"jsonrpc\":\"2.0\",\"method\":\"tools/list\"}",
+        })
+    );
 }
 
 #[derive(Debug, PartialEq, Eq)]

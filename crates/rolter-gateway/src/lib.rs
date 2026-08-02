@@ -23,6 +23,7 @@ mod health;
 mod health_events;
 mod load;
 mod logging;
+mod mcp_proxy;
 mod metrics;
 mod multipart;
 mod openapi;
@@ -263,6 +264,18 @@ pub fn build_router(state: AppState, metrics_path: &str, max_body_bytes: usize) 
         )
         .route("/v1/audio/translations", post(handlers::audio_translations))
         .route("/v1/realtime", get(realtime::realtime))
+        .route(
+            "/mcp/{server}",
+            get(mcp_proxy::proxy_root)
+                .post(mcp_proxy::proxy_root)
+                .delete(mcp_proxy::proxy_root),
+        )
+        .route(
+            "/mcp/{server}/{*path}",
+            get(mcp_proxy::proxy_tail)
+                .post(mcp_proxy::proxy_tail)
+                .delete(mcp_proxy::proxy_tail),
+        )
         // cap request bodies (raising axum's 2 MiB default) so large LLM
         // payloads pass but a pathological body is rejected. the mapper is added
         // next, so it wraps the limit layer and rewrites its 413 into json
