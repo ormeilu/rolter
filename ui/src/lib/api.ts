@@ -77,7 +77,7 @@ async function apiError(res: Response): Promise<ApiError> {
 }
 
 async function sendJson<T>(
-  method: "POST" | "PUT" | "DELETE",
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
   url: string,
   body?: unknown,
 ): Promise<T> {
@@ -2122,7 +2122,63 @@ export interface McpServerRow {
   slug: string;
   url: string;
   transport: string;
+  description: string;
+  enabled: boolean;
+  tools: string[];
+  source: "custom" | "library";
+  required_scopes: string[];
   created_at: string;
+}
+
+export interface McpServerInput {
+  name: string;
+  slug: string;
+  url: string;
+  transport: string;
+  description: string;
+  enabled: boolean;
+  tools: string[];
+  source: "custom" | "library";
+  required_scopes: string[];
+}
+
+export interface McpLibraryItem {
+  slug: string;
+  name: string;
+  description: string;
+  url: string;
+  transport: string;
+  tools: string[];
+  required_scopes: string[];
+  installed: boolean;
+}
+
+export interface McpToolRef {
+  server_id: string;
+  tool: string;
+}
+
+export interface McpToolGroupRow {
+  id: string;
+  org_id: string;
+  name: string;
+  slug: string;
+  description: string;
+  enabled: boolean;
+  tools: McpToolRef[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface McpGatewaySettingsRow {
+  org_id: string;
+  default_transport: string;
+  connect_timeout_ms: number;
+  request_timeout_ms: number;
+  max_retries: number;
+  default_failure_mode: "fail_open" | "fail_closed";
+  allow_unlisted_tools: boolean;
+  updated_at: string;
 }
 
 export interface McpOAuthGrantRow {
@@ -2153,6 +2209,46 @@ export interface McpOAuthSessionRow {
 
 export function fetchMcpServers(orgId: string): Promise<McpServerRow[]> {
   return getJson<McpServerRow[]>(`/api/v1/orgs/${orgId}/mcp-servers`);
+}
+
+export function createMcpServer(orgId: string, input: McpServerInput): Promise<McpServerRow> {
+  return sendJson<McpServerRow>("POST", `/api/v1/orgs/${orgId}/mcp-servers`, input);
+}
+
+export function updateMcpServer(id: string, input: Omit<McpServerInput, "slug" | "source">): Promise<McpServerRow> {
+  return sendJson<McpServerRow>("PATCH", `/api/v1/mcp-servers/${id}`, input);
+}
+
+export function deleteMcpServer(id: string): Promise<void> {
+  return sendJson<void>("DELETE", `/api/v1/mcp-servers/${id}`);
+}
+
+export function fetchMcpLibrary(orgId: string): Promise<McpLibraryItem[]> {
+  return getJson<McpLibraryItem[]>(`/api/v1/orgs/${orgId}/mcp/library`);
+}
+
+export function fetchMcpToolGroups(orgId: string): Promise<McpToolGroupRow[]> {
+  return getJson<McpToolGroupRow[]>(`/api/v1/orgs/${orgId}/mcp/tool-groups`);
+}
+
+export function createMcpToolGroup(orgId: string, input: Omit<McpToolGroupRow, "id" | "org_id" | "created_at" | "updated_at">): Promise<McpToolGroupRow> {
+  return sendJson<McpToolGroupRow>("POST", `/api/v1/orgs/${orgId}/mcp/tool-groups`, input);
+}
+
+export function updateMcpToolGroup(id: string, input: Omit<McpToolGroupRow, "id" | "org_id" | "slug" | "created_at" | "updated_at">): Promise<McpToolGroupRow> {
+  return sendJson<McpToolGroupRow>("PUT", `/api/v1/mcp/tool-groups/${id}`, input);
+}
+
+export function deleteMcpToolGroup(id: string): Promise<void> {
+  return sendJson<void>("DELETE", `/api/v1/mcp/tool-groups/${id}`);
+}
+
+export function fetchMcpSettings(orgId: string): Promise<McpGatewaySettingsRow> {
+  return getJson<McpGatewaySettingsRow>(`/api/v1/orgs/${orgId}/mcp/settings`);
+}
+
+export function updateMcpSettings(orgId: string, input: Omit<McpGatewaySettingsRow, "org_id" | "updated_at">): Promise<McpGatewaySettingsRow> {
+  return sendJson<McpGatewaySettingsRow>("PUT", `/api/v1/orgs/${orgId}/mcp/settings`, input);
 }
 
 export function fetchMcpGrants(orgId: string): Promise<McpOAuthGrantRow[]> {

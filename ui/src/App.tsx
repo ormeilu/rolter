@@ -33,6 +33,7 @@ import AcceptInvite from "@/pages/AcceptInvite";
 import Login from "@/pages/Login";
 import Logs from "@/pages/Logs";
 import McpCatalog from "@/pages/McpCatalog";
+import { McpLibrary, McpSettings, ToolGroups } from "@/pages/McpManagement";
 import McpLogs from "@/pages/McpLogs";
 import { AuthSessions, OAuthGrants } from "@/pages/McpOAuth";
 import Models from "@/pages/Models";
@@ -78,8 +79,11 @@ const SCREENS: Record<string, React.ReactNode> = {
   rbac: <Rbac />,
   "audit-logs": <AuditLog />,
   "mcp-catalog": <McpCatalog />,
+  "mcp-library": <McpLibrary />,
+  "tool-groups": <ToolGroups />,
   "auth-sessions": <AuthSessions />,
   "oauth-grants": <OAuthGrants />,
+  "mcp-settings": <McpSettings />,
   "api-keys": <Account />,
   security: <Security />,
   caching: <Config />,

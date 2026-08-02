@@ -434,9 +434,43 @@ pub struct McpServer {
     pub url: String,
     /// one of `stdio` | `sse` | `streamable_http` | `websocket`
     pub transport: String,
+    pub description: String,
+    /// only enabled servers are projected into gateway snapshots
+    pub enabled: bool,
+    /// tool names advertised by the registry, never executable code
+    pub tools: Vec<String>,
+    /// `custom` or `library`
+    pub source: String,
     /// OAuth scopes every proxied call to this server must carry
     pub required_scopes: Vec<String>,
     pub created_at: DateTime<Utc>,
+}
+
+/// a governed, named bundle of MCP tool references
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct McpToolGroup {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub description: String,
+    pub enabled: bool,
+    pub tools: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// organization defaults managed by the MCP Settings screen
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct McpGatewaySettings {
+    pub org_id: Uuid,
+    pub default_transport: String,
+    pub connect_timeout_ms: i32,
+    pub request_timeout_ms: i32,
+    pub max_retries: i32,
+    pub default_failure_mode: String,
+    pub allow_unlisted_tools: bool,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// a user's consent grant against one MCP server. Revoked grants are kept so

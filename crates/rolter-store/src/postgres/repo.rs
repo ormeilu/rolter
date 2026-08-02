@@ -14,12 +14,12 @@ use rolter_core::{Error, Result};
 use super::models::{
     AdaptiveRoutingPolicy, AdaptiveRoutingTelemetry, AuditLogEntry, Budget, BusinessUnit,
     ClusterNode, CompatibilityPolicy, Customer, FeatureFlags, GuardrailProvider, GuardrailRule,
-    Invitation, LoggingSettings, McpOAuthGrant, McpOAuthSession, McpServer, Membership, ModelPrice,
-    Org, OrgAuthPolicy, OwnedVirtualKey, PluginInstance, Project, PromptTemplate,
-    PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember,
-    RateLimit, Route, RouteTarget, RuntimePolicy, ScimIdentity, ScimToken, SecuritySettings,
-    Session, Skill, SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider, Team, User,
-    VirtualKey,
+    Invitation, LoggingSettings, McpGatewaySettings, McpOAuthGrant, McpOAuthSession, McpServer,
+    McpToolGroup, Membership, ModelPrice, Org, OrgAuthPolicy, OwnedVirtualKey, PluginInstance,
+    Project, PromptTemplate, PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup,
+    ProviderGroupMember, RateLimit, Route, RouteTarget, RuntimePolicy, ScimIdentity, ScimToken,
+    SecuritySettings, Session, Skill, SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider,
+    Team, User, VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -1517,8 +1517,8 @@ impl ScimIdentityRepo<'_> {
 /// MCP servers an org has registered.
 pub struct McpServerRepo<'a>(pub &'a PgPool);
 
-const MCP_SERVER_COLUMNS: &str =
-    "id, org_id, name, slug, url, transport, required_scopes, created_at";
+const MCP_SERVER_COLUMNS: &str = "id, org_id, name, slug, url, transport, description, enabled, \
+     tools, source, required_scopes, created_at";
 
 impl McpServerRepo<'_> {
     pub async fn list(&self, org_id: Uuid) -> Result<Vec<McpServer>> {
@@ -1542,6 +1542,7 @@ impl McpServerRepo<'_> {
         .ok_or_else(|| Error::NotFound(format!("mcp server {id}")))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
         org_id: Uuid,
@@ -1549,33 +1550,57 @@ impl McpServerRepo<'_> {
         slug: &str,
         url: &str,
         transport: &str,
+        description: &str,
+        enabled: bool,
+        tools: &[String],
+        source: &str,
         required_scopes: &[String],
     ) -> Result<McpServer> {
         sqlx::query_as(&format!(
-            "insert into mcp_servers (org_id, name, slug, url, transport, required_scopes) \
-             values ($1, $2, $3, $4, $5, $6) returning {MCP_SERVER_COLUMNS}"
+            "insert into mcp_servers \
+             (org_id, name, slug, url, transport, description, enabled, tools, source, required_scopes) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             returning {MCP_SERVER_COLUMNS}"
         ))
         .bind(org_id)
         .bind(name)
         .bind(slug)
         .bind(url)
         .bind(transport)
+        .bind(description)
+        .bind(enabled)
+        .bind(tools)
+        .bind(source)
         .bind(required_scopes)
         .fetch_one(self.0)
         .await
         .map_err(store_err)
     }
 
-    pub async fn update_required_scopes(
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update(
         &self,
         id: Uuid,
+        name: &str,
+        url: &str,
+        transport: &str,
+        description: &str,
+        enabled: bool,
+        tools: &[String],
         required_scopes: &[String],
     ) -> Result<McpServer> {
         sqlx::query_as(&format!(
-            "update mcp_servers set required_scopes = $2 \
+            "update mcp_servers set name = $2, url = $3, transport = $4, description = $5, \
+             enabled = $6, tools = $7, required_scopes = $8 \
              where id = $1 returning {MCP_SERVER_COLUMNS}"
         ))
         .bind(id)
+        .bind(name)
+        .bind(url)
+        .bind(transport)
+        .bind(description)
+        .bind(enabled)
+        .bind(tools)
         .bind(required_scopes)
         .fetch_optional(self.0)
         .await
@@ -1595,6 +1620,159 @@ impl McpServerRepo<'_> {
             return Err(Error::NotFound(format!("mcp server {id}")));
         }
         Ok(())
+    }
+}
+
+/// Organization-owned tool-group policy manifests.
+pub struct McpToolGroupRepo<'a>(pub &'a PgPool);
+
+const MCP_TOOL_GROUP_COLUMNS: &str =
+    "id, org_id, name, slug, description, enabled, tools, created_at, updated_at";
+
+impl McpToolGroupRepo<'_> {
+    pub async fn list(&self, org_id: Uuid) -> Result<Vec<McpToolGroup>> {
+        sqlx::query_as(&format!(
+            "select {MCP_TOOL_GROUP_COLUMNS} from mcp_tool_groups \
+             where org_id = $1 order by name"
+        ))
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get(&self, id: Uuid) -> Result<McpToolGroup> {
+        sqlx::query_as(&format!(
+            "select {MCP_TOOL_GROUP_COLUMNS} from mcp_tool_groups where id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("mcp tool group {id}")))
+    }
+
+    pub async fn create(
+        &self,
+        org_id: Uuid,
+        name: &str,
+        slug: &str,
+        description: &str,
+        enabled: bool,
+        tools: &serde_json::Value,
+    ) -> Result<McpToolGroup> {
+        sqlx::query_as(&format!(
+            "insert into mcp_tool_groups (org_id, name, slug, description, enabled, tools) \
+             values ($1, $2, $3, $4, $5, $6) returning {MCP_TOOL_GROUP_COLUMNS}"
+        ))
+        .bind(org_id)
+        .bind(name)
+        .bind(slug)
+        .bind(description)
+        .bind(enabled)
+        .bind(tools)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn update(
+        &self,
+        id: Uuid,
+        name: &str,
+        description: &str,
+        enabled: bool,
+        tools: &serde_json::Value,
+    ) -> Result<McpToolGroup> {
+        sqlx::query_as(&format!(
+            "update mcp_tool_groups set name = $2, description = $3, enabled = $4, \
+             tools = $5, updated_at = now() where id = $1 returning {MCP_TOOL_GROUP_COLUMNS}"
+        ))
+        .bind(id)
+        .bind(name)
+        .bind(description)
+        .bind(enabled)
+        .bind(tools)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("mcp tool group {id}")))
+    }
+
+    pub async fn delete(&self, id: Uuid) -> Result<()> {
+        let result = sqlx::query("delete from mcp_tool_groups where id = $1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("mcp tool group {id}")));
+        }
+        Ok(())
+    }
+}
+
+/// Per-organization MCP gateway defaults.
+pub struct McpGatewaySettingsRepo<'a>(pub &'a PgPool);
+
+impl McpGatewaySettingsRepo<'_> {
+    pub async fn get(&self, org_id: Uuid) -> Result<McpGatewaySettings> {
+        sqlx::query_as(
+            "select org_id, default_transport, connect_timeout_ms, request_timeout_ms, \
+             max_retries, default_failure_mode, allow_unlisted_tools, updated_at \
+             from mcp_gateway_settings where org_id = $1",
+        )
+        .bind(org_id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)
+        .map(|stored| {
+            stored.unwrap_or_else(|| McpGatewaySettings {
+                org_id,
+                default_transport: "streamable_http".to_string(),
+                connect_timeout_ms: 5_000,
+                request_timeout_ms: 30_000,
+                max_retries: 1,
+                default_failure_mode: "fail_closed".to_string(),
+                allow_unlisted_tools: false,
+                updated_at: Utc::now(),
+            })
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update(
+        &self,
+        org_id: Uuid,
+        default_transport: &str,
+        connect_timeout_ms: i32,
+        request_timeout_ms: i32,
+        max_retries: i32,
+        default_failure_mode: &str,
+        allow_unlisted_tools: bool,
+    ) -> Result<McpGatewaySettings> {
+        sqlx::query_as(
+            "insert into mcp_gateway_settings \
+             (org_id, default_transport, connect_timeout_ms, request_timeout_ms, max_retries, \
+              default_failure_mode, allow_unlisted_tools, updated_at) \
+             values ($1, $2, $3, $4, $5, $6, $7, now()) \
+             on conflict (org_id) do update set default_transport = excluded.default_transport, \
+             connect_timeout_ms = excluded.connect_timeout_ms, request_timeout_ms = excluded.request_timeout_ms, \
+             max_retries = excluded.max_retries, default_failure_mode = excluded.default_failure_mode, \
+             allow_unlisted_tools = excluded.allow_unlisted_tools, updated_at = now() \
+             returning org_id, default_transport, connect_timeout_ms, request_timeout_ms, \
+             max_retries, default_failure_mode, allow_unlisted_tools, updated_at",
+        )
+        .bind(org_id)
+        .bind(default_transport)
+        .bind(connect_timeout_ms)
+        .bind(request_timeout_ms)
+        .bind(max_retries)
+        .bind(default_failure_mode)
+        .bind(allow_unlisted_tools)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
     }
 }
 

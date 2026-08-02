@@ -276,6 +276,22 @@ const CAPABILITIES: &[Capability] = &[
         update: ADMIN,
         delete: ADMIN,
     },
+    Capability {
+        resource: "mcp_tool_group",
+        scope: "org",
+        read: VIEWER,
+        create: ADMIN,
+        update: ADMIN,
+        delete: ADMIN,
+    },
+    Capability {
+        resource: "mcp_settings",
+        scope: "org",
+        read: VIEWER,
+        create: NA,
+        update: ADMIN,
+        delete: NA,
+    },
     // a grant or session belongs to a user: an org admin sees and revokes any,
     // a member only their own — so the floor is a viewer membership at the org
     // and the handler narrows it to the owner. nobody creates one through the

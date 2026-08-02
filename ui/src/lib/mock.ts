@@ -1,26 +1,6 @@
-// design-prototype mock data for screens whose backend DTOs don't exist yet
-// (MCP catalog, security settings, RBAC matrix, feature flags). each consumer
-// labels itself as preview data in the UI; replace with real fetchers as the
-// control API grows.
-
-export interface MockMcpServer {
-  id: string;
-  name: string;
-  transport: "stdio" | "http" | "sse";
-  status: "ok" | "degraded" | "down";
-  enabled: boolean;
-  calls24h: number;
-  tools: string[];
-}
-
-export const MCP_SERVERS: MockMcpServer[] = [
-  { id: "mcp_github", name: "github", transport: "stdio", status: "ok", enabled: true, calls24h: 4120, tools: ["search_code", "create_issue", "get_pr", "list_repos"] },
-  { id: "mcp_postgres", name: "postgres", transport: "http", status: "ok", enabled: true, calls24h: 9800, tools: ["query", "list_tables", "describe"] },
-  { id: "mcp_filesystem", name: "filesystem", transport: "stdio", status: "degraded", enabled: true, calls24h: 2100, tools: ["read_file", "write_file", "list_dir"] },
-  { id: "mcp_slack", name: "slack", transport: "http", status: "ok", enabled: true, calls24h: 640, tools: ["post_message", "list_channels"] },
-  { id: "mcp_browser", name: "browser", transport: "sse", status: "down", enabled: false, calls24h: 0, tools: ["navigate", "screenshot", "click"] },
-  { id: "mcp_sentry", name: "sentry", transport: "http", status: "ok", enabled: true, calls24h: 310, tools: ["list_issues", "get_event"] },
-];
+// design-prototype mock data for the remaining screens whose backend DTOs do
+// not exist yet. each consumer labels itself as preview data; MCP Catalog was
+// removed from this file when the real registry API landed.
 
 export interface RbacResource {
   key: string;

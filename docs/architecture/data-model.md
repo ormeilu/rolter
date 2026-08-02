@@ -17,6 +17,8 @@ erDiagram
   orgs ||--o{ mcp_servers : registers
   users ||--o{ mcp_oauth_grants : consents
   mcp_servers ||--o{ mcp_oauth_grants : authorizes
+  orgs ||--o{ mcp_tool_groups : governs
+  orgs ||--o| mcp_gateway_settings : configures
   mcp_oauth_grants ||--o{ mcp_oauth_sessions : issues
 ```
 
@@ -24,7 +26,7 @@ erDiagram
 - **Providers** are owned at the org level and referenced by route targets. Upstream credentials live in `provider_keys`, **envelope-encrypted** (see [security.md](security.md)).
 - **Routes** belong to a project and map a public `model` to `route_targets` with a `strategy`.
 - **Virtual keys** belong to a project, store only a hash of the key plus a display prefix, and carry an optional model allow-list.
-- **MCP servers** belong to an org and declare required OAuth scopes. Grants bind a user to a server; sealed token sessions belong to a grant. The gateway receives only the newest live, scope-valid session per user/server through the protected snapshot channel.
+- **MCP servers** belong to an org and declare required OAuth scopes and exposed tool names. Only enabled servers reach gateway snapshots. Grants bind a user to a server; sealed token sessions belong to a grant. **MCP tool groups** persist named server/tool manifests, while **MCP gateway settings** hold organization defaults for registration and MCP-aware clients; neither is currently a request-path authorization boundary.
 
 ## Cost & limits
 

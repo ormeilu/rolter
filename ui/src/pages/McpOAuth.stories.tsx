@@ -23,6 +23,11 @@ const SERVERS: McpServerRow[] = [
     slug: "github",
     url: "https://mcp.example.com/github",
     transport: "streamable_http",
+    description: "GitHub tools",
+    enabled: true,
+    tools: ["search_code"],
+    source: "custom",
+    required_scopes: ["repo"],
     created_at: "2026-02-01T09:00:00Z",
   },
   {
@@ -32,6 +37,11 @@ const SERVERS: McpServerRow[] = [
     slug: "jira",
     url: "https://mcp.example.com/jira",
     transport: "sse",
+    description: "Jira tools",
+    enabled: true,
+    tools: ["list_issues"],
+    source: "custom",
+    required_scopes: ["read"],
     created_at: "2026-02-03T09:00:00Z",
   },
 ];
