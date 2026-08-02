@@ -17,3 +17,7 @@ I am learning that Linear tickets are no longer used for PR titles.
 ## 2024-07-31 - Keyboard navigation in RowIconButton & SortLabel
 **Learning:** Shared UI components used across lists and grids (like `RowIconButton` and `SortLabel` in `screen.tsx`) didn't have keyboard focus indicators, making the entire app's tables inaccessible to keyboard-only users. Because these components are heavily reused, adding `focus-visible` to these primitives fixes accessibility across many pages (e.g., Users, Keys) at once.
 **Action:** When auditing list/table accessibility, verify focus styles on shared generic row action buttons. Ensure the `focus-visible:ring-1` pattern is applied to custom primitives that use `button` HTML tags.
+## 2024-06-03 - Missing keyboard focus states on raw `<button>` icon actions
+
+**Learning:** There's a recurring pattern in the codebase of using raw `<button>` elements (instead of the `<Button>` component) for small destructive/inline actions (like trash or remove icons). While they often have hover states, they frequently miss keyboard focus states (`focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring`) and semantic `aria-label`s, breaking keyboard navigation and screen reader accessibility for these critical actions.
+**Action:** When reviewing or creating new inline icon buttons, explicitly check for and enforce both `aria-label` and `focus-visible` Tailwind classes if the `<Button>` component (which provides these by default) isn't being used.
