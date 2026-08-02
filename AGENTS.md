@@ -35,6 +35,17 @@ rolter is a high-performance OpenAI/Anthropic-compatible AI gateway and load bal
 - `cd ui && bun install` then `bun run dev` / `bun run test` / `bun run build` — UI deps, dev server, unit tests (`bun test src`), production build
 - `docker compose -f docker/docker-compose.yml up -d` — bring up Postgres, Redis, ClickHouse and rolter
 
+## Parallel agent worktrees
+
+- Use Worktrunk (`wt`) to create, inspect, and remove agent worktrees; see `docs/development/worktrees.md`.
+- Create independent issue work from current `origin/master`: `git fetch origin master`, then `wt switch --create <type>/<issue-number>-<short-description> --base origin/master`.
+- Give every agent exactly one branch and worktree. This applies equally to Codex, Claude, Z.ai, Warp, and other agents; never encode an agent name in the branch.
+- For dependent work, create the child with `--base <parent-branch>` and target the child PR at that parent. Rebase in dependency order after the parent merges.
+- Use `wt list --full` before assigning, publishing, or cleaning work. Treat activity markers as advisory and inspect Git state directly.
+- Worktrunk is the lifecycle layer only. Commit and push with standard Git, publish and merge with `gh`/GitHub, and keep hosted `ci-ok` authoritative.
+- Do not use `wt merge`, `wt step commit`, `wt step squash`, or `wt step push`. Do not use `--force` or `--force-delete` in automated cleanup.
+- Preserve branches with `wt remove --no-delete-branch` whenever merge state is uncertain. Never clean another agent's dirty worktree.
+
 ## Code standards
 
 - Rust 2021, `rustfmt` defaults, `clippy` clean with `-D warnings`.
