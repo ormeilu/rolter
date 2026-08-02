@@ -58,6 +58,7 @@
               "configuration/environment-variables",
               "configuration/hot-reload",
               "configuration/feature-flags",
+              "configuration/plugins",
               "configuration/compatibility",
               "configuration/gemini-interactions"
             ]

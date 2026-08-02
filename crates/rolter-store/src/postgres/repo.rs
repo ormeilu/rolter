@@ -15,10 +15,11 @@ use super::models::{
     AdaptiveRoutingPolicy, AdaptiveRoutingTelemetry, AuditLogEntry, Budget, BusinessUnit,
     ClusterNode, CompatibilityPolicy, Customer, FeatureFlags, GuardrailProvider, GuardrailRule,
     Invitation, LoggingSettings, McpOAuthGrant, McpOAuthSession, McpServer, Membership, ModelPrice,
-    Org, OrgAuthPolicy, OwnedVirtualKey, Project, PromptTemplate, PromptTemplateScope,
-    PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember, RateLimit, Route,
-    RouteTarget, RuntimePolicy, ScimIdentity, ScimToken, SecuritySettings, Session, Skill,
-    SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider, Team, User, VirtualKey,
+    Org, OrgAuthPolicy, OwnedVirtualKey, PluginInstance, Project, PromptTemplate,
+    PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember,
+    RateLimit, Route, RouteTarget, RuntimePolicy, ScimIdentity, ScimToken, SecuritySettings,
+    Session, Skill, SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider, Team, User,
+    VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -673,6 +674,123 @@ impl PromptTemplateRepo<'_> {
             .map_err(store_err)?;
         if res.rows_affected() == 0 {
             return Err(Error::NotFound(format!("prompt template {id}")));
+        }
+        Ok(())
+    }
+}
+
+pub struct PluginRepo<'a>(pub &'a PgPool);
+
+const PLUGIN_COLUMNS: &str = "id, org_id, project_id, name, slug, description, kind, stage, \
+    enabled, position, failure_mode, endpoint, secret_env, config, created_at, updated_at";
+
+impl PluginRepo<'_> {
+    pub async fn list(&self, org_id: Uuid) -> Result<Vec<PluginInstance>> {
+        sqlx::query_as(&format!(
+            "select {PLUGIN_COLUMNS} from plugin_instances where org_id=$1 order by position, name"
+        ))
+        .bind(org_id)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn get(&self, id: Uuid) -> Result<PluginInstance> {
+        sqlx::query_as(&format!(
+            "select {PLUGIN_COLUMNS} from plugin_instances where id=$1"
+        ))
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("plugin {id}")))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create(
+        &self,
+        org_id: Uuid,
+        project_id: Option<Uuid>,
+        name: &str,
+        slug: &str,
+        description: &str,
+        kind: &str,
+        stage: &str,
+        enabled: bool,
+        position: i32,
+        failure_mode: &str,
+        endpoint: &str,
+        secret_env: Option<&str>,
+        config: &serde_json::Value,
+    ) -> Result<PluginInstance> {
+        sqlx::query_as(&format!(
+            "insert into plugin_instances (org_id, project_id, name, slug, description, kind, \
+             stage, enabled, position, failure_mode, endpoint, secret_env, config) values \
+             ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning {PLUGIN_COLUMNS}"
+        ))
+        .bind(org_id)
+        .bind(project_id)
+        .bind(name)
+        .bind(slug)
+        .bind(description)
+        .bind(kind)
+        .bind(stage)
+        .bind(enabled)
+        .bind(position)
+        .bind(failure_mode)
+        .bind(endpoint)
+        .bind(secret_env)
+        .bind(config)
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update(
+        &self,
+        id: Uuid,
+        project_id: Option<Uuid>,
+        name: &str,
+        description: &str,
+        stage: &str,
+        enabled: bool,
+        position: i32,
+        failure_mode: &str,
+        endpoint: &str,
+        secret_env: Option<&str>,
+        config: &serde_json::Value,
+    ) -> Result<PluginInstance> {
+        sqlx::query_as(&format!(
+            "update plugin_instances set project_id=$2, name=$3, description=$4, stage=$5, \
+             enabled=$6, position=$7, failure_mode=$8, endpoint=$9, secret_env=$10, config=$11, \
+             updated_at=now() where id=$1 returning {PLUGIN_COLUMNS}"
+        ))
+        .bind(id)
+        .bind(project_id)
+        .bind(name)
+        .bind(description)
+        .bind(stage)
+        .bind(enabled)
+        .bind(position)
+        .bind(failure_mode)
+        .bind(endpoint)
+        .bind(secret_env)
+        .bind(config)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("plugin {id}")))
+    }
+
+    pub async fn delete(&self, id: Uuid) -> Result<()> {
+        let result = sqlx::query("delete from plugin_instances where id=$1")
+            .bind(id)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("plugin {id}")));
         }
         Ok(())
     }
@@ -3985,6 +4103,76 @@ mod tests {
             repo.get_skill(skill.id).await,
             Err(Error::NotFound(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn plugin_instances_round_trip_at_org_and_project_scope() {
+        let Ok(_) = std::env::var("ROLTER_TEST_DATABASE_URL") else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        let org = OrgRepo(&pool).create("plugins", "plugins").await.unwrap();
+        let team = TeamRepo(&pool).create(org.id, "platform").await.unwrap();
+        let project = ProjectRepo(&pool).create(team.id, "gateway").await.unwrap();
+        let repo = PluginRepo(&pool);
+        let org_plugin = repo
+            .create(
+                org.id,
+                None,
+                "audit",
+                "audit",
+                "org audit",
+                "webhook",
+                "post_response",
+                false,
+                20,
+                "fail_open",
+                "https://plugins.internal/audit",
+                None,
+                &serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        let project_plugin = repo
+            .create(
+                org.id,
+                Some(project.id),
+                "audit override",
+                "audit",
+                "project audit",
+                "webhook",
+                "pre_upstream",
+                true,
+                10,
+                "fail_closed",
+                "https://plugins.internal/project-audit",
+                Some("PLUGIN_TOKEN"),
+                &serde_json::json!({"sample": 1.0}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(repo.list(org.id).await.unwrap().len(), 2);
+        let updated = repo
+            .update(
+                project_plugin.id,
+                Some(project.id),
+                "audit override",
+                "updated",
+                "pre_route",
+                false,
+                5,
+                "fail_open",
+                "https://plugins.internal/project-audit",
+                None,
+                &serde_json::json!({"sample": 0.5}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.stage, "pre_route");
+        assert_eq!(updated.position, 5);
+        repo.delete(org_plugin.id).await.unwrap();
+        assert_eq!(repo.list(org.id).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

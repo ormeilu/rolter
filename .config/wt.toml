@@ -4,8 +4,18 @@
 platform = "github"
 
 # reuse safe build caches without copying secrets such as .env files
-[post-start]
+[[post-start]]
 cache = "wt step copy-ignored --require-include"
+
+# serve the rolter-storybook MCP server (.mcp.json points at 127.0.0.1:6006/mcp).
+# it is the storybook dev server itself, so it must already be listening when a
+# session starts or the MCP server never attaches. runs after the cache step
+# because storybook needs the copied node_modules. `wt step tether` kills the
+# whole process group when the worktree is removed, so no pre-remove hook.
+# --exact-port fails loudly instead of drifting to a port .mcp.json cannot reach;
+# only one worktree can hold 6006 at a time.
+[[post-start]]
+storybook = "wt step tether -C {{ worktree_path }}/ui -- bunx storybook dev -p 6006 --ci --no-open --exact-port"
 
 # reclaim reproducible Rust build output before a completed worktree is removed
 [pre-remove]
