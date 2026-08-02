@@ -53,7 +53,17 @@ export const CatalogLoaded: Story = { render: () => <Harness fetchStub={routed()
 export const CatalogLoading: Story = { render: () => <Harness fetchStub={routed({ servers: () => new Promise<Response>(() => {}) })}><McpCatalog /></Harness> };
 export const CatalogEmpty: Story = { render: () => <Harness fetchStub={routed({ servers: async () => json([]) })}><McpCatalog /></Harness> };
 export const CatalogForbidden: Story = { render: () => <Harness fetchStub={routed({ servers: async () => json({ error: { message: "forbidden" } }, 403) })}><McpCatalog /></Harness> };
-export const CatalogValidatesEndpoint: Story = { render: () => <Harness fetchStub={routed()}><McpCatalog /></Harness>, play: async ({ canvasElement }) => { const canvas = within(canvasElement); await userEvent.click(await canvas.findByRole("button", { name: "Register server" })); const body = within(document.body); await userEvent.type(body.getByLabelText("Name"), "Local tools"); await userEvent.type(body.getByLabelText("Endpoint URL"), "ftp://invalid"); await expect(body.getByRole("button", { name: "Register server" })).toBeDisabled(); } };
+export const CatalogValidatesEndpoint: Story = {
+  render: () => <Harness fetchStub={routed()}><McpCatalog /></Harness>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "Register server" }));
+    const dialog = within(await within(document.body).findByRole("dialog"));
+    await userEvent.type(dialog.getByLabelText("Name"), "Local tools");
+    await userEvent.type(dialog.getByLabelText("Endpoint URL"), "ftp://invalid");
+    await expect(dialog.getByRole("button", { name: "Register server" })).toBeDisabled();
+  },
+};
 export const CatalogExplainsDeleteCascade: Story = { render: () => <Harness fetchStub={routed()}><McpCatalog /></Harness>, play: async ({ canvasElement }) => { const canvas = within(canvasElement); await userEvent.click(await canvas.findByRole("button", { name: "Delete GitHub" })); const body = within(document.body); await expect(body.getByText(/removes every OAuth grant and token session/)).toBeVisible(); await expect(body.getByRole("button", { name: "Delete server" })).toBeEnabled(); } };
 
 export const LibraryLoaded: Story = { render: () => <Harness fetchStub={routed()}><McpLibrary /></Harness> };
