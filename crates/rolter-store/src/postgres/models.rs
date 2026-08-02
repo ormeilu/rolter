@@ -533,6 +533,42 @@ pub struct LoggingSettings {
     pub updated_at: DateTime<Utc>,
 }
 
+/// one ordered built-in or custom regex rule in the global guardrail policy
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct GuardrailRule {
+    pub id: Uuid,
+    pub name: String,
+    pub enabled: bool,
+    pub source_type: String,
+    pub builtin: Option<String>,
+    pub pattern: Option<String>,
+    pub stage: String,
+    pub action: String,
+    pub replacement: Option<String>,
+    pub include_system: bool,
+    pub position: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// one external guardrail service; at most one row can be enabled at a time
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct GuardrailProvider {
+    pub id: Uuid,
+    pub name: String,
+    pub enabled: bool,
+    pub url: String,
+    pub stage: String,
+    pub timeout_ms: i32,
+    pub max_retries: i32,
+    pub failure_mode: String,
+    pub max_body_bytes: i32,
+    pub auth_kind: String,
+    pub auth_env: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// a local account. `password_hash` is `None` for sso-only users (a later
 /// phase) and is never serialized back to a client
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

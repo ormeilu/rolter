@@ -398,6 +398,22 @@ const CAPABILITIES: &[Capability] = &[
         delete: NA,
     },
     Capability {
+        resource: "guardrail_rule",
+        scope: "deployment",
+        read: SUPER,
+        create: SUPER,
+        update: SUPER,
+        delete: SUPER,
+    },
+    Capability {
+        resource: "guardrail_provider",
+        scope: "deployment",
+        read: SUPER,
+        create: SUPER,
+        update: SUPER,
+        delete: SUPER,
+    },
+    Capability {
         // read-only: the data plane writes it over the internal channel, and
         // no operator role edits a measurement
         resource: "adaptive_routing_telemetry",
@@ -787,6 +803,7 @@ mod tests {
         ),
         ("crud.rs", include_str!("crud.rs")),
         ("feature_flags.rs", include_str!("feature_flags.rs")),
+        ("guardrails.rs", include_str!("guardrails.rs")),
         ("health.rs", include_str!("health.rs")),
         ("invitations.rs", include_str!("invitations.rs")),
         ("lib.rs", include_str!("lib.rs")),
