@@ -6,8 +6,10 @@ rolter stores the OAuth state behind Model Context Protocol access: which MCP se
 
 ```
 mcp_servers (org-scoped)
-   └── mcp_oauth_grants   one live grant per (server, user)
-          └── mcp_oauth_sessions   token material, sealed at rest
+   ├── mcp_oauth_grants   one live grant per (server, user)
+   │      └── mcp_oauth_sessions   token material, sealed at rest
+   ├── mcp_tool_groups    named server/tool policy manifests
+   └── mcp_gateway_settings   organization defaults
 ```
 
 - **Server** — name, slug (unique per org), URL, transport and the OAuth scopes every proxied call requires. Deleting one cascades to its grants and sessions: withdrawing the server withdraws access to it.
@@ -35,7 +37,10 @@ Every listing is joined through `mcp_servers.org_id`, so a cross-tenant read is 
 
 ## Endpoints
 
-- `GET`/`POST /api/v1/orgs/{org_id}/mcp-servers`, `PATCH`/`DELETE /api/v1/mcp-servers/{id}` — viewer reads, admin writes. A server URL must be `http(s)`; the transport must be one of `stdio`, `sse`, `streamable_http`, `websocket`. `PATCH` replaces `required_scopes` without destroying grants or sessions.
+- `GET`/`POST /api/v1/orgs/{org_id}/mcp-servers`, `PATCH`/`DELETE /api/v1/mcp-servers/{id}` — viewer reads, admin writes. A server URL must be `http(s)`; the transport must be one of `stdio`, `sse`, `streamable_http`, `websocket`. `PATCH` updates registry metadata, enabled state, declared tools and required scopes without destroying grants or sessions.
+- `GET /api/v1/orgs/{org_id}/mcp/library` — curated definitions annotated with whether the slug is installed. Installing one uses the ordinary server create endpoint, so the registry remains the source of truth.
+- `GET`/`POST /api/v1/orgs/{org_id}/mcp/tool-groups`, `PUT`/`DELETE /api/v1/mcp/tool-groups/{id}` — exact server/tool policy manifests. These definitions are not yet enforced by the proxy.
+- `GET`/`PUT /api/v1/orgs/{org_id}/mcp/settings` — organization transport and request defaults. The current HTTP proxy still uses deployment-level transport timeouts.
 - `GET /api/v1/orgs/{org_id}/mcp/grants`, `DELETE /api/v1/mcp/grants/{id}`
 - `GET /api/v1/orgs/{org_id}/mcp/sessions`, `DELETE /api/v1/mcp/sessions/{id}`
 - `GET`/`POST`/`DELETE /mcp/{server_slug}/{path...}` — Streamable HTTP/SSE proxy on the gateway, authorized by virtual-key owner, server and required scopes

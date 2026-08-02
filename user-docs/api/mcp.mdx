@@ -28,3 +28,22 @@ client authorization headers are removed.
 
 stdio and WebSocket registrations fail with `mcp_transport_unsupported` on
 this HTTP endpoint.
+
+## Manage the registry
+
+The dashboard's MCP Catalog reads the organization registry directly. An admin
+can register a custom HTTP endpoint, declare its tool names and OAuth scopes,
+or install a reviewed definition from MCP Library. Turning a server off removes
+it from the next gateway snapshot; its grants and sessions remain stored until
+the server is deleted.
+
+Tool Groups bundle exact `server/tool` references into named policy manifests.
+They are useful to MCP-aware clients and future project assignment, but the
+current proxy does not enforce group membership as an access boundary. Access
+continues to be decided by virtual-key owner, server, live OAuth session and
+required scopes.
+
+MCP Settings stores organization defaults for transport, timeout intent,
+retries, failure policy and undeclared tools. The current HTTP proxy continues
+to use deployment-level transport timeouts; the screen calls this out rather
+than implying a saved value has already changed request-path behavior.

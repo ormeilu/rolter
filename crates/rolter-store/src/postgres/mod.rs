@@ -573,7 +573,7 @@ impl PostgresConfigStore {
     async fn load_mcp_servers(&self) -> Result<Vec<McpServerConfig>> {
         let rows: Vec<McpServerSnapshotRow> = sqlx::query_as(
             "select id, org_id, slug, url, transport, required_scopes \
-             from mcp_servers order by org_id, slug",
+             from mcp_servers where enabled order by org_id, slug",
         )
         .fetch_all(&self.pool)
         .await
