@@ -23,6 +23,7 @@ import {
   createScimToken,
   fetchScimTokens,
   revokeScimToken,
+  ApiError,
   type CreatedScimToken,
   type ScimTokenRow,
 } from "@/lib/api";
@@ -30,11 +31,11 @@ import { useScope } from "@/lib/scope";
 
 const TOKENS_QUERY_KEY = ["scim-tokens"];
 
-// listing, creating and revoking all require Admin on the org, and getJson only
-// carries the status in its message. a 403 is a permission answer, not a
-// failure, so it gets its own calm state rather than an error banner
+// listing, creating and revoking all require Admin on the org. a 403 is a
+// permission answer, not a failure, so it gets its own calm state rather than
+// an error banner
 function isForbidden(error: unknown): boolean {
-  return error instanceof Error && /\b403\b/.test(error.message);
+  return error instanceof ApiError && error.status === 403;
 }
 
 function stamp(iso: string | null): string {
