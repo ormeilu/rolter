@@ -35,6 +35,7 @@ import { AuthSessions, OAuthGrants } from "@/pages/McpOAuth";
 import Models from "@/pages/Models";
 import Performance from "@/pages/Performance";
 import Playground from "@/pages/Playground";
+import Plugins from "@/pages/Plugins";
 import Pricing from "@/pages/Pricing";
 import ProviderGroups from "@/pages/ProviderGroups";
 import Providers from "@/pages/Providers";
@@ -50,6 +51,7 @@ import Users from "@/pages/Users";
 // renders the branded stub. keys double as route paths (/<key>).
 const SCREENS: Record<string, React.ReactNode> = {
   playground: <Playground />,
+  plugins: <Plugins />,
   dashboard: <Dashboard />,
   logs: <Logs />,
   "mcp-logs": <McpLogs />,
