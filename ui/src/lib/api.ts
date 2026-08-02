@@ -44,26 +44,36 @@ function authHeaders(): Record<string, string> {
   }
 }
 
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: authHeaders() });
   if (!res.ok) {
-    throw new Error(`request failed: ${res.status}`);
+    throw await apiError(res);
   }
   return (await res.json()) as T;
 }
 
 /// extract the control api's `{"error": {"message": ...}}` body when present,
 /// falling back to the raw status text
-async function apiError(res: Response): Promise<Error> {
+async function apiError(res: Response): Promise<ApiError> {
   try {
     const body = (await res.json()) as { error?: { message?: string } };
     if (body?.error?.message) {
-      return new Error(body.error.message);
+      return new ApiError(body.error.message, res.status);
     }
   } catch {
     // not json, fall through
   }
-  return new Error(`request failed: ${res.status}`);
+  return new ApiError(`request failed: ${res.status}`, res.status);
 }
 
 async function sendJson<T>(
@@ -819,6 +829,136 @@ export function setVirtualKeyCache(
 
 export function deleteVirtualKey(id: string): Promise<void> {
   return sendJson<void>("DELETE", `/api/v1/virtual-keys/${id}`);
+}
+
+// --- prompt template repository (crates/rolter-control/src/crud.rs) ---
+
+export interface PromptTemplateVariable {
+  name: string;
+  required: boolean;
+  default?: string;
+}
+
+export type PromptDecoratorRole = "system" | "assistant" | "user";
+export type PromptDecoratorPosition = "prepend" | "append";
+
+export interface PromptTemplateDecorator {
+  role: PromptDecoratorRole;
+  position: PromptDecoratorPosition;
+  content: string;
+}
+
+export interface PromptTemplateRow {
+  id: string;
+  org_id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  published_version?: number | null;
+  created_at: string;
+}
+
+export interface PromptTemplateVersionRow {
+  template_id: string;
+  version: number;
+  variables: PromptTemplateVariable[];
+  decorators: PromptTemplateDecorator[];
+  created_at: string;
+}
+
+export type PromptTemplateScopeType = "org" | "project" | "route" | "virtual_key";
+
+export interface PromptTemplateScopeRow {
+  template_id: string;
+  version: number;
+  scope_type: PromptTemplateScopeType;
+  scope_id: string;
+  created_at: string;
+}
+
+export interface PromptTemplateScopeInput {
+  scope_type: PromptTemplateScopeType;
+  scope_id: string;
+}
+
+export function fetchPromptTemplates(orgId: string): Promise<PromptTemplateRow[]> {
+  return getJson<PromptTemplateRow[]>(`/api/v1/orgs/${orgId}/prompt-templates`);
+}
+
+export function createPromptTemplate(
+  orgId: string,
+  input: { name: string; slug?: string; description?: string },
+): Promise<PromptTemplateRow> {
+  return sendJson<PromptTemplateRow>(
+    "POST",
+    `/api/v1/orgs/${orgId}/prompt-templates`,
+    input,
+  );
+}
+
+export function fetchPromptTemplateVersions(
+  templateId: string,
+): Promise<PromptTemplateVersionRow[]> {
+  return getJson<PromptTemplateVersionRow[]>(
+    `/api/v1/prompt-templates/${templateId}/versions`,
+  );
+}
+
+export function createPromptTemplateVersion(
+  templateId: string,
+  input: {
+    variables: PromptTemplateVariable[];
+    decorators: PromptTemplateDecorator[];
+  },
+): Promise<PromptTemplateVersionRow> {
+  return sendJson<PromptTemplateVersionRow>(
+    "POST",
+    `/api/v1/prompt-templates/${templateId}/versions`,
+    input,
+  );
+}
+
+export function fetchPromptTemplateScopes(
+  templateId: string,
+  version: number,
+): Promise<PromptTemplateScopeRow[]> {
+  return getJson<PromptTemplateScopeRow[]>(
+    `/api/v1/prompt-templates/${templateId}/versions/${version}/scopes`,
+  );
+}
+
+export function setPromptTemplateScopes(
+  templateId: string,
+  version: number,
+  scopes: PromptTemplateScopeInput[],
+): Promise<PromptTemplateScopeRow[]> {
+  return sendJson<PromptTemplateScopeRow[]>(
+    "PUT",
+    `/api/v1/prompt-templates/${templateId}/versions/${version}/scopes`,
+    { scopes },
+  );
+}
+
+export function publishPromptTemplateVersion(
+  templateId: string,
+  version: number,
+): Promise<PromptTemplateRow> {
+  return sendJson<PromptTemplateRow>(
+    "PUT",
+    `/api/v1/prompt-templates/${templateId}/publish`,
+    { version },
+  );
+}
+
+export function rollbackPromptTemplateVersion(
+  templateId: string,
+  version: number,
+): Promise<PromptTemplateRow> {
+  return sendJson<PromptTemplateRow>(
+    "PUT",
+    `/api/v1/prompt-templates/${templateId}/rollback`,
+    { version },
+  );
 }
 
 // --- organization skills repository (crates/rolter-control/src/crud.rs) ---
@@ -1636,6 +1776,62 @@ export function updateAdaptiveRoutingPolicy(
     "PUT",
     "/api/v1/adaptive-routing-policy",
     input,
+  );
+}
+
+export interface AdaptiveDecisionCountsDto {
+  blend: number;
+  exploration: number;
+  fallback: number;
+}
+
+export interface AdaptiveTargetTelemetryDto {
+  target: number;
+  provider?: string;
+  upstream_model?: string;
+  score?: number;
+  latency_score?: number;
+  cost_score?: number;
+  load_score?: number;
+  latency_ms?: number;
+  cost_per_mtok?: number;
+  in_flight?: number;
+  samples?: number;
+  last_sample_age_ms?: number | null;
+}
+
+export interface AdaptiveNodeTelemetryDto {
+  node_id: string;
+  engaged: boolean;
+  observed: number;
+  decisions: AdaptiveDecisionCountsDto;
+  policy: {
+    enabled?: boolean;
+    latency_weight?: number;
+    cost_weight?: number;
+    load_weight?: number;
+    exploration_ratio?: number;
+    min_samples?: number;
+  };
+  targets: AdaptiveTargetTelemetryDto[];
+  reported_at: string;
+}
+
+export interface AdaptiveRouteTelemetryDto {
+  model: string;
+  engaged: boolean;
+  nodes: AdaptiveNodeTelemetryDto[];
+}
+
+export interface AdaptiveRoutingTelemetryDto {
+  generated_at: string;
+  fresh_window_secs: number;
+  routes: AdaptiveRouteTelemetryDto[];
+}
+
+export function fetchAdaptiveRoutingTelemetry(): Promise<AdaptiveRoutingTelemetryDto> {
+  return getJson<AdaptiveRoutingTelemetryDto>(
+    "/api/v1/adaptive-routing-telemetry",
   );
 }
 

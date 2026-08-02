@@ -252,8 +252,10 @@ export const BUILT = new Set([
   "customers",
   "compatibility",
   "cluster",
+  "adaptive-dashboard",
   "adaptive-settings",
   "user-provisioning",
+  "prompt-repo",
   "skills-repo",
 ]);
 

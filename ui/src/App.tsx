@@ -12,6 +12,7 @@ import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 import Account from "@/pages/Account";
 import { AlertChannels, AlertHistory, AlertRules } from "@/pages/Alerting";
+import AdaptiveDashboard from "@/pages/AdaptiveDashboard";
 import AdaptiveSettings from "@/pages/AdaptiveSettings";
 import AuditLog from "@/pages/AuditLog";
 import Cluster from "@/pages/Cluster";
@@ -36,6 +37,7 @@ import Models from "@/pages/Models";
 import Performance from "@/pages/Performance";
 import Playground from "@/pages/Playground";
 import Pricing from "@/pages/Pricing";
+import PromptRepository from "@/pages/PromptRepository";
 import ProviderGroups from "@/pages/ProviderGroups";
 import Providers from "@/pages/Providers";
 import Rbac from "@/pages/Rbac";
@@ -82,10 +84,12 @@ const SCREENS: Record<string, React.ReactNode> = {
   performance: <Performance />,
   compatibility: <Compatibility />,
   cluster: <Cluster />,
+  "adaptive-dashboard": <AdaptiveDashboard />,
   "adaptive-settings": <AdaptiveSettings />,
   "business-units": <BusinessUnits />,
   customers: <Customers />,
   "user-provisioning": <UserProvisioning />,
+  "prompt-repo": <PromptRepository />,
   "skills-repo": <SkillsRepository />,
 };
 

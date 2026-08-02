@@ -105,8 +105,9 @@ export default function Pricing() {
               <button
                 type="button"
                 title="Delete price"
+                aria-label={`Delete price for ${price.model}`}
                 onClick={() => setDeleteTarget(price)}
-                className="flex items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)]"
+                className="flex items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
