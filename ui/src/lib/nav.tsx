@@ -256,6 +256,7 @@ export const BUILT = new Set([
   "adaptive-settings",
   "user-provisioning",
   "prompt-repo",
+  "skills-repo",
 ]);
 
 // every navigable leaf key (parents with children are toggles, not screens)
