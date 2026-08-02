@@ -127,6 +127,10 @@ wt list --full
 wt remove <branch>
 ```
 
+The shared `pre-remove` hook runs `cargo clean` inside that worktree before
+Worktrunk deletes it. This reclaims the copied `target/` cache while the path
+still exists; source files and other worktrees are unaffected.
+
 Worktrunk deletes a branch only when it can prove the branch adds no changes to
 the default branch. When the merge state is uncertain, preserve the branch:
 

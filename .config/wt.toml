@@ -6,3 +6,7 @@ platform = "github"
 # reuse safe build caches without copying secrets such as .env files
 [post-start]
 cache = "wt step copy-ignored --require-include"
+
+# reclaim reproducible Rust build output before a completed worktree is removed
+[pre-remove]
+target = "cargo clean"
