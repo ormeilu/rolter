@@ -378,9 +378,10 @@ const CAPABILITIES: &[Capability] = &[
         // no operator role edits a measurement
         resource: "adaptive_routing_telemetry",
         scope: "deployment",
-        read: S,
-        write: S,
-        unsupported: &[Action::Create, Action::Update, Action::Delete],
+        read: SUPER,
+        create: NA,
+        update: NA,
+        delete: NA,
     },
     Capability {
         resource: "cluster_node",
