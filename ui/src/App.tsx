@@ -12,6 +12,7 @@ import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 import Account from "@/pages/Account";
 import { AlertChannels, AlertHistory, AlertRules } from "@/pages/Alerting";
+import AdaptiveDashboard from "@/pages/AdaptiveDashboard";
 import AdaptiveSettings from "@/pages/AdaptiveSettings";
 import AuditLog from "@/pages/AuditLog";
 import Cluster from "@/pages/Cluster";
@@ -37,11 +38,13 @@ import Performance from "@/pages/Performance";
 import Playground from "@/pages/Playground";
 import Plugins from "@/pages/Plugins";
 import Pricing from "@/pages/Pricing";
+import PromptRepository from "@/pages/PromptRepository";
 import ProviderGroups from "@/pages/ProviderGroups";
 import Providers from "@/pages/Providers";
 import Rbac from "@/pages/Rbac";
 import RoutingRules from "@/pages/RoutingRules";
 import Security from "@/pages/Security";
+import SkillsRepository from "@/pages/SkillsRepository";
 import Stub from "@/pages/Stub";
 import Teams from "@/pages/Teams";
 import UserProvisioning from "@/pages/UserProvisioning";
@@ -83,10 +86,13 @@ const SCREENS: Record<string, React.ReactNode> = {
   performance: <Performance />,
   compatibility: <Compatibility />,
   cluster: <Cluster />,
+  "adaptive-dashboard": <AdaptiveDashboard />,
   "adaptive-settings": <AdaptiveSettings />,
   "business-units": <BusinessUnits />,
   customers: <Customers />,
   "user-provisioning": <UserProvisioning />,
+  "prompt-repo": <PromptRepository />,
+  "skills-repo": <SkillsRepository />,
 };
 
 // old bookmarkable paths → new IA keys
