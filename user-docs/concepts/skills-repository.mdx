@@ -1,0 +1,37 @@
+---
+title: "Skills repository"
+description: "Share immutable agent skills across an organization with role and team access policies, inline content or artifact references, and safe rollback."
+---
+
+The Skills Repository gives agents and teams one governed source for reusable instructions. Each skill has a stable slug, a mutable access policy, and an immutable version history. Publishing selects which saved version callers resolve; it never rewrites that version.
+
+## Create and share a skill
+
+Open **Skills Repository** in the dashboard and create a skill. Choose the minimum organization role that can resolve it:
+
+- **Viewer** allows every authenticated organization member.
+- **Member** excludes viewer-only principals.
+- **Admin** limits resolution to organization administrators.
+
+Optionally select one or more teams. With no teams selected, the skill is shared across the organization. When teams are selected, a caller must belong to an allowed team and meet the minimum role.
+
+## Save content
+
+Every version uses exactly one content source:
+
+- **Inline SKILL.md** stores the complete skill instructions in Rolter.
+- **Artifact reference** points to an `https`, `git+https`, `oci`, or `s3` location without embedded credentials. Pin a commit or digest where the scheme supports it so the external content is immutable too.
+
+Optional metadata is a JSON object for non-secret runtime requirements, capabilities, or provenance. The control plane rejects metadata fields whose names imply a secret, password, token, or API key.
+
+Selecting **Save new version** appends a version. Saved content, references, and metadata cannot be edited; start from any history entry to create the next version.
+
+## Publish, roll back, and retire
+
+Select a saved version and publish it to make it resolve by the skill's slug. To restore older behavior, select an earlier version and confirm **Roll back**. Newer versions remain in history.
+
+Retiring a skill stops callers from resolving it without deleting its metadata or version history. Reactivate it from **Settings** when it should be available again.
+
+<Note>
+  Organization skills require the PostgreSQL-backed control plane. Publication, rollback, and retirement bump the reload-free configuration snapshot consumed by gateways.
+</Note>

@@ -41,6 +41,7 @@ import Providers from "@/pages/Providers";
 import Rbac from "@/pages/Rbac";
 import RoutingRules from "@/pages/RoutingRules";
 import Security from "@/pages/Security";
+import SkillsRepository from "@/pages/SkillsRepository";
 import Stub from "@/pages/Stub";
 import Teams from "@/pages/Teams";
 import UserProvisioning from "@/pages/UserProvisioning";
@@ -85,6 +86,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   "business-units": <BusinessUnits />,
   customers: <Customers />,
   "user-provisioning": <UserProvisioning />,
+  "skills-repo": <SkillsRepository />,
 };
 
 // old bookmarkable paths → new IA keys
