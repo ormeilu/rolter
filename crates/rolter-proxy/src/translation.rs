@@ -986,8 +986,7 @@ fn content_text(v: Option<&Value>) -> String {
         Some(Value::Array(a)) => a
             .iter()
             .filter_map(|v| v.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join(""),
+            .collect::<String>(),
         Some(v) => v.to_string(),
         None => String::new(),
     }
