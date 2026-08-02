@@ -38,6 +38,8 @@ mod mcp_logs;
 mod mcp_oauth;
 #[cfg(feature = "postgres")]
 mod me;
+#[cfg(feature = "postgres")]
+mod plugins;
 mod proxy;
 #[cfg(feature = "postgres")]
 mod rbac;
@@ -388,6 +390,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(invitations::router())
             .merge(crud::router())
             .merge(me::router())
+            .merge(plugins::router())
             .merge(mcp_logs::router())
             .merge(mcp_oauth::router())
             .merge(feature_flags::router())
