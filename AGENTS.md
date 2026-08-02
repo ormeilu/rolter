@@ -99,14 +99,24 @@ existing rolter design system (DesignSync / the Claude Design project), which
 supplies the tokens and primitives the dashboard already ships: run the skill
 first, then build against the tokens. Never hard-code a hex or font the tokens
 already carry.
-When working on dashboard UI, run `bun run storybook` in `ui/` and consult the
-project MCP server (`rolter-storybook` in `.mcp.json`) before writing
-components:
+When working on dashboard UI, consult the project MCP server
+(`rolter-storybook` in `.mcp.json`) before writing components:
 - run `list-all-documentation` first to discover available primitives
 - run `get-documentation` / `get-documentation-for-story` before using
   component props
 - run `get-storybook-story-instructions` before creating or editing stories
-- run `run-story-tests` after generating UI or stories
+- run `preview-stories` after generating UI or stories, and include the
+  returned URLs in your reply
+
+That MCP server *is* the Storybook dev server on port 6006, so it has to be
+listening before the agent session starts — a session that begins with port
+6006 down has no `rolter-storybook` tools for its entire lifetime, and starting
+Storybook mid-session does not attach them. The `post-start` hook in
+`.config/wt.toml` starts it for every new worktree and tears it down with the
+worktree, so this is handled as long as hooks are approved
+(`wt config approvals add`). Outside a Worktrunk worktree, start it yourself
+with `bun run storybook` in `ui/` before launching the session. Only one
+worktree can hold port 6006 at a time.
 
 This applies to every state a screen has, empty/loading/error included. Assets
 stay vendored locally — the dashboard must work air-gapped, so no runtime CDN
