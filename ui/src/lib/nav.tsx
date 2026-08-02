@@ -218,6 +218,8 @@ export const META: Record<string, [string, string]> = {
 
 // screens with a real implementation; everything else renders the branded stub
 export const BUILT = new Set([
+  "guardrail-rules",
+  "guardrail-providers",
   "playground",
   "dashboard",
   "logs",

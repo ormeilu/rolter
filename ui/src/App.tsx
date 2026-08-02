@@ -23,6 +23,8 @@ import { BusinessUnits, Customers } from "@/pages/CostAttribution";
 import Dashboard from "@/pages/Dashboard";
 import FeatureFlags from "@/pages/FeatureFlags";
 import Health from "@/pages/Health";
+import GuardrailProviders from "@/pages/GuardrailProviders";
+import GuardrailRules from "@/pages/GuardrailRules";
 import LogsSettings from "@/pages/LogsSettings";
 import Keys from "@/pages/Keys";
 import Limits from "@/pages/Limits";
@@ -77,6 +79,8 @@ const SCREENS: Record<string, React.ReactNode> = {
   security: <Security />,
   caching: <Config />,
   "feature-flags": <FeatureFlags />,
+  "guardrail-rules": <GuardrailRules />,
+  "guardrail-providers": <GuardrailProviders />,
   "logs-settings": <LogsSettings />,
   performance: <Performance />,
   compatibility: <Compatibility />,
