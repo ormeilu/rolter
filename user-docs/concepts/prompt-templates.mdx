@@ -1,0 +1,34 @@
+---
+title: "Prompt templates"
+description: "Author versioned prompt decorators, preview variables, and publish them to organization, project, route, or virtual-key scopes."
+---
+
+The Prompt Repository lets operators add consistent messages around a caller's conversation without changing the client. A template contains ordered **decorators** and an optional set of **variables**. Each saved version is immutable, so the live prompt can always be traced to the exact content and scope that produced it.
+
+## Create a template
+
+Open **Prompt Repository** in the dashboard and create a template. Its slug is the stable identity; the name and description explain its purpose to other operators.
+
+Add one or more decorators:
+
+- **Role** controls whether the rendered message is sent as `system`, `assistant`, or `user`.
+- **Position** places the message before or after the caller's original messages.
+- **Content** accepts declared variables in `{{ variable_name }}` form.
+
+Variable names start with a letter or underscore and contain only letters, digits, and underscores. A variable is either required or has a default value, never both. Use the live preview's sample values to inspect the rendered messages; samples remain in the browser and are not saved.
+
+## Assign scopes
+
+A version can be assigned to the entire organization, the current project, an individual route, or a virtual key. Leave its scope list empty to save it without deploying it anywhere.
+
+Scope assignment belongs to the version. Once a version is published, both its content and scopes remain immutable. Create a new draft to make a change.
+
+## Publish and roll back
+
+**Save as new draft** creates the next immutable version. Select that version in the history rail and publish it when it is ready. Publishing changes the template's live-version pointer; it does not rewrite the saved version.
+
+To restore previous behavior, choose an older version and select **Roll back**. The older version becomes live again, while all newer versions remain visible in history.
+
+<Note>
+  Prompt templates are control-plane configuration. The control plane must use PostgreSQL, and the gateway must consume its configuration snapshot for published changes to reach traffic.
+</Note>

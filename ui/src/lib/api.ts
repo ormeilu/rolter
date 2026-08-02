@@ -44,26 +44,36 @@ function authHeaders(): Record<string, string> {
   }
 }
 
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: authHeaders() });
   if (!res.ok) {
-    throw new Error(`request failed: ${res.status}`);
+    throw await apiError(res);
   }
   return (await res.json()) as T;
 }
 
 /// extract the control api's `{"error": {"message": ...}}` body when present,
 /// falling back to the raw status text
-async function apiError(res: Response): Promise<Error> {
+async function apiError(res: Response): Promise<ApiError> {
   try {
     const body = (await res.json()) as { error?: { message?: string } };
     if (body?.error?.message) {
-      return new Error(body.error.message);
+      return new ApiError(body.error.message, res.status);
     }
   } catch {
     // not json, fall through
   }
-  return new Error(`request failed: ${res.status}`);
+  return new ApiError(`request failed: ${res.status}`, res.status);
 }
 
 async function sendJson<T>(
@@ -821,6 +831,211 @@ export function deleteVirtualKey(id: string): Promise<void> {
   return sendJson<void>("DELETE", `/api/v1/virtual-keys/${id}`);
 }
 
+// --- prompt template repository (crates/rolter-control/src/crud.rs) ---
+
+export interface PromptTemplateVariable {
+  name: string;
+  required: boolean;
+  default?: string;
+}
+
+export type PromptDecoratorRole = "system" | "assistant" | "user";
+export type PromptDecoratorPosition = "prepend" | "append";
+
+export interface PromptTemplateDecorator {
+  role: PromptDecoratorRole;
+  position: PromptDecoratorPosition;
+  content: string;
+}
+
+export interface PromptTemplateRow {
+  id: string;
+  org_id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  published_version?: number | null;
+  created_at: string;
+}
+
+export interface PromptTemplateVersionRow {
+  template_id: string;
+  version: number;
+  variables: PromptTemplateVariable[];
+  decorators: PromptTemplateDecorator[];
+  created_at: string;
+}
+
+export type PromptTemplateScopeType = "org" | "project" | "route" | "virtual_key";
+
+export interface PromptTemplateScopeRow {
+  template_id: string;
+  version: number;
+  scope_type: PromptTemplateScopeType;
+  scope_id: string;
+  created_at: string;
+}
+
+export interface PromptTemplateScopeInput {
+  scope_type: PromptTemplateScopeType;
+  scope_id: string;
+}
+
+export function fetchPromptTemplates(orgId: string): Promise<PromptTemplateRow[]> {
+  return getJson<PromptTemplateRow[]>(`/api/v1/orgs/${orgId}/prompt-templates`);
+}
+
+export function createPromptTemplate(
+  orgId: string,
+  input: { name: string; slug?: string; description?: string },
+): Promise<PromptTemplateRow> {
+  return sendJson<PromptTemplateRow>(
+    "POST",
+    `/api/v1/orgs/${orgId}/prompt-templates`,
+    input,
+  );
+}
+
+export function fetchPromptTemplateVersions(
+  templateId: string,
+): Promise<PromptTemplateVersionRow[]> {
+  return getJson<PromptTemplateVersionRow[]>(
+    `/api/v1/prompt-templates/${templateId}/versions`,
+  );
+}
+
+export function createPromptTemplateVersion(
+  templateId: string,
+  input: {
+    variables: PromptTemplateVariable[];
+    decorators: PromptTemplateDecorator[];
+  },
+): Promise<PromptTemplateVersionRow> {
+  return sendJson<PromptTemplateVersionRow>(
+    "POST",
+    `/api/v1/prompt-templates/${templateId}/versions`,
+    input,
+  );
+}
+
+export function fetchPromptTemplateScopes(
+  templateId: string,
+  version: number,
+): Promise<PromptTemplateScopeRow[]> {
+  return getJson<PromptTemplateScopeRow[]>(
+    `/api/v1/prompt-templates/${templateId}/versions/${version}/scopes`,
+  );
+}
+
+export function setPromptTemplateScopes(
+  templateId: string,
+  version: number,
+  scopes: PromptTemplateScopeInput[],
+): Promise<PromptTemplateScopeRow[]> {
+  return sendJson<PromptTemplateScopeRow[]>(
+    "PUT",
+    `/api/v1/prompt-templates/${templateId}/versions/${version}/scopes`,
+    { scopes },
+  );
+}
+
+export function publishPromptTemplateVersion(
+  templateId: string,
+  version: number,
+): Promise<PromptTemplateRow> {
+  return sendJson<PromptTemplateRow>(
+    "PUT",
+    `/api/v1/prompt-templates/${templateId}/publish`,
+    { version },
+  );
+}
+
+export function rollbackPromptTemplateVersion(
+  templateId: string,
+  version: number,
+): Promise<PromptTemplateRow> {
+  return sendJson<PromptTemplateRow>(
+    "PUT",
+    `/api/v1/prompt-templates/${templateId}/rollback`,
+    { version },
+  );
+}
+
+// --- organization skills repository (crates/rolter-control/src/crud.rs) ---
+
+export type SkillMinimumRole = "viewer" | "member" | "admin";
+
+export interface SkillRow {
+  id: string;
+  org_id: string;
+  name: string;
+  slug: string;
+  description: string;
+  retired_at?: string | null;
+  published_version?: number | null;
+  allowed_team_ids: string[];
+  minimum_role: SkillMinimumRole;
+  created_at: string;
+}
+
+export interface SkillVersionRow {
+  skill_id: string;
+  version: number;
+  content?: string | null;
+  content_ref?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CreateSkillInput {
+  name: string;
+  slug?: string;
+  description?: string;
+  allowed_team_ids?: string[];
+  minimum_role?: SkillMinimumRole;
+}
+
+export interface UpdateSkillInput {
+  name?: string;
+  description?: string;
+  retired?: boolean;
+  allowed_team_ids?: string[];
+  minimum_role?: SkillMinimumRole;
+}
+
+export function fetchSkills(orgId: string): Promise<SkillRow[]> {
+  return getJson<SkillRow[]>(`/api/v1/orgs/${orgId}/skills`);
+}
+
+export function createSkill(orgId: string, input: CreateSkillInput): Promise<SkillRow> {
+  return sendJson<SkillRow>("POST", `/api/v1/orgs/${orgId}/skills`, input);
+}
+
+export function updateSkill(id: string, input: UpdateSkillInput): Promise<SkillRow> {
+  return sendJson<SkillRow>("PUT", `/api/v1/skills/${id}`, input);
+}
+
+export function fetchSkillVersions(id: string): Promise<SkillVersionRow[]> {
+  return getJson<SkillVersionRow[]>(`/api/v1/skills/${id}/versions`);
+}
+
+export function createSkillVersion(
+  id: string,
+  input:
+    | { content: string; content_ref?: never; metadata: Record<string, unknown> }
+    | { content?: never; content_ref: string; metadata: Record<string, unknown> },
+): Promise<SkillVersionRow> {
+  return sendJson<SkillVersionRow>("POST", `/api/v1/skills/${id}/versions`, input);
+}
+
+export function publishSkillVersion(id: string, version: number): Promise<SkillRow> {
+  return sendJson<SkillRow>("PUT", `/api/v1/skills/${id}/publish`, { version });
+}
+
+export function rollbackSkillVersion(id: string, version: number): Promise<SkillRow> {
+  return sendJson<SkillRow>("PUT", `/api/v1/skills/${id}/rollback`, { version });
+}
+
 // --- budgets, rate limits, model pricing (crates/rolter-control/src/crud.rs) ---
 
 export const SCOPE_TYPES = ["org", "team", "project", "virtual_key"] as const;
@@ -1561,6 +1776,62 @@ export function updateAdaptiveRoutingPolicy(
     "PUT",
     "/api/v1/adaptive-routing-policy",
     input,
+  );
+}
+
+export interface AdaptiveDecisionCountsDto {
+  blend: number;
+  exploration: number;
+  fallback: number;
+}
+
+export interface AdaptiveTargetTelemetryDto {
+  target: number;
+  provider?: string;
+  upstream_model?: string;
+  score?: number;
+  latency_score?: number;
+  cost_score?: number;
+  load_score?: number;
+  latency_ms?: number;
+  cost_per_mtok?: number;
+  in_flight?: number;
+  samples?: number;
+  last_sample_age_ms?: number | null;
+}
+
+export interface AdaptiveNodeTelemetryDto {
+  node_id: string;
+  engaged: boolean;
+  observed: number;
+  decisions: AdaptiveDecisionCountsDto;
+  policy: {
+    enabled?: boolean;
+    latency_weight?: number;
+    cost_weight?: number;
+    load_weight?: number;
+    exploration_ratio?: number;
+    min_samples?: number;
+  };
+  targets: AdaptiveTargetTelemetryDto[];
+  reported_at: string;
+}
+
+export interface AdaptiveRouteTelemetryDto {
+  model: string;
+  engaged: boolean;
+  nodes: AdaptiveNodeTelemetryDto[];
+}
+
+export interface AdaptiveRoutingTelemetryDto {
+  generated_at: string;
+  fresh_window_secs: number;
+  routes: AdaptiveRouteTelemetryDto[];
+}
+
+export function fetchAdaptiveRoutingTelemetry(): Promise<AdaptiveRoutingTelemetryDto> {
+  return getJson<AdaptiveRoutingTelemetryDto>(
+    "/api/v1/adaptive-routing-telemetry",
   );
 }
 
