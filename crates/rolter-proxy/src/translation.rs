@@ -983,11 +983,12 @@ fn openai_finish(v: Option<&Value>) -> Value {
 fn content_text(v: Option<&Value>) -> String {
     match v {
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(a)) => a
-            .iter()
-            .filter_map(|v| v.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join(""),
+        Some(Value::Array(a)) => {
+            // ⚡ Bolt: Eliminate intermediate Vec allocation
+            a.iter()
+                .filter_map(|v| v.get("text").and_then(Value::as_str))
+                .collect::<String>()
+        }
         Some(v) => v.to_string(),
         None => String::new(),
     }
