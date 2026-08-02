@@ -75,6 +75,18 @@ describe("api client", () => {
 
       await expect(fetchConfig()).rejects.toThrow("request failed: 404");
     });
+
+    it("should surface control plane error messages", async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "superadmin access required" } }), {
+          status: 403,
+        })
+      );
+
+      const request = fetchConfig();
+      await expect(request).rejects.toThrow("superadmin access required");
+      await expect(request).rejects.toMatchObject({ status: 403 });
+    });
   });
 
   describe("sendJson (via createOrg)", () => {

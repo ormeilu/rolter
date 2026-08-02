@@ -12,6 +12,7 @@ import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 import Account from "@/pages/Account";
 import { AlertChannels, AlertHistory, AlertRules } from "@/pages/Alerting";
+import AdaptiveDashboard from "@/pages/AdaptiveDashboard";
 import AdaptiveSettings from "@/pages/AdaptiveSettings";
 import AuditLog from "@/pages/AuditLog";
 import Cluster from "@/pages/Cluster";
@@ -81,6 +82,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   performance: <Performance />,
   compatibility: <Compatibility />,
   cluster: <Cluster />,
+  "adaptive-dashboard": <AdaptiveDashboard />,
   "adaptive-settings": <AdaptiveSettings />,
   "business-units": <BusinessUnits />,
   customers: <Customers />,
