@@ -1,0 +1,36 @@
+---
+title: "Plugins"
+description: "Store org- and project-scoped webhook middleware configuration for the Rolter request pipeline."
+---
+
+Open **Plugins** to arrange desired request and response middleware across three stages:
+
+- **Pre-route** — before Rolter selects a route.
+- **Pre-upstream** — after routing and immediately before provider delivery.
+- **Post-response** — after the provider returns and before client delivery.
+
+Each webhook configuration has a stable slug, an organization or project scope, an order, a failure policy, an HTTP endpoint, an optional secret environment-variable reference, and a JSON object with plugin-specific settings.
+
+<Warning>
+  The current Plugins screen is a configuration registry. Saving or enabling a row does not execute middleware in the gateway yet. The screen labels enabled values as desired state; gateway dispatch will consume the registry when the plugin runtime ships.
+</Warning>
+
+## Failure policy
+
+Choose the desired behavior for the future dispatcher:
+
+- **Fail open** favors availability by continuing when the plugin cannot decide.
+- **Fail closed** favors enforcement by stopping the request when the plugin cannot decide.
+
+## Secrets
+
+`secret_env` contains only an environment variable name such as `ROLTER_PLUGIN_TOKEN`. Put the value in the gateway environment. The control-plane API never accepts or returns the secret itself.
+
+## API
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/v1/orgs/{org_id}/plugins` | List or install configurations |
+| `PUT`, `DELETE` | `/api/v1/plugins/{id}` | Update or remove a configuration |
+
+Reads require viewer access at the organization. Mutations require admin access at the configuration's organization or project scope, and every mutation is written to the audit log.

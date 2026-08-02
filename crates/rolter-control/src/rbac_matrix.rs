@@ -129,6 +129,14 @@ const CAPABILITIES: &[Capability] = &[
         delete: ADMIN,
     },
     Capability {
+        resource: "plugin",
+        scope: "org",
+        read: VIEWER,
+        create: ADMIN,
+        update: ADMIN,
+        delete: ADMIN,
+    },
+    Capability {
         resource: "provider_group",
         scope: "org",
         read: VIEWER,
@@ -772,6 +780,7 @@ mod tests {
         ("mcp_oauth.rs", include_str!("mcp_oauth.rs")),
         ("me.rs", include_str!("me.rs")),
         ("proxy.rs", include_str!("proxy.rs")),
+        ("plugins.rs", include_str!("plugins.rs")),
         ("rbac.rs", include_str!("rbac.rs")),
         ("rbac_matrix.rs", include_str!("rbac_matrix.rs")),
         ("runtime_policy.rs", include_str!("runtime_policy.rs")),
