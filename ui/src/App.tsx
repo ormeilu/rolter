@@ -36,6 +36,7 @@ import Models from "@/pages/Models";
 import Performance from "@/pages/Performance";
 import Playground from "@/pages/Playground";
 import Pricing from "@/pages/Pricing";
+import PromptRepository from "@/pages/PromptRepository";
 import ProviderGroups from "@/pages/ProviderGroups";
 import Providers from "@/pages/Providers";
 import Rbac from "@/pages/Rbac";
@@ -85,6 +86,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   "business-units": <BusinessUnits />,
   customers: <Customers />,
   "user-provisioning": <UserProvisioning />,
+  "prompt-repo": <PromptRepository />,
 };
 
 // old bookmarkable paths → new IA keys
