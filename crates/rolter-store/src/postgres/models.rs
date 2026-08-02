@@ -106,6 +106,27 @@ pub struct SkillVersion {
     pub created_at: DateTime<Utc>,
 }
 
+/// one configured plugin instance at org or project scope
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct PluginInstance {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub project_id: Option<Uuid>,
+    pub name: String,
+    pub slug: String,
+    pub description: String,
+    pub kind: String,
+    pub stage: String,
+    pub enabled: bool,
+    pub position: i32,
+    pub failure_mode: String,
+    pub endpoint: String,
+    pub secret_env: Option<String>,
+    pub config: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Provider {
     pub id: Uuid,
