@@ -686,7 +686,10 @@ async fn create_provider(
     Ok(Json(provider))
 }
 
-fn parse_role(role: &str) -> ApiResult<()> {
+/// The roles a group mapping may grant. Shared with
+/// [`crate::scim_groups`], so both provisioning paths accept exactly the same
+/// set and neither can hand out something the other refuses.
+pub(crate) fn parse_role(role: &str) -> ApiResult<()> {
     if matches!(role, "admin" | "member" | "viewer") {
         Ok(())
     } else {

@@ -299,6 +299,16 @@ const CAPABILITIES: &[Capability] = &[
         update: NA,
         delete: ADMIN,
     },
+    // a group mapping is a way to grant a role, so it needs the same admin bar
+    // as granting one directly — the rule sso_group_mapping already follows
+    Capability {
+        resource: "scim_group_mapping",
+        scope: "org",
+        read: ADMIN,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
+    },
     Capability {
         resource: "mcp_server",
         scope: "org",
@@ -1079,6 +1089,7 @@ mod tests {
         ("rbac_matrix.rs", include_str!("rbac_matrix.rs")),
         ("runtime_policy.rs", include_str!("runtime_policy.rs")),
         ("scim.rs", include_str!("scim.rs")),
+        ("scim_groups.rs", include_str!("scim_groups.rs")),
         ("security.rs", include_str!("security.rs")),
         ("seed.rs", include_str!("seed.rs")),
         ("sso.rs", include_str!("sso.rs")),

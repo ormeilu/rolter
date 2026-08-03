@@ -2975,6 +2975,455 @@ async fn scim_users_are_provisioned_scoped_and_idempotent() {
     assert_eq!(action.as_deref(), Some("scim.user.deprovision"));
 }
 
+/// SCIM 2.0 Groups (#540): the group surface an IdP drives, and the org-scoped
+/// group→team mapping that turns group membership into roles. Covers SCIM
+/// semantics and error envelopes, cross-tenant scoping, membership
+/// reconciliation converging on a replayed sync, and deprovisioning taking the
+/// group-granted roles with it.
+#[tokio::test]
+async fn scim_groups_map_to_teams_and_reconcile_idempotently() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "GroupOrg", "slug": "group-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let org_uuid: uuid::Uuid = org_id.parse().unwrap();
+
+    let other: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "OtherGroupOrg", "slug": "other-group-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_id = other["id"].as_str().unwrap().to_string();
+
+    let team: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/teams"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Platform"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let team_id = team["id"].as_str().unwrap().to_string();
+    let team_uuid: uuid::Uuid = team_id.parse().unwrap();
+
+    let minted: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/scim-tokens"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "okta"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = minted["secret"].as_str().unwrap().to_string();
+
+    // an unauthenticated Groups call is a SCIM-shaped 401, like Users
+    let unauth = client
+        .get(format!("{base}/scim/v2/Groups"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth.status(), 401);
+    let body: Value = unauth.json().await.unwrap();
+    assert_eq!(
+        body["schemas"][0],
+        "urn:ietf:params:scim:api:messages:2.0:Error"
+    );
+
+    // provision two users through the Users surface first: a group may only
+    // contain accounts this token already created
+    let mut user_ids = Vec::new();
+    for name in ["ada@example.com", "grace@example.com"] {
+        let created: Value = client
+            .post(format!("{base}/scim/v2/Users"))
+            .bearer_auth(&secret)
+            .json(&json!({"userName": name, "emails": [{"value": name, "primary": true}]}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        user_ids.push(created["id"].as_str().unwrap().to_string());
+    }
+    let ada = user_ids[0].clone();
+    let grace = user_ids[1].clone();
+    let ada_uuid: uuid::Uuid = ada.parse().unwrap();
+    let grace_uuid: uuid::Uuid = grace.parse().unwrap();
+
+    // an operator maps the group name to a role on the team, before the IdP has
+    // ever mentioned the group — that must not error
+    let mapping: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/scim-group-mappings"))
+        .bearer_auth("admintok")
+        .json(&json!({"group_name": "platform", "role": "member", "team_id": team_id}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mapping_id = mapping["id"].as_str().unwrap().to_string();
+    assert_eq!(mapping["group_name"], "platform");
+
+    // a mapping may not grant into another tenant's team
+    let cross_team = client
+        .post(format!("{base}/api/v1/orgs/{other_id}/scim-group-mappings"))
+        .bearer_auth("admintok")
+        .json(&json!({"group_name": "platform", "role": "admin", "team_id": team_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        cross_team.status(),
+        400,
+        "a mapping must not reach another org's team"
+    );
+
+    // only the three built-in roles are mappable
+    let bad_role = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/scim-group-mappings"))
+        .bearer_auth("admintok")
+        .json(&json!({"group_name": "platform", "role": "superadmin"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_role.status(), 400);
+
+    // the IdP creates the group with one member
+    let created = client
+        .post(format!("{base}/scim/v2/Groups"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+            "displayName": "platform",
+            "externalId": "idp-group-1",
+            "members": [{"value": ada}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 201);
+    let created: Value = created.json().await.unwrap();
+    let group_id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(created["displayName"], "platform");
+    assert_eq!(created["externalId"], "idp-group-1");
+    assert_eq!(created["members"][0]["value"], ada);
+    assert_eq!(created["members"][0]["display"], "ada@example.com");
+
+    // the mapping took effect: ada holds member on the team, sourced 'scim'
+    let team_roles = |user: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "select role from memberships where user_id = $1 and team_id = $2 \
+                 and source = 'scim'",
+            )
+            .bind(user)
+            .bind(team_uuid)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(team_roles(ada_uuid).await, vec!["member".to_string()]);
+    assert!(team_roles(grace_uuid).await.is_empty());
+
+    // a replayed create is a uniqueness conflict, not a second group
+    let replay = client
+        .post(format!("{base}/scim/v2/Groups"))
+        .bearer_auth(&secret)
+        .json(&json!({"displayName": "platform"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 409);
+    let replay: Value = replay.json().await.unwrap();
+    assert_eq!(replay["scimType"], "uniqueness");
+
+    // the filter IdPs reconcile with, and the ones that are refused explicitly
+    let found: Value = client
+        .get(format!(
+            "{base}/scim/v2/Groups?filter=displayName%20eq%20%22platform%22"
+        ))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(found["totalResults"], 1);
+    assert_eq!(found["Resources"][0]["id"], group_id);
+    let bad_filter = client
+        .get(format!(
+            "{base}/scim/v2/Groups?filter=externalId%20eq%20%22idp-group-1%22"
+        ))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_filter.status(), 400);
+
+    // PATCH add: the shape Okta and Entra send for a joiner
+    let patched: Value = client
+        .patch(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{"op": "add", "path": "members", "value": [{"value": grace}]}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(patched["members"].as_array().unwrap().len(), 2);
+    assert_eq!(team_roles(grace_uuid).await, vec!["member".to_string()]);
+
+    // replaying that exact operation must converge, not accumulate
+    let replayed: Value = client
+        .patch(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "Operations": [{"op": "add", "path": "members", "value": [{"value": grace}]}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(replayed["members"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        team_roles(grace_uuid).await,
+        vec!["member".to_string()],
+        "a replayed sync must not grant the same role twice"
+    );
+
+    // PATCH remove with the filtered path form, which is how a leaver arrives
+    let removed: Value = client
+        .patch(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "Operations": [{"op": "remove", "path": format!("members[value eq \"{grace}\"]")}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(removed["members"].as_array().unwrap().len(), 1);
+    assert!(
+        team_roles(grace_uuid).await.is_empty(),
+        "leaving the group must revoke what it granted"
+    );
+
+    // a member the token never provisioned is refused
+    let stranger = seed_user(&pool, "stranger@example.com", false).await;
+    let outsider = client
+        .patch(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "Operations": [{"op": "add", "path": "members", "value": [{"value": stranger}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(outsider.status(), 400);
+    let outsider: Value = outsider.json().await.unwrap();
+    assert_eq!(outsider["scimType"], "invalidValue");
+
+    // an operation nothing supports is refused rather than answered with a
+    // success the IdP would read as "the change landed"
+    let unsupported = client
+        .patch(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({"Operations": [{"op": "replace", "path": "urn:unknown", "value": "x"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unsupported.status(), 400);
+
+    // PUT replaces the whole member list
+    let replaced: Value = client
+        .put(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({"displayName": "platform", "members": [{"value": grace}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(replaced["members"].as_array().unwrap().len(), 1);
+    assert_eq!(replaced["members"][0]["value"], grace);
+    assert!(team_roles(ada_uuid).await.is_empty());
+    assert_eq!(team_roles(grace_uuid).await, vec!["member".to_string()]);
+
+    // another org's token cannot see or touch this group
+    let other_minted: Value = client
+        .post(format!("{base}/api/v1/orgs/{other_id}/scim-tokens"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "entra"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_secret = other_minted["secret"].as_str().unwrap().to_string();
+    let cross = client
+        .get(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&other_secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross.status(), 404, "a token must not reach another tenant");
+    let cross_list: Value = client
+        .get(format!("{base}/scim/v2/Groups"))
+        .bearer_auth(&other_secret)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cross_list["totalResults"], 0);
+    let cross_delete = client
+        .delete(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&other_secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_delete.status(), 404);
+
+    // a manual grant an operator made survives a sync
+    let manual: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/memberships"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "user_id": ada,
+            "scope_type": "team",
+            "scope_id": team_id,
+            "role": "admin"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let manual_id = manual["id"].as_str().unwrap().to_string();
+    let resync: Value = client
+        .put(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({"displayName": "platform", "members": [{"value": ada}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resync["members"].as_array().unwrap().len(), 1);
+    let survived: Option<String> = sqlx::query_scalar("select role from memberships where id = $1")
+        .bind(manual_id.parse::<uuid::Uuid>().unwrap())
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        survived.as_deref(),
+        Some("admin"),
+        "reconciliation must not touch a grant an operator made"
+    );
+
+    // deprovisioning the user takes the group-granted role with it
+    let deprovisioned = client
+        .delete(format!("{base}/scim/v2/Users/{ada}"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deprovisioned.status(), 204);
+    assert!(
+        team_roles(ada_uuid).await.is_empty(),
+        "a deprovisioned account must not keep a group-granted role"
+    );
+
+    // dropping the mapping revokes what it granted, without a sync
+    client
+        .patch(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "Operations": [{"op": "add", "path": "members", "value": [{"value": grace}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(team_roles(grace_uuid).await, vec!["member".to_string()]);
+    let dropped = client
+        .delete(format!("{base}/api/v1/scim-group-mappings/{mapping_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dropped.status(), 204);
+    assert!(team_roles(grace_uuid).await.is_empty());
+
+    // and deleting the group is idempotent from the IdP's point of view
+    let deleted = client
+        .delete(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 204);
+    let gone = client
+        .delete(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 404);
+
+    let actions: Vec<String> = sqlx::query_scalar(
+        "select action from audit_log where org_id = $1 and action like 'scim.group%'",
+    )
+    .bind(org_uuid)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(actions.iter().any(|a| a == "scim.group.create"));
+    assert!(actions.iter().any(|a| a == "scim.group.update"));
+    assert!(actions.iter().any(|a| a == "scim.group.delete"));
+}
+
 /// MCP OAuth grants and sessions (#541): admins see the whole org, a member
 /// sees only what they own, revoking a grant kills its sessions, and no token
 /// material ever appears in a response.

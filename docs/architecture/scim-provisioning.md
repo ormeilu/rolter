@@ -1,6 +1,6 @@
 # SCIM 2.0 provisioning
 
-An identity provider can create, update, deactivate and reconcile rolter accounts over SCIM 2.0 instead of an operator doing it by hand. This page covers the Users half; Groups (and group→team mapping) land in a later slice.
+An identity provider can create, update, deactivate and reconcile rolter accounts *and groups* over SCIM 2.0 instead of an operator doing it by hand. Users answer *who exists*; groups, through an operator-written mapping, answer *what they may do*.
 
 ## Tokens carry the tenant
 
@@ -37,10 +37,56 @@ DELETE /scim/v2/Users/{id}
 
 A `password` attribute in a SCIM body is ignored, not honoured. Provisioned accounts are SSO-shaped: `password_hash` stays null, and there is no code path through which SCIM can set or read a local credential.
 
+## Groups
+
+```
+GET    /scim/v2/Groups?filter=displayName eq "platform"
+POST   /scim/v2/Groups
+GET    /scim/v2/Groups/{id}
+PUT    /scim/v2/Groups/{id}
+PATCH  /scim/v2/Groups/{id}
+DELETE /scim/v2/Groups/{id}
+```
+
+Same token, same tenancy rule, same `ScimError` envelope as Users.
+
+- **Filters.** Only `displayName eq "value"` is supported, for the same reason `userName eq` is the only Users filter: answering an unsupported filter with the whole directory reads to an IdP as "no such group", and it then creates a duplicate.
+- **Members must already be provisioned here.** A `members` entry has to be a user with a SCIM identity in the token's org. Anything else — an unparsable id, a local account the IdP never created, another tenant's user — is a `400` with `scimType: invalidValue`. A group can therefore never be a side door into an account the Users surface did not make.
+- **PATCH.** The operations IdPs actually send are implemented: `add`/`replace` on `members` (array of `{"value": id}`, array of bare ids, or a single entry), `remove` on `members` both with a value list and in the filtered `members[value eq "…"]` path form Okta uses, `remove` on the whole attribute to empty the group, `replace` on `displayName`/`externalId`, and the pathless `{"op": "replace", "value": {…}}` shape. Anything else is a `400`.
+- **Idempotence.** A replayed create is a `409` with `scimType: uniqueness`. A replayed `add` of an existing member, or a `PUT` re-sending the same member list, changes nothing.
+- **DELETE.** The group row goes and its members are reconciled in the same request, so the roles it granted disappear immediately rather than at the next sync. A second `DELETE` is a `404`.
+
+## Group→team mapping
+
+A mapping is written by an operator, not by the IdP — the IdP may not decide what its groups are worth:
+
+```
+POST   /api/v1/orgs/{org_id}/scim-group-mappings   # org admin
+       { "group_name": "platform", "role": "member", "team_id": "…" }
+GET    /api/v1/orgs/{org_id}/scim-group-mappings
+DELETE /api/v1/scim-group-mappings/{id}
+```
+
+This is deliberately the [SSO group-mapping model](sso.md), down to the vocabulary: a `group_name` grants one of `admin`/`member`/`viewer` at the most specific non-null scope id (`team_id`, `project_id`, or the org itself when neither is named), and a mapping may only grant inside its own org — a team or project belonging to another tenant is a `400`. Two divergent group-mapping models in one control plane would be two things for an operator to learn and two places for a privilege bug to hide.
+
+Mappings key on the group's `displayName`, which is what an operator sees in the IdP UI. Renaming a group in the IdP therefore detaches it from a mapping written against the old name; rewrite the mapping, or keep the SCIM display name stable.
+
+A mapping may be written before the IdP has ever mentioned the group. Creating or deleting one reconciles that group's current members straight away, so a mapping change does not wait for the next sync.
+
+## Reconciliation converges
+
+Every group write recomputes the affected users' memberships from the database, never from the request body. The wanted set is "every mapping of every group this user is currently in"; `source = 'scim'` rows that are not in it are deleted, missing ones are created. Three consequences:
+
+- A scheduled sync re-sending the same group state is a no-op.
+- Dropping a user from a group revokes exactly what that group granted, in the same request.
+- A grant an operator made by hand carries `source = 'manual'` and is never touched — the same rule SSO logins follow, so the enrolment paths can be used side by side. An equivalent manual grant also suppresses creating a duplicate `scim` row.
+
+`DELETE /scim/v2/Users/{id}` drops the account from every group in the org before removing the identity, so a deprovisioned account cannot keep a group-granted role.
+
 ## Roles
 
-A provisioned account is granted a **viewer** membership at the org it was provisioned into — least privilege on purpose. SCIM decides *who exists*; an operator still decides what they may do. Group-driven role mapping arrives with the Groups slice.
+A provisioned account is granted a **viewer** membership at the org it was provisioned into, merely for existing — least privilege on purpose. Anything beyond a read comes from a group mapping an operator wrote.
 
 ## Audit
 
-`scim.user.create`, `scim.user.update` and `scim.user.deprovision` are written to `audit_log`, scoped to the org, with the provisioning token's id in the detail — the actor is a token, not a human. Token creation and revocation are audited as `scim_token.create` / `scim_token.revoke` with the acting operator.
+`scim.user.create`, `scim.user.update`, `scim.user.deprovision`, `scim.group.create`, `scim.group.update` and `scim.group.delete` are written to `audit_log`, scoped to the org, with the provisioning token's id in the detail — the actor is a token, not a human. Operator actions carry the acting operator instead: `scim_token.create` / `scim_token.revoke`, and `scim_group_mapping.create` / `scim_group_mapping.delete`.

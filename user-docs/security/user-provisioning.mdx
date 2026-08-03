@@ -1,10 +1,10 @@
 ---
 title: "Provision Users into Rolter from Okta, Entra ID, or Any SCIM 2.0 Identity Provider"
 sidebarTitle: "User Provisioning (SCIM)"
-description: "Issue an org-scoped SCIM token, wire it into your identity provider, and let joiners, movers, and leavers flow into Rolter automatically."
+description: "Issue an org-scoped SCIM token, wire it into your identity provider, map its groups to teams, and let joiners, movers, and leavers flow into Rolter automatically."
 ---
 
-Rolter speaks SCIM 2.0, so your identity provider can create, update, and deactivate Rolter accounts without anyone touching the dashboard. You issue a provisioning token for the org, paste it into the IdP's SCIM connector, and the IdP does the rest on its own schedule.
+Rolter speaks SCIM 2.0, so your identity provider can create, update, and deactivate Rolter accounts — and push its groups — without anyone touching the dashboard. You issue a provisioning token for the org, paste it into the IdP's SCIM connector, and the IdP does the rest on its own schedule.
 
 The direction of control matters: **the identity provider drives provisioning, Rolter receives it.** The dashboard never calls the SCIM endpoints. What you manage in **Governance → User Provisioning** is the credential the IdP authenticates with — issuing one, seeing when it last synced, and revoking it.
 
@@ -30,7 +30,7 @@ Issuing, listing, and revoking tokens all require the **admin** role on the org 
   </Step>
 
   <Step title="Configure the connector">
-    In your identity provider, set the SCIM base URL to `https://your-rolter-host/scim/v2` and the authentication mode to HTTP header / bearer token, using the value you just copied. Enable *create users*, *update user attributes*, and *deactivate users*.
+    In your identity provider, set the SCIM base URL to `https://your-rolter-host/scim/v2` and the authentication mode to HTTP header / bearer token, using the value you just copied. Enable *create users*, *update user attributes*, and *deactivate users* — and *push groups* if you plan to drive roles from group membership.
   </Step>
 
   <Step title="Push a test user">
@@ -42,7 +42,7 @@ Issuing, listing, and revoking tokens all require the **admin** role on the org 
 
 A provisioned account is deliberately minimal:
 
-- It joins the org with the **viewer** role. SCIM decides *who exists*; an operator still decides what they may do. Group-to-role mapping is a separate slice and is not part of this surface.
+- It joins the org with the **viewer** role, merely for existing. SCIM decides *who exists*; anything beyond a read comes from a group mapping you wrote (see [Map groups to teams](#map-groups-to-teams)).
 - It has **no local password**. A `password` attribute sent by the IdP is ignored rather than stored — provisioned accounts are SSO-shaped by construction.
 - Deactivating a user through SCIM also drops their live sessions, so a leaver disabled in the IdP is logged out of Rolter rather than merely blocked from signing in again.
 - A SCIM `DELETE` deactivates the account and removes the org's identity mapping, but keeps the underlying user row: its memberships and audit trail have to outlive any one IdP. Re-provisioning the same person adopts the existing account instead of creating a duplicate.
@@ -58,9 +58,50 @@ Every provisioning action is written to the [audit log](/observability/logs-and-
 | Read user | `GET /scim/v2/Users/{id}` | |
 | Replace user | `PUT /scim/v2/Users/{id}` | |
 | Patch user | `PATCH /scim/v2/Users/{id}` | The `active` attribute, in both the `path: "active"` and bare-value shapes IdPs send |
-| Deprovision | `DELETE /scim/v2/Users/{id}` | Deactivates and unmaps; the account row survives |
+| Deprovision | `DELETE /scim/v2/Users/{id}` | Deactivates and unmaps; the account row survives, and its group-granted roles go with the identity |
+| List / search groups | `GET /scim/v2/Groups` | Supports the `displayName eq "value"` filter |
+| Create group | `POST /scim/v2/Groups` | Idempotent — a replayed create returns a `uniqueness` conflict |
+| Read group | `GET /scim/v2/Groups/{id}` | |
+| Replace group | `PUT /scim/v2/Groups/{id}` | Replaces the member list wholesale |
+| Patch group | `PATCH /scim/v2/Groups/{id}` | Member add / remove / replace in every shape IdPs send, plus `displayName` and `externalId` |
+| Delete group | `DELETE /scim/v2/Groups/{id}` | Removes the group and everything it granted |
 
-Groups are not part of this slice yet.
+## Map groups to teams
+
+A group arriving from your identity provider grants nothing on its own. **You** decide what it is worth, by writing a mapping — the identity provider never gets to name a role.
+
+```bash
+curl -X POST https://your-rolter-host/api/v1/orgs/$ORG_ID/scim-group-mappings \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"group_name": "platform", "role": "member", "team_id": "'$TEAM_ID'"}'
+```
+
+- `group_name` is the group's **display name** as your IdP shows it.
+- `role` is one of `admin`, `member`, `viewer` — the same three roles [RBAC](/security/rbac) defines. Nothing else is mappable.
+- Name a `team_id` or a `project_id` to grant at that scope; omit both to grant at the org.
+- The scope must belong to the same org. A mapping cannot reach another tenant's team, whatever the IdP sends.
+
+This is the same model [single sign-on](/security/authentication) uses for its group mappings, so you only learn it once.
+
+<Info>
+Mappings key on the group's display name. If you rename a group in the identity provider, rewrite the mapping too — otherwise the old name simply stops matching and the roles it granted are withdrawn on the next sync.
+</Info>
+
+You can write a mapping before the group has ever been pushed. Creating or deleting one takes effect immediately for whoever is already in that group, rather than waiting for the next sync.
+
+## What a sync does to roles
+
+Every group change recomputes the affected people's provisioning-granted roles from scratch:
+
+- Running the same sync twice changes nothing.
+- Removing someone from a group revokes exactly what that group gave them, right away.
+- A role **you** granted by hand — in the dashboard, through the API, or through an invitation — is never touched by a sync. Manual and provisioned grants coexist.
+- Deleting a group, or deprovisioning a user, withdraws the roles involved in the same request.
+
+<Warning>
+Because a mapping is a way to grant a role, creating or deleting one requires the **admin** role on the org — the same bar as granting a role directly.
+</Warning>
 
 ## Rotating and revoking a token
 
