@@ -5,7 +5,7 @@
 //! strategy parsing) is left to callers; see [`super::PostgresConfigStore`]
 //! for the read path the gateway uses.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -16,12 +16,12 @@ use super::models::{
     AdaptiveRoutingPolicy, AdaptiveRoutingTelemetry, AuditLogEntry, Budget, BusinessUnit,
     ClusterNode, CompatibilityPolicy, CustomRole, CustomRoleGrant, Customer, EffectiveGrant,
     FeatureFlags, GuardrailProvider, GuardrailRule, Invitation, LoggingSettings,
-    McpGatewaySettings, McpOAuthGrant, McpOAuthSession, McpServer, McpToolGroup, Membership,
-    ModelPrice, Org, OrgAuthPolicy, OwnedVirtualKey, PluginInstance, Project, PromptTemplate,
-    PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup, ProviderGroupMember,
-    RateLimit, Route, RouteTarget, RuntimePolicy, ScimIdentity, ScimToken, SecuritySettings,
-    Session, Skill, SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider, Team, User,
-    VirtualKey,
+    McpGatewaySettings, McpLoginState, McpOAuthGrant, McpOAuthSession, McpServer, McpToolGroup,
+    Membership, ModelPrice, Org, OrgAuthPolicy, OwnedVirtualKey, PluginInstance, Project,
+    PromptTemplate, PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup,
+    ProviderGroupMember, RateLimit, Route, RouteTarget, RuntimePolicy, ScimIdentity, ScimToken,
+    SecuritySettings, Session, Skill, SkillVersion, SsoGroupMapping, SsoLoginState, SsoProvider,
+    Team, User, VirtualKey,
 };
 
 fn store_err(err: sqlx::Error) -> Error {
@@ -1519,8 +1519,13 @@ impl ScimIdentityRepo<'_> {
 /// MCP servers an org has registered.
 pub struct McpServerRepo<'a>(pub &'a PgPool);
 
+/// Columns of `mcp_servers` that may leave the store. The sealed client secret
+/// is absent by construction: `has_client_secret` is projected instead, so no
+/// query in this file can hand the ciphertext to a serializer by accident.
 const MCP_SERVER_COLUMNS: &str = "id, org_id, name, slug, url, transport, description, enabled, \
-     tools, source, required_scopes, created_at";
+     tools, source, required_scopes, created_at, \
+     authorize_url, token_url, client_id, default_scopes, \
+     (client_secret_ciphertext is not null) as has_client_secret";
 
 impl McpServerRepo<'_> {
     pub async fn list(&self, org_id: Uuid) -> Result<Vec<McpServer>> {
@@ -1608,6 +1613,75 @@ impl McpServerRepo<'_> {
         .await
         .map_err(store_err)?
         .ok_or_else(|| Error::NotFound(format!("mcp server {id}")))
+    }
+
+    /// Register (or replace) the OAuth client rolter presents to this server's
+    /// authorization server. `client_secret` is sealed before it is written;
+    /// `None` leaves the stored secret alone, `Some("")` clears it, which is
+    /// how a confidential client is downgraded to a public one.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn set_oauth_client(
+        &self,
+        kek: &super::crypto::Kek,
+        id: Uuid,
+        authorize_url: &str,
+        token_url: &str,
+        client_id: &str,
+        client_secret: Option<&str>,
+        default_scopes: &[String],
+    ) -> Result<McpServer> {
+        // three shapes: leave the secret, clear it, or replace it
+        let sealed = match client_secret {
+            None => None,
+            Some("") => Some((None, None)),
+            Some(secret) => {
+                let (c, n) = kek.encrypt(secret)?;
+                Some((Some(c), Some(n)))
+            }
+        };
+        let (touch_secret, ciphertext, nonce) = match sealed {
+            None => (false, None, None),
+            Some((c, n)) => (true, c, n),
+        };
+        sqlx::query_as(&format!(
+            "update mcp_servers set authorize_url = $2, token_url = $3, client_id = $4, \
+                    default_scopes = $5, \
+                    client_secret_ciphertext = case when $6 then $7 else client_secret_ciphertext end, \
+                    client_secret_nonce = case when $6 then $8 else client_secret_nonce end \
+             where id = $1 returning {MCP_SERVER_COLUMNS}"
+        ))
+        .bind(id)
+        .bind(authorize_url)
+        .bind(token_url)
+        .bind(client_id)
+        .bind(default_scopes)
+        .bind(touch_secret)
+        .bind(ciphertext)
+        .bind(nonce)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("mcp server {id}")))
+    }
+
+    /// Open the sealed client secret for `id`, or `None` when the client is
+    /// public. The only way ciphertext leaves this table.
+    pub async fn client_secret(
+        &self,
+        kek: &super::crypto::Kek,
+        id: Uuid,
+    ) -> Result<Option<String>> {
+        let row: Option<SealedSecretRow> = sqlx::query_as(
+            "select client_secret_ciphertext, client_secret_nonce from mcp_servers where id = $1",
+        )
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        let Some((Some(ciphertext), Some(nonce))) = row else {
+            return Ok(None);
+        };
+        Ok(Some(kek.decrypt(&ciphertext, &nonce)?))
     }
 
     /// Delete a server. Its grants and sessions cascade, which is the intended
@@ -1777,6 +1851,30 @@ impl McpGatewaySettingsRepo<'_> {
         .map_err(store_err)
     }
 }
+
+/// Sealed client-secret columns of an `mcp_servers` row.
+type SealedSecretRow = (Option<Vec<u8>>, Option<Vec<u8>>);
+
+/// One `mcp_oauth_login_states` row as stored: `(state, server, user, verifier
+/// ciphertext, verifier nonce, scopes, redirect uri, created at)`.
+type SealedLoginRow = (
+    String,
+    Uuid,
+    Uuid,
+    Vec<u8>,
+    Vec<u8>,
+    Vec<String>,
+    String,
+    DateTime<Utc>,
+);
+
+/// Refresh material of one session: `(grant, server, refresh ciphertext,
+/// refresh nonce, scopes)`.
+type SealedRefreshRow = (Uuid, Uuid, Option<Vec<u8>>, Option<Vec<u8>>, Vec<String>);
+
+/// Who a session belongs to: `(session, grant, user, server, grant scopes,
+/// session scopes)`.
+type SessionContextRow = (Uuid, Uuid, Uuid, Uuid, Vec<String>, Vec<String>);
 
 /// Sealed columns of one session row: `(access ciphertext, access nonce,
 /// refresh ciphertext, refresh nonce, scopes)`.
@@ -2030,6 +2128,242 @@ impl McpOAuthRepo<'_> {
             .map_err(store_err)?;
         Ok(())
     }
+
+    // -- authorization-code exchange (#707) ---------------------------------
+
+    /// Record an in-flight consent. The PKCE verifier is sealed on the way in,
+    /// so a database read alone cannot redeem a stolen authorization code.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_login(
+        &self,
+        kek: &super::crypto::Kek,
+        state: &str,
+        server_id: Uuid,
+        user_id: Uuid,
+        code_verifier: &str,
+        scopes: &[String],
+        redirect_uri: &str,
+    ) -> Result<()> {
+        let (ciphertext, nonce) = kek.encrypt(code_verifier)?;
+        sqlx::query(
+            "insert into mcp_oauth_login_states \
+                 (state, server_id, user_id, verifier_ciphertext, verifier_nonce, scopes, \
+                  redirect_uri) \
+             values ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(state)
+        .bind(server_id)
+        .bind(user_id)
+        .bind(ciphertext)
+        .bind(nonce)
+        .bind(scopes)
+        .bind(redirect_uri)
+        .execute(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(())
+    }
+
+    /// Consume an in-flight consent: the row is deleted as it is read, so a
+    /// replayed `code`+`state` pair finds nothing. Rows older than `max_age`
+    /// are treated as absent (and swept), which bounds how long a leaked
+    /// `state` is worth anything.
+    pub async fn consume_login(
+        &self,
+        kek: &super::crypto::Kek,
+        state: &str,
+        now: DateTime<Utc>,
+        max_age: Duration,
+    ) -> Result<Option<McpLoginState>> {
+        let cutoff = now - max_age;
+        // sweep first: expired rows are garbage whether or not this call
+        // matches one, and this is the only traffic the table sees
+        sqlx::query("delete from mcp_oauth_login_states where created_at < $1")
+            .bind(cutoff)
+            .execute(self.0)
+            .await
+            .map_err(store_err)?;
+        let row: Option<SealedLoginRow> = sqlx::query_as(
+            "delete from mcp_oauth_login_states where state = $1 and created_at >= $2 \
+                 returning state, server_id, user_id, verifier_ciphertext, verifier_nonce, \
+                           scopes, redirect_uri, created_at",
+        )
+        .bind(state)
+        .bind(cutoff)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        let Some((state, server_id, user_id, ciphertext, nonce, scopes, redirect_uri, created_at)) =
+            row
+        else {
+            return Ok(None);
+        };
+        Ok(Some(McpLoginState {
+            state,
+            server_id,
+            user_id,
+            code_verifier: kek.decrypt(&ciphertext, &nonce)?,
+            scopes,
+            redirect_uri,
+            created_at,
+        }))
+    }
+
+    /// Open the sealed *refresh* token of a session whose access token may
+    /// already have expired — the one case [`Self::open_session`] deliberately
+    /// refuses. Consent is still checked: a revoked session or a withdrawn
+    /// grant yields `None`, as does an expired refresh token, so a renewal can
+    /// never outlive the consent it hangs off.
+    pub async fn open_refresh(
+        &self,
+        kek: &super::crypto::Kek,
+        id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<Option<McpRefreshMaterial>> {
+        let row: Option<SealedRefreshRow> = sqlx::query_as(
+            "select g.id, g.server_id, s.refresh_ciphertext, s.refresh_nonce, s.scopes \
+                 from mcp_oauth_sessions s join mcp_oauth_grants g on g.id = s.grant_id \
+                 where s.id = $1 and s.revoked_at is null and g.revoked_at is null \
+                   and (s.refresh_expires_at is null or s.refresh_expires_at > $2)",
+        )
+        .bind(id)
+        .bind(now)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        let Some((grant_id, server_id, Some(ciphertext), Some(nonce), scopes)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(McpRefreshMaterial {
+            grant_id,
+            server_id,
+            refresh_token: kek.decrypt(&ciphertext, &nonce)?,
+            scopes,
+        }))
+    }
+
+    /// Replace the token material on a live session in place. Rotation is the
+    /// point: an authorization server that hands back a new refresh token must
+    /// not leave the old one readable, and one that omits it must not leave the
+    /// session unrenewable, so `refresh_token` is written unconditionally.
+    ///
+    /// The row id is stable across a renewal on purpose — a session is the
+    /// user's mental unit of "this app is connected", and churning its id on
+    /// every silent refresh would make the sessions screen unreadable.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn rotate_session(
+        &self,
+        kek: &super::crypto::Kek,
+        id: Uuid,
+        access_token: &str,
+        refresh_token: Option<&str>,
+        scopes: &[String],
+        expires_at: DateTime<Utc>,
+        refresh_expires_at: Option<DateTime<Utc>>,
+    ) -> Result<McpOAuthSession> {
+        let (access_ciphertext, access_nonce) = kek.encrypt(access_token)?;
+        let refresh = refresh_token.map(|t| kek.encrypt(t)).transpose()?;
+        let (refresh_ciphertext, refresh_nonce) = match refresh {
+            Some((c, n)) => (Some(c), Some(n)),
+            None => (None, None),
+        };
+        sqlx::query_as(&format!(
+            "update mcp_oauth_sessions set access_ciphertext = $2, access_nonce = $3, \
+                    refresh_ciphertext = $4, refresh_nonce = $5, scopes = $6, \
+                    expires_at = $7, refresh_expires_at = $8 \
+             where id = $1 and revoked_at is null returning {SESSION_COLUMNS}"
+        ))
+        .bind(id)
+        .bind(access_ciphertext)
+        .bind(access_nonce)
+        .bind(refresh_ciphertext)
+        .bind(refresh_nonce)
+        .bind(scopes)
+        .bind(expires_at)
+        .bind(refresh_expires_at)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("live mcp oauth session {id}")))
+    }
+
+    /// Live sessions whose access token expires before `before` and that hold a
+    /// refresh token — the work list for the background renewer. Sessions
+    /// without one are skipped: there is nothing to renew them with, and they
+    /// simply lapse.
+    pub async fn sessions_due_for_refresh(
+        &self,
+        before: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<Uuid>> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "select s.id from mcp_oauth_sessions s \
+                 join mcp_oauth_grants g on g.id = s.grant_id \
+             where s.revoked_at is null and g.revoked_at is null \
+               and s.refresh_ciphertext is not null and s.expires_at < $1 \
+               and (s.refresh_expires_at is null or s.refresh_expires_at > now()) \
+             order by s.expires_at limit $2",
+        )
+        .bind(before)
+        .bind(limit)
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// The grant a session hangs off together with its server and owner, in one
+    /// round trip. Used by the authorization guard on the MCP call path, which
+    /// runs per request and cannot afford three.
+    pub async fn session_context(&self, id: Uuid) -> Result<Option<McpSessionContext>> {
+        let row: Option<SessionContextRow> = sqlx::query_as(
+            "select s.id, g.id, g.user_id, srv.id, g.scopes, s.scopes \
+             from mcp_oauth_sessions s \
+             join mcp_oauth_grants g on g.id = s.grant_id \
+             join mcp_servers srv on srv.id = g.server_id \
+             where s.id = $1",
+        )
+        .bind(id)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?;
+        Ok(row.map(
+            |(session_id, grant_id, user_id, server_id, grant_scopes, session_scopes)| {
+                McpSessionContext {
+                    session_id,
+                    grant_id,
+                    user_id,
+                    server_id,
+                    grant_scopes,
+                    session_scopes,
+                }
+            },
+        ))
+    }
+}
+
+/// The refresh token of a session plus the consent it belongs to. Not
+/// `Serialize`: the token may not reach an API response or a log line.
+#[derive(Debug, Clone)]
+pub struct McpRefreshMaterial {
+    pub grant_id: Uuid,
+    pub server_id: Uuid,
+    pub refresh_token: String,
+    pub scopes: Vec<String>,
+}
+
+/// Who a session belongs to and what it is allowed to ask for. Carries no
+/// token material, so it is safe to hold across an authorization decision.
+#[derive(Debug, Clone)]
+pub struct McpSessionContext {
+    pub session_id: Uuid,
+    pub grant_id: Uuid,
+    pub user_id: Uuid,
+    pub server_id: Uuid,
+    /// what the user consented to — the ceiling for everything below
+    pub grant_scopes: Vec<String>,
+    /// what this particular session actually holds
+    pub session_scopes: Vec<String>,
 }
 
 /// Opened token material. Deliberately not `Serialize`: nothing in this struct

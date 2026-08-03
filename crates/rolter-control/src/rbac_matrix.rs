@@ -323,15 +323,32 @@ const CAPABILITIES: &[Capability] = &[
         update: ADMIN,
         delete: NA,
     },
+    // the OAuth client rolter presents to an MCP server's authorization
+    // server. registering one decides which external host receives a consent
+    // code, so it is admin-only in both directions — even reading it, since
+    // the row names a third party the tenant has chosen to trust
+    Capability {
+        resource: "mcp_oauth_client",
+        scope: "org",
+        read: ADMIN,
+        create: NA,
+        update: ADMIN,
+        delete: ADMIN,
+    },
     // a grant or session belongs to a user: an org admin sees and revokes any,
-    // a member only their own — so the floor is a viewer membership at the org
-    // and the handler narrows it to the owner. nobody creates one through the
-    // API; they are minted by the OAuth exchange
+    // a member only their own — so the read/revoke floor is a viewer
+    // membership at the org and the handler narrows it to the owner.
+    //
+    // minting is a rung higher. completing consent (`create`), renewing a
+    // session (`update`) and exchanging one on-behalf-of (`create`) all hand
+    // rolter the ability to act at a third party as the caller, which is a
+    // write however read-only the eventual MCP call is — so it sits with
+    // `my_virtual_key:create` at member, not with viewer reads
     Capability {
         resource: "mcp_oauth_grant",
         scope: "org",
         read: VIEWER,
-        create: NA,
+        create: MEMBER,
         update: NA,
         delete: VIEWER,
     },
@@ -339,8 +356,8 @@ const CAPABILITIES: &[Capability] = &[
         resource: "mcp_oauth_session",
         scope: "org",
         read: VIEWER,
-        create: NA,
-        update: NA,
+        create: MEMBER,
+        update: MEMBER,
         delete: VIEWER,
     },
     // configurable rbac (#534). Defining a role or a profile is a way to grant
@@ -944,12 +961,24 @@ mod tests {
         );
     }
 
+    /// What a member adds over a viewer is exactly the set of things done *on
+    /// their own behalf*: minting their own virtual key, and completing or
+    /// renewing their own MCP OAuth consent. Nothing here touches another
+    /// user's rows — the handlers narrow every one of them to the owner.
     #[test]
-    fn a_member_may_mint_their_own_key_and_nothing_more() {
+    fn a_member_may_act_on_their_own_behalf_and_nothing_more() {
         let member = allowed_for(false, Some(Role::Member), &[], ScopeChain::default());
         let viewer = allowed_for(false, Some(Role::Viewer), &[], ScopeChain::default());
         let extra: Vec<_> = member.iter().filter(|a| !viewer.contains(a)).collect();
-        assert_eq!(extra, vec!["my_virtual_key:create"]);
+        assert_eq!(
+            extra,
+            vec![
+                "my_virtual_key:create",
+                "mcp_oauth_grant:create",
+                "mcp_oauth_session:create",
+                "mcp_oauth_session:update",
+            ]
+        );
     }
 
     #[test]
@@ -1042,6 +1071,7 @@ mod tests {
         ("main.rs", include_str!("main.rs")),
         ("mcp_logs.rs", include_str!("mcp_logs.rs")),
         ("mcp_oauth.rs", include_str!("mcp_oauth.rs")),
+        ("mcp_oauth_flow.rs", include_str!("mcp_oauth_flow.rs")),
         ("me.rs", include_str!("me.rs")),
         ("proxy.rs", include_str!("proxy.rs")),
         ("plugins.rs", include_str!("plugins.rs")),
