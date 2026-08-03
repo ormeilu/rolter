@@ -424,6 +424,32 @@ pub struct ScimIdentity {
     pub updated_at: DateTime<Utc>,
 }
 
+/// a SCIM group inside one org. `display_name` is the name mappings are keyed
+/// on, which is also the name an operator sees in the IdP.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ScimGroup {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub external_id: Option<String>,
+    pub display_name: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// a SCIM group name granting a role at an org/team/project scope, with the
+/// same "most specific non-null id" convention as [`Membership`] and
+/// [`SsoGroupMapping`]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ScimGroupMapping {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub group_name: String,
+    pub team_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+}
+
 /// an MCP server an org has registered; the anchor OAuth grants hang off
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct McpServer {

@@ -56,6 +56,8 @@ mod runtime_policy;
 #[cfg(feature = "postgres")]
 mod scim;
 #[cfg(feature = "postgres")]
+mod scim_groups;
+#[cfg(feature = "postgres")]
 mod security;
 #[cfg(feature = "postgres")]
 pub mod seed;
@@ -413,6 +415,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(adaptive_telemetry::router())
             .merge(rbac_matrix::router())
             .merge(scim::router())
+            .merge(scim_groups::router())
             .merge(sso::router())
             .merge(cluster::router())
             .merge(security::router());
