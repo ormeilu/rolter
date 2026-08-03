@@ -538,7 +538,7 @@ fn parse_scope(scope: &str) -> Vec<String> {
 pub(crate) enum TokenError {
     /// the authorization server said no (4xx / `invalid_grant`)
     Refused(String),
-    /// network, timeout, 5xx, or an unparseable body
+    /// network, timeout, 5xx, or an unparsable body
     Transient(String),
 }
 

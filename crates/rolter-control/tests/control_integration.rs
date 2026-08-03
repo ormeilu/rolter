@@ -4968,6 +4968,8 @@ async fn rbac_matrix_reflects_custom_roles_after_a_change() {
     let roles = after["custom_roles"].as_array().unwrap();
     assert_eq!(roles.len(), 1, "matrix must show the new role: {after}");
     assert_eq!(roles[0]["name"], "Budget Keeper");
+}
+
 /// A stub OAuth 2.0 authorization server for the MCP consent flow (#707).
 /// It records the last form it was posted so PKCE, scope and grant type can be
 /// asserted, and its next answer is set by the test.
