@@ -3847,7 +3847,15 @@ async fn rbac_matrix_and_effective_permissions_are_api_backed() {
         .await
         .unwrap();
     assert!(elsewhere["role"].is_null());
-    assert_eq!(elsewhere["allowed"].as_array().unwrap().len(), 0);
+    // nothing org-scoped is reachable there; what remains is exactly the two
+    // global read-only catalogs, which take authentication and no membership
+    let elsewhere_allowed: Vec<&str> = elsewhere["allowed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a.as_str().unwrap())
+        .collect();
+    assert_eq!(elsewhere_allowed, vec!["model_price:read", "model:read"]);
 
     // a project-scoped admin inherits nothing upward: the same user is only an
     // admin inside the project chain they were granted
@@ -6013,4 +6021,68 @@ async fn mcp_oauth_sessions_are_not_reachable_across_owners() {
             "a co-tenant must not act on someone else's session via {path}"
         );
     }
+}
+
+/// The two global catalogs are readable by any authenticated caller with no
+/// membership anywhere, and refused outright without authentication (#766).
+#[tokio::test]
+async fn global_catalogs_take_authentication_but_no_membership() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // a user belonging to nothing at all
+    let user = seed_user(&pool, "nobody@acme.test", false).await;
+    let token = seed_session(&pool, user, "catalogs").await;
+
+    for path in ["/api/v1/model-prices", "/api/v1/models"] {
+        let anonymous = client.get(format!("{base}{path}")).send().await.unwrap();
+        assert_eq!(
+            anonymous.status(),
+            401,
+            "{path} must still require authentication"
+        );
+
+        let authenticated = client
+            .get(format!("{base}{path}"))
+            .bearer_auth(token.clone())
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            authenticated.status().is_success(),
+            "{path} must be readable without a membership: {}",
+            authenticated.status()
+        );
+    }
+
+    // and the matrix says so, rather than naming a role floor nobody can meet
+    let matrix: Value = client
+        .get(format!("{base}/api/v1/rbac/matrix"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let model = matrix["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["resource"] == "model")
+        .expect("model resource in the matrix");
+    let read = model["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["action"] == "read")
+        .expect("model read action");
+    assert_eq!(read["authenticated_only"], true, "{matrix}");
+    assert!(read["minimum_role"].is_null(), "{matrix}");
 }

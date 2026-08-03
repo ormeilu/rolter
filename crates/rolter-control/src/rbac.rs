@@ -337,10 +337,14 @@ pub(crate) async fn authorize(
         Principal::Superadmin => return Ok(()),
         Principal::User(user) => user,
     };
-    // a superadmin-only capability has no scope a membership could satisfy, so
-    // a plain user is refused without touching the database
-    let Authority::Role(required) = requirement.authority else {
-        return Err(ApiError::Forbidden);
+    let required = match requirement.authority {
+        Authority::Role(required) => required,
+        // holding a `Principal` at all means authentication already succeeded,
+        // so there is nothing further to check
+        Authority::Authenticated => return Ok(()),
+        // a superadmin-only capability has no scope a membership could satisfy,
+        // so a plain user is refused without touching the database
+        Authority::Superadmin => return Err(ApiError::Forbidden),
     };
     let memberships = MembershipRepo(pool(state)).list_for_user(user.id).await?;
     if user_authorized(&memberships, chain, required) {
@@ -473,7 +477,7 @@ pub(crate) fn authorize_superadmin(
 ) -> ApiResult<()> {
     match requirement.authority {
         Authority::Superadmin => require_superadmin(principal),
-        Authority::Role(_) => Err(ApiError::Forbidden),
+        Authority::Role(_) | Authority::Authenticated => Err(ApiError::Forbidden),
     }
 }
 
