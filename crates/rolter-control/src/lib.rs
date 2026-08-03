@@ -9,6 +9,8 @@
 //! reuses the same entrypoint as its `control` subcommand.
 
 #[cfg(feature = "postgres")]
+mod access_control;
+#[cfg(feature = "postgres")]
 mod adaptive_policy;
 #[cfg(feature = "postgres")]
 mod adaptive_telemetry;
@@ -386,6 +388,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
     if state.pool.is_some() {
         alerting::start_evaluator(state.clone());
         api = api
+            .merge(access_control::router())
             .merge(alerting::router())
             .merge(auth::router())
             .merge(auth_policy::router())

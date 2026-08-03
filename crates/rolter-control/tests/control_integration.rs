@@ -4634,3 +4634,338 @@ async fn adaptive_routing_telemetry_round_trips_from_the_data_plane() {
         .unwrap();
     assert_eq!(stale["routes"].as_array().unwrap().len(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// configurable rbac (#534)
+// ---------------------------------------------------------------------------
+
+/// A custom role widens a member beyond what their base role allows, and only
+/// inside the scope the profile assigns it — the deny case is the point.
+#[tokio::test]
+async fn custom_role_grant_widens_a_member_within_its_scope_only() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // two orgs, so "in scope" can be told apart from "authorized everywhere"
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Acme", "slug": "acme"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let other: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Other", "slug": "other"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_id = other["id"].as_str().unwrap().to_string();
+
+    // a plain member of both orgs: creating a provider is admin-only, so both
+    // attempts must fail before any custom role exists
+    let user = seed_user(&pool, "member@acme.test", false).await;
+    seed_membership(
+        &pool,
+        user,
+        Some(org_id.parse().unwrap()),
+        None,
+        None,
+        "member",
+    )
+    .await;
+    seed_membership(
+        &pool,
+        user,
+        Some(other_id.parse().unwrap()),
+        None,
+        None,
+        "member",
+    )
+    .await;
+    let token = seed_session(&pool, user, "custom-role").await;
+
+    let create_provider = |org: String| {
+        client
+            .post(format!("{base}/api/v1/orgs/{org}/providers"))
+            .bearer_auth(token.clone())
+            .json(&json!({
+                "name": format!("p-{}", uuid::Uuid::new_v4()),
+                "kind": "openai",
+                "api_base": "https://api.openai.com",
+            }))
+            .send()
+    };
+
+    assert_eq!(
+        create_provider(org_id.clone()).await.unwrap().status(),
+        403,
+        "a member must not create a provider before the grant exists"
+    );
+
+    // a custom role that grants exactly provider:create, still on the member base
+    let role: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/custom-roles"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Provider Wrangler",
+            "base_role": "member",
+            "grants": [{"resource": "provider", "action": "create"}],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let role_id = role["id"].as_str().unwrap().to_string();
+
+    // composed into a profile scoped to the first org, assigned to the user
+    let profile: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/access-profiles"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Acme Wranglers",
+            "roles": [{"role_id": role_id, "org_id": org_id}],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let profile_id = profile["id"].as_str().unwrap().to_string();
+
+    let assigned = client
+        .post(format!(
+            "{base}/api/v1/access-profiles/{profile_id}/assignments"
+        ))
+        .bearer_auth("admintok")
+        .json(&json!({"user_id": user}))
+        .send()
+        .await
+        .unwrap();
+    assert!(assigned.status().is_success(), "{}", assigned.status());
+
+    // in scope the grant applies; in the other org the same member is still refused
+    let allowed = create_provider(org_id.clone()).await.unwrap();
+    assert!(
+        allowed.status().is_success(),
+        "granted org must allow the create: {}",
+        allowed.status()
+    );
+    assert_eq!(
+        create_provider(other_id.clone()).await.unwrap().status(),
+        403,
+        "the grant must not leak into an org the profile does not name"
+    );
+
+    // and it is revocable: dropping the assignment closes the door again
+    let assignments: Value = client
+        .get(format!(
+            "{base}/api/v1/access-profiles/{profile_id}/assignments"
+        ))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let assignment_id = assignments[0]["id"].as_str().unwrap().to_string();
+    let removed = client
+        .delete(format!(
+            "{base}/api/v1/access-profile-assignments/{assignment_id}"
+        ))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    assert!(removed.status().is_success(), "{}", removed.status());
+    assert_eq!(
+        create_provider(org_id).await.unwrap().status(),
+        403,
+        "removing the assignment must withdraw the grant"
+    );
+}
+
+/// A custom role in use cannot be deleted out from under its assignments, and
+/// every change to one is audited.
+#[tokio::test]
+async fn custom_role_changes_are_guarded_by_references_and_audited() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Acme", "slug": "acme"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+
+    let role: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/custom-roles"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Auditor",
+            "base_role": "viewer",
+            "grants": [{"resource": "audit_log", "action": "read"}],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let role_id = role["id"].as_str().unwrap().to_string();
+
+    let profile: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/access-profiles"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Auditors",
+            "roles": [{"role_id": role_id, "org_id": org_id}],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let profile_id = profile["id"].as_str().unwrap().to_string();
+
+    // referenced by a profile, so the delete must be refused rather than
+    // silently stripping the profile's composition
+    let refused = client
+        .delete(format!("{base}/api/v1/custom-roles/{role_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        refused.status(),
+        409,
+        "deleting a referenced role must conflict, not cascade"
+    );
+
+    // detach it, then the delete goes through
+    let detached = client
+        .put(format!("{base}/api/v1/access-profiles/{profile_id}"))
+        .bearer_auth("admintok")
+        .json(&json!({"roles": []}))
+        .send()
+        .await
+        .unwrap();
+    assert!(detached.status().is_success(), "{}", detached.status());
+    let deleted = client
+        .delete(format!("{base}/api/v1/custom-roles/{role_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    assert!(deleted.status().is_success(), "{}", deleted.status());
+
+    let actions: Vec<String> =
+        sqlx::query_scalar("select action from audit_log where action like 'custom_role%' or action like 'access_profile%' order by at")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert!(
+        actions.iter().any(|a| a == "custom_role.create"),
+        "creating a role must be audited: {actions:?}"
+    );
+    assert!(
+        actions.iter().any(|a| a == "custom_role.delete"),
+        "deleting a role must be audited: {actions:?}"
+    );
+}
+
+/// The matrix endpoint is API-backed: a role created through the API shows up
+/// in the next read, so the dashboard never has to trust its own state.
+#[tokio::test]
+async fn rbac_matrix_reflects_custom_roles_after_a_change() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Acme", "slug": "acme"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+
+    let before: Value = client
+        .get(format!("{base}/api/v1/rbac/matrix?org_id={org_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        before["custom_roles"].as_array().unwrap().is_empty(),
+        "a fresh org has no custom roles: {before}"
+    );
+
+    client
+        .post(format!("{base}/api/v1/orgs/{org_id}/custom-roles"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Budget Keeper",
+            "base_role": "member",
+            "grants": [{"resource": "budget", "action": "update"}],
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let after: Value = client
+        .get(format!("{base}/api/v1/rbac/matrix?org_id={org_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let roles = after["custom_roles"].as_array().unwrap();
+    assert_eq!(roles.len(), 1, "matrix must show the new role: {after}");
+    assert_eq!(roles[0]["name"], "Budget Keeper");
+}

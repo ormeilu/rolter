@@ -671,3 +671,101 @@ pub struct Session {
     pub expires_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
 }
+
+// ---------------------------------------------------------------------------
+// configurable rbac (#534): custom roles and access profiles
+// ---------------------------------------------------------------------------
+
+/// an org-scoped role an operator defined. `base_role` is the built-in role it
+/// is at least equivalent to; the explicit grants in [`CustomRoleGrant`] widen
+/// it further
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct CustomRole {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub slug: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// one of `admin` | `member` | `viewer`
+    pub base_role: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// one explicit `(resource, action)` a custom role grants. `resource` names a
+/// row in the control plane's capability table; `action` is one of `read` |
+/// `create` | `update` | `delete`
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct CustomRoleGrant {
+    pub id: Uuid,
+    pub role_id: Uuid,
+    pub resource: String,
+    pub action: String,
+}
+
+/// a reusable bundle of custom roles, each pinned to a scope
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AccessProfile {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub slug: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// one `(custom role, scope)` pair inside a profile. Scope follows the same
+/// most-specific-non-null convention as [`Membership`]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AccessProfileRole {
+    pub id: Uuid,
+    pub profile_id: Uuid,
+    pub role_id: Uuid,
+    pub org_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// a profile handed to a user or to a whole team (exactly one is set)
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AccessProfileAssignment {
+    pub id: Uuid,
+    pub profile_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// model/route visibility carried by a profile. An empty allow-list means "no
+/// restriction"; deny beats allow. Entries are exact names or a trailing-`*`
+/// prefix glob
+#[derive(Debug, Clone, Default, FromRow, Serialize, Deserialize)]
+pub struct AccessProfilePolicy {
+    pub profile_id: Uuid,
+    pub allowed_models: Vec<String>,
+    pub denied_models: Vec<String>,
+    pub allowed_routes: Vec<String>,
+    pub denied_routes: Vec<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One `(custom role at a scope)` a user actually holds, flattened across every
+/// profile that reaches them — directly or through a team they belong to.
+///
+/// `resource`/`action` are `None` for a composition whose role has no explicit
+/// grants: the row still carries `base_role`, which is the whole point of a
+/// role that only widens the built-in floor.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct EffectiveGrant {
+    pub profile_id: Uuid,
+    pub role_id: Uuid,
+    pub role_slug: String,
+    pub base_role: String,
+    pub org_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub resource: Option<String>,
+    pub action: Option<String>,
+}

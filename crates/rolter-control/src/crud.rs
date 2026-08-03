@@ -32,6 +32,7 @@ use rolter_store::postgres::repo::{
     SessionRepo, SkillRepo, TeamRepo, UserRepo, VirtualKeyRepo,
 };
 
+use crate::access_control::caller_policy;
 use crate::rbac::{authorize, authorize_superadmin, policy_allows, Principal, ScopeChain};
 use crate::rbac_matrix::{cap, superadmin_cap, Requirement};
 use crate::ControlState;
@@ -2028,7 +2029,7 @@ fn validate_kind(kind: &str) -> ApiResult<()> {
 /// Resolve the slug for a new provider: an explicit `slug` is validated as-is;
 /// an omitted one is derived from `name`. A name with no ascii-alphanumerics
 /// slugifies to the empty string, so the caller must supply an explicit slug.
-fn resolve_new_slug(name: &str, slug: Option<&str>) -> ApiResult<String> {
+pub(crate) fn resolve_new_slug(name: &str, slug: Option<&str>) -> ApiResult<String> {
     let candidate = match slug.map(str::trim).filter(|s| !s.is_empty()) {
         Some(explicit) => explicit.to_string(),
         None => slugify(name),
@@ -2477,7 +2478,19 @@ async fn list_routes(
 ) -> ApiResult<Json<Vec<Route>>> {
     let chain = ScopeChain::from_project(pool(&state), project_id).await?;
     authorize(&state, &principal, chain, cap!("route", Read)).await?;
-    Ok(Json(RouteRepo(pool(&state)).list(project_id).await?))
+    let routes = RouteRepo(pool(&state)).list(project_id).await?;
+    // an access profile may narrow which routes the caller sees (#534). With no
+    // profile carrying a policy the filter is the identity, which is every
+    // deployment that defines none
+    let policy = caller_policy(&state, &principal).await?;
+    Ok(Json(if policy.is_unrestricted() {
+        routes
+    } else {
+        routes
+            .into_iter()
+            .filter(|route| policy.permits_route(&route.model))
+            .collect()
+    }))
 }
 
 #[derive(Deserialize)]
@@ -3490,13 +3503,17 @@ struct EffectiveModel {
 /// The merged model list the gateway effectively serves: bootstrap-config
 /// routes (read-only) plus DB routes, as exposed by the merged store.
 async fn list_models(
-    _principal: Principal,
+    principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<Vec<EffectiveModel>>> {
     let config = state.store.load().await?;
+    // model visibility carried by the caller's access profiles (#534);
+    // unrestricted for a superadmin and for anyone holding no policy
+    let policy = caller_policy(&state, &principal).await?;
     let models = config
         .routes
         .iter()
+        .filter(|r| policy.permits_model(&r.model))
         .map(|r| EffectiveModel {
             model: r.model.clone(),
             strategy: r.strategy,
@@ -3863,7 +3880,7 @@ async fn delete_membership(
         // this is a data-integrity fallback rather than a route capability, so
         // it names no `(resource, action)`: nothing but a superadmin may clean
         // such a row up
-        authorize_superadmin(&principal, Requirement::Superadmin)?;
+        authorize_superadmin(&principal, Requirement::unscoped_superadmin())?;
         MembershipRepo(pool).delete(id).await?;
         log_audit(
             &state,
