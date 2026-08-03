@@ -4969,3 +4969,599 @@ async fn rbac_matrix_reflects_custom_roles_after_a_change() {
     assert_eq!(roles.len(), 1, "matrix must show the new role: {after}");
     assert_eq!(roles[0]["name"], "Budget Keeper");
 }
+
+/// A stub OAuth 2.0 authorization server for the MCP consent flow (#707).
+/// It records the last form it was posted so PKCE, scope and grant type can be
+/// asserted, and its next answer is set by the test.
+mod stub_authz {
+    use super::*;
+    use axum::Router;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    pub struct Stub {
+        /// json body (and status) the next token request receives
+        pub next: Arc<Mutex<(u16, Value)>>,
+        /// form body of the last token request
+        pub last_form: Arc<Mutex<String>>,
+        /// how many token requests have been served
+        pub calls: Arc<Mutex<u32>>,
+    }
+
+    impl Default for Stub {
+        fn default() -> Self {
+            Self {
+                next: Arc::new(Mutex::new((200, json!({})))),
+                last_form: Arc::new(Mutex::new(String::new())),
+                calls: Arc::new(Mutex::new(0)),
+            }
+        }
+    }
+
+    impl Stub {
+        pub fn answer(&self, status: u16, body: Value) {
+            *self.next.lock().unwrap() = (status, body);
+        }
+        pub fn form(&self) -> String {
+            self.last_form.lock().unwrap().clone()
+        }
+        pub fn calls(&self) -> u32 {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    pub async fn serve_stub() -> (String, Stub) {
+        let stub = Stub::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/token",
+            axum::routing::post({
+                let stub = stub.clone();
+                move |body: String| {
+                    let stub = stub.clone();
+                    async move {
+                        *stub.last_form.lock().unwrap() = body;
+                        *stub.calls.lock().unwrap() += 1;
+                        let (status, payload) = stub.next.lock().unwrap().clone();
+                        (
+                            axum::http::StatusCode::from_u16(status).unwrap(),
+                            axum::Json(payload),
+                        )
+                    }
+                }
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), stub)
+    }
+}
+
+/// The MCP OAuth token-acquisition path (#707), end to end against a stub
+/// authorization server: consent mints a grant plus a sealed session, a refresh
+/// rotates it, a refused refresh revokes rather than loops, an on-behalf-of
+/// exchange cannot widen the consent, and no token material ever appears in a
+/// response.
+#[tokio::test]
+async fn mcp_oauth_consent_refresh_and_exchange() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    std::env::set_var("ROLTER_PUBLIC_URL", format!("http://{addr}"));
+    std::env::set_var("ROLTER_KEK", "mcp-oauth-test-kek");
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+    let (authz, stub) = stub_authz::serve_stub().await;
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "McpOrg", "slug": "mcp-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+
+    // a member who will do the consenting
+    use argon2::password_hash::rand_core::OsRng;
+    use argon2::password_hash::{PasswordHasher, SaltString};
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = argon2::Argon2::default()
+        .hash_password(b"correct horse battery staple", &salt)
+        .unwrap()
+        .to_string();
+    let user_id: uuid::Uuid =
+        sqlx::query_scalar("insert into users (email, password_hash) values ($1, $2) returning id")
+            .bind("ada@example.com")
+            .bind(&hash)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query("insert into memberships (user_id, org_id, role) values ($1, $2, 'member')")
+        .bind(user_id)
+        .bind(uuid::Uuid::parse_str(&org_id).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let login: Value = client
+        .post(format!("{base}/api/v1/auth/login"))
+        .json(&json!({"email": "ada@example.com", "password": "correct horse battery staple"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = login["token"].as_str().unwrap().to_string();
+
+    let server: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/mcp-servers"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Docs", "slug": "docs", "url": "https://mcp.example.com"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let server_id = server["id"].as_str().unwrap().to_string();
+
+    // consent is impossible before an oauth client is registered
+    let unregistered = client
+        .post(format!(
+            "{base}/api/v1/mcp-servers/{server_id}/oauth/authorize"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unregistered.status(), 400);
+
+    // a plaintext token endpoint on a non-loopback host is refused outright
+    let plaintext = client
+        .put(format!(
+            "{base}/api/v1/mcp-servers/{server_id}/oauth-client"
+        ))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "authorize_url": "http://mcp.example.com/authorize",
+            "token_url": "http://mcp.example.com/token",
+            "client_id": "rolter"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(plaintext.status(), 400);
+
+    // a member may not register the client; that is an admin decision
+    let forbidden = client
+        .put(format!(
+            "{base}/api/v1/mcp-servers/{server_id}/oauth-client"
+        ))
+        .bearer_auth(&token)
+        .json(&json!({
+            "authorize_url": format!("{authz}/authorize"),
+            "token_url": format!("{authz}/token"),
+            "client_id": "rolter"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), 403);
+
+    let registered: Value = client
+        .put(format!(
+            "{base}/api/v1/mcp-servers/{server_id}/oauth-client"
+        ))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "authorize_url": format!("{authz}/authorize"),
+            "token_url": format!("{authz}/token"),
+            "client_id": "rolter",
+            "client_secret": "cli3nt-s3cret",
+            "default_scopes": ["tools:read", "tools:write"]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(registered["has_client_secret"], true);
+    assert_eq!(
+        registered["redirect_uri"],
+        format!("{base}/auth/mcp/callback")
+    );
+    let registered_text = registered.to_string();
+    assert!(
+        !registered_text.contains("cli3nt-s3cret"),
+        "the client secret leaked into the api response: {registered_text}"
+    );
+    // and listing the servers must not carry it either
+    let servers: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp-servers"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!servers.to_string().contains("cli3nt-s3cret"));
+
+    // -- consent ------------------------------------------------------------
+
+    let started: Value = client
+        .post(format!(
+            "{base}/api/v1/mcp-servers/{server_id}/oauth/authorize"
+        ))
+        .bearer_auth(&token)
+        .json(&json!({"scopes": ["tools:read", "tools:write"]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let auth_url = started["authorization_url"].as_str().unwrap().to_string();
+    assert!(auth_url.starts_with(&format!("{authz}/authorize?response_type=code")));
+    assert!(auth_url.contains("code_challenge_method=S256"));
+    let state = url_param(&auth_url, "state");
+    assert!(!state.is_empty());
+
+    // the authorization server grants only the read scope of the two asked for
+    stub.answer(
+        200,
+        json!({
+            "access_token": "access-1",
+            "refresh_token": "refresh-1",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": "tools:read"
+        }),
+    );
+    let consented: Value = client
+        .get(format!(
+            "{base}/auth/mcp/callback?code=code-1&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session_id = consented["session_id"].as_str().unwrap().to_string();
+    let grant_id = consented["grant_id"].as_str().unwrap().to_string();
+    assert_eq!(consented["scopes"], json!(["tools:read"]));
+    assert_eq!(consented["has_refresh_token"], true);
+    let consented_text = consented.to_string();
+    assert!(
+        !consented_text.contains("access-1") && !consented_text.contains("refresh-1"),
+        "token material leaked into the callback response: {consented_text}"
+    );
+    // the exchange used PKCE and the deployment-owned redirect uri
+    let form = stub.form();
+    assert!(form.contains("grant_type=authorization_code"));
+    assert!(form.contains("code_verifier="));
+    assert!(form.contains("client_secret=cli3nt-s3cret"));
+
+    // the same state cannot be redeemed twice
+    let replayed = client
+        .get(format!(
+            "{base}/auth/mcp/callback?code=code-1&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        replayed.status(),
+        400,
+        "a redeemed state must not work twice"
+    );
+
+    // the sealed columns really are sealed
+    let (access_ct, access_pt): (Vec<u8>, Option<String>) = sqlx::query_as(
+        "select access_ciphertext, encode(access_ciphertext, 'escape') from mcp_oauth_sessions \
+         where id = $1",
+    )
+    .bind(uuid::Uuid::parse_str(&session_id).unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!access_ct.is_empty());
+    assert!(
+        !access_pt.unwrap_or_default().contains("access-1"),
+        "the access token is stored in the clear"
+    );
+
+    // the session shows up on the sessions screen, without token material
+    let sessions: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/sessions"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(sessions.as_array().unwrap().len(), 1);
+    assert!(!sessions.to_string().contains("access-1"));
+    let grants: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/grants"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(grants[0]["id"], grant_id);
+    assert_eq!(grants[0]["scopes"], json!(["tools:read"]));
+
+    // -- scope ceiling ------------------------------------------------------
+
+    // an exchange may not ask for more than the grant carries
+    let escalated = client
+        .post(format!("{base}/api/v1/mcp/sessions/{session_id}/exchange"))
+        .bearer_auth(&token)
+        .json(&json!({"scopes": ["tools:read", "tools:write"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        escalated.status(),
+        400,
+        "an exchange must not widen the consent"
+    );
+    let before_exchange = stub.calls();
+
+    // an in-bounds exchange mints a second, independently revocable session
+    stub.answer(
+        200,
+        json!({
+            "access_token": "obo-access",
+            "token_type": "Bearer",
+            "expires_in": 600,
+            "scope": "tools:read"
+        }),
+    );
+    let exchanged: Value = client
+        .post(format!("{base}/api/v1/mcp/sessions/{session_id}/exchange"))
+        .bearer_auth(&token)
+        .json(&json!({"scopes": ["tools:read"], "audience": "https://downstream.example.com"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_ne!(exchanged["id"], json!(session_id));
+    assert_eq!(exchanged["grant_id"], grant_id);
+    assert_eq!(exchanged["scopes"], json!(["tools:read"]));
+    assert!(!exchanged.to_string().contains("obo-access"));
+    assert_eq!(
+        stub.calls(),
+        before_exchange + 1,
+        "the refused exchange must not have reached the authorization server"
+    );
+    let form = stub.form();
+    assert!(form.contains("token-exchange"));
+    assert!(form.contains("subject_token"));
+    assert!(form.contains("audience"));
+
+    // -- refresh ------------------------------------------------------------
+
+    // a rotated refresh token replaces the old one
+    stub.answer(
+        200,
+        json!({
+            "access_token": "access-2",
+            "refresh_token": "refresh-2",
+            "token_type": "Bearer",
+            "expires_in": 7200
+        }),
+    );
+    let refreshed: Value = client
+        .post(format!("{base}/api/v1/mcp/sessions/{session_id}/refresh"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        refreshed["id"],
+        json!(session_id),
+        "a refresh keeps the row"
+    );
+    assert_eq!(refreshed["revoked_at"], Value::Null);
+    assert!(!refreshed.to_string().contains("refresh-2"));
+    let form = stub.form();
+    assert!(form.contains("grant_type=refresh_token"));
+    assert!(form.contains("refresh_token=refresh-1"));
+
+    // a transient failure leaves the session alone to be retried
+    stub.answer(503, json!({"error": "temporarily_unavailable"}));
+    let transient = client
+        .post(format!("{base}/api/v1/mcp/sessions/{session_id}/refresh"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(transient.status(), 400);
+    let still_live: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("select revoked_at from mcp_oauth_sessions where id = $1")
+            .bind(uuid::Uuid::parse_str(&session_id).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        still_live.is_none(),
+        "a 503 is not a verdict on the grant; the session must survive it"
+    );
+
+    // a refusal is final: the session is revoked rather than retried forever
+    stub.answer(400, json!({"error": "invalid_grant"}));
+    let refused = client
+        .post(format!("{base}/api/v1/mcp/sessions/{session_id}/refresh"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 400);
+    let revoked_at: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("select revoked_at from mcp_oauth_sessions where id = $1")
+            .bind(uuid::Uuid::parse_str(&session_id).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        revoked_at.is_some(),
+        "a refused refresh must revoke the session, not loop on it"
+    );
+
+    // and a revoked session is not renewable again
+    let after_revoke = client
+        .post(format!("{base}/api/v1/mcp/sessions/{session_id}/refresh"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(after_revoke.status(), 400);
+
+    // the whole lifecycle is on the audit trail
+    let actions: Vec<String> = sqlx::query_scalar(
+        "select action from audit_log where action like 'mcp_oauth%' order by at",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    for expected in [
+        "mcp_oauth_client.update",
+        "mcp_oauth_grant.consent",
+        "mcp_oauth_session.exchange",
+        "mcp_oauth_session.refresh_refused",
+    ] {
+        assert!(
+            actions.iter().any(|a| a == expected),
+            "missing audit event {expected} in {actions:?}"
+        );
+    }
+}
+
+/// Cross-tenant isolation on the exchange path: a member of another org may not
+/// refresh or exchange a session they do not own, and the answer is a 404 —
+/// whether a session exists elsewhere is not something to probe for.
+#[tokio::test]
+async fn mcp_oauth_sessions_are_not_reachable_across_owners() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    std::env::set_var("ROLTER_KEK", "mcp-oauth-test-kek");
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "OwnerOrg", "slug": "owner-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = uuid::Uuid::parse_str(org["id"].as_str().unwrap()).unwrap();
+
+    use argon2::password_hash::rand_core::OsRng;
+    use argon2::password_hash::{PasswordHasher, SaltString};
+    let mut tokens = Vec::new();
+    let mut ids = Vec::new();
+    for email in ["owner@example.com", "other@example.com"] {
+        let salt = SaltString::generate(&mut OsRng);
+        let hash = argon2::Argon2::default()
+            .hash_password(b"correct horse battery staple", &salt)
+            .unwrap()
+            .to_string();
+        let id: uuid::Uuid = sqlx::query_scalar(
+            "insert into users (email, password_hash) values ($1, $2) returning id",
+        )
+        .bind(email)
+        .bind(&hash)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("insert into memberships (user_id, org_id, role) values ($1, $2, 'member')")
+            .bind(id)
+            .bind(org_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let login: Value = client
+            .post(format!("{base}/api/v1/auth/login"))
+            .json(&json!({"email": email, "password": "correct horse battery staple"}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        tokens.push(login["token"].as_str().unwrap().to_string());
+        ids.push(id);
+    }
+
+    // a grant + session owned by the first user, written directly: this test is
+    // about the guard, not about the exchange
+    let server_id: uuid::Uuid = sqlx::query_scalar(
+        "insert into mcp_servers (org_id, name, slug, url) \
+         values ($1, 'Docs', 'docs', 'https://mcp.example.com') returning id",
+    )
+    .bind(org_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let grant_id: uuid::Uuid = sqlx::query_scalar(
+        "insert into mcp_oauth_grants (server_id, user_id, scopes) \
+         values ($1, $2, '{tools:read}') returning id",
+    )
+    .bind(server_id)
+    .bind(ids[0])
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let session_id: uuid::Uuid = sqlx::query_scalar(
+        "insert into mcp_oauth_sessions (grant_id, access_ciphertext, access_nonce, scopes, \
+                expires_at) \
+         values ($1, '\\x00', '\\x00', '{tools:read}', now() + interval '1 hour') returning id",
+    )
+    .bind(grant_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    for path in ["refresh", "exchange"] {
+        let denied = client
+            .post(format!("{base}/api/v1/mcp/sessions/{session_id}/{path}"))
+            .bearer_auth(&tokens[1])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            denied.status(),
+            403,
+            "a co-tenant must not act on someone else's session via {path}"
+        );
+    }
+}

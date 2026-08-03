@@ -54,6 +54,53 @@ Both listings are scoped by ownership, and the dashboard says so on the page rat
 
 Both screens surface that `403` as a plain message rather than an empty table, so "nothing here" is never confused with "not allowed".
 
+## Granting consent
+
+Before a user can consent, an org admin registers the OAuth client Rolter
+presents to the server's authorization server:
+
+```bash
+curl -X PUT https://control.example.com/api/v1/mcp-servers/$SERVER_ID/oauth-client \
+  -H "Authorization: Bearer $ROLTER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "authorize_url": "https://github.com/login/oauth/authorize",
+        "token_url": "https://github.com/login/oauth/access_token",
+        "client_id": "Iv1.abc123",
+        "client_secret": "…",
+        "default_scopes": ["repo", "read:org"]
+      }'
+```
+
+This endpoint is admin-only in both directions — even reading it, because the
+row names a third party the organization has chosen to trust. The secret is
+sealed with the deployment key on write and is never readable back; sending an
+empty secret downgrades the client to a public one.
+
+The user then starts consent from the dashboard, which calls
+`POST /api/v1/mcp-servers/{id}/oauth/authorize` and receives the authorization
+URL to open. After they approve, the browser returns to
+`/auth/mcp/callback`, and Rolter writes the grant and its first session
+together. A replayed callback finds nothing to consume and fails.
+
+## Sessions renew themselves
+
+Rolter renews a session about five minutes before it expires, so a user
+consents once rather than every hour. Refresh-token rotation is handled: if
+the authorization server hands back a new refresh token, that is what gets
+stored.
+
+If the authorization server *refuses* the refresh with `invalid_grant` or
+`invalid_scope`, Rolter revokes the session instead of retrying — that answer
+means consent is gone, and the user simply consents again. Network blips and
+`5xx` responses are left for the next sweep.
+
+A service that needs to call a downstream system on the user's behalf can
+exchange a live session for a narrower one with
+`POST /api/v1/mcp/sessions/{id}/exchange`. The new session descends from the
+same grant, can be revoked on its own, and can never carry more scopes than
+the consent it came from.
+
 ## Calling a server through Rolter
 
 Use your normal user-owned virtual key against the gateway path. The server

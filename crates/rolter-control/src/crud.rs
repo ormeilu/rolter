@@ -320,6 +320,36 @@ where
     }
 }
 
+/// `Option<SafeJson<T>>`: absent when the request carries no JSON body at all,
+/// so a POST whose every field is optional can be sent with no body. A body
+/// that *is* present still goes through the same validation — being optional
+/// is not a way to skip [`reject_control_chars`].
+impl<S, T> axum::extract::OptionalFromRequest<S> for SafeJson<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(
+        req: axum::extract::Request,
+        state: &S,
+    ) -> Result<Option<Self>, Self::Rejection> {
+        let Some(Json(value)) = <Json<serde_json::Value> as axum::extract::OptionalFromRequest<
+            S,
+        >>::from_request(req, state)
+        .await
+        .map_err(|rejection| ApiError::Core(Error::Config(rejection.body_text())))?
+        else {
+            return Ok(None);
+        };
+        reject_control_chars(&value, "")?;
+        let parsed = serde_json::from_value(value)
+            .map_err(|err| ApiError::Core(Error::Config(format!("invalid request body: {err}"))))?;
+        Ok(Some(Self(parsed)))
+    }
+}
+
 /// Reject a required field that's empty after trimming.
 pub(crate) fn require_non_empty(value: &str, field: &str) -> ApiResult<()> {
     if value.trim().is_empty() {
@@ -335,7 +365,11 @@ pub(crate) fn require_non_empty(value: &str, field: &str) -> ApiResult<()> {
 /// The gateway re-checks the same policy when it validates a snapshot, but
 /// failing at write time gives the operator a 400 at the point of the mistake
 /// instead of a rejected snapshot later.
-fn require_allowed_egress(state: &ControlState, url: &str, field: &str) -> ApiResult<()> {
+pub(crate) fn require_allowed_egress(
+    state: &ControlState,
+    url: &str,
+    field: &str,
+) -> ApiResult<()> {
     state
         .egress
         .check_url(url, field)

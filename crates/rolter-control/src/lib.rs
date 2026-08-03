@@ -41,6 +41,8 @@ mod mcp_logs;
 #[cfg(feature = "postgres")]
 mod mcp_oauth;
 #[cfg(feature = "postgres")]
+mod mcp_oauth_flow;
+#[cfg(feature = "postgres")]
 mod me;
 #[cfg(feature = "postgres")]
 mod plugins;
@@ -387,6 +389,9 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
     #[cfg(feature = "postgres")]
     if state.pool.is_some() {
         alerting::start_evaluator(state.clone());
+        // renew MCP OAuth sessions before they lapse, so a user consents once
+        // rather than every hour (#707)
+        mcp_oauth_flow::start_refresher(state.clone());
         api = api
             .merge(access_control::router())
             .merge(alerting::router())
@@ -398,6 +403,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(plugins::router())
             .merge(mcp_logs::router())
             .merge(mcp_oauth::router())
+            .merge(mcp_oauth_flow::router())
             .merge(feature_flags::router())
             .merge(guardrails::router())
             .merge(logging_settings::router())

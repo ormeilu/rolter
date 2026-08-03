@@ -444,6 +444,33 @@ pub struct McpServer {
     /// OAuth scopes every proxied call to this server must carry
     pub required_scopes: Vec<String>,
     pub created_at: DateTime<Utc>,
+    /// authorization endpoint a user's browser is sent to for consent (#707)
+    pub authorize_url: Option<String>,
+    /// token endpoint the code, refresh and exchange grants are posted to
+    pub token_url: Option<String>,
+    /// the OAuth client rolter presents; the matching secret is sealed and is
+    /// deliberately **not** on this struct, so a serialized `McpServer` cannot
+    /// carry it into an API response
+    pub client_id: Option<String>,
+    /// scopes requested when a consent flow does not name its own
+    pub default_scopes: Vec<String>,
+    /// whether a sealed client secret is stored, so a UI can show that the
+    /// client is confidential without the control plane handing the secret out
+    pub has_client_secret: bool,
+}
+
+/// One in-flight authorization-code consent, opened by the callback. The PKCE
+/// verifier is decrypted here and nowhere else; like
+/// [`super::repo::McpSessionTokens`] this is deliberately not `Serialize`.
+#[derive(Debug, Clone)]
+pub struct McpLoginState {
+    pub state: String,
+    pub server_id: Uuid,
+    pub user_id: Uuid,
+    pub code_verifier: String,
+    pub scopes: Vec<String>,
+    pub redirect_uri: String,
+    pub created_at: DateTime<Utc>,
 }
 
 /// a governed, named bundle of MCP tool references
