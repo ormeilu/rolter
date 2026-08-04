@@ -13,6 +13,7 @@ use dashmap::DashMap;
 use rolter_core::{BackpressurePolicy, Error, ProviderConfig, QueueConfig, Result};
 use rolter_proxy::Forwarder;
 use tokio::sync::{mpsc, oneshot, Mutex};
+use tracing::Instrument;
 
 use crate::metrics::Metrics;
 
@@ -39,6 +40,7 @@ enum Job {
         trace_headers: Vec<(String, String)>,
         reply: oneshot::Sender<Result<reqwest::Response>>,
         wait: tracing::Span,
+        parent: tracing::Span,
     },
     Raw {
         provider: ProviderConfig,
@@ -49,6 +51,7 @@ enum Job {
         trace_headers: Vec<(String, String)>,
         reply: oneshot::Sender<Result<reqwest::Response>>,
         wait: tracing::Span,
+        parent: tracing::Span,
     },
 }
 
@@ -118,6 +121,10 @@ impl ProviderQueues {
             trace_headers: owned_headers(trace_headers),
             reply,
             wait: queue_wait_span(&provider.name),
+            // the worker runs on its own task, where nothing is in scope: carry
+            // the caller's span across so the forwarder's own stages land under
+            // `upstream.request` instead of becoming orphan roots (#805)
+            parent: tracing::Span::current(),
         };
         self.dispatch(config, &provider.name, job, result).await
     }
@@ -149,6 +156,10 @@ impl ProviderQueues {
             trace_headers: owned_headers(trace_headers),
             reply,
             wait: queue_wait_span(&provider.name),
+            // the worker runs on its own task, where nothing is in scope: carry
+            // the caller's span across so the forwarder's own stages land under
+            // `upstream.request` instead of becoming orphan roots (#805)
+            parent: tracing::Span::current(),
         };
         self.dispatch(config, &provider.name, job, result).await
     }
@@ -229,10 +240,13 @@ async fn run_job(forwarder: &Forwarder, job: Job) {
             trace_headers,
             reply,
             wait,
+            parent,
         } => {
             // the job is off the queue: close the wait span before doing any work
             drop(wait);
             let headers = borrowed_headers(&trace_headers);
+            // `.instrument`, not `.enter()`: an entered guard is `!Send` and this
+            // future is spawned onto the worker task
             let _ = reply.send(
                 forwarder
                     .forward_json(
@@ -243,6 +257,7 @@ async fn run_job(forwarder: &Forwarder, job: Job) {
                         upstream_model.as_deref(),
                         &headers,
                     )
+                    .instrument(parent)
                     .await,
             );
         }
@@ -255,10 +270,13 @@ async fn run_job(forwarder: &Forwarder, job: Job) {
             trace_headers,
             reply,
             wait,
+            parent,
         } => {
             // the job is off the queue: close the wait span before doing any work
             drop(wait);
             let headers = borrowed_headers(&trace_headers);
+            // `.instrument`, not `.enter()`: an entered guard is `!Send` and this
+            // future is spawned onto the worker task
             let _ = reply.send(
                 forwarder
                     .forward_raw(
@@ -269,6 +287,7 @@ async fn run_job(forwarder: &Forwarder, job: Job) {
                         api_key.as_deref(),
                         &headers,
                     )
+                    .instrument(parent)
                     .await,
             );
         }

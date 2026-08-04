@@ -9,8 +9,8 @@
 //! disconnected one; the id is stored on each [`RequestLog`](crate::logging::RequestLog)
 //! and surfaces in ClickHouse for cross-service correlation.
 //!
-//! [`continue_trace`] takes that further (#805): it makes the inbound context the
-//! real OpenTelemetry *parent* of the request span, and [`outbound_headers`]
+//! [`GatewayMakeSpan`] takes that further (#805): it builds the request span and
+//! makes the inbound context its real OpenTelemetry *parent*, and [`outbound_headers`]
 //! injects the gateway's own span into the upstream call rather than copying the
 //! caller's header verbatim. Together those are what put a dashboard click, the
 //! gateway, and the provider request in one correctly-parented trace. All of it
@@ -22,7 +22,7 @@ use axum::extract::Request;
 use axum::http::{HeaderMap, HeaderValue};
 use axum::middleware::Next;
 use axum::response::Response;
-use tower_http::trace::OnResponse;
+use tower_http::trace::{MakeSpan, OnResponse};
 use tracing::Span;
 
 /// header carrying the end-to-end request id
@@ -61,28 +61,53 @@ fn new_request_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// Adopt the caller's inbound trace context as the parent of the request span
-/// (#805).
+/// Builds the per-request span and adopts the caller's inbound trace context as
+/// its parent (#805).
 ///
-/// Without this every gateway span is a disconnected root: the caller's
-/// `traceparent` was parsed into a string for the request log but never became
-/// an OpenTelemetry parent, so a dashboard click and the gateway work it caused
-/// were two unrelated traces. Layer this *inside* the
-/// [`TraceLayer`](tower_http::trace::TraceLayer) so `Span::current()` is the
-/// request span it should parent.
+/// This has to be the [`TraceLayer`](tower_http::trace::TraceLayer)'s own
+/// span-maker rather than a middleware layered inside it. `DefaultMakeSpan`
+/// creates the request span at **DEBUG**, so under the default `RUST_LOG=info`
+/// it is disabled — and setting a parent on a disabled span does nothing, which
+/// left the stage spans as disconnected roots carrying a freshly-minted trace id
+/// even though the caller had sent a perfectly good `traceparent`. Building the
+/// span here, at `INFO`, is what makes it real enough to parent and to export.
 ///
-/// Costs one relaxed atomic load when no OTLP pipeline is installed.
-pub async fn continue_trace(req: Request, next: Next) -> Response {
-    if rolter_core::telemetry::is_active() {
+/// When no OTLP pipeline is installed it falls back to the stock DEBUG span, so
+/// an untraced deployment keeps paying exactly what it paid before: the span is
+/// disabled by the default filter and never allocated.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GatewayMakeSpan;
+
+impl<B> MakeSpan<B> for GatewayMakeSpan {
+    fn make_span(&mut self, req: &axum::http::Request<B>) -> Span {
+        if !rolter_core::telemetry::is_active() {
+            // stock behaviour: disabled at the default filter, costs nothing
+            return tracing::debug_span!(
+                "request",
+                method = %req.method(),
+                uri = %req.uri(),
+                version = ?req.version(),
+            );
+        }
+
+        // `otel.name` is what a backend shows as the span name; method + route
+        // reads better in a waterfall than the bare path
+        let span = tracing::info_span!(
+            "gateway.request",
+            otel.name = %format!("{} {}", req.method(), req.uri().path()),
+            http.request.method = %req.method(),
+            url.path = %req.uri().path(),
+        );
+
         let mut carrier = rolter_core::telemetry::TraceCarrier::new();
         for name in PROPAGATED_TRACE_HEADERS {
             if let Some(value) = req.headers().get(*name).and_then(|v| v.to_str().ok()) {
                 carrier.insert(name, value);
             }
         }
-        rolter_core::telemetry::adopt_inbound(&Span::current(), &carrier.finish());
+        rolter_core::telemetry::adopt_inbound(&span, &carrier.finish());
+        span
     }
-    next.run(req).await
 }
 
 /// The trace id to stamp on this request's [`RequestLog`](crate::logging::RequestLog).
@@ -395,6 +420,30 @@ mod tests {
             "traceparent".to_string(),
             "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string()
         )));
+    }
+
+    #[test]
+    fn the_request_span_is_disabled_without_a_pipeline_and_real_with_one() {
+        use tower_http::trace::MakeSpan;
+
+        // the trap this pins: `DefaultMakeSpan` builds the request span at DEBUG,
+        // which the default `info` filter disables — and a disabled span cannot
+        // be parented or exported, so every stage span became a root carrying a
+        // freshly-minted trace id. with no pipeline that stock behaviour is what
+        // we want (it costs nothing); with one, the span must be real
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .body(())
+            .unwrap();
+
+        assert!(!rolter_core::telemetry::is_active());
+        let span = GatewayMakeSpan.make_span(&req);
+        assert_eq!(
+            span.metadata().map(|m| *m.level()),
+            Some(tracing::Level::DEBUG),
+            "without a pipeline the request span stays the cheap DEBUG one"
+        );
     }
 
     #[test]
