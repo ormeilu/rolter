@@ -79,7 +79,7 @@ impl KeyMeta {
     /// Whether this key may address `model`, by both gates it has to clear: the
     /// key's own allow-list and the access-profile policy its owner holds.
     ///
-    /// The two are separate grants and are deliberately ANDed. The key list is
+    /// The two are separate grants and both must permit. The key list is
     /// what the key's creator chose to scope this credential to; the policy is
     /// what an operator decided the *person* may reach at all. Neither can widen
     /// the other, so a key naming a model its owner is denied stays denied.

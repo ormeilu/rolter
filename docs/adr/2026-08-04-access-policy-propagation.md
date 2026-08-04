@@ -44,8 +44,8 @@ Concretely:
   in one batched query for the whole key set, and publishes it on
   `VirtualKeyRecord::access_policy`. `None` means unrestricted.
 - `KeyMeta::model_permitted` and `KeyMeta::route_permitted` gate the request
-  path. The key's own model allow-list and the owner's policy are **ANDed**:
-  they are separate grants and neither may widen the other.
+  path. The key's own model allow-list and the owner's policy must **both**
+  permit a model: they are separate grants and neither may widen the other.
 - Migration `0060` adds `bump_config_version()` triggers to exactly the four
   tables that feed this resolution: `access_profile_policies`,
   `access_profile_assignments`, `access_profiles`, and `memberships`.
