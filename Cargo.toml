@@ -98,7 +98,7 @@ libc = "0.2"
 # aws_lc_rs, not rust_crypto: the pure-rust `rsa` crate that rust_crypto pulls
 # in carries RUSTSEC-2023-0071 (Marvin timing sidechannel) with no patched
 # release, and aws-lc-rs is already in the tree under rustls
-jsonwebtoken = { version = "10", default-features = false, features = [
+jsonwebtoken = { version = "11", default-features = false, features = [
   "aws_lc_rs",
   # pem parsing is used by the sso integration test's stub identity provider,
   # which mints id tokens with a key generated per test run
