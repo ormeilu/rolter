@@ -45,7 +45,7 @@ sha2 = { workspace = true, optional = true }
 [dev-dependencies]
 # the sso tests stand up a stub identity provider and need to mint id tokens;
 # the key is generated per test run rather than checked in
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
+p256 = { version = "0.14", features = ["ecdsa", "pkcs8", "pem"] }
 
 [features]
 default = []
