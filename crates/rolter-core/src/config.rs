@@ -1266,6 +1266,12 @@ pub struct VirtualKeyRecord {
     /// customer this key's spend is attributed to; empty when unattributed
     #[serde(default)]
     pub customer_id: String,
+    /// merged model/route policy of the access profiles the key's owner holds,
+    /// resolved when the snapshot is built (#791). `None` is "unrestricted" and
+    /// is what every key on a deployment with no access profiles carries — as
+    /// does any key with no owner, since a policy is a property of a user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_policy: Option<crate::access_policy::ModelPolicy>,
 }
 
 /// An organization-scoped MCP endpoint available to the gateway.

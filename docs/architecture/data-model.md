@@ -38,6 +38,8 @@ erDiagram
 
 `config_version` holds a single monotonic counter the gateways watch for reload-free updates ([config-and-hot-reload.md](config-and-hot-reload.md)). `audit_log` records who changed what.
 
+The RBAC tables are split on exactly this question. `access_profile_policies`, `access_profile_assignments`, `access_profiles` and `memberships` all carry a `bump_config_version()` trigger, because the gateway resolves the model/route policy of each virtual key's owner from them and enforces it on the request path (#791, [ADR-0023](../adr/2026-08-04-access-policy-propagation.md)). `custom_roles` and `custom_role_grants` do not and must not: they decide control-plane authorization, which is evaluated live per request, so a bump would wake the fleet for a change it cannot observe.
+
 `plugin_instances` is the control-plane registry for desired request/response middleware configuration. A row belongs to an org and may narrow to a project; slugs are unique within that scope. Endpoint credentials are environment-variable references and `config` is always a JSON object. The table deliberately has no `bump_config_version()` trigger until the allocation-light gateway dispatcher in #509 consumes it—an enabled registry row is configuration, not a false claim that middleware is running.
 
 The guardrail registry is deployment-wide:
