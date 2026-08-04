@@ -151,10 +151,7 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> R
         })
         .map(|(model, _)| model.clone())
         .chain(builtin)
-        .filter(|m| {
-            vk.as_ref()
-                .is_none_or(|vk| rolter_auth::model_allowed(&vk.models, m))
-        })
+        .filter(|m| vk.as_ref().is_none_or(|vk| vk.model_permitted(m)))
         .map(|m| json!({"id": m, "object": "model", "owned_by": "rolter"}))
         .collect();
 
@@ -189,9 +186,10 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> R
                 continue;
             };
             let id = format!("{slug}/{upstream}");
-            if vk.as_ref().is_none_or(|vk| {
-                rolter_auth::model_allowed(&vk.models, &id) && vk.provider_allowed(&target.provider)
-            }) {
+            if vk
+                .as_ref()
+                .is_none_or(|vk| vk.model_permitted(&id) && vk.provider_allowed(&target.provider))
+            {
                 pinned.insert((id, target.provider.clone()));
             }
         }
@@ -219,8 +217,7 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> R
             for model in models {
                 let id = format!("{slug}/{model}");
                 if vk.as_ref().is_none_or(|vk| {
-                    rolter_auth::model_allowed(&vk.models, &id)
-                        && vk.provider_allowed(&member.provider)
+                    vk.model_permitted(&id) && vk.provider_allowed(&member.provider)
                 }) {
                     grouped.insert((id, group.name.clone()));
                 }
@@ -239,18 +236,21 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> R
 /// Whether a virtual key can reach at least one target of this route. An empty
 /// provider list is deliberately permissive for existing keys and configs.
 pub(crate) fn key_allows_route(key: &KeyMeta, entry: &crate::state::RouteEntry) -> bool {
-    entry
-        .route
-        .targets
-        .iter()
-        .chain(
-            entry
-                .route
-                .variants
-                .iter()
-                .flat_map(|variant| variant.targets.iter()),
-        )
-        .any(|target| key.provider_allowed(&target.provider))
+    // the owner's access profile can deny a whole named route regardless of
+    // which providers sit behind it (#791)
+    key.route_permitted(&entry.route.model)
+        && entry
+            .route
+            .targets
+            .iter()
+            .chain(
+                entry
+                    .route
+                    .variants
+                    .iter()
+                    .flat_map(|variant| variant.targets.iter()),
+            )
+            .any(|target| key.provider_allowed(&target.provider))
 }
 
 /// Enforce the part of model visibility that is available on the gateway
@@ -729,7 +729,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         Err(resp) => return resp,
     };
     if let Some(vk) = &vk {
-        if !rolter_auth::model_allowed(&vk.models, &model) {
+        if !vk.model_permitted(&model) {
             return crate::error::ApiError::new(
                 StatusCode::FORBIDDEN,
                 "model not allowed for this key",
@@ -862,6 +862,18 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         .into_response();
     }
     if let Some(key) = &vk {
+        // checked before the composite gate so the caller is told which of the
+        // two denied them: the route policy their owner holds, or the key's
+        // own provider allow-list (#791)
+        if !key.route_permitted(&entry.route.model) {
+            return crate::error::ApiError::new(
+                StatusCode::FORBIDDEN,
+                "route is not allowed for this key's access profile",
+            )
+            .with_code("route_not_allowed")
+            .with_param("model")
+            .into_response();
+        }
         if !key_allows_route(key, entry) {
             return crate::error::ApiError::new(
                 StatusCode::FORBIDDEN,
@@ -1716,7 +1728,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
         Err(resp) => return resp,
     };
     if let Some(vk) = &vk {
-        if !rolter_auth::model_allowed(&vk.models, &model) {
+        if !vk.model_permitted(&model) {
             return crate::error::ApiError::new(
                 StatusCode::FORBIDDEN,
                 "model not allowed for this key",
@@ -3105,6 +3117,7 @@ mod tests {
         let mut config = GatewayConfig::default();
         let pepper = config.server.resolve_key_pepper();
         config.db_virtual_keys.push(VirtualKeyRecord {
+            access_policy: None,
             key_hash: rolter_auth::hash_key(&pepper, "sk-db-key"),
             id: "vk-1".to_string(),
             org_id: "org-1".to_string(),
@@ -3145,6 +3158,7 @@ mod tests {
         let mut config = GatewayConfig::default();
         let pepper = config.server.resolve_key_pepper();
         config.db_virtual_keys.push(VirtualKeyRecord {
+            access_policy: None,
             key_hash: rolter_auth::hash_key(&pepper, "sk-attributed"),
             id: "vk-1".to_string(),
             org_id: "org-1".to_string(),
@@ -3533,6 +3547,113 @@ mod tests {
         // both open: fail open to an untried target rather than returning None
         assert!(bb.on_failure("m", 1));
         assert!(pick_untried(&entry, &ctx, &[], &[], &cd, &hh, &bb, "m", false, None).is_some());
+    }
+
+    /// A key whose owner holds the given access-profile policy.
+    fn key_with_policy(policy: rolter_core::ModelPolicy) -> KeyMeta {
+        KeyMeta {
+            access_policy: Some(policy),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn access_policy_denies_a_model_the_key_list_would_allow() {
+        let key = key_with_policy(rolter_core::ModelPolicy {
+            denied_models: vec!["secret-*".to_string()],
+            ..Default::default()
+        });
+        assert!(key.model_permitted("gpt-4o"));
+        assert!(!key.model_permitted("secret-model"));
+    }
+
+    #[test]
+    fn the_key_list_and_the_access_policy_are_anded() {
+        // the key names one model; the owner's profile permits a different one.
+        // neither may widen the other, so nothing gets through
+        let key = KeyMeta {
+            models: vec!["gpt-4o".to_string()],
+            access_policy: Some(rolter_core::ModelPolicy {
+                allowed_models: vec!["claude-opus".to_string()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(!key.model_permitted("gpt-4o"));
+        assert!(!key.model_permitted("claude-opus"));
+
+        // and the intersection does pass
+        let overlapping = KeyMeta {
+            models: vec!["gpt-4o".to_string(), "claude-opus".to_string()],
+            access_policy: Some(rolter_core::ModelPolicy {
+                allowed_models: vec!["claude-opus".to_string()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(overlapping.model_permitted("claude-opus"));
+        assert!(!overlapping.model_permitted("gpt-4o"));
+    }
+
+    #[test]
+    fn no_access_policy_leaves_model_selection_exactly_as_it_was() {
+        let key = KeyMeta {
+            models: vec!["gpt-4o".to_string()],
+            ..Default::default()
+        };
+        assert!(key.access_policy.is_none());
+        assert!(key.model_permitted("gpt-4o"));
+        assert!(!key.model_permitted("other"));
+
+        // and an unrestricted key still reaches everything
+        let open = KeyMeta::default();
+        assert!(open.model_permitted("anything"));
+        assert!(open.route_permitted("anything"));
+    }
+
+    #[test]
+    fn a_denied_route_is_refused_whatever_its_providers_are() {
+        let route = ModelRoute {
+            model: "internal-tools".to_string(),
+            strategy: BalancingStrategy::RoundRobin,
+            targets: vec![Target {
+                provider: "a".to_string(),
+                model: None,
+                weight: 1,
+            }],
+            params: Default::default(),
+            param_policy: Default::default(),
+            advanced: Default::default(),
+            variants: Vec::new(),
+            cache: None,
+        };
+        let entry = crate::state::RouteEntry {
+            guardrails: Default::default(),
+            balancer: rolter_balancer::build(route.strategy, &[1]),
+            variant_balancers: Vec::new(),
+            route,
+        };
+
+        // the key's provider list would admit this route
+        let denied = KeyMeta {
+            access_policy: Some(rolter_core::ModelPolicy {
+                denied_routes: vec!["internal-*".to_string()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(denied.provider_allowed("a"));
+        assert!(!key_allows_route(&denied, &entry));
+
+        // a policy on the model axis alone leaves the route reachable
+        let model_axis_only = KeyMeta {
+            access_policy: Some(rolter_core::ModelPolicy {
+                denied_models: vec!["internal-*".to_string()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(key_allows_route(&model_axis_only, &entry));
     }
 
     #[test]

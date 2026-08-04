@@ -3,6 +3,7 @@
 //! This crate holds the configuration model, domain error type and telemetry
 //! bootstrap that every other rolter crate depends on.
 
+pub mod access_policy;
 pub mod config;
 pub mod currency;
 pub mod error;
@@ -12,6 +13,7 @@ pub mod prompt_templates;
 pub mod slug;
 pub mod telemetry;
 
+pub use access_policy::ModelPolicy;
 pub use config::{
     AdaptiveRoutingConfig, AdvancedModelConfig, ApiKeyConfig, BackpressurePolicy,
     BalancingStrategy, BreakerConfig, BudgetConfig, BudgetPeriod, BudgetScope, CacheConfig,
@@ -22,7 +24,7 @@ pub use config::{
     ProviderConfig, ProviderGroupConfig, ProviderKind, QueueConfig, RateLimitConfig,
     RealtimeConfig, ResponsesConfig, RetryConfig, RoleProfile, RouteCache, SemanticCacheConfig,
     ServerConfig, Target, TimeoutConfig, TlsConfig, Variant, VirtualKeyConfig, VirtualKeyRecord,
-    MAX_EXPLORATION_RATIO, RESERVED_PATHS,
+    MAX_EXPLORATION_RATIO, MCP_TRANSPORTS, RESERVED_PATHS,
 };
 pub use currency::{CurrencyConfig, CurrencyConverter, StaticRates, DEFAULT_BASE_CURRENCY};
 pub use error::{Error, Result};

@@ -23,10 +23,15 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use rolter_auth::Role;
-use rolter_store::postgres::repo::MembershipRepo;
+use rolter_store::postgres::models::{AccessProfilePolicy, EffectiveGrant};
+use rolter_store::postgres::repo::{AccessProfileRepo, CustomRoleRepo, MembershipRepo};
 
+use crate::access_control::{merge_policies, MergedPolicy};
 use crate::crud::{pool, ApiResult};
-use crate::rbac::{resolve_role, role_rank, Principal, ROLES};
+use crate::rbac::{
+    authorize, best_role, custom_base_role, grant_applies, resolve_role, role_rank, Principal,
+    ScopeChain, ROLES,
+};
 use crate::ControlState;
 
 pub(crate) fn router() -> Router<ControlState> {
@@ -50,20 +55,51 @@ impl Action {
     const ALL: [Action; 4] = [Action::Read, Action::Create, Action::Update, Action::Delete];
 }
 
-/// What a caller must hold for an action.
+/// The authority an action takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Requirement {
+pub(crate) enum Authority {
     /// the minimum scoped role that authorizes the action
     Role(Role),
     /// deployment-wide settings only the admin token or a superadmin may touch
     Superadmin,
+    /// any authenticated caller, with no membership anywhere. Reserved for
+    /// global read-only catalogs that carry no tenant's data: there is no
+    /// deployment-scoped membership to hold, so naming a role here would
+    /// describe a floor nobody can stand on (#766)
+    Authenticated,
+}
+
+/// What a caller must hold for one `(resource, action)` pair.
+///
+/// It carries the pair itself and not just the [`Authority`], because a custom
+/// role grants exactly that pair (#534): the guard has to know *what* is being
+/// asked for before it can look the answer up among a caller's explicit grants.
+/// Handlers still name the pair once, through [`cap!`], and never construct
+/// this by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Requirement {
+    pub(crate) resource: &'static str,
+    pub(crate) action: Action,
+    pub(crate) authority: Authority,
 }
 
 impl Requirement {
     /// const-friendly discriminant test, so [`superadmin_cap!`] can reject a
     /// scoped requirement at compile time
     pub(crate) const fn is_superadmin(self) -> bool {
-        matches!(self, Requirement::Superadmin)
+        matches!(self.authority, Authority::Superadmin)
+    }
+
+    /// A superadmin requirement that names no route capability, for the one
+    /// data-integrity path that cleans up a row the schema should have made
+    /// impossible. Deliberately not reachable through [`cap!`]: it guards no
+    /// published resource, so it must not appear in the matrix either.
+    pub(crate) const fn unscoped_superadmin() -> Self {
+        Self {
+            resource: "",
+            action: Action::Delete,
+            authority: Authority::Superadmin,
+        }
     }
 }
 
@@ -76,18 +112,20 @@ struct Capability {
     /// scope the resource lives under, surfaced so a UI can ask for the right
     /// `org_id`/`team_id`/`project_id` when checking effective permissions
     scope: &'static str,
-    read: Option<Requirement>,
-    create: Option<Requirement>,
-    update: Option<Requirement>,
-    delete: Option<Requirement>,
+    read: Option<Authority>,
+    create: Option<Authority>,
+    update: Option<Authority>,
+    delete: Option<Authority>,
 }
 
-const VIEWER: Option<Requirement> = Some(Requirement::Role(Role::Viewer));
-const MEMBER: Option<Requirement> = Some(Requirement::Role(Role::Member));
-const ADMIN: Option<Requirement> = Some(Requirement::Role(Role::Admin));
-const SUPER: Option<Requirement> = Some(Requirement::Superadmin);
+const VIEWER: Option<Authority> = Some(Authority::Role(Role::Viewer));
+const MEMBER: Option<Authority> = Some(Authority::Role(Role::Member));
+const ADMIN: Option<Authority> = Some(Authority::Role(Role::Admin));
+const SUPER: Option<Authority> = Some(Authority::Superadmin);
+/// any authenticated caller; see [`Authority::Authenticated`]
+const ANYONE: Option<Authority> = Some(Authority::Authenticated);
 /// the resource has no such action
-const NA: Option<Requirement> = None;
+const NA: Option<Authority> = None;
 
 /// The capability table. Read access is a viewer's, mutations are an admin's,
 /// and anything without a tenancy scope to be a member of is superadmin-only.
@@ -187,13 +225,14 @@ const CAPABILITIES: &[Capability] = &[
         delete: ADMIN,
     },
     // the pricing catalog and the effective model list are global (unscoped),
-    // so their mutations are superadmin-only. their reads are not guarded at
-    // all today — any authenticated principal may list them — and `viewer` is
-    // recorded here as the nominal floor (#766)
+    // so their mutations are superadmin-only. their reads are every
+    // authenticated caller's: both are deployment-wide catalogs of upstream
+    // capability and list price, carrying no tenant's data, and there is no
+    // deployment-scoped membership a role floor could be measured against
     Capability {
         resource: "model_price",
         scope: "deployment",
-        read: VIEWER,
+        read: ANYONE,
         create: NA,
         update: SUPER,
         delete: SUPER,
@@ -201,7 +240,7 @@ const CAPABILITIES: &[Capability] = &[
     Capability {
         resource: "model",
         scope: "deployment",
-        read: VIEWER,
+        read: ANYONE,
         create: NA,
         update: NA,
         delete: SUPER,
@@ -268,6 +307,16 @@ const CAPABILITIES: &[Capability] = &[
         update: NA,
         delete: ADMIN,
     },
+    // a group mapping is a way to grant a role, so it needs the same admin bar
+    // as granting one directly — the rule sso_group_mapping already follows
+    Capability {
+        resource: "scim_group_mapping",
+        scope: "org",
+        read: ADMIN,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
+    },
     Capability {
         resource: "mcp_server",
         scope: "org",
@@ -292,15 +341,32 @@ const CAPABILITIES: &[Capability] = &[
         update: ADMIN,
         delete: NA,
     },
+    // the OAuth client rolter presents to an MCP server's authorization
+    // server. registering one decides which external host receives a consent
+    // code, so it is admin-only in both directions — even reading it, since
+    // the row names a third party the tenant has chosen to trust
+    Capability {
+        resource: "mcp_oauth_client",
+        scope: "org",
+        read: ADMIN,
+        create: NA,
+        update: ADMIN,
+        delete: ADMIN,
+    },
     // a grant or session belongs to a user: an org admin sees and revokes any,
-    // a member only their own — so the floor is a viewer membership at the org
-    // and the handler narrows it to the owner. nobody creates one through the
-    // API; they are minted by the OAuth exchange
+    // a member only their own — so the read/revoke floor is a viewer
+    // membership at the org and the handler narrows it to the owner.
+    //
+    // minting is a rung higher. completing consent (`create`), renewing a
+    // session (`update`) and exchanging one on-behalf-of (`create`) all hand
+    // rolter the ability to act at a third party as the caller, which is a
+    // write however read-only the eventual MCP call is — so it sits with
+    // `my_virtual_key:create` at member, not with viewer reads
     Capability {
         resource: "mcp_oauth_grant",
         scope: "org",
         read: VIEWER,
-        create: NA,
+        create: MEMBER,
         update: NA,
         delete: VIEWER,
     },
@@ -308,9 +374,37 @@ const CAPABILITIES: &[Capability] = &[
         resource: "mcp_oauth_session",
         scope: "org",
         read: VIEWER,
-        create: NA,
-        update: NA,
+        create: MEMBER,
+        update: MEMBER,
         delete: VIEWER,
+    },
+    // configurable rbac (#534). Defining a role or a profile is a way to grant
+    // authority, so it takes the same admin bar as granting one directly;
+    // reading the definitions is a viewer's, so the dashboard can render the
+    // matrix for anyone who can see the org
+    Capability {
+        resource: "custom_role",
+        scope: "org",
+        read: VIEWER,
+        create: ADMIN,
+        update: ADMIN,
+        delete: ADMIN,
+    },
+    Capability {
+        resource: "access_profile",
+        scope: "org",
+        read: VIEWER,
+        create: ADMIN,
+        update: ADMIN,
+        delete: ADMIN,
+    },
+    Capability {
+        resource: "access_profile_assignment",
+        scope: "org",
+        read: VIEWER,
+        create: ADMIN,
+        update: NA,
+        delete: ADMIN,
     },
     Capability {
         resource: "audit_log",
@@ -477,7 +571,7 @@ const CAPABILITIES: &[Capability] = &[
 ];
 
 impl Capability {
-    const fn requirement(&self, action: Action) -> Option<Requirement> {
+    const fn authority(&self, action: Action) -> Option<Authority> {
         match action {
             Action::Read => self.read,
             Action::Create => self.create,
@@ -508,12 +602,16 @@ const fn str_eq(a: &str, b: &str) -> bool {
 /// A `const fn`, so [`cap!`] turns an unknown resource or an action the
 /// resource does not support into a compile error at the call site rather than
 /// a guard that silently disagrees with the published matrix.
-pub(crate) const fn requirement_for(resource: &str, action: Action) -> Requirement {
+pub(crate) const fn requirement_for(resource: &'static str, action: Action) -> Requirement {
     let mut i = 0;
     while i < CAPABILITIES.len() {
         if str_eq(CAPABILITIES[i].resource, resource) {
-            return match CAPABILITIES[i].requirement(action) {
-                Some(requirement) => requirement,
+            return match CAPABILITIES[i].authority(action) {
+                Some(authority) => Requirement {
+                    resource,
+                    action,
+                    authority,
+                },
                 None => panic!(
                     "the rbac capability table marks this action unsupported for this resource"
                 ),
@@ -553,9 +651,12 @@ pub(crate) use {cap, superadmin_cap};
 #[derive(Debug, Serialize)]
 struct ActionView {
     action: Action,
-    /// minimum scoped role, absent when the action is superadmin-only
+    /// minimum scoped role, absent when the action is superadmin-only or open
+    /// to every authenticated caller
     minimum_role: Option<Role>,
     superadmin_only: bool,
+    /// no membership required: any authenticated caller may perform it
+    authenticated_only: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -572,16 +673,79 @@ struct RoleView {
     rank: u8,
 }
 
+/// One `resource:action` an org-defined role grants explicitly.
+#[derive(Debug, Serialize)]
+struct CustomGrantView {
+    resource: String,
+    action: String,
+}
+
+/// An org-defined role as the matrix presents it, alongside the built-ins.
+#[derive(Debug, Serialize)]
+struct CustomRoleView {
+    id: Uuid,
+    slug: String,
+    name: String,
+    description: Option<String>,
+    /// the built-in role this custom role is at least equivalent to
+    base_role: Role,
+    /// rank of `base_role`, so a UI can order custom roles against built-ins
+    base_rank: u8,
+    /// the pairs it grants on top of `base_role`
+    grants: Vec<CustomGrantView>,
+    /// pairs the role names that this build's capability table does not define.
+    /// Reported rather than hidden: they grant nothing, and an operator who
+    /// downgraded rolter should be able to see why a role went quiet.
+    unknown_grants: Vec<CustomGrantView>,
+}
+
 #[derive(Debug, Serialize)]
 struct MatrixView {
     roles: Vec<RoleView>,
     resources: Vec<ResourceView>,
+    /// org-defined roles, present only when the caller asked for an org they
+    /// may read. Empty for a deployment that defines none, which keeps the
+    /// payload byte-identical to what shipped before #534.
+    custom_roles: Vec<CustomRoleView>,
+}
+
+/// Whether this build's capability table defines `(resource, action)`. A custom
+/// grant naming a pair it does not is inert, never an error: the table is code,
+/// and a role must not become unloadable because a release retired a resource.
+fn table_defines(resource: &str, action: Action) -> bool {
+    CAPABILITIES
+        .iter()
+        .any(|cap| cap.resource == resource && cap.authority(action).is_some())
+}
+
+fn parse_action(action: &str) -> Option<Action> {
+    Action::ALL.into_iter().find(|&a| action_key(a) == action)
 }
 
 /// The deployment's capability matrix. Any authenticated principal may read
 /// it: it describes the rules, not anyone's access, and a caller learns
 /// nothing about a tenant they cannot already see.
-async fn get_matrix(_principal: Principal) -> ApiResult<Json<MatrixView>> {
+async fn get_matrix(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Query(query): Query<MatrixQuery>,
+) -> ApiResult<Json<MatrixView>> {
+    // the org-defined half is per-tenant, so it takes a membership in that
+    // tenant; without `org_id` the answer is the built-in table alone, exactly
+    // as before
+    let custom_roles = match query.org_id {
+        Some(org_id) => {
+            authorize(
+                &state,
+                &principal,
+                ScopeChain::org(org_id),
+                cap!("custom_role", Read),
+            )
+            .await?;
+            custom_role_views(&state, org_id).await?
+        }
+        None => Vec::new(),
+    };
     Ok(Json(MatrixView {
         roles: ROLES
             .iter()
@@ -591,7 +755,47 @@ async fn get_matrix(_principal: Principal) -> ApiResult<Json<MatrixView>> {
             })
             .collect(),
         resources: CAPABILITIES.iter().map(resource_view).collect(),
+        custom_roles,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct MatrixQuery {
+    /// include this org's custom roles; requires a membership there
+    org_id: Option<Uuid>,
+}
+
+async fn custom_role_views(state: &ControlState, org_id: Uuid) -> ApiResult<Vec<CustomRoleView>> {
+    let repo = CustomRoleRepo(pool(state));
+    let roles = repo.list(org_id).await?;
+    let ids: Vec<Uuid> = roles.iter().map(|r| r.id).collect();
+    let grants = repo.list_grants_for_roles(&ids).await?;
+    Ok(roles
+        .into_iter()
+        .map(|role| {
+            let (known, unknown): (Vec<_>, Vec<_>) = grants
+                .iter()
+                .filter(|g| g.role_id == role.id)
+                .partition(|g| {
+                    parse_action(&g.action).is_some_and(|a| table_defines(&g.resource, a))
+                });
+            let view = |g: &&rolter_store::postgres::models::CustomRoleGrant| CustomGrantView {
+                resource: g.resource.clone(),
+                action: g.action.clone(),
+            };
+            let base_role = crate::access_control::parse_base_role(&role.base_role);
+            CustomRoleView {
+                id: role.id,
+                slug: role.slug,
+                name: role.name,
+                description: role.description,
+                base_role,
+                base_rank: role_rank(base_role),
+                grants: known.iter().map(view).collect(),
+                unknown_grants: unknown.iter().map(view).collect(),
+            }
+        })
+        .collect())
 }
 
 fn resource_view(cap: &Capability) -> ResourceView {
@@ -601,13 +805,14 @@ fn resource_view(cap: &Capability) -> ResourceView {
         actions: Action::ALL
             .iter()
             .filter_map(|&action| {
-                cap.requirement(action).map(|req| ActionView {
+                cap.authority(action).map(|authority| ActionView {
                     action,
-                    minimum_role: match req {
-                        Requirement::Role(role) => Some(role),
-                        Requirement::Superadmin => None,
+                    minimum_role: match authority {
+                        Authority::Role(role) => Some(role),
+                        Authority::Superadmin | Authority::Authenticated => None,
                     },
-                    superadmin_only: req == Requirement::Superadmin,
+                    superadmin_only: authority == Authority::Superadmin,
+                    authenticated_only: authority == Authority::Authenticated,
                 })
             })
             .collect(),
@@ -621,16 +826,32 @@ struct EffectiveQuery {
     project_id: Option<Uuid>,
 }
 
+/// A custom role the caller holds at the requested scope, and the profile it
+/// came from.
+#[derive(Debug, Serialize)]
+struct HeldRoleView {
+    profile_id: Uuid,
+    role_id: Uuid,
+    role_slug: String,
+    base_role: Role,
+}
+
 #[derive(Debug, Serialize)]
 struct EffectiveView {
     /// true when the caller is the admin token or a superadmin user (which is
     /// also every caller while the control plane runs in open mode)
     superadmin: bool,
     /// the caller's resolved role at the requested scope chain, absent when no
-    /// membership reaches it
+    /// membership reaches it. Raised by a custom role's `base_role` where an
+    /// access profile confers one at that scope
     role: Option<Role>,
     /// the `resource:action` pairs the caller may perform at that scope
     allowed: Vec<String>,
+    /// the custom roles behind any pair `role` alone does not explain
+    custom_roles: Vec<HeldRoleView>,
+    /// model/route visibility the caller's access profiles impose. Absent when
+    /// no profile carries a policy, which means "everything"
+    model_policy: Option<MergedPolicy>,
 }
 
 /// What the calling principal may actually do at a scope chain, evaluated
@@ -641,37 +862,87 @@ async fn get_effective(
     State(state): State<ControlState>,
     Query(query): Query<EffectiveQuery>,
 ) -> ApiResult<Json<EffectiveView>> {
-    let (superadmin, role) = match &principal {
-        Principal::Superadmin => (true, None),
+    let chain = ScopeChain {
+        org: query.org_id,
+        team: query.team_id,
+        project: query.project_id,
+    };
+    let (superadmin, from_memberships, grants, policies) = match &principal {
+        Principal::Superadmin => (true, None, Vec::new(), Vec::new()),
         Principal::User(user) => {
             let memberships = MembershipRepo(pool(&state)).list_for_user(user.id).await?;
+            let profiles = AccessProfileRepo(pool(&state));
             (
                 false,
-                resolve_role(&memberships, query.org_id, query.team_id, query.project_id),
+                resolve_role(&memberships, chain.org, chain.team, chain.project),
+                profiles.effective_grants_for_user(user.id).await?,
+                profiles.policies_for_user(user.id).await?,
             )
         }
     };
+    let role = best_role(from_memberships, custom_base_role(&grants, chain));
     Ok(Json(EffectiveView {
         superadmin,
         role,
-        allowed: allowed_for(superadmin, role),
+        allowed: allowed_for(superadmin, role, &grants, chain),
+        custom_roles: held_roles(&grants, chain),
+        model_policy: merged_policy(&policies),
     }))
+}
+
+/// Distinct `(profile, role)` pairs the caller holds at `chain`.
+fn held_roles(grants: &[EffectiveGrant], chain: ScopeChain) -> Vec<HeldRoleView> {
+    let mut seen: Vec<(Uuid, Uuid)> = Vec::new();
+    let mut views = Vec::new();
+    for grant in grants.iter().filter(|g| grant_applies(g, chain)) {
+        if seen.contains(&(grant.profile_id, grant.role_id)) {
+            continue;
+        }
+        seen.push((grant.profile_id, grant.role_id));
+        views.push(HeldRoleView {
+            profile_id: grant.profile_id,
+            role_id: grant.role_id,
+            role_slug: grant.role_slug.clone(),
+            base_role: crate::access_control::parse_base_role(&grant.base_role),
+        });
+    }
+    views
+}
+
+fn merged_policy(policies: &[AccessProfilePolicy]) -> Option<MergedPolicy> {
+    let merged = merge_policies(policies);
+    (!merged.is_unrestricted()).then_some(merged)
 }
 
 /// The `resource:action` pairs a caller with `role` (or superadmin) may
 /// perform. Default-deny: a caller with no membership at the scope gets an
 /// empty list, exactly as `authorize` would.
-fn allowed_for(superadmin: bool, role: Option<Role>) -> Vec<String> {
+fn allowed_for(
+    superadmin: bool,
+    role: Option<Role>,
+    grants: &[EffectiveGrant],
+    chain: ScopeChain,
+) -> Vec<String> {
     let mut allowed = Vec::new();
     for cap in CAPABILITIES {
         for action in Action::ALL {
-            let Some(requirement) = cap.requirement(action) else {
+            let Some(authority) = cap.authority(action) else {
                 continue;
             };
-            let permitted = match requirement {
-                Requirement::Superadmin => superadmin,
-                Requirement::Role(required) => {
-                    superadmin || role.is_some_and(|r| role_rank(r) >= role_rank(required))
+            let permitted = match authority {
+                // deployment-wide policy is never reachable through a custom
+                // role, so the grants are not consulted here
+                Authority::Superadmin => superadmin,
+                // reaching this code path means the caller is authenticated
+                Authority::Authenticated => true,
+                Authority::Role(required) => {
+                    superadmin
+                        || role.is_some_and(|r| role_rank(r) >= role_rank(required))
+                        || grants.iter().any(|g| {
+                            grant_applies(g, chain)
+                                && g.resource.as_deref() == Some(cap.resource)
+                                && g.action.as_deref() == Some(action_key(action))
+                        })
                 }
             };
             if permitted {
@@ -682,7 +953,7 @@ fn allowed_for(superadmin: bool, role: Option<Role>) -> Vec<String> {
     allowed
 }
 
-fn action_key(action: Action) -> &'static str {
+pub(crate) const fn action_key(action: Action) -> &'static str {
     match action {
         Action::Read => "read",
         Action::Create => "create",
@@ -697,7 +968,7 @@ mod tests {
 
     #[test]
     fn a_viewer_may_read_everything_scoped_and_write_nothing() {
-        let allowed = allowed_for(false, Some(Role::Viewer));
+        let allowed = allowed_for(false, Some(Role::Viewer), &[], ScopeChain::default());
         assert!(allowed.contains(&"provider:read".to_string()));
         assert!(allowed.contains(&"route:read".to_string()));
         assert!(!allowed.iter().any(|a| a.ends_with(":create")));
@@ -714,17 +985,29 @@ mod tests {
         );
     }
 
+    /// What a member adds over a viewer is exactly the set of things done *on
+    /// their own behalf*: minting their own virtual key, and completing or
+    /// renewing their own MCP OAuth consent. Nothing here touches another
+    /// user's rows — the handlers narrow every one of them to the owner.
     #[test]
-    fn a_member_may_mint_their_own_key_and_nothing_more() {
-        let member = allowed_for(false, Some(Role::Member));
-        let viewer = allowed_for(false, Some(Role::Viewer));
+    fn a_member_may_act_on_their_own_behalf_and_nothing_more() {
+        let member = allowed_for(false, Some(Role::Member), &[], ScopeChain::default());
+        let viewer = allowed_for(false, Some(Role::Viewer), &[], ScopeChain::default());
         let extra: Vec<_> = member.iter().filter(|a| !viewer.contains(a)).collect();
-        assert_eq!(extra, vec!["my_virtual_key:create"]);
+        assert_eq!(
+            extra,
+            vec![
+                "my_virtual_key:create",
+                "mcp_oauth_grant:create",
+                "mcp_oauth_session:create",
+                "mcp_oauth_session:update",
+            ]
+        );
     }
 
     #[test]
     fn an_admin_writes_scoped_resources_but_not_deployment_policy() {
-        let allowed = allowed_for(false, Some(Role::Admin));
+        let allowed = allowed_for(false, Some(Role::Admin), &[], ScopeChain::default());
         assert!(allowed.contains(&"provider:create".to_string()));
         assert!(allowed.contains(&"virtual_key:delete".to_string()));
         assert!(allowed.contains(&"audit_log:read".to_string()));
@@ -738,20 +1021,24 @@ mod tests {
         assert!(!allowed.contains(&"user:delete".to_string()));
     }
 
+    /// Without a membership anywhere, a caller holds exactly the global
+    /// read-only catalogs and nothing else — those carry no tenant's data and
+    /// have no scope a membership could be held at (#766).
     #[test]
-    fn no_membership_means_no_permissions() {
-        assert!(allowed_for(false, None).is_empty());
+    fn no_membership_means_only_the_global_catalogs() {
+        let allowed = allowed_for(false, None, &[], ScopeChain::default());
+        assert_eq!(allowed, vec!["model_price:read", "model:read"]);
     }
 
     #[test]
     fn superadmin_holds_every_supported_action() {
-        let allowed = allowed_for(true, None);
+        let allowed = allowed_for(true, None, &[], ScopeChain::default());
         let supported: usize = CAPABILITIES
             .iter()
             .map(|cap| {
                 Action::ALL
                     .iter()
-                    .filter(|&&a| cap.requirement(a).is_some())
+                    .filter(|&&a| cap.authority(a).is_some())
                     .count()
             })
             .sum();
@@ -761,8 +1048,8 @@ mod tests {
     #[test]
     fn unsupported_actions_are_absent_for_everyone() {
         for allowed in [
-            allowed_for(true, None),
-            allowed_for(false, Some(Role::Admin)),
+            allowed_for(true, None, &[], ScopeChain::default()),
+            allowed_for(false, Some(Role::Admin), &[], ScopeChain::default()),
         ] {
             // an audit log is append-only; nobody deletes one through the API
             assert!(!allowed.contains(&"audit_log:delete".to_string()));
@@ -787,6 +1074,7 @@ mod tests {
     /// Every control-plane module, as `(file name, contents)`. Compiled in, so
     /// the checks below see exactly the source that shipped.
     const MODULES: &[(&str, &str)] = &[
+        ("access_control.rs", include_str!("access_control.rs")),
         ("adaptive_policy.rs", include_str!("adaptive_policy.rs")),
         (
             "adaptive_telemetry.rs",
@@ -811,6 +1099,7 @@ mod tests {
         ("main.rs", include_str!("main.rs")),
         ("mcp_logs.rs", include_str!("mcp_logs.rs")),
         ("mcp_oauth.rs", include_str!("mcp_oauth.rs")),
+        ("mcp_oauth_flow.rs", include_str!("mcp_oauth_flow.rs")),
         ("me.rs", include_str!("me.rs")),
         ("proxy.rs", include_str!("proxy.rs")),
         ("plugins.rs", include_str!("plugins.rs")),
@@ -818,6 +1107,7 @@ mod tests {
         ("rbac_matrix.rs", include_str!("rbac_matrix.rs")),
         ("runtime_policy.rs", include_str!("runtime_policy.rs")),
         ("scim.rs", include_str!("scim.rs")),
+        ("scim_groups.rs", include_str!("scim_groups.rs")),
         ("security.rs", include_str!("security.rs")),
         ("seed.rs", include_str!("seed.rs")),
         ("sso.rs", include_str!("sso.rs")),
@@ -830,6 +1120,12 @@ mod tests {
         (
             "lib.rs",
             "only enumerates the roles for `GET /api/v1/roles`",
+        ),
+        (
+            "access_control.rs",
+            "parses a custom role's base role out of a request body; the role \
+             is the data it manages, not the authority it checks — its own \
+             guards still go through `cap!`",
         ),
     ];
 
@@ -926,12 +1222,25 @@ mod tests {
 
     #[test]
     fn the_macro_resolves_the_same_requirement_the_matrix_publishes() {
-        assert_eq!(cap!("provider", Read), Requirement::Role(Role::Viewer));
-        assert_eq!(cap!("provider", Delete), Requirement::Role(Role::Admin));
-        assert_eq!(cap!("feature_flags", Update), Requirement::Superadmin);
         assert_eq!(
-            superadmin_cap!("cluster_node", Delete),
-            Requirement::Superadmin
+            cap!("provider", Read).authority,
+            Authority::Role(Role::Viewer)
         );
+        assert_eq!(
+            cap!("provider", Delete).authority,
+            Authority::Role(Role::Admin)
+        );
+        assert_eq!(
+            cap!("feature_flags", Update).authority,
+            Authority::Superadmin
+        );
+        assert_eq!(
+            superadmin_cap!("cluster_node", Delete).authority,
+            Authority::Superadmin
+        );
+        // and the pair travels with the requirement, which is what lets the
+        // guard look it up among a caller's explicit custom grants
+        assert_eq!(cap!("provider", Delete).resource, "provider");
+        assert_eq!(cap!("provider", Delete).action, Action::Delete);
     }
 }

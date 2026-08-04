@@ -38,17 +38,17 @@ use axum::http::request::Parts;
 use subtle::ConstantTimeEq;
 
 use rolter_auth::Role;
-use rolter_store::postgres::models::{Membership, User};
+use rolter_store::postgres::models::{EffectiveGrant, Membership, User};
 use rolter_store::postgres::repo::{
-    BusinessUnitRepo, CustomerRepo, MembershipRepo, ProjectRepo, SessionRepo, TeamRepo, UserRepo,
-    VirtualKeyRepo,
+    AccessProfileRepo, BusinessUnitRepo, CustomerRepo, MembershipRepo, ProjectRepo, SessionRepo,
+    TeamRepo, UserRepo, VirtualKeyRepo,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{bearer_token, session_pepper};
 use crate::crud::{pool, ApiError, ApiResult};
-use crate::rbac_matrix::Requirement;
+use crate::rbac_matrix::{action_key, Authority, Requirement};
 use crate::ControlState;
 
 /// The authenticated caller behind a control-plane mutation.
@@ -205,16 +205,74 @@ fn membership_specificity(
     team: Option<Uuid>,
     project: Option<Uuid>,
 ) -> Option<u8> {
-    if let Some(p) = m.project_id {
-        return (Some(p) == project).then_some(3);
+    scope_specificity(
+        m.org_id,
+        m.team_id,
+        m.project_id,
+        ScopeChain { org, team, project },
+    )
+}
+
+/// How specifically a scope triple `(org, team, project)` matches `chain`, by
+/// its most-specific non-null id. Shared by memberships and by the access
+/// profiles of #534, so a custom role composed at team scope inherits down to a
+/// project exactly the way a team membership does.
+fn scope_specificity(
+    org: Option<Uuid>,
+    team: Option<Uuid>,
+    project: Option<Uuid>,
+    chain: ScopeChain,
+) -> Option<u8> {
+    if let Some(p) = project {
+        return (Some(p) == chain.project).then_some(3);
     }
-    if let Some(t) = m.team_id {
-        return (Some(t) == team).then_some(2);
+    if let Some(t) = team {
+        return (Some(t) == chain.team).then_some(2);
     }
-    if let Some(o) = m.org_id {
-        return (Some(o) == org).then_some(1);
+    if let Some(o) = org {
+        return (Some(o) == chain.org).then_some(1);
     }
     None
+}
+
+/// Whether a profile composition reaches `chain` at all.
+pub(crate) fn grant_applies(grant: &EffectiveGrant, chain: ScopeChain) -> bool {
+    scope_specificity(grant.org_id, grant.team_id, grant.project_id, chain).is_some()
+}
+
+/// The highest built-in role the applicable custom roles confer at `chain`,
+/// via their `base_role`. Purely additive: it can raise the membership answer
+/// and never lower it, which is what keeps a deployment with no custom roles
+/// behaving exactly as it did before.
+pub(crate) fn custom_base_role(grants: &[EffectiveGrant], chain: ScopeChain) -> Option<Role> {
+    grants
+        .iter()
+        .filter(|grant| grant_applies(grant, chain))
+        .filter_map(|grant| parse_role(&grant.base_role))
+        .max_by_key(|&role| role_rank(role))
+}
+
+/// Whether an applicable custom role names this exact `(resource, action)`.
+///
+/// A superadmin requirement is never satisfiable this way: deployment-wide
+/// settings have no org for an org admin to define a role in, so letting a
+/// custom grant reach them would be a privilege-escalation path out of the
+/// tenant.
+pub(crate) fn custom_grants_allow(
+    grants: &[EffectiveGrant],
+    chain: ScopeChain,
+    requirement: Requirement,
+) -> bool {
+    let Authority::Role(required) = requirement.authority else {
+        return false;
+    };
+    let action = action_key(requirement.action);
+    grants.iter().any(|grant| {
+        grant_applies(grant, chain)
+            && (parse_role(&grant.base_role).is_some_and(|r| role_rank(r) >= role_rank(required))
+                || (grant.resource.as_deref() == Some(requirement.resource)
+                    && grant.action.as_deref() == Some(action)))
+    })
 }
 
 /// Resolve the effective role for a user's memberships at a scope chain.
@@ -279,16 +337,58 @@ pub(crate) async fn authorize(
         Principal::Superadmin => return Ok(()),
         Principal::User(user) => user,
     };
-    // a superadmin-only capability has no scope a membership could satisfy, so
-    // a plain user is refused without touching the database
-    let Requirement::Role(required) = requirement else {
-        return Err(ApiError::Forbidden);
+    let required = match requirement.authority {
+        Authority::Role(required) => required,
+        // holding a `Principal` at all means authentication already succeeded,
+        // so there is nothing further to check
+        Authority::Authenticated => return Ok(()),
+        // a superadmin-only capability has no scope a membership could satisfy,
+        // so a plain user is refused without touching the database
+        Authority::Superadmin => return Err(ApiError::Forbidden),
     };
     let memberships = MembershipRepo(pool(state)).list_for_user(user.id).await?;
     if user_authorized(&memberships, chain, required) {
+        return Ok(());
+    }
+    // only now the configurable half (#534). Custom grants are strictly
+    // additive, so this second query runs exactly on the path that was already
+    // about to answer 403 — a deployment with no custom roles pays one empty
+    // lookup on requests it was going to refuse anyway, and nothing at all on
+    // the ones it allows.
+    let grants = AccessProfileRepo(pool(state))
+        .effective_grants_for_user(user.id)
+        .await?;
+    if custom_grants_allow(&grants, chain, requirement) {
         Ok(())
     } else {
         Err(ApiError::Forbidden)
+    }
+}
+
+/// The built-in role a user effectively holds at `chain`: the best of their
+/// memberships and the `base_role` of any custom role a profile confers there.
+pub(crate) async fn effective_role(
+    state: &ControlState,
+    user: &User,
+    chain: ScopeChain,
+) -> ApiResult<Option<Role>> {
+    let memberships = MembershipRepo(pool(state)).list_for_user(user.id).await?;
+    let from_memberships = resolve_role(&memberships, chain.org, chain.team, chain.project);
+    let grants = AccessProfileRepo(pool(state))
+        .effective_grants_for_user(user.id)
+        .await?;
+    Ok(best_role(
+        from_memberships,
+        custom_base_role(&grants, chain),
+    ))
+}
+
+/// The higher of two optional roles.
+pub(crate) fn best_role(a: Option<Role>, b: Option<Role>) -> Option<Role> {
+    match (a, b) {
+        (Some(a), Some(b)) if role_rank(b) > role_rank(a) => Some(b),
+        (Some(a), _) => Some(a),
+        (None, b) => b,
     }
 }
 
@@ -300,11 +400,13 @@ pub(crate) async fn holds_admin(
     principal: &Principal,
     chain: ScopeChain,
 ) -> ApiResult<bool> {
-    match authorize(state, principal, chain, Requirement::Role(Role::Admin)).await {
-        Ok(()) => Ok(true),
-        Err(ApiError::Forbidden) => Ok(false),
-        Err(err) => Err(err),
-    }
+    let user = match principal {
+        Principal::Superadmin => return Ok(true),
+        Principal::User(user) => user,
+    };
+    Ok(effective_role(state, user, chain)
+        .await?
+        .is_some_and(|role| role_rank(role) >= role_rank(Role::Admin)))
 }
 
 /// Check a resource-level access profile after ordinary org authorization.
@@ -321,7 +423,9 @@ pub(crate) async fn policy_allows(
         Principal::User(user) => user,
     };
     let memberships = MembershipRepo(pool(state)).list_for_user(user.id).await?;
-    let Some(effective_role) = resolve_role(&memberships, Some(org_id), None, None) else {
+    // a custom role a profile confers at the org counts here too, so an
+    // operator can widen resource visibility without minting a membership
+    let Some(effective_role) = effective_role(state, user, ScopeChain::org(org_id)).await? else {
         return Ok(false);
     };
     let Some(required_role) = parse_role(minimum_role) else {
@@ -371,9 +475,9 @@ pub(crate) fn authorize_superadmin(
     principal: &Principal,
     requirement: Requirement,
 ) -> ApiResult<()> {
-    match requirement {
-        Requirement::Superadmin => require_superadmin(principal),
-        Requirement::Role(_) => Err(ApiError::Forbidden),
+    match requirement.authority {
+        Authority::Superadmin => require_superadmin(principal),
+        Authority::Role(_) | Authority::Authenticated => Err(ApiError::Forbidden),
     }
 }
 
@@ -745,19 +849,32 @@ mod tests {
         ));
     }
 
+    /// A scoped requirement built by hand, which `superadmin_cap!` refuses at
+    /// compile time — only the deployment guard's defensive branch needs one.
+    fn scoped_viewer_requirement() -> crate::rbac_matrix::Requirement {
+        crate::rbac_matrix::Requirement {
+            resource: "provider",
+            action: crate::rbac_matrix::Action::Read,
+            authority: crate::rbac_matrix::Authority::Role(Role::Viewer),
+        }
+    }
+
     /// The deployment guard passes a superadmin through and refuses everyone
     /// else — including, defensively, a scoped requirement that `superadmin_cap!`
     /// would have rejected at compile time.
     #[test]
     fn authorize_superadmin_denies_users_and_scoped_requirements() {
         let user = Principal::User(user_with_superadmin(false));
-        assert!(authorize_superadmin(&Principal::Superadmin, Requirement::Superadmin).is_ok());
+        assert!(
+            authorize_superadmin(&Principal::Superadmin, Requirement::unscoped_superadmin())
+                .is_ok()
+        );
         assert!(matches!(
-            authorize_superadmin(&user, Requirement::Superadmin),
+            authorize_superadmin(&user, Requirement::unscoped_superadmin()),
             Err(ApiError::Forbidden)
         ));
         assert!(matches!(
-            authorize_superadmin(&Principal::Superadmin, Requirement::Role(Role::Viewer)),
+            authorize_superadmin(&Principal::Superadmin, scoped_viewer_requirement()),
             Err(ApiError::Forbidden)
         ));
     }

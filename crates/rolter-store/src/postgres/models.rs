@@ -424,6 +424,32 @@ pub struct ScimIdentity {
     pub updated_at: DateTime<Utc>,
 }
 
+/// a SCIM group inside one org. `display_name` is the name mappings are keyed
+/// on, which is also the name an operator sees in the IdP.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ScimGroup {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub external_id: Option<String>,
+    pub display_name: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// a SCIM group name granting a role at an org/team/project scope, with the
+/// same "most specific non-null id" convention as [`Membership`] and
+/// [`SsoGroupMapping`]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ScimGroupMapping {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub group_name: String,
+    pub team_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+}
+
 /// an MCP server an org has registered; the anchor OAuth grants hang off
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct McpServer {
@@ -443,6 +469,33 @@ pub struct McpServer {
     pub source: String,
     /// OAuth scopes every proxied call to this server must carry
     pub required_scopes: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    /// authorization endpoint a user's browser is sent to for consent (#707)
+    pub authorize_url: Option<String>,
+    /// token endpoint the code, refresh and exchange grants are posted to
+    pub token_url: Option<String>,
+    /// the OAuth client rolter presents; the matching secret is sealed and is
+    /// deliberately **not** on this struct, so a serialized `McpServer` cannot
+    /// carry it into an API response
+    pub client_id: Option<String>,
+    /// scopes requested when a consent flow does not name its own
+    pub default_scopes: Vec<String>,
+    /// whether a sealed client secret is stored, so a UI can show that the
+    /// client is confidential without the control plane handing the secret out
+    pub has_client_secret: bool,
+}
+
+/// One in-flight authorization-code consent, opened by the callback. The PKCE
+/// verifier is decrypted here and nowhere else; like
+/// [`super::repo::McpSessionTokens`] this is deliberately not `Serialize`.
+#[derive(Debug, Clone)]
+pub struct McpLoginState {
+    pub state: String,
+    pub server_id: Uuid,
+    pub user_id: Uuid,
+    pub code_verifier: String,
+    pub scopes: Vec<String>,
+    pub redirect_uri: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -670,4 +723,102 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
+// configurable rbac (#534): custom roles and access profiles
+// ---------------------------------------------------------------------------
+
+/// an org-scoped role an operator defined. `base_role` is the built-in role it
+/// is at least equivalent to; the explicit grants in [`CustomRoleGrant`] widen
+/// it further
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct CustomRole {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub slug: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// one of `admin` | `member` | `viewer`
+    pub base_role: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// one explicit `(resource, action)` a custom role grants. `resource` names a
+/// row in the control plane's capability table; `action` is one of `read` |
+/// `create` | `update` | `delete`
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct CustomRoleGrant {
+    pub id: Uuid,
+    pub role_id: Uuid,
+    pub resource: String,
+    pub action: String,
+}
+
+/// a reusable bundle of custom roles, each pinned to a scope
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AccessProfile {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub slug: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// one `(custom role, scope)` pair inside a profile. Scope follows the same
+/// most-specific-non-null convention as [`Membership`]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AccessProfileRole {
+    pub id: Uuid,
+    pub profile_id: Uuid,
+    pub role_id: Uuid,
+    pub org_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// a profile handed to a user or to a whole team (exactly one is set)
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AccessProfileAssignment {
+    pub id: Uuid,
+    pub profile_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// model/route visibility carried by a profile. An empty allow-list means "no
+/// restriction"; deny beats allow. Entries are exact names or a trailing-`*`
+/// prefix glob
+#[derive(Debug, Clone, Default, FromRow, Serialize, Deserialize)]
+pub struct AccessProfilePolicy {
+    pub profile_id: Uuid,
+    pub allowed_models: Vec<String>,
+    pub denied_models: Vec<String>,
+    pub allowed_routes: Vec<String>,
+    pub denied_routes: Vec<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One `(custom role at a scope)` a user actually holds, flattened across every
+/// profile that reaches them — directly or through a team they belong to.
+///
+/// `resource`/`action` are `None` for a composition whose role has no explicit
+/// grants: the row still carries `base_role`, which is the whole point of a
+/// role that only widens the built-in floor.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct EffectiveGrant {
+    pub profile_id: Uuid,
+    pub role_id: Uuid,
+    pub role_slug: String,
+    pub base_role: String,
+    pub org_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub resource: Option<String>,
+    pub action: Option<String>,
 }

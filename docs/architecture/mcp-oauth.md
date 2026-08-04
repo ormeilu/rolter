@@ -43,6 +43,19 @@ Every listing is joined through `mcp_servers.org_id`, so a cross-tenant read is 
 - `GET`/`PUT /api/v1/orgs/{org_id}/mcp/settings` — organization transport and request defaults. The current HTTP proxy still uses deployment-level transport timeouts.
 - `GET /api/v1/orgs/{org_id}/mcp/grants`, `DELETE /api/v1/mcp/grants/{id}`
 - `GET /api/v1/orgs/{org_id}/mcp/sessions`, `DELETE /api/v1/mcp/sessions/{id}`
+- `GET`/`PUT /api/v1/mcp-servers/{id}/oauth-client` — the OAuth client rolter presents to the server's authorization server. Admin-only in both directions: the row names a third party the tenant has chosen to trust. The client secret is sealed with the deployment KEK on write and never read back; `PUT` with an empty secret downgrades a confidential client to a public one.
+- `POST /api/v1/mcp-servers/{id}/oauth/authorize` — begin consent. Returns the authorization URL rather than a `302`, because the caller is the dashboard over `fetch` and cannot usefully follow a cross-origin redirect.
+- `GET /auth/mcp/callback` — where the browser returns. Authenticated by the one-shot login state, not by a session bearer token.
+- `POST /api/v1/mcp/sessions/{id}/refresh` — renew a session from its stored refresh token.
+- `POST /api/v1/mcp/sessions/{id}/exchange` — RFC 8693 token exchange for a narrower, downstream session.
 - `GET`/`POST`/`DELETE /mcp/{server_slug}/{path...}` — Streamable HTTP/SSE proxy on the gateway, authorized by virtual-key owner, server and required scopes
 
 Revoking a grant revokes every session under it **in the same transaction**, so consent and tokens can never disagree. Server creation/deletion and both revocations are written to `audit_log`.
+
+## The session lifecycle
+
+Consent runs as an ordinary authorization-code flow with PKCE. `POST .../oauth/authorize` mints a verifier, seals it into a one-shot `mcp_oauth_login_states` row keyed by `state`, and returns the authorization URL. The callback consumes that row — a replayed `state` finds nothing and fails — verifies the code against the sealed verifier, then writes the grant and its first session in one transaction.
+
+A background refresher sweeps every 60 seconds and renews up to 100 sessions per pass, 5 minutes before expiry, so the skew between rolter's clock and the authorization server's plus one round trip is always covered. It handles refresh-token rotation by replacing the stored refresh material whenever the response carries a new one. **A permanently refused refresh revokes the session** rather than retrying: a `4xx` carrying `invalid_grant` or `invalid_scope` is a final answer about this grant — consent was withdrawn or the token was rotated away — and a retry loop would only hammer the upstream. Transient failures (network errors, `5xx`) leave the session alone for the next sweep.
+
+Token exchange (`urn:ietf:params:oauth:grant-type:token-exchange`) is the server-to-server half. A service acting for a user gets its own session row descending from the same grant, so it can be revoked independently without taking the user's interactive session with it, and its scopes are intersected against the grant's — an exchange can never widen consent.

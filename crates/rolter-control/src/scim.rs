@@ -14,8 +14,9 @@
 //!   honoured: provisioning creates an SSO-shaped account with no local
 //!   credential, and can never set or read one.
 //!
-//! Groups (and group→team mapping) are a separate slice; this module is the
-//! Users half plus the token lifecycle the provisioning screen needs.
+//! Groups, group membership and group→team mapping live next door in
+//! [`crate::scim_groups`]; this module is the Users half plus the token
+//! lifecycle the provisioning screen needs.
 
 use axum::extract::{FromRequestParts, Path, Query, State};
 use axum::http::request::Parts;
@@ -39,18 +40,18 @@ use crate::rbac_matrix::cap;
 use crate::ControlState;
 
 const USER_SCHEMA: &str = "urn:ietf:params:scim:schemas:core:2.0:User";
-const LIST_SCHEMA: &str = "urn:ietf:params:scim:api:messages:2.0:ListResponse";
+pub(crate) const LIST_SCHEMA: &str = "urn:ietf:params:scim:api:messages:2.0:ListResponse";
 const ERROR_SCHEMA: &str = "urn:ietf:params:scim:api:messages:2.0:Error";
-const PATCH_SCHEMA: &str = "urn:ietf:params:scim:api:messages:2.0:PatchOp";
+pub(crate) const PATCH_SCHEMA: &str = "urn:ietf:params:scim:api:messages:2.0:PatchOp";
 
-/// Role a provisioned account is granted at the org. Least privilege on
-/// purpose: SCIM decides *who exists*, an operator still decides what they may
-/// do. Group→role mapping arrives with the Groups slice.
+/// Role a provisioned account is granted at the org merely for existing. Least
+/// privilege on purpose: SCIM decides *who exists*, and anything beyond a read
+/// comes from a group mapping an operator wrote (see [`crate::scim_groups`]).
 const PROVISIONED_ROLE: &str = "viewer";
 
 /// Largest page a SCIM client can ask for, so a `count=100000` cannot turn one
 /// request into an unbounded scan.
-const MAX_PAGE: usize = 200;
+pub(crate) const MAX_PAGE: usize = 200;
 
 pub(crate) fn router() -> Router<ControlState> {
     Router::new()
@@ -77,14 +78,18 @@ pub(crate) fn router() -> Router<ControlState> {
 /// A SCIM error response. SCIM clients parse this envelope, so a plain
 /// `ApiError` body would read as a transport failure to an IdP.
 #[derive(Debug)]
-struct ScimError {
+pub(crate) struct ScimError {
     status: StatusCode,
     scim_type: Option<&'static str>,
     detail: String,
 }
 
 impl ScimError {
-    fn new(status: StatusCode, scim_type: Option<&'static str>, detail: impl Into<String>) -> Self {
+    pub(crate) fn new(
+        status: StatusCode,
+        scim_type: Option<&'static str>,
+        detail: impl Into<String>,
+    ) -> Self {
         Self {
             status,
             scim_type,
@@ -92,7 +97,7 @@ impl ScimError {
         }
     }
 
-    fn unauthorized() -> Self {
+    pub(crate) fn unauthorized() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
             None,
@@ -100,7 +105,7 @@ impl ScimError {
         )
     }
 
-    fn not_found(id: &str) -> Self {
+    pub(crate) fn not_found(id: &str) -> Self {
         Self::new(
             StatusCode::NOT_FOUND,
             None,
@@ -108,7 +113,7 @@ impl ScimError {
         )
     }
 
-    fn invalid(detail: impl Into<String>) -> Self {
+    pub(crate) fn invalid(detail: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, Some("invalidValue"), detail)
     }
 }
@@ -138,13 +143,13 @@ impl From<rolter_core::Error> for ScimError {
     }
 }
 
-type ScimResult<T> = std::result::Result<T, ScimError>;
+pub(crate) type ScimResult<T> = std::result::Result<T, ScimError>;
 
 /// The org a presented provisioning token belongs to. Extracting this is what
 /// authenticates and scopes every SCIM handler.
-struct ScimPrincipal {
-    org_id: Uuid,
-    token_id: Uuid,
+pub(crate) struct ScimPrincipal {
+    pub(crate) org_id: Uuid,
+    pub(crate) token_id: Uuid,
 }
 
 impl FromRequestParts<ControlState> for ScimPrincipal {
@@ -200,11 +205,11 @@ fn user_resource(user: &User, identity: &ScimIdentity) -> Value {
 }
 
 #[derive(Debug, Deserialize)]
-struct ListQuery {
-    filter: Option<String>,
+pub(crate) struct ListQuery {
+    pub(crate) filter: Option<String>,
     #[serde(rename = "startIndex")]
-    start_index: Option<usize>,
-    count: Option<usize>,
+    pub(crate) start_index: Option<usize>,
+    pub(crate) count: Option<usize>,
 }
 
 /// Parse the one filter shape provisioning actually needs: `userName eq "x"`.
@@ -362,8 +367,9 @@ async fn create_user(
     }
     audit_scim(
         &state,
-        principal,
+        &principal,
         "scim.user.create",
+        "user",
         user.id,
         json!({"user_name": user_name}),
     )
@@ -437,8 +443,9 @@ async fn replace_user(
     }
     audit_scim(
         &state,
-        principal,
+        &principal,
         "scim.user.update",
+        "user",
         user.id,
         json!({"user_name": identity.user_name}),
     )
@@ -448,21 +455,21 @@ async fn replace_user(
 }
 
 #[derive(Debug, Deserialize)]
-struct PatchOp {
+pub(crate) struct PatchOp {
     #[serde(default)]
-    op: String,
+    pub(crate) op: String,
     #[serde(default)]
-    path: Option<String>,
+    pub(crate) path: Option<String>,
     #[serde(default)]
-    value: Option<Value>,
+    pub(crate) value: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
-struct PatchBody {
+pub(crate) struct PatchBody {
     #[serde(default)]
-    schemas: Vec<String>,
+    pub(crate) schemas: Vec<String>,
     #[serde(rename = "Operations", alias = "operations", default)]
-    operations: Vec<PatchOp>,
+    pub(crate) operations: Vec<PatchOp>,
 }
 
 /// The `active` toggle is what every IdP uses to deactivate a leaver, so it is
@@ -496,8 +503,9 @@ async fn patch_user(
     }
     audit_scim(
         &state,
-        principal,
+        &principal,
         "scim.user.update",
+        "user",
         user.id,
         json!({"user_name": identity.user_name}),
     )
@@ -546,9 +554,10 @@ async fn deactivate(state: &ControlState, user_id: Uuid, deactivated: bool) -> S
 }
 
 /// SCIM `DELETE` deprovisions: the account is deactivated and its sessions
-/// dropped, and the org's identity mapping is removed. The `users` row itself
-/// stays, because its memberships and audit trail must outlive any one IdP —
-/// and a re-provision through `POST` adopts it again.
+/// dropped, its group membership dropped with everything those groups granted,
+/// and the org's identity mapping removed. The `users` row itself stays,
+/// because its memberships and audit trail must outlive any one IdP — and a
+/// re-provision through `POST` adopts it again.
 async fn delete_user(
     principal: ScimPrincipal,
     State(state): State<ControlState>,
@@ -556,13 +565,17 @@ async fn delete_user(
 ) -> ScimResult<StatusCode> {
     let (user, identity) = resolve(&state, &principal, &id).await?;
     deactivate(&state, user.id, true).await?;
+    // before the identity goes: the group-granted roles must go with it, or a
+    // deprovisioned account would keep admin on a team nobody can see it on
+    crate::scim_groups::forget_user(&state, principal.org_id, user.id).await?;
     ScimIdentityRepo(pool(&state))
         .delete(user.id, principal.org_id)
         .await?;
     audit_scim(
         &state,
-        principal,
+        &principal,
         "scim.user.deprovision",
+        "user",
         user.id,
         json!({"user_name": identity.user_name}),
     )
@@ -572,11 +585,12 @@ async fn delete_user(
 
 /// Record a provisioning action. The actor is the token, not a human, so the
 /// audit row carries the token id rather than a user id.
-async fn audit_scim(
+pub(crate) async fn audit_scim(
     state: &ControlState,
-    principal: ScimPrincipal,
+    principal: &ScimPrincipal,
     action: &str,
-    user_id: Uuid,
+    resource_type: &str,
+    resource_id: Uuid,
     mut detail: Value,
 ) {
     detail["scim_token_id"] = json!(principal.token_id.to_string());
@@ -585,8 +599,8 @@ async fn audit_scim(
             Some(principal.org_id),
             None,
             action,
-            Some("user"),
-            Some(user_id),
+            Some(resource_type),
+            Some(resource_id),
             Some(detail),
         )
         .await

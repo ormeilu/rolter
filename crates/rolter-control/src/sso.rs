@@ -178,14 +178,14 @@ async fn signing_key(jwks_uri: &str, kid: &str) -> ApiResult<jsonwebtoken::jwk::
 // ---------------------------------------------------------------------------
 
 /// Generate the PKCE verifier and its S256 challenge.
-fn pkce_pair() -> (String, String) {
+pub(crate) fn pkce_pair() -> (String, String) {
     let verifier = random_token();
     let digest = Sha256::digest(verifier.as_bytes());
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
     (verifier, challenge)
 }
 
-fn random_token() -> String {
+pub(crate) fn random_token() -> String {
     use rand::Rng;
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
@@ -255,7 +255,7 @@ fn authorize_url(
 
 /// Percent-encode a query parameter value. Small and dependency-free: the
 /// alphabet below is RFC 3986 unreserved, so everything else is escaped.
-fn urlencode(value: &str) -> String {
+pub(crate) fn urlencode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         match byte {
@@ -686,7 +686,10 @@ async fn create_provider(
     Ok(Json(provider))
 }
 
-fn parse_role(role: &str) -> ApiResult<()> {
+/// The roles a group mapping may grant. Shared with
+/// [`crate::scim_groups`], so both provisioning paths accept exactly the same
+/// set and neither can hand out something the other refuses.
+pub(crate) fn parse_role(role: &str) -> ApiResult<()> {
     if matches!(role, "admin" | "member" | "viewer") {
         Ok(())
     } else {

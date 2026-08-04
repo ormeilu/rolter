@@ -399,6 +399,17 @@ fn default_metrics_path() -> String {
     "/metrics".to_string()
 }
 
+/// Transports an MCP server may speak, and the one authoritative definition of
+/// that set (#783).
+///
+/// Config validation, the control plane's registry and tool-call-log ingest all
+/// read this, and the `mcp_servers.transport` /
+/// `mcp_gateway_settings.default_transport` check constraints match it — pinned
+/// by a test in `rolter-control`. `stdio` is deliberately absent: it names a
+/// local subprocess, which a hosted control plane cannot dial and the gateway's
+/// HTTP proxy path has never served.
+pub const MCP_TRANSPORTS: &[&str] = &["sse", "streamable_http", "websocket"];
+
 /// Gateway request paths reserved by the built-in routes; the metrics path must
 /// not collide with any of these.
 pub const RESERVED_PATHS: &[&str] = &[
@@ -1255,6 +1266,12 @@ pub struct VirtualKeyRecord {
     /// customer this key's spend is attributed to; empty when unattributed
     #[serde(default)]
     pub customer_id: String,
+    /// merged model/route policy of the access profiles the key's owner holds,
+    /// resolved when the snapshot is built (#791). `None` is "unrestricted" and
+    /// is what every key on a deployment with no access profiles carries — as
+    /// does any key with no owner, since a policy is a property of a user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_policy: Option<crate::access_policy::ModelPolicy>,
 }
 
 /// An organization-scoped MCP endpoint available to the gateway.
@@ -2617,10 +2634,7 @@ impl GatewayConfig {
             {
                 problems.push(problem);
             }
-            if !matches!(
-                server.transport.as_str(),
-                "stdio" | "sse" | "streamable_http" | "websocket"
-            ) {
+            if !MCP_TRANSPORTS.contains(&server.transport.as_str()) {
                 problems.push(format!(
                     "MCP server '{}' has unsupported transport '{}'",
                     server.slug, server.transport

@@ -2975,6 +2975,455 @@ async fn scim_users_are_provisioned_scoped_and_idempotent() {
     assert_eq!(action.as_deref(), Some("scim.user.deprovision"));
 }
 
+/// SCIM 2.0 Groups (#540): the group surface an IdP drives, and the org-scoped
+/// group→team mapping that turns group membership into roles. Covers SCIM
+/// semantics and error envelopes, cross-tenant scoping, membership
+/// reconciliation converging on a replayed sync, and deprovisioning taking the
+/// group-granted roles with it.
+#[tokio::test]
+async fn scim_groups_map_to_teams_and_reconcile_idempotently() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "GroupOrg", "slug": "group-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let org_uuid: uuid::Uuid = org_id.parse().unwrap();
+
+    let other: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "OtherGroupOrg", "slug": "other-group-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_id = other["id"].as_str().unwrap().to_string();
+
+    let team: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/teams"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Platform"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let team_id = team["id"].as_str().unwrap().to_string();
+    let team_uuid: uuid::Uuid = team_id.parse().unwrap();
+
+    let minted: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/scim-tokens"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "okta"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = minted["secret"].as_str().unwrap().to_string();
+
+    // an unauthenticated Groups call is a SCIM-shaped 401, like Users
+    let unauth = client
+        .get(format!("{base}/scim/v2/Groups"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth.status(), 401);
+    let body: Value = unauth.json().await.unwrap();
+    assert_eq!(
+        body["schemas"][0],
+        "urn:ietf:params:scim:api:messages:2.0:Error"
+    );
+
+    // provision two users through the Users surface first: a group may only
+    // contain accounts this token already created
+    let mut user_ids = Vec::new();
+    for name in ["ada@example.com", "grace@example.com"] {
+        let created: Value = client
+            .post(format!("{base}/scim/v2/Users"))
+            .bearer_auth(&secret)
+            .json(&json!({"userName": name, "emails": [{"value": name, "primary": true}]}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        user_ids.push(created["id"].as_str().unwrap().to_string());
+    }
+    let ada = user_ids[0].clone();
+    let grace = user_ids[1].clone();
+    let ada_uuid: uuid::Uuid = ada.parse().unwrap();
+    let grace_uuid: uuid::Uuid = grace.parse().unwrap();
+
+    // an operator maps the group name to a role on the team, before the IdP has
+    // ever mentioned the group — that must not error
+    let mapping: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/scim-group-mappings"))
+        .bearer_auth("admintok")
+        .json(&json!({"group_name": "platform", "role": "member", "team_id": team_id}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mapping_id = mapping["id"].as_str().unwrap().to_string();
+    assert_eq!(mapping["group_name"], "platform");
+
+    // a mapping may not grant into another tenant's team
+    let cross_team = client
+        .post(format!("{base}/api/v1/orgs/{other_id}/scim-group-mappings"))
+        .bearer_auth("admintok")
+        .json(&json!({"group_name": "platform", "role": "admin", "team_id": team_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        cross_team.status(),
+        400,
+        "a mapping must not reach another org's team"
+    );
+
+    // only the three built-in roles are mappable
+    let bad_role = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/scim-group-mappings"))
+        .bearer_auth("admintok")
+        .json(&json!({"group_name": "platform", "role": "superadmin"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_role.status(), 400);
+
+    // the IdP creates the group with one member
+    let created = client
+        .post(format!("{base}/scim/v2/Groups"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+            "displayName": "platform",
+            "externalId": "idp-group-1",
+            "members": [{"value": ada}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 201);
+    let created: Value = created.json().await.unwrap();
+    let group_id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(created["displayName"], "platform");
+    assert_eq!(created["externalId"], "idp-group-1");
+    assert_eq!(created["members"][0]["value"], ada);
+    assert_eq!(created["members"][0]["display"], "ada@example.com");
+
+    // the mapping took effect: ada holds member on the team, sourced 'scim'
+    let team_roles = |user: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "select role from memberships where user_id = $1 and team_id = $2 \
+                 and source = 'scim'",
+            )
+            .bind(user)
+            .bind(team_uuid)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(team_roles(ada_uuid).await, vec!["member".to_string()]);
+    assert!(team_roles(grace_uuid).await.is_empty());
+
+    // a replayed create is a uniqueness conflict, not a second group
+    let replay = client
+        .post(format!("{base}/scim/v2/Groups"))
+        .bearer_auth(&secret)
+        .json(&json!({"displayName": "platform"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 409);
+    let replay: Value = replay.json().await.unwrap();
+    assert_eq!(replay["scimType"], "uniqueness");
+
+    // the filter IdPs reconcile with, and the ones that are refused explicitly
+    let found: Value = client
+        .get(format!(
+            "{base}/scim/v2/Groups?filter=displayName%20eq%20%22platform%22"
+        ))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(found["totalResults"], 1);
+    assert_eq!(found["Resources"][0]["id"], group_id);
+    let bad_filter = client
+        .get(format!(
+            "{base}/scim/v2/Groups?filter=externalId%20eq%20%22idp-group-1%22"
+        ))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_filter.status(), 400);
+
+    // PATCH add: the shape Okta and Entra send for a joiner
+    let patched: Value = client
+        .patch(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{"op": "add", "path": "members", "value": [{"value": grace}]}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(patched["members"].as_array().unwrap().len(), 2);
+    assert_eq!(team_roles(grace_uuid).await, vec!["member".to_string()]);
+
+    // replaying that exact operation must converge, not accumulate
+    let replayed: Value = client
+        .patch(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "Operations": [{"op": "add", "path": "members", "value": [{"value": grace}]}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(replayed["members"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        team_roles(grace_uuid).await,
+        vec!["member".to_string()],
+        "a replayed sync must not grant the same role twice"
+    );
+
+    // PATCH remove with the filtered path form, which is how a leaver arrives
+    let removed: Value = client
+        .patch(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "Operations": [{"op": "remove", "path": format!("members[value eq \"{grace}\"]")}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(removed["members"].as_array().unwrap().len(), 1);
+    assert!(
+        team_roles(grace_uuid).await.is_empty(),
+        "leaving the group must revoke what it granted"
+    );
+
+    // a member the token never provisioned is refused
+    let stranger = seed_user(&pool, "stranger@example.com", false).await;
+    let outsider = client
+        .patch(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "Operations": [{"op": "add", "path": "members", "value": [{"value": stranger}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(outsider.status(), 400);
+    let outsider: Value = outsider.json().await.unwrap();
+    assert_eq!(outsider["scimType"], "invalidValue");
+
+    // an operation nothing supports is refused rather than answered with a
+    // success the IdP would read as "the change landed"
+    let unsupported = client
+        .patch(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({"Operations": [{"op": "replace", "path": "urn:unknown", "value": "x"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unsupported.status(), 400);
+
+    // PUT replaces the whole member list
+    let replaced: Value = client
+        .put(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({"displayName": "platform", "members": [{"value": grace}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(replaced["members"].as_array().unwrap().len(), 1);
+    assert_eq!(replaced["members"][0]["value"], grace);
+    assert!(team_roles(ada_uuid).await.is_empty());
+    assert_eq!(team_roles(grace_uuid).await, vec!["member".to_string()]);
+
+    // another org's token cannot see or touch this group
+    let other_minted: Value = client
+        .post(format!("{base}/api/v1/orgs/{other_id}/scim-tokens"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "entra"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_secret = other_minted["secret"].as_str().unwrap().to_string();
+    let cross = client
+        .get(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&other_secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross.status(), 404, "a token must not reach another tenant");
+    let cross_list: Value = client
+        .get(format!("{base}/scim/v2/Groups"))
+        .bearer_auth(&other_secret)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cross_list["totalResults"], 0);
+    let cross_delete = client
+        .delete(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&other_secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_delete.status(), 404);
+
+    // a manual grant an operator made survives a sync
+    let manual: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/memberships"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "user_id": ada,
+            "scope_type": "team",
+            "scope_id": team_id,
+            "role": "admin"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let manual_id = manual["id"].as_str().unwrap().to_string();
+    let resync: Value = client
+        .put(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({"displayName": "platform", "members": [{"value": ada}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resync["members"].as_array().unwrap().len(), 1);
+    let survived: Option<String> = sqlx::query_scalar("select role from memberships where id = $1")
+        .bind(manual_id.parse::<uuid::Uuid>().unwrap())
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        survived.as_deref(),
+        Some("admin"),
+        "reconciliation must not touch a grant an operator made"
+    );
+
+    // deprovisioning the user takes the group-granted role with it
+    let deprovisioned = client
+        .delete(format!("{base}/scim/v2/Users/{ada}"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deprovisioned.status(), 204);
+    assert!(
+        team_roles(ada_uuid).await.is_empty(),
+        "a deprovisioned account must not keep a group-granted role"
+    );
+
+    // dropping the mapping revokes what it granted, without a sync
+    client
+        .patch(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .json(&json!({
+            "Operations": [{"op": "add", "path": "members", "value": [{"value": grace}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(team_roles(grace_uuid).await, vec!["member".to_string()]);
+    let dropped = client
+        .delete(format!("{base}/api/v1/scim-group-mappings/{mapping_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dropped.status(), 204);
+    assert!(team_roles(grace_uuid).await.is_empty());
+
+    // and deleting the group is idempotent from the IdP's point of view
+    let deleted = client
+        .delete(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 204);
+    let gone = client
+        .delete(format!("{base}/scim/v2/Groups/{group_id}"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 404);
+
+    let actions: Vec<String> = sqlx::query_scalar(
+        "select action from audit_log where org_id = $1 and action like 'scim.group%'",
+    )
+    .bind(org_uuid)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(actions.iter().any(|a| a == "scim.group.create"));
+    assert!(actions.iter().any(|a| a == "scim.group.update"));
+    assert!(actions.iter().any(|a| a == "scim.group.delete"));
+}
+
 /// MCP OAuth grants and sessions (#541): admins see the whole org, a member
 /// sees only what they own, revoking a grant kills its sessions, and no token
 /// material ever appears in a response.
@@ -3398,7 +3847,15 @@ async fn rbac_matrix_and_effective_permissions_are_api_backed() {
         .await
         .unwrap();
     assert!(elsewhere["role"].is_null());
-    assert_eq!(elsewhere["allowed"].as_array().unwrap().len(), 0);
+    // nothing org-scoped is reachable there; what remains is exactly the two
+    // global read-only catalogs, which take authentication and no membership
+    let elsewhere_allowed: Vec<&str> = elsewhere["allowed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a.as_str().unwrap())
+        .collect();
+    assert_eq!(elsewhere_allowed, vec!["model_price:read", "model:read"]);
 
     // a project-scoped admin inherits nothing upward: the same user is only an
     // admin inside the project chain they were granted
@@ -4633,4 +5090,999 @@ async fn adaptive_routing_telemetry_round_trips_from_the_data_plane() {
         .await
         .unwrap();
     assert_eq!(stale["routes"].as_array().unwrap().len(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// configurable rbac (#534)
+// ---------------------------------------------------------------------------
+
+/// A custom role widens a member beyond what their base role allows, and only
+/// inside the scope the profile assigns it — the deny case is the point.
+#[tokio::test]
+async fn custom_role_grant_widens_a_member_within_its_scope_only() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // two orgs, so "in scope" can be told apart from "authorized everywhere"
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Acme", "slug": "acme"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let other: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Other", "slug": "other"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let other_id = other["id"].as_str().unwrap().to_string();
+
+    // a plain member of both orgs: creating a provider is admin-only, so both
+    // attempts must fail before any custom role exists
+    let user = seed_user(&pool, "member@acme.test", false).await;
+    seed_membership(
+        &pool,
+        user,
+        Some(org_id.parse().unwrap()),
+        None,
+        None,
+        "member",
+    )
+    .await;
+    seed_membership(
+        &pool,
+        user,
+        Some(other_id.parse().unwrap()),
+        None,
+        None,
+        "member",
+    )
+    .await;
+    let token = seed_session(&pool, user, "custom-role").await;
+
+    let create_provider = |org: String| {
+        client
+            .post(format!("{base}/api/v1/orgs/{org}/providers"))
+            .bearer_auth(token.clone())
+            .json(&json!({
+                "name": format!("p-{}", uuid::Uuid::new_v4()),
+                "kind": "openai",
+                "api_base": "https://api.openai.com",
+            }))
+            .send()
+    };
+
+    assert_eq!(
+        create_provider(org_id.clone()).await.unwrap().status(),
+        403,
+        "a member must not create a provider before the grant exists"
+    );
+
+    // a custom role that grants exactly provider:create, still on the member base
+    let role: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/custom-roles"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Provider Wrangler",
+            "base_role": "member",
+            "grants": [{"resource": "provider", "action": "create"}],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let role_id = role["id"].as_str().unwrap().to_string();
+
+    // composed into a profile scoped to the first org, assigned to the user
+    let profile: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/access-profiles"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Acme Wranglers",
+            "roles": [{"role_id": role_id, "org_id": org_id}],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let profile_id = profile["id"].as_str().unwrap().to_string();
+
+    let assigned = client
+        .post(format!(
+            "{base}/api/v1/access-profiles/{profile_id}/assignments"
+        ))
+        .bearer_auth("admintok")
+        .json(&json!({"user_id": user}))
+        .send()
+        .await
+        .unwrap();
+    assert!(assigned.status().is_success(), "{}", assigned.status());
+
+    // in scope the grant applies; in the other org the same member is still refused
+    let allowed = create_provider(org_id.clone()).await.unwrap();
+    assert!(
+        allowed.status().is_success(),
+        "granted org must allow the create: {}",
+        allowed.status()
+    );
+    assert_eq!(
+        create_provider(other_id.clone()).await.unwrap().status(),
+        403,
+        "the grant must not leak into an org the profile does not name"
+    );
+
+    // and it is revocable: dropping the assignment closes the door again
+    let assignments: Value = client
+        .get(format!(
+            "{base}/api/v1/access-profiles/{profile_id}/assignments"
+        ))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let assignment_id = assignments[0]["id"].as_str().unwrap().to_string();
+    let removed = client
+        .delete(format!(
+            "{base}/api/v1/access-profile-assignments/{assignment_id}"
+        ))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    assert!(removed.status().is_success(), "{}", removed.status());
+    assert_eq!(
+        create_provider(org_id).await.unwrap().status(),
+        403,
+        "removing the assignment must withdraw the grant"
+    );
+}
+
+/// A custom role in use cannot be deleted out from under its assignments, and
+/// every change to one is audited.
+#[tokio::test]
+async fn custom_role_changes_are_guarded_by_references_and_audited() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Acme", "slug": "acme"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+
+    let role: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/custom-roles"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Auditor",
+            "base_role": "viewer",
+            "grants": [{"resource": "audit_log", "action": "read"}],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let role_id = role["id"].as_str().unwrap().to_string();
+
+    let profile: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/access-profiles"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Auditors",
+            "roles": [{"role_id": role_id, "org_id": org_id}],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let profile_id = profile["id"].as_str().unwrap().to_string();
+
+    // referenced by a profile, so the delete must be refused rather than
+    // silently stripping the profile's composition
+    let refused = client
+        .delete(format!("{base}/api/v1/custom-roles/{role_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        refused.status(),
+        409,
+        "deleting a referenced role must conflict, not cascade"
+    );
+
+    // detach it, then the delete goes through
+    let detached = client
+        .put(format!("{base}/api/v1/access-profiles/{profile_id}"))
+        .bearer_auth("admintok")
+        .json(&json!({"roles": []}))
+        .send()
+        .await
+        .unwrap();
+    assert!(detached.status().is_success(), "{}", detached.status());
+    let deleted = client
+        .delete(format!("{base}/api/v1/custom-roles/{role_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap();
+    assert!(deleted.status().is_success(), "{}", deleted.status());
+
+    let actions: Vec<String> =
+        sqlx::query_scalar("select action from audit_log where action like 'custom_role%' or action like 'access_profile%' order by at")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert!(
+        actions.iter().any(|a| a == "custom_role.create"),
+        "creating a role must be audited: {actions:?}"
+    );
+    assert!(
+        actions.iter().any(|a| a == "custom_role.delete"),
+        "deleting a role must be audited: {actions:?}"
+    );
+}
+
+/// The matrix endpoint is API-backed: a role created through the API shows up
+/// in the next read, so the dashboard never has to trust its own state.
+#[tokio::test]
+async fn rbac_matrix_reflects_custom_roles_after_a_change() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Acme", "slug": "acme"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+
+    let before: Value = client
+        .get(format!("{base}/api/v1/rbac/matrix?org_id={org_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        before["custom_roles"].as_array().unwrap().is_empty(),
+        "a fresh org has no custom roles: {before}"
+    );
+
+    client
+        .post(format!("{base}/api/v1/orgs/{org_id}/custom-roles"))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "name": "Budget Keeper",
+            "base_role": "member",
+            "grants": [{"resource": "budget", "action": "update"}],
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let after: Value = client
+        .get(format!("{base}/api/v1/rbac/matrix?org_id={org_id}"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let roles = after["custom_roles"].as_array().unwrap();
+    assert_eq!(roles.len(), 1, "matrix must show the new role: {after}");
+    assert_eq!(roles[0]["name"], "Budget Keeper");
+}
+
+/// A stub OAuth 2.0 authorization server for the MCP consent flow (#707).
+/// It records the last form it was posted so PKCE, scope and grant type can be
+/// asserted, and its next answer is set by the test.
+mod stub_authz {
+    use super::*;
+    use axum::Router;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    pub struct Stub {
+        /// json body (and status) the next token request receives
+        pub next: Arc<Mutex<(u16, Value)>>,
+        /// form body of the last token request
+        pub last_form: Arc<Mutex<String>>,
+        /// how many token requests have been served
+        pub calls: Arc<Mutex<u32>>,
+    }
+
+    impl Default for Stub {
+        fn default() -> Self {
+            Self {
+                next: Arc::new(Mutex::new((200, json!({})))),
+                last_form: Arc::new(Mutex::new(String::new())),
+                calls: Arc::new(Mutex::new(0)),
+            }
+        }
+    }
+
+    impl Stub {
+        pub fn answer(&self, status: u16, body: Value) {
+            *self.next.lock().unwrap() = (status, body);
+        }
+        pub fn form(&self) -> String {
+            self.last_form.lock().unwrap().clone()
+        }
+        pub fn calls(&self) -> u32 {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    pub async fn serve_stub() -> (String, Stub) {
+        let stub = Stub::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/token",
+            axum::routing::post({
+                let stub = stub.clone();
+                move |body: String| {
+                    let stub = stub.clone();
+                    async move {
+                        *stub.last_form.lock().unwrap() = body;
+                        *stub.calls.lock().unwrap() += 1;
+                        let (status, payload) = stub.next.lock().unwrap().clone();
+                        (
+                            axum::http::StatusCode::from_u16(status).unwrap(),
+                            axum::Json(payload),
+                        )
+                    }
+                }
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), stub)
+    }
+}
+
+/// The MCP OAuth token-acquisition path (#707), end to end against a stub
+/// authorization server: consent mints a grant plus a sealed session, a refresh
+/// rotates it, a refused refresh revokes rather than loops, an on-behalf-of
+/// exchange cannot widen the consent, and no token material ever appears in a
+/// response.
+#[tokio::test]
+async fn mcp_oauth_consent_refresh_and_exchange() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    std::env::set_var("ROLTER_PUBLIC_URL", format!("http://{addr}"));
+    std::env::set_var("ROLTER_KEK", "mcp-oauth-test-kek");
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+    let (authz, stub) = stub_authz::serve_stub().await;
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "McpOrg", "slug": "mcp-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = org["id"].as_str().unwrap().to_string();
+
+    // a member who will do the consenting
+    use argon2::password_hash::rand_core::OsRng;
+    use argon2::password_hash::{PasswordHasher, SaltString};
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = argon2::Argon2::default()
+        .hash_password(b"correct horse battery staple", &salt)
+        .unwrap()
+        .to_string();
+    let user_id: uuid::Uuid =
+        sqlx::query_scalar("insert into users (email, password_hash) values ($1, $2) returning id")
+            .bind("ada@example.com")
+            .bind(&hash)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query("insert into memberships (user_id, org_id, role) values ($1, $2, 'member')")
+        .bind(user_id)
+        .bind(uuid::Uuid::parse_str(&org_id).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let login: Value = client
+        .post(format!("{base}/api/v1/auth/login"))
+        .json(&json!({"email": "ada@example.com", "password": "correct horse battery staple"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = login["token"].as_str().unwrap().to_string();
+
+    let server: Value = client
+        .post(format!("{base}/api/v1/orgs/{org_id}/mcp-servers"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "Docs", "slug": "docs", "url": "https://mcp.example.com"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let server_id = server["id"].as_str().unwrap().to_string();
+
+    // consent is impossible before an oauth client is registered
+    let unregistered = client
+        .post(format!(
+            "{base}/api/v1/mcp-servers/{server_id}/oauth/authorize"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unregistered.status(), 400);
+
+    // a plaintext token endpoint on a non-loopback host is refused outright
+    let plaintext = client
+        .put(format!(
+            "{base}/api/v1/mcp-servers/{server_id}/oauth-client"
+        ))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "authorize_url": "http://mcp.example.com/authorize",
+            "token_url": "http://mcp.example.com/token",
+            "client_id": "rolter"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(plaintext.status(), 400);
+
+    // a member may not register the client; that is an admin decision
+    let forbidden = client
+        .put(format!(
+            "{base}/api/v1/mcp-servers/{server_id}/oauth-client"
+        ))
+        .bearer_auth(&token)
+        .json(&json!({
+            "authorize_url": format!("{authz}/authorize"),
+            "token_url": format!("{authz}/token"),
+            "client_id": "rolter"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), 403);
+
+    let registered: Value = client
+        .put(format!(
+            "{base}/api/v1/mcp-servers/{server_id}/oauth-client"
+        ))
+        .bearer_auth("admintok")
+        .json(&json!({
+            "authorize_url": format!("{authz}/authorize"),
+            "token_url": format!("{authz}/token"),
+            "client_id": "rolter",
+            "client_secret": "cli3nt-s3cret",
+            "default_scopes": ["tools:read", "tools:write"]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(registered["has_client_secret"], true);
+    assert_eq!(
+        registered["redirect_uri"],
+        format!("{base}/auth/mcp/callback")
+    );
+    let registered_text = registered.to_string();
+    assert!(
+        !registered_text.contains("cli3nt-s3cret"),
+        "the client secret leaked into the api response: {registered_text}"
+    );
+    // and listing the servers must not carry it either
+    let servers: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp-servers"))
+        .bearer_auth("admintok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!servers.to_string().contains("cli3nt-s3cret"));
+
+    // -- consent ------------------------------------------------------------
+
+    let started: Value = client
+        .post(format!(
+            "{base}/api/v1/mcp-servers/{server_id}/oauth/authorize"
+        ))
+        .bearer_auth(&token)
+        .json(&json!({"scopes": ["tools:read", "tools:write"]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let auth_url = started["authorization_url"].as_str().unwrap().to_string();
+    assert!(auth_url.starts_with(&format!("{authz}/authorize?response_type=code")));
+    assert!(auth_url.contains("code_challenge_method=S256"));
+    let state = url_param(&auth_url, "state");
+    assert!(!state.is_empty());
+
+    // the authorization server grants only the read scope of the two asked for
+    stub.answer(
+        200,
+        json!({
+            "access_token": "access-1",
+            "refresh_token": "refresh-1",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": "tools:read"
+        }),
+    );
+    let consented: Value = client
+        .get(format!(
+            "{base}/auth/mcp/callback?code=code-1&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session_id = consented["session_id"].as_str().unwrap().to_string();
+    let grant_id = consented["grant_id"].as_str().unwrap().to_string();
+    assert_eq!(consented["scopes"], json!(["tools:read"]));
+    assert_eq!(consented["has_refresh_token"], true);
+    let consented_text = consented.to_string();
+    assert!(
+        !consented_text.contains("access-1") && !consented_text.contains("refresh-1"),
+        "token material leaked into the callback response: {consented_text}"
+    );
+    // the exchange used PKCE and the deployment-owned redirect uri
+    let form = stub.form();
+    assert!(form.contains("grant_type=authorization_code"));
+    assert!(form.contains("code_verifier="));
+    assert!(form.contains("client_secret=cli3nt-s3cret"));
+
+    // the same state cannot be redeemed twice
+    let replayed = client
+        .get(format!(
+            "{base}/auth/mcp/callback?code=code-1&state={state}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        replayed.status(),
+        400,
+        "a redeemed state must not work twice"
+    );
+
+    // the sealed columns really are sealed
+    let (access_ct, access_pt): (Vec<u8>, Option<String>) = sqlx::query_as(
+        "select access_ciphertext, encode(access_ciphertext, 'escape') from mcp_oauth_sessions \
+         where id = $1",
+    )
+    .bind(uuid::Uuid::parse_str(&session_id).unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!access_ct.is_empty());
+    assert!(
+        !access_pt.unwrap_or_default().contains("access-1"),
+        "the access token is stored in the clear"
+    );
+
+    // the session shows up on the sessions screen, without token material
+    let sessions: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/sessions"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(sessions.as_array().unwrap().len(), 1);
+    assert!(!sessions.to_string().contains("access-1"));
+    let grants: Value = client
+        .get(format!("{base}/api/v1/orgs/{org_id}/mcp/grants"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(grants[0]["id"], grant_id);
+    assert_eq!(grants[0]["scopes"], json!(["tools:read"]));
+
+    // -- scope ceiling ------------------------------------------------------
+
+    // an exchange may not ask for more than the grant carries
+    let escalated = client
+        .post(format!("{base}/api/v1/mcp/sessions/{session_id}/exchange"))
+        .bearer_auth(&token)
+        .json(&json!({"scopes": ["tools:read", "tools:write"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        escalated.status(),
+        400,
+        "an exchange must not widen the consent"
+    );
+    let before_exchange = stub.calls();
+
+    // an in-bounds exchange mints a second, independently revocable session
+    stub.answer(
+        200,
+        json!({
+            "access_token": "obo-access",
+            "token_type": "Bearer",
+            "expires_in": 600,
+            "scope": "tools:read"
+        }),
+    );
+    let exchanged: Value = client
+        .post(format!("{base}/api/v1/mcp/sessions/{session_id}/exchange"))
+        .bearer_auth(&token)
+        .json(&json!({"scopes": ["tools:read"], "audience": "https://downstream.example.com"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_ne!(exchanged["id"], json!(session_id));
+    assert_eq!(exchanged["grant_id"], grant_id);
+    assert_eq!(exchanged["scopes"], json!(["tools:read"]));
+    assert!(!exchanged.to_string().contains("obo-access"));
+    assert_eq!(
+        stub.calls(),
+        before_exchange + 1,
+        "the refused exchange must not have reached the authorization server"
+    );
+    let form = stub.form();
+    assert!(form.contains("token-exchange"));
+    assert!(form.contains("subject_token"));
+    assert!(form.contains("audience"));
+
+    // -- refresh ------------------------------------------------------------
+
+    // a rotated refresh token replaces the old one
+    stub.answer(
+        200,
+        json!({
+            "access_token": "access-2",
+            "refresh_token": "refresh-2",
+            "token_type": "Bearer",
+            "expires_in": 7200
+        }),
+    );
+    let refreshed: Value = client
+        .post(format!("{base}/api/v1/mcp/sessions/{session_id}/refresh"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        refreshed["id"],
+        json!(session_id),
+        "a refresh keeps the row"
+    );
+    assert_eq!(refreshed["revoked_at"], Value::Null);
+    assert!(!refreshed.to_string().contains("refresh-2"));
+    let form = stub.form();
+    assert!(form.contains("grant_type=refresh_token"));
+    assert!(form.contains("refresh_token=refresh-1"));
+
+    // a transient failure leaves the session alone to be retried
+    stub.answer(503, json!({"error": "temporarily_unavailable"}));
+    let transient = client
+        .post(format!("{base}/api/v1/mcp/sessions/{session_id}/refresh"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(transient.status(), 400);
+    let still_live: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("select revoked_at from mcp_oauth_sessions where id = $1")
+            .bind(uuid::Uuid::parse_str(&session_id).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        still_live.is_none(),
+        "a 503 is not a verdict on the grant; the session must survive it"
+    );
+
+    // a refusal is final: the session is revoked rather than retried forever
+    stub.answer(400, json!({"error": "invalid_grant"}));
+    let refused = client
+        .post(format!("{base}/api/v1/mcp/sessions/{session_id}/refresh"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 400);
+    let revoked_at: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("select revoked_at from mcp_oauth_sessions where id = $1")
+            .bind(uuid::Uuid::parse_str(&session_id).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        revoked_at.is_some(),
+        "a refused refresh must revoke the session, not loop on it"
+    );
+
+    // and a revoked session is not renewable again
+    let after_revoke = client
+        .post(format!("{base}/api/v1/mcp/sessions/{session_id}/refresh"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(after_revoke.status(), 400);
+
+    // the whole lifecycle is on the audit trail
+    let actions: Vec<String> = sqlx::query_scalar(
+        "select action from audit_log where action like 'mcp_oauth%' order by at",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    for expected in [
+        "mcp_oauth_client.update",
+        "mcp_oauth_grant.consent",
+        "mcp_oauth_session.exchange",
+        "mcp_oauth_session.refresh_refused",
+    ] {
+        assert!(
+            actions.iter().any(|a| a == expected),
+            "missing audit event {expected} in {actions:?}"
+        );
+    }
+}
+
+/// Cross-tenant isolation on the exchange path: a member of another org may not
+/// refresh or exchange a session they do not own, and the answer is a 404 —
+/// whether a session exists elsewhere is not something to probe for.
+#[tokio::test]
+async fn mcp_oauth_sessions_are_not_reachable_across_owners() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    std::env::set_var("ROLTER_KEK", "mcp-oauth-test-kek");
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let org: Value = client
+        .post(format!("{base}/api/v1/orgs"))
+        .bearer_auth("admintok")
+        .json(&json!({"name": "OwnerOrg", "slug": "owner-org"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let org_id = uuid::Uuid::parse_str(org["id"].as_str().unwrap()).unwrap();
+
+    use argon2::password_hash::rand_core::OsRng;
+    use argon2::password_hash::{PasswordHasher, SaltString};
+    let mut tokens = Vec::new();
+    let mut ids = Vec::new();
+    for email in ["owner@example.com", "other@example.com"] {
+        let salt = SaltString::generate(&mut OsRng);
+        let hash = argon2::Argon2::default()
+            .hash_password(b"correct horse battery staple", &salt)
+            .unwrap()
+            .to_string();
+        let id: uuid::Uuid = sqlx::query_scalar(
+            "insert into users (email, password_hash) values ($1, $2) returning id",
+        )
+        .bind(email)
+        .bind(&hash)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("insert into memberships (user_id, org_id, role) values ($1, $2, 'member')")
+            .bind(id)
+            .bind(org_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let login: Value = client
+            .post(format!("{base}/api/v1/auth/login"))
+            .json(&json!({"email": email, "password": "correct horse battery staple"}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        tokens.push(login["token"].as_str().unwrap().to_string());
+        ids.push(id);
+    }
+
+    // a grant + session owned by the first user, written directly: this test is
+    // about the guard, not about the exchange
+    let server_id: uuid::Uuid = sqlx::query_scalar(
+        "insert into mcp_servers (org_id, name, slug, url) \
+         values ($1, 'Docs', 'docs', 'https://mcp.example.com') returning id",
+    )
+    .bind(org_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let grant_id: uuid::Uuid = sqlx::query_scalar(
+        "insert into mcp_oauth_grants (server_id, user_id, scopes) \
+         values ($1, $2, '{tools:read}') returning id",
+    )
+    .bind(server_id)
+    .bind(ids[0])
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let session_id: uuid::Uuid = sqlx::query_scalar(
+        "insert into mcp_oauth_sessions (grant_id, access_ciphertext, access_nonce, scopes, \
+                expires_at) \
+         values ($1, '\\x00', '\\x00', '{tools:read}', now() + interval '1 hour') returning id",
+    )
+    .bind(grant_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    for path in ["refresh", "exchange"] {
+        let denied = client
+            .post(format!("{base}/api/v1/mcp/sessions/{session_id}/{path}"))
+            .bearer_auth(&tokens[1])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            denied.status(),
+            403,
+            "a co-tenant must not act on someone else's session via {path}"
+        );
+    }
+}
+
+/// The two global catalogs are readable by any authenticated caller with no
+/// membership anywhere, and refused outright without authentication (#766).
+#[tokio::test]
+async fn global_catalogs_take_authentication_but_no_membership() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // a user belonging to nothing at all
+    let user = seed_user(&pool, "nobody@acme.test", false).await;
+    let token = seed_session(&pool, user, "catalogs").await;
+
+    for path in ["/api/v1/model-prices", "/api/v1/models"] {
+        let anonymous = client.get(format!("{base}{path}")).send().await.unwrap();
+        assert_eq!(
+            anonymous.status(),
+            401,
+            "{path} must still require authentication"
+        );
+
+        let authenticated = client
+            .get(format!("{base}{path}"))
+            .bearer_auth(token.clone())
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            authenticated.status().is_success(),
+            "{path} must be readable without a membership: {}",
+            authenticated.status()
+        );
+    }
+
+    // and the matrix says so, rather than naming a role floor nobody can meet
+    let matrix: Value = client
+        .get(format!("{base}/api/v1/rbac/matrix"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let model = matrix["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["resource"] == "model")
+        .expect("model resource in the matrix");
+    let read = model["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["action"] == "read")
+        .expect("model read action");
+    assert_eq!(read["authenticated_only"], true, "{matrix}");
+    assert!(read["minimum_role"].is_null(), "{matrix}");
 }

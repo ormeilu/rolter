@@ -9,6 +9,8 @@
 //! reuses the same entrypoint as its `control` subcommand.
 
 #[cfg(feature = "postgres")]
+mod access_control;
+#[cfg(feature = "postgres")]
 mod adaptive_policy;
 #[cfg(feature = "postgres")]
 mod adaptive_telemetry;
@@ -39,6 +41,8 @@ mod mcp_logs;
 #[cfg(feature = "postgres")]
 mod mcp_oauth;
 #[cfg(feature = "postgres")]
+mod mcp_oauth_flow;
+#[cfg(feature = "postgres")]
 mod me;
 #[cfg(feature = "postgres")]
 mod plugins;
@@ -51,6 +55,8 @@ mod rbac_matrix;
 mod runtime_policy;
 #[cfg(feature = "postgres")]
 mod scim;
+#[cfg(feature = "postgres")]
+mod scim_groups;
 #[cfg(feature = "postgres")]
 mod security;
 #[cfg(feature = "postgres")]
@@ -385,7 +391,11 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
     #[cfg(feature = "postgres")]
     if state.pool.is_some() {
         alerting::start_evaluator(state.clone());
+        // renew MCP OAuth sessions before they lapse, so a user consents once
+        // rather than every hour (#707)
+        mcp_oauth_flow::start_refresher(state.clone());
         api = api
+            .merge(access_control::router())
             .merge(alerting::router())
             .merge(auth::router())
             .merge(auth_policy::router())
@@ -395,6 +405,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(plugins::router())
             .merge(mcp_logs::router())
             .merge(mcp_oauth::router())
+            .merge(mcp_oauth_flow::router())
             .merge(feature_flags::router())
             .merge(guardrails::router())
             .merge(logging_settings::router())
@@ -404,6 +415,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(adaptive_telemetry::router())
             .merge(rbac_matrix::router())
             .merge(scim::router())
+            .merge(scim_groups::router())
             .merge(sso::router())
             .merge(cluster::router())
             .merge(security::router());

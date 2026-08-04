@@ -26,8 +26,25 @@ servers. Request body, query parameters, MCP protocol/session headers, response
 status, response headers, and streaming body are preserved. Hop-by-hop and
 client authorization headers are removed.
 
-stdio and WebSocket registrations fail with `mcp_transport_unsupported` on
-this HTTP endpoint.
+### Accepted values
+
+A registered server's `transport`, and an organization's
+`default_transport`, must be one of:
+
+| Value | Proxied over this endpoint |
+| --- | --- |
+| `streamable_http` | yes — the default |
+| `sse` | yes, legacy |
+| `websocket` | no; accepted in the registry, rejected with `mcp_transport_unsupported` on this HTTP endpoint |
+
+`stdio` is **not accepted**. It names a local subprocess, which a hosted
+control plane cannot dial, so registering one now fails validation rather than
+storing a server nothing could reach. Any stdio server registered before this
+was disabled in place, keeping its OAuth grants and sessions intact; re-point
+it at an HTTP endpoint to bring it back.
+
+One list is authoritative — `rolter_core::MCP_TRANSPORTS` — and the database
+check constraints, the API validation and the dashboard dropdown all match it.
 
 ## Manage the registry
 

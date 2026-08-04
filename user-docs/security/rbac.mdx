@@ -54,7 +54,7 @@ Carol  →  viewer  at  team: platform
 ```
 
 <Note>
-  The control plane enforces RBAC for all management operations. The gateway data plane does not consult roles — it only checks that the incoming virtual key exists, is active, and is allowed to access the requested model. RBAC and virtual key auth are independent systems.
+  The control plane enforces RBAC for all management operations. The gateway data plane does not consult roles — it checks that the incoming virtual key exists, is active, and is allowed to access the requested model. The one place the two meet is an access profile's [model and route policy](#model-and-route-policy), which does reach the gateway.
 </Note>
 
 ## Ask the server what a role can do
@@ -63,7 +63,7 @@ Rolter publishes its own permission table, so you never have to keep a copy in s
 
 | Endpoint | Answers |
 | --- | --- |
-| `GET /api/v1/rbac/matrix` | For every resource, the minimum role each of read / create / update / delete takes — or that the action is reserved for a superadmin, or does not exist. |
+| `GET /api/v1/rbac/matrix` | For every resource, the minimum role each of read / create / update / delete takes — or that the action is reserved for a superadmin, open to any authenticated caller (`authenticated_only`), or does not exist. |
 | `GET /api/v1/rbac/effective?org_id=&team_id=&project_id=` | What *you* may do at that scope, resolved from your own memberships. |
 
 Both read the same table the control plane enforces with, so the answer is never a guess: a request that `effective` says you cannot make returns `403` if you make it anyway.
@@ -71,6 +71,65 @@ Both read the same table the control plane enforces with, so the answer is never
 <Note>
   Deployment-wide settings — feature flags, runtime, logging, compatibility and adaptive-routing policy, cluster nodes, security settings, alerting and the model pricing catalog — sit outside the org/team/project hierarchy. No org role reaches them; they require the deployment admin token or a superadmin account. The same is true of editing or deleting a user account, which spans every org that user belongs to.
 </Note>
+
+## Custom roles and access profiles
+
+The three built-in roles are a floor, not the limit. An organization can define its own **custom roles**: pick a base role, then add the exact `resource:action` pairs it should also allow.
+
+```bash
+curl -X POST https://control.example.com/api/v1/orgs/$ORG_ID/custom-roles \
+  -H "Authorization: Bearer $ROLTER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "name": "Provider Wrangler",
+        "base_role": "member",
+        "grants": [{"resource": "provider", "action": "create"}]
+      }'
+```
+
+A grant can only **widen**. A custom role never removes what its base role already allowed, so existing admin/member/viewer behaviour is untouched and nothing needs migrating.
+
+Custom roles are not handed to people one at a time. You compose them into an **access profile**, which pairs each role with the org, team or project it applies at, and assign that profile to users or teams:
+
+```bash
+# "auditor across the org, and deploy admin on one project"
+curl -X POST https://control.example.com/api/v1/orgs/$ORG_ID/access-profiles \
+  -H "Authorization: Bearer $ROLTER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "name": "Platform On-Call",
+        "roles": [
+          {"role_id": "'$AUDITOR_ROLE'",  "org_id": "'$ORG_ID'"},
+          {"role_id": "'$DEPLOY_ROLE'", "project_id": "'$PROJECT_ID'"}
+        ]
+      }'
+
+curl -X POST https://control.example.com/api/v1/access-profiles/$PROFILE_ID/assignments \
+  -H "Authorization: Bearer $ROLTER_TOKEN" \
+  -d '{"user_id": "'$USER_ID'"}'
+```
+
+Scope is honoured exactly as it is for memberships: a grant attached to one project authorizes that project, not the whole org.
+
+## Model and route policy
+
+A profile can also carry a **model and route policy** — allow and deny lists for the models and routes its holders may reach. Entries are exact names or a trailing-`*` prefix glob (`gpt-*`), an empty allow-list means "no restriction", and deny always wins over allow. Where someone holds several profiles the lists are unioned, never intersected, so giving a person another profile can only ever widen their access.
+
+It is reported on `GET /api/v1/rbac/effective` as `model_policy`, and the gateway enforces it. Because a policy belongs to a person while a request carries a key, rolter resolves the policy of each virtual key's **creator** and attaches it to that key. A denied model returns `403` with code `model_not_allowed`; a denied route returns `403` with code `route_not_allowed`.
+
+<Note>
+  A key's own model list and its creator's policy are both applied, and neither widens the other. A key that names `gpt-4o` still cannot reach it if its creator's profile denies it — and a profile that allows `gpt-4o` does not add it to a key scoped to something else.
+
+  Keys with no creator — those made by an admin on someone's behalf, or defined in the config file — carry no policy at all, since there is no person whose profiles could apply. Restrict those with the key's own model list.
+</Note>
+
+Policy changes propagate to the gateway the same way provider and route changes do, on the next config refresh rather than instantly. Assigning or revoking a profile, editing its policy, and adding or removing someone from a team all trigger that refresh.
+
+<Warning>
+  Deleting a custom role that a profile still references returns `409` rather than quietly emptying that profile — detach it first. Deleting a *profile* does remove its assignments, since they mean nothing without it. Every change to a role, profile, assignment or policy is written to the audit log with its before and after, because all of them change what real people can do.
+</Warning>
+
+`GET /api/v1/rbac/matrix?org_id=` returns your org's custom roles alongside the built-in ones, so the dashboard's matrix always reflects the current rule set.
 
 ## Most-restrictive-wins
 
