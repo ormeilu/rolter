@@ -802,90 +802,23 @@ async fn delete_assignment(
 // ---------------------------------------------------------------------------
 
 /// The union of every model/route policy the caller's profiles carry.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub(crate) struct MergedPolicy {
-    pub(crate) allowed_models: Vec<String>,
-    pub(crate) denied_models: Vec<String>,
-    pub(crate) allowed_routes: Vec<String>,
-    pub(crate) denied_routes: Vec<String>,
-}
-
-impl MergedPolicy {
-    /// No policy at all — the pre-#534 answer, and what every caller without a
-    /// profile gets.
-    pub(crate) fn is_unrestricted(&self) -> bool {
-        self.allowed_models.is_empty()
-            && self.denied_models.is_empty()
-            && self.allowed_routes.is_empty()
-            && self.denied_routes.is_empty()
-    }
-
-    pub(crate) fn permits_model(&self, model: &str) -> bool {
-        permits(model, &self.allowed_models, &self.denied_models)
-    }
-
-    pub(crate) fn permits_route(&self, model: &str) -> bool {
-        permits(model, &self.allowed_routes, &self.denied_routes)
-    }
-}
-
-/// Whether `name` survives an allow/deny pair. An empty allow-list is "no
-/// restriction"; a deny always wins. Patterns are exact names or a trailing-`*`
-/// prefix glob (`gpt-*`), with a bare `*` meaning everything.
-fn permits(name: &str, allowed: &[String], denied: &[String]) -> bool {
-    if denied.iter().any(|p| matches_pattern(name, p)) {
-        return false;
-    }
-    allowed.is_empty() || allowed.iter().any(|p| matches_pattern(name, p))
-}
-
-fn matches_pattern(name: &str, pattern: &str) -> bool {
-    match pattern.strip_suffix('*') {
-        Some(prefix) => name.starts_with(prefix),
-        None => name == pattern,
-    }
-}
-
-/// Combine the policies of several profiles the same caller holds.
 ///
-/// Union, not intersection, and for the same reason grants are additive: two
-/// profiles must grant at least what either grants alone, or an operator would
-/// *reduce* someone's access by giving them another profile. One consequence is
-/// load-bearing: a profile that carries no model restriction at all makes the
-/// merged allow-list unrestricted, because that profile already permitted
-/// everything on its own.
+/// The type, its merge rule and its allow/deny matching live in `rolter-core`:
+/// the gateway now enforces the same policy this plane reports (#791), and a
+/// second implementation here would be free to drift from the one guarding
+/// traffic.
+pub(crate) type MergedPolicy = rolter_core::ModelPolicy;
+
+/// Combine the policies of several profiles the same caller holds. See
+/// [`rolter_core::ModelPolicy::merge`] for why this unions rather than
+/// intersects.
 pub(crate) fn merge_policies(policies: &[AccessProfilePolicy]) -> MergedPolicy {
-    let mut merged = MergedPolicy::default();
-    let mut models_unrestricted = false;
-    let mut routes_unrestricted = false;
-    for policy in policies {
-        if policy.allowed_models.is_empty() {
-            models_unrestricted = true;
-        }
-        if policy.allowed_routes.is_empty() {
-            routes_unrestricted = true;
-        }
-        merged.allowed_models.extend(policy.allowed_models.clone());
-        merged.denied_models.extend(policy.denied_models.clone());
-        merged.allowed_routes.extend(policy.allowed_routes.clone());
-        merged.denied_routes.extend(policy.denied_routes.clone());
-    }
-    if models_unrestricted {
-        merged.allowed_models.clear();
-    }
-    if routes_unrestricted {
-        merged.allowed_routes.clear();
-    }
-    for list in [
-        &mut merged.allowed_models,
-        &mut merged.denied_models,
-        &mut merged.allowed_routes,
-        &mut merged.denied_routes,
-    ] {
-        list.sort();
-        list.dedup();
-    }
-    merged
+    MergedPolicy::merge(policies.iter().map(|p| MergedPolicy {
+        allowed_models: p.allowed_models.clone(),
+        denied_models: p.denied_models.clone(),
+        allowed_routes: p.allowed_routes.clone(),
+        denied_routes: p.denied_routes.clone(),
+    }))
 }
 
 /// The model/route policy that applies to this caller. Unrestricted for a
@@ -979,9 +912,12 @@ mod tests {
 
     #[test]
     fn a_bare_star_is_everything() {
-        assert!(matches_pattern("anything", "*"));
-        assert!(!matches_pattern("anything", "any"));
-        assert!(matches_pattern("anything", "any*"));
+        // pattern matching itself now lives in `rolter_core::ModelPolicy`; this
+        // asserts the control plane still reaches it through `merge_policies`
+        assert!(merge_policies(&[policy(&["*"], &[])]).permits_model("anything"));
+        // a pattern without a trailing star is an exact name, not a prefix
+        assert!(!merge_policies(&[policy(&["any"], &[])]).permits_model("anything"));
+        assert!(merge_policies(&[policy(&["any*"], &[])]).permits_model("anything"));
     }
 
     #[test]

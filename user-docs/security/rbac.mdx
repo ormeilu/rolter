@@ -54,7 +54,7 @@ Carol  →  viewer  at  team: platform
 ```
 
 <Note>
-  The control plane enforces RBAC for all management operations. The gateway data plane does not consult roles — it only checks that the incoming virtual key exists, is active, and is allowed to access the requested model. RBAC and virtual key auth are independent systems.
+  The control plane enforces RBAC for all management operations. The gateway data plane does not consult roles — it checks that the incoming virtual key exists, is active, and is allowed to access the requested model. The one place the two meet is an access profile's [model and route policy](#model-and-route-policy), which does reach the gateway.
 </Note>
 
 ## Ask the server what a role can do
@@ -111,7 +111,19 @@ curl -X POST https://control.example.com/api/v1/access-profiles/$PROFILE_ID/assi
 
 Scope is honoured exactly as it is for memberships: a grant attached to one project authorizes that project, not the whole org.
 
-A profile can also carry a **model and route policy** — allow and deny lists for the models and routes its holders may reach, with deny winning over allow. It is reported on `GET /api/v1/rbac/effective` as `model_policy`; enforcing it on the gateway data plane is not yet wired up.
+## Model and route policy
+
+A profile can also carry a **model and route policy** — allow and deny lists for the models and routes its holders may reach. Entries are exact names or a trailing-`*` prefix glob (`gpt-*`), an empty allow-list means "no restriction", and deny always wins over allow. Where someone holds several profiles the lists are unioned, never intersected, so giving a person another profile can only ever widen their access.
+
+It is reported on `GET /api/v1/rbac/effective` as `model_policy`, and the gateway enforces it. Because a policy belongs to a person while a request carries a key, rolter resolves the policy of each virtual key's **creator** and attaches it to that key. A denied model returns `403` with code `model_not_allowed`; a denied route returns `403` with code `route_not_allowed`.
+
+<Note>
+  A key's own model list and its creator's policy are both applied, and neither widens the other. A key that names `gpt-4o` still cannot reach it if its creator's profile denies it — and a profile that allows `gpt-4o` does not add it to a key scoped to something else.
+
+  Keys with no creator — those made by an admin on someone's behalf, or defined in the config file — carry no policy at all, since there is no person whose profiles could apply. Restrict those with the key's own model list.
+</Note>
+
+Policy changes propagate to the gateway the same way provider and route changes do, on the next config refresh rather than instantly. Assigning or revoking a profile, editing its policy, and adding or removing someone from a team all trigger that refresh.
 
 <Warning>
   Deleting a custom role that a profile still references returns `409` rather than quietly emptying that profile — detach it first. Deleting a *profile* does remove its assignments, since they mean nothing without it. Every change to a role, profile, assignment or policy is written to the audit log with its before and after, because all of them change what real people can do.

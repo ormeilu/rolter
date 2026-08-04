@@ -10,9 +10,10 @@ use rolter_core::{
     BackpressurePolicy, BalancingStrategy, BudgetConfig, BudgetPeriod, BudgetScope, BuiltinRule,
     Decorator, Error, FailureMode, FeatureFlagsConfig, GatewayConfig, GroupMember, GuardAction,
     GuardStage, GuardrailRule, GuardrailWebhookConfig, GuardrailsConfig, McpOAuthSessionConfig,
-    McpServerConfig, ModelPriceConfig, ModelRoute, PromptTemplate, PromptTemplateActivationScope,
-    PromptTemplatesConfig, ProviderConfig, ProviderGroupConfig, ProviderKind, RateLimitConfig,
-    Result, Target, TemplateVariable, VirtualKeyRecord, WebhookAuth, WebhookStage,
+    McpServerConfig, ModelPolicy, ModelPriceConfig, ModelRoute, PromptTemplate,
+    PromptTemplateActivationScope, PromptTemplatesConfig, ProviderConfig, ProviderGroupConfig,
+    ProviderKind, RateLimitConfig, Result, Target, TemplateVariable, VirtualKeyRecord, WebhookAuth,
+    WebhookStage,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool};
@@ -263,6 +264,17 @@ struct VirtualKeyRow {
     created_by: Option<Uuid>,
     business_unit_id: Option<Uuid>,
     customer_id: Option<Uuid>,
+}
+
+/// One access-profile policy row, tagged with the user it reaches. A user
+/// holding several profiles produces several rows (#791).
+#[derive(FromRow)]
+struct OwnerPolicyRow {
+    user_id: Uuid,
+    allowed_models: Vec<String>,
+    denied_models: Vec<String>,
+    allowed_routes: Vec<String>,
+    denied_routes: Vec<String>,
 }
 
 #[derive(FromRow)]
@@ -630,9 +642,23 @@ impl PostgresConfigStore {
         .fetch_all(&self.pool)
         .await
         .map_err(store_err)?;
+
+        let owners: Vec<Uuid> = {
+            let mut ids: Vec<Uuid> = rows.iter().filter_map(|r| r.created_by).collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        };
+        let policies = self.access_policies_for_owners(&owners).await?;
+
         Ok(rows
             .into_iter()
             .map(|r| VirtualKeyRecord {
+                access_policy: r
+                    .created_by
+                    .and_then(|owner| policies.get(&owner))
+                    .filter(|policy| !policy.is_unrestricted())
+                    .cloned(),
                 key_hash: r.key_hash,
                 id: r.id.to_string(),
                 org_id: r.org_id.to_string(),
@@ -650,6 +676,59 @@ impl PostgresConfigStore {
                     .unwrap_or_default(),
                 customer_id: r.customer_id.map(|id| id.to_string()).unwrap_or_default(),
             })
+            .collect())
+    }
+
+    /// Merged access-profile policy for each of `owners`, keyed by user id.
+    ///
+    /// One query for the whole key set rather than one per key: a deployment
+    /// can hold thousands of virtual keys and this runs on every snapshot
+    /// build. Users with no profile are simply absent from the map, which the
+    /// caller reads as unrestricted.
+    ///
+    /// A profile reaches a user either directly or through a team they belong
+    /// to, including membership held at project level — the same two paths
+    /// `AccessProfileRepo::policies_for_user` resolves for the control plane.
+    async fn access_policies_for_owners(
+        &self,
+        owners: &[Uuid],
+    ) -> Result<HashMap<Uuid, ModelPolicy>> {
+        if owners.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows: Vec<OwnerPolicyRow> = sqlx::query_as(
+            "select distinct o.id as user_id, p.allowed_models, p.denied_models, \
+                    p.allowed_routes, p.denied_routes \
+             from unnest($1::uuid[]) as o(id) \
+             join access_profile_assignments a \
+               on a.user_id = o.id \
+               or a.team_id in ( \
+                   select m.team_id from memberships m \
+                    where m.user_id = o.id and m.team_id is not null \
+                   union \
+                   select pr.team_id from memberships m \
+                     join projects pr on pr.id = m.project_id \
+                    where m.user_id = o.id \
+               ) \
+             join access_profile_policies p on p.profile_id = a.profile_id",
+        )
+        .bind(owners)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+
+        let mut by_owner: HashMap<Uuid, Vec<ModelPolicy>> = HashMap::new();
+        for row in rows {
+            by_owner.entry(row.user_id).or_default().push(ModelPolicy {
+                allowed_models: row.allowed_models,
+                denied_models: row.denied_models,
+                allowed_routes: row.allowed_routes,
+                denied_routes: row.denied_routes,
+            });
+        }
+        Ok(by_owner
+            .into_iter()
+            .map(|(owner, policies)| (owner, ModelPolicy::merge(policies)))
             .collect())
     }
 
@@ -1157,6 +1236,288 @@ mod tests {
         // the provider delete cascades to provider_keys, whose statement trigger
         // bumps the version even when no key rows exist
         assert_eq!(current_version(&pool).await.unwrap(), v0 + 3);
+    }
+
+    /// org → team → project → user, with a virtual key the user owns.
+    /// Returns `(user_id, project_id)`.
+    async fn tenancy_with_owned_key(pool: &PgPool, key_hash: &str) -> (Uuid, Uuid) {
+        let org_id: Uuid = sqlx::query_scalar(
+            "insert into orgs (name, slug) values ('acme', 'acme') returning id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let team_id: Uuid =
+            sqlx::query_scalar("insert into teams (org_id, name) values ($1, 'core') returning id")
+                .bind(org_id)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let project_id: Uuid = sqlx::query_scalar(
+            "insert into projects (team_id, name) values ($1, 'api') returning id",
+        )
+        .bind(team_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let user_id: Uuid =
+            sqlx::query_scalar("insert into users (email) values ('dev@example.com') returning id")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        sqlx::query(
+            "insert into virtual_keys (project_id, key_hash, key_prefix, name, created_by)
+             values ($1, $2, 'sk-test', 'test key', $3)",
+        )
+        .bind(project_id)
+        .bind(key_hash)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        (user_id, project_id)
+    }
+
+    /// Attach a profile carrying `policy` to `user_id`, returning its id.
+    async fn profile_for_user(
+        pool: &PgPool,
+        user_id: Uuid,
+        slug: &str,
+        allowed_models: &[&str],
+        denied_models: &[&str],
+        denied_routes: &[&str],
+    ) -> Uuid {
+        let org_id: Uuid = sqlx::query_scalar("select id from orgs limit 1")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let profile_id: Uuid = sqlx::query_scalar(
+            "insert into access_profiles (org_id, slug, name) values ($1, $2, $2) returning id",
+        )
+        .bind(org_id)
+        .bind(slug)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into access_profile_policies
+                 (profile_id, allowed_models, denied_models, denied_routes)
+             values ($1, $2, $3, $4)",
+        )
+        .bind(profile_id)
+        .bind(
+            allowed_models
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            denied_models
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            denied_routes
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("insert into access_profile_assignments (profile_id, user_id) values ($1, $2)")
+            .bind(profile_id)
+            .bind(user_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        profile_id
+    }
+
+    #[tokio::test]
+    async fn snapshot_carries_the_key_owners_access_policy() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        let store = PostgresConfigStore {
+            pool: pool.clone(),
+            kek: None,
+        };
+        let (user_id, _) = tenancy_with_owned_key(&pool, "hash-owner-policy").await;
+
+        // no profiles yet: the key is unrestricted, exactly as before #791
+        let keys = store.load_virtual_keys().await.unwrap();
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].access_policy.is_none());
+
+        profile_for_user(&pool, user_id, "restricted", &["gpt-*"], &["gpt-4o"], &[]).await;
+
+        let keys = store.load_virtual_keys().await.unwrap();
+        let policy = keys[0]
+            .access_policy
+            .as_ref()
+            .expect("owner's policy reaches the snapshot");
+        assert!(policy.permits_model("gpt-4o-mini"));
+        // deny wins over the allow-list that also matches
+        assert!(!policy.permits_model("gpt-4o"));
+        // outside the allow-list entirely
+        assert!(!policy.permits_model("claude-opus"));
+    }
+
+    #[tokio::test]
+    async fn several_profiles_union_onto_one_key() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        let store = PostgresConfigStore {
+            pool: pool.clone(),
+            kek: None,
+        };
+        let (user_id, _) = tenancy_with_owned_key(&pool, "hash-multi-profile").await;
+
+        profile_for_user(&pool, user_id, "openai", &["gpt-*"], &[], &[]).await;
+        profile_for_user(
+            &pool,
+            user_id,
+            "anthropic",
+            &["claude-*"],
+            &[],
+            &["internal-*"],
+        )
+        .await;
+
+        let keys = store.load_virtual_keys().await.unwrap();
+        let policy = keys[0].access_policy.as_ref().expect("merged policy");
+        // union, not intersection: a second profile may only widen
+        assert!(policy.permits_model("gpt-4o"));
+        assert!(policy.permits_model("claude-opus"));
+        assert!(!policy.permits_model("llama-3"));
+        // the route deny from one profile still applies
+        assert!(!policy.permits_route("internal-tools"));
+    }
+
+    #[tokio::test]
+    async fn a_team_assigned_profile_reaches_the_keys_owner() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        let store = PostgresConfigStore {
+            pool: pool.clone(),
+            kek: None,
+        };
+        let (user_id, project_id) = tenancy_with_owned_key(&pool, "hash-team-profile").await;
+        let team_id: Uuid = sqlx::query_scalar("select team_id from projects where id = $1")
+            .bind(project_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let org_id: Uuid = sqlx::query_scalar("select id from orgs limit 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let profile_id: Uuid = sqlx::query_scalar(
+            "insert into access_profiles (org_id, slug, name)
+             values ($1, 'team-wide', 'team-wide') returning id",
+        )
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into access_profile_policies (profile_id, denied_models)
+             values ($1, '{secret-*}')",
+        )
+        .bind(profile_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("insert into access_profile_assignments (profile_id, team_id) values ($1, $2)")
+            .bind(profile_id)
+            .bind(team_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // the profile is on the team; the user is not in it yet
+        let keys = store.load_virtual_keys().await.unwrap();
+        assert!(keys[0].access_policy.is_none());
+
+        sqlx::query("insert into memberships (user_id, team_id, role) values ($1, $2, 'member')")
+            .bind(user_id)
+            .bind(team_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let keys = store.load_virtual_keys().await.unwrap();
+        let policy = keys[0]
+            .access_policy
+            .as_ref()
+            .expect("team membership carries the profile through");
+        assert!(!policy.permits_model("secret-model"));
+        assert!(policy.permits_model("gpt-4o"));
+    }
+
+    #[tokio::test]
+    async fn access_policy_writes_bump_version() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        let (user_id, project_id) = tenancy_with_owned_key(&pool, "hash-bump").await;
+        let team_id: Uuid = sqlx::query_scalar("select team_id from projects where id = $1")
+            .bind(project_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        // the gateway now reads these tables, so every write has to propagate
+        let v0 = current_version(&pool).await.unwrap();
+        profile_for_user(&pool, user_id, "bumping", &["gpt-*"], &[], &[]).await;
+        assert!(
+            current_version(&pool).await.unwrap() > v0,
+            "profile, policy and assignment writes must bump config_version"
+        );
+
+        let v1 = current_version(&pool).await.unwrap();
+        sqlx::query("insert into memberships (user_id, team_id, role) values ($1, $2, 'member')")
+            .bind(user_id)
+            .bind(team_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            current_version(&pool).await.unwrap() > v1,
+            "a membership change alters someone's effective policy and must bump"
+        );
+
+        // custom roles stay control-plane only: no bump, per ADR-0023
+        let org_id: Uuid = sqlx::query_scalar("select id from orgs limit 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let v2 = current_version(&pool).await.unwrap();
+        sqlx::query(
+            "insert into custom_roles (org_id, slug, name) values ($1, 'auditor', 'Auditor')",
+        )
+        .bind(org_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            current_version(&pool).await.unwrap(),
+            v2,
+            "custom roles decide control-plane authorization only"
+        );
     }
 
     #[tokio::test]
