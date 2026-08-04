@@ -63,7 +63,7 @@ Rolter publishes its own permission table, so you never have to keep a copy in s
 
 | Endpoint | Answers |
 | --- | --- |
-| `GET /api/v1/rbac/matrix` | For every resource, the minimum role each of read / create / update / delete takes — or that the action is reserved for a superadmin, or does not exist. |
+| `GET /api/v1/rbac/matrix` | For every resource, the minimum role each of read / create / update / delete takes — or that the action is reserved for a superadmin, open to any authenticated caller (`authenticated_only`), or does not exist. |
 | `GET /api/v1/rbac/effective?org_id=&team_id=&project_id=` | What *you* may do at that scope, resolved from your own memberships. |
 
 Both read the same table the control plane enforces with, so the answer is never a guess: a request that `effective` says you cannot make returns `403` if you make it anyway.

@@ -62,6 +62,11 @@ pub(crate) enum Authority {
     Role(Role),
     /// deployment-wide settings only the admin token or a superadmin may touch
     Superadmin,
+    /// any authenticated caller, with no membership anywhere. Reserved for
+    /// global read-only catalogs that carry no tenant's data: there is no
+    /// deployment-scoped membership to hold, so naming a role here would
+    /// describe a floor nobody can stand on (#766)
+    Authenticated,
 }
 
 /// What a caller must hold for one `(resource, action)` pair.
@@ -117,6 +122,8 @@ const VIEWER: Option<Authority> = Some(Authority::Role(Role::Viewer));
 const MEMBER: Option<Authority> = Some(Authority::Role(Role::Member));
 const ADMIN: Option<Authority> = Some(Authority::Role(Role::Admin));
 const SUPER: Option<Authority> = Some(Authority::Superadmin);
+/// any authenticated caller; see [`Authority::Authenticated`]
+const ANYONE: Option<Authority> = Some(Authority::Authenticated);
 /// the resource has no such action
 const NA: Option<Authority> = None;
 
@@ -218,13 +225,14 @@ const CAPABILITIES: &[Capability] = &[
         delete: ADMIN,
     },
     // the pricing catalog and the effective model list are global (unscoped),
-    // so their mutations are superadmin-only. their reads are not guarded at
-    // all today — any authenticated principal may list them — and `viewer` is
-    // recorded here as the nominal floor (#766)
+    // so their mutations are superadmin-only. their reads are every
+    // authenticated caller's: both are deployment-wide catalogs of upstream
+    // capability and list price, carrying no tenant's data, and there is no
+    // deployment-scoped membership a role floor could be measured against
     Capability {
         resource: "model_price",
         scope: "deployment",
-        read: VIEWER,
+        read: ANYONE,
         create: NA,
         update: SUPER,
         delete: SUPER,
@@ -232,7 +240,7 @@ const CAPABILITIES: &[Capability] = &[
     Capability {
         resource: "model",
         scope: "deployment",
-        read: VIEWER,
+        read: ANYONE,
         create: NA,
         update: NA,
         delete: SUPER,
@@ -643,9 +651,12 @@ pub(crate) use {cap, superadmin_cap};
 #[derive(Debug, Serialize)]
 struct ActionView {
     action: Action,
-    /// minimum scoped role, absent when the action is superadmin-only
+    /// minimum scoped role, absent when the action is superadmin-only or open
+    /// to every authenticated caller
     minimum_role: Option<Role>,
     superadmin_only: bool,
+    /// no membership required: any authenticated caller may perform it
+    authenticated_only: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -798,9 +809,10 @@ fn resource_view(cap: &Capability) -> ResourceView {
                     action,
                     minimum_role: match authority {
                         Authority::Role(role) => Some(role),
-                        Authority::Superadmin => None,
+                        Authority::Superadmin | Authority::Authenticated => None,
                     },
                     superadmin_only: authority == Authority::Superadmin,
+                    authenticated_only: authority == Authority::Authenticated,
                 })
             })
             .collect(),
@@ -921,6 +933,8 @@ fn allowed_for(
                 // deployment-wide policy is never reachable through a custom
                 // role, so the grants are not consulted here
                 Authority::Superadmin => superadmin,
+                // reaching this code path means the caller is authenticated
+                Authority::Authenticated => true,
                 Authority::Role(required) => {
                     superadmin
                         || role.is_some_and(|r| role_rank(r) >= role_rank(required))
@@ -1007,9 +1021,13 @@ mod tests {
         assert!(!allowed.contains(&"user:delete".to_string()));
     }
 
+    /// Without a membership anywhere, a caller holds exactly the global
+    /// read-only catalogs and nothing else — those carry no tenant's data and
+    /// have no scope a membership could be held at (#766).
     #[test]
-    fn no_membership_means_no_permissions() {
-        assert!(allowed_for(false, None, &[], ScopeChain::default()).is_empty());
+    fn no_membership_means_only_the_global_catalogs() {
+        let allowed = allowed_for(false, None, &[], ScopeChain::default());
+        assert_eq!(allowed, vec!["model_price:read", "model:read"]);
     }
 
     #[test]

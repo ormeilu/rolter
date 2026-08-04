@@ -3435,9 +3435,16 @@ async fn delete_rate_limit(
 // --- model pricing catalog ---
 
 async fn list_model_prices(
-    _principal: Principal,
+    principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<Vec<ModelPrice>>> {
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::default(),
+        cap!("model_price", Read),
+    )
+    .await?;
     Ok(Json(ModelPriceRepo(pool(&state)).list().await?))
 }
 
@@ -3540,6 +3547,13 @@ async fn list_models(
     principal: Principal,
     State(state): State<ControlState>,
 ) -> ApiResult<Json<Vec<EffectiveModel>>> {
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::default(),
+        cap!("model", Read),
+    )
+    .await?;
     let config = state.store.load().await?;
     // model visibility carried by the caller's access profiles (#534);
     // unrestricted for a superadmin and for anyone holding no policy
