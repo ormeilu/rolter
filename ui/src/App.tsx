@@ -15,6 +15,7 @@ import { AlertChannels, AlertHistory, AlertRules } from "@/pages/Alerting";
 import AdaptiveDashboard from "@/pages/AdaptiveDashboard";
 import AdaptiveSettings from "@/pages/AdaptiveSettings";
 import AuditLog from "@/pages/AuditLog";
+import ClientSettings from "@/pages/ClientSettings";
 import Cluster from "@/pages/Cluster";
 import ComplexityRouter from "@/pages/ComplexityRouter";
 import Compatibility from "@/pages/Compatibility";
@@ -36,6 +37,7 @@ import McpCatalog from "@/pages/McpCatalog";
 import { McpLibrary, McpSettings, ToolGroups } from "@/pages/McpManagement";
 import McpLogs from "@/pages/McpLogs";
 import { AuthSessions, OAuthGrants } from "@/pages/McpOAuth";
+import ModelSettings from "@/pages/ModelSettings";
 import Models from "@/pages/Models";
 import Performance from "@/pages/Performance";
 import Playground from "@/pages/Playground";
@@ -63,6 +65,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   "mcp-logs": <McpLogs />,
   connectors: <Connectors />,
   "model-catalog": <Models />,
+  "model-settings": <ModelSettings />,
   providers: <Providers />,
   "provider-groups": <ProviderGroups />,
   budgets: <Limits />,
@@ -87,6 +90,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   "api-keys": <Account />,
   security: <Security />,
   caching: <Config />,
+  "client-settings": <ClientSettings />,
   "feature-flags": <FeatureFlags />,
   "guardrail-rules": <GuardrailRules />,
   "guardrail-providers": <GuardrailProviders />,

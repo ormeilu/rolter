@@ -22,7 +22,8 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use reqwest::{Client, Method, Proxy, RequestBuilder, Response};
 use rolter_core::{
-    CompatibilityConfig, EgressPolicy, Error, ProviderConfig, ProviderKind, Result, TimeoutConfig,
+    ClientConfig, CompatibilityConfig, EgressPolicy, Error, ModelDefaultsConfig, ProviderConfig,
+    ProviderKind, Result, TimeoutConfig,
 };
 
 use crate::egress_resolver::{EgressResolver, SharedEgressPolicy};
@@ -40,6 +41,10 @@ pub struct Forwarder {
     request_timeout_secs: AtomicU64,
     /// control-plane-owned cross-dialect behavior; swapped on reload (#546)
     compatibility: ArcSwap<CompatibilityConfig>,
+    /// control-plane-owned upstream header policy; swapped on reload (#564)
+    client_policy: ArcSwap<ClientConfig>,
+    /// control-plane-owned inference defaults; swapped on reload (#564)
+    model_defaults: ArcSwap<ModelDefaultsConfig>,
     next_proxy: AtomicUsize,
     proxy_health: DashMap<String, ProxyHealth>,
 }
@@ -104,6 +109,8 @@ impl Forwarder {
             connect_timeout_secs: AtomicU64::new(timeouts.connect_secs),
             request_timeout_secs: AtomicU64::new(timeouts.request_secs),
             compatibility: ArcSwap::from_pointee(CompatibilityConfig::default()),
+            client_policy: ArcSwap::from_pointee(ClientConfig::default()),
+            model_defaults: ArcSwap::from_pointee(ModelDefaultsConfig::default()),
             next_proxy: AtomicUsize::new(0),
             proxy_health: DashMap::new(),
         }
@@ -278,6 +285,24 @@ impl Forwarder {
         self.compatibility.store(Arc::new(compatibility.clone()));
     }
 
+    /// Apply the control plane's client header policy (#564). Hot-swapped on
+    /// snapshot reload; in-flight requests keep the policy they started with.
+    pub fn set_client_policy(&self, client: &ClientConfig) {
+        self.client_policy.store(Arc::new(client.clone()));
+    }
+
+    /// Apply the control plane's inference defaults (#564).
+    pub fn set_model_defaults(&self, defaults: &ModelDefaultsConfig) {
+        self.model_defaults.store(Arc::new(defaults.clone()));
+    }
+
+    /// Header names the gateway forwards verbatim from the inbound request, on
+    /// top of the trace context it always propagates. Lowercased and validated
+    /// by the control plane, so the caller can compare them directly.
+    pub fn forwarded_header_names(&self) -> Vec<String> {
+        self.client_policy.load().forwarded_headers.clone()
+    }
+
     /// Forward a JSON body to `provider` at `path` and return the raw response.
     ///
     /// `api_key` is injected per provider kind (Bearer for OpenAI-style,
@@ -331,7 +356,10 @@ impl Forwarder {
             provider_url(provider, translation.upstream_path(path))
         };
         let compatibility = self.compatibility.load();
+        let client_policy = self.client_policy.load();
+        let injected = &client_policy.injected_headers;
         let body = translation.translate_request_with(body, &compatibility)?;
+        let body = translation.apply_model_defaults(body, &self.model_defaults.load());
         let body = translation::normalize_prompt_cache_control(body, provider.kind)?;
         // gemini native takes no top-level `model` field (it is in the url)
         let body = if translation.is_gemini_generate() {
@@ -355,6 +383,9 @@ impl Forwarder {
                 if let Ok(title) = std::env::var("OPENROUTER_X_TITLE") {
                     req = req.header("X-Title", title);
                 }
+            }
+            for (name, value) in injected.iter() {
+                req = req.header(name.as_str(), value.as_str());
             }
             for (name, value) in passthrough_headers {
                 req = req.header(*name, *value);
@@ -388,6 +419,8 @@ impl Forwarder {
         }
         let url = provider_url(provider, path);
         let compatibility = self.compatibility.load();
+        let client_policy = self.client_policy.load();
+        let injected = &client_policy.injected_headers;
         self.send_with_proxy_retry(provider, |client| {
             let mut req = apply_provider_auth_with(
                 client
@@ -397,6 +430,9 @@ impl Forwarder {
                 api_key,
                 &compatibility,
             );
+            for (name, value) in injected.iter() {
+                req = req.header(name.as_str(), value.as_str());
+            }
             for (name, value) in passthrough_headers {
                 req = req.header(*name, *value);
             }
@@ -418,6 +454,8 @@ impl Forwarder {
     ) -> Result<Response> {
         let url = provider_url(provider, path);
         let compatibility = self.compatibility.load();
+        let client_policy = self.client_policy.load();
+        let injected = &client_policy.injected_headers;
         self.send_with_proxy_retry(provider, |client| {
             let mut req = apply_provider_auth_with(
                 client.request(method.clone(), &url),
@@ -425,6 +463,9 @@ impl Forwarder {
                 api_key,
                 &compatibility,
             );
+            for (name, value) in injected.iter() {
+                req = req.header(name.as_str(), value.as_str());
+            }
             for (name, value) in passthrough_headers {
                 req = req.header(*name, *value);
             }

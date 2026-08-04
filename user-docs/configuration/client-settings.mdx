@@ -1,0 +1,68 @@
+---
+title: "Client Settings: Base URL and Upstream Headers"
+sidebarTitle: "Client Settings"
+description: "The base URL Rolter advertises to clients, which inbound headers reach the provider, which headers Rolter adds itself, and the header carrying the request id."
+---
+
+Client settings cover the seam between your callers and your providers: what address clients dial, which of their headers survive the hop, and what Rolter attaches on the way out.
+
+Edit them from **Settings → Client Settings** in the dashboard, or through the management API. Changes reach every gateway through the config snapshot, with no restart.
+
+---
+
+## Base URL
+
+The address clients point their SDK at. Set it when the gateway sits behind a load balancer or a custom domain, so the connection snippet in the dashboard matches what a caller can actually reach.
+
+Leave it empty and the dashboard falls back to its own origin. This value is advisory: the gateway never reads it, and setting it does not change what the gateway listens on.
+
+---
+
+## Forwarded request headers
+
+An allowlist of inbound client headers passed through to the upstream provider. Anything not on the list is dropped at the gateway — that is the default, and an empty list means Rolter sends exactly what it sent before this setting existed.
+
+Trace-context headers (`traceparent`, `tracestate`, `b3`) propagate whether or not they are listed, so distributed tracing cannot be broken by editing this list.
+
+Some headers can never be forwarded, because forwarding them would hand a caller the gateway's own credentials or corrupt the upstream request: `authorization`, `x-api-key`, `api-key`, `host`, `content-length`, `content-type`, `transfer-encoding`, `connection` and `cookie`. Listing one is rejected.
+
+---
+
+## Injected upstream headers
+
+Static name/value pairs Rolter adds to every upstream request — a partner id, a routing tag, a billing dimension your provider expects.
+
+Injected headers are applied *before* trace context, so a trace header of the same name still wins. Values are treated as deployment credential material: they reach the gateway through the snapshot, but they are never written to the audit log. The log records which header **names** changed, not what they were set to.
+
+The same reserved list applies here.
+
+---
+
+## Request ID header
+
+The header carrying the end-to-end request id. Rolter reuses the caller's value when one is present, mints a UUID when it is not, and echoes it on the response so a client can find its own call in the logs.
+
+Default is `x-request-id`. It must be a valid header name and cannot be one of the reserved names.
+
+---
+
+## API
+
+Both endpoints are **superadmin only**, and every update is audited.
+
+```bash
+curl -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  https://control.example.com/api/v1/client-settings
+
+curl -X PUT -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "public_base_url": "https://gateway.example.com",
+        "forwarded_headers": ["x-tenant-id"],
+        "injected_headers": {"x-partner-id": "acme"},
+        "request_id_header": "x-request-id"
+      }' \
+  https://control.example.com/api/v1/client-settings
+```
+
+The read response also carries `always_propagated` and `reserved`, so a client does not have to hard-code either list.

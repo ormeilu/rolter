@@ -484,6 +484,22 @@ const CAPABILITIES: &[Capability] = &[
         delete: NA,
     },
     Capability {
+        resource: "client_settings",
+        scope: "deployment",
+        read: SUPER,
+        create: NA,
+        update: SUPER,
+        delete: NA,
+    },
+    Capability {
+        resource: "model_defaults",
+        scope: "deployment",
+        read: SUPER,
+        create: NA,
+        update: SUPER,
+        delete: NA,
+    },
+    Capability {
         resource: "adaptive_routing_policy",
         scope: "deployment",
         read: SUPER,
@@ -1085,6 +1101,7 @@ mod tests {
         ("auth.rs", include_str!("auth.rs")),
         ("auth_policy.rs", include_str!("auth_policy.rs")),
         ("cluster.rs", include_str!("cluster.rs")),
+        ("client_settings.rs", include_str!("client_settings.rs")),
         (
             "compatibility_policy.rs",
             include_str!("compatibility_policy.rs"),
@@ -1098,6 +1115,7 @@ mod tests {
         ("logging_settings.rs", include_str!("logging_settings.rs")),
         ("main.rs", include_str!("main.rs")),
         ("mcp_logs.rs", include_str!("mcp_logs.rs")),
+        ("model_defaults.rs", include_str!("model_defaults.rs")),
         ("mcp_oauth.rs", include_str!("mcp_oauth.rs")),
         ("mcp_oauth_flow.rs", include_str!("mcp_oauth_flow.rs")),
         ("me.rs", include_str!("me.rs")),

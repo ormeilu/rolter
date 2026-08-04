@@ -415,9 +415,13 @@ async fn response_lifecycle(
         upstream_path.push('?');
         upstream_path.push_str(query);
     }
-    let trace_ctx = crate::trace::outbound_trace_headers(&headers);
-    let trace_headers: Vec<(&str, &str)> =
-        trace_ctx.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    // trace context plus any client headers the operator allowlisted (#564)
+    let trace_ctx =
+        crate::trace::outbound_headers(&headers, &state.forwarder.forwarded_header_names());
+    let trace_headers: Vec<(&str, &str)> = trace_ctx
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
     match state
         .forwarder
         .forward_resource(
@@ -1120,9 +1124,13 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
     };
     // the caller's inbound trace context, propagated verbatim to whichever
     // upstream is chosen so it continues the same distributed trace (ROL-61)
-    let trace_ctx = crate::trace::outbound_trace_headers(&headers);
-    let trace_headers: Vec<(&str, &str)> =
-        trace_ctx.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    // trace context plus any client headers the operator allowlisted (#564)
+    let trace_ctx =
+        crate::trace::outbound_headers(&headers, &state.forwarder.forwarded_header_names());
+    let trace_headers: Vec<(&str, &str)> = trace_ctx
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
 
     // exact-match response cache (ROL-56, streaming added in ROL-235): eligible
     // for routes that opted in, when the global switch is on and Redis is wired.
@@ -1837,9 +1845,13 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
         prompt: None,
         token_ids: token_ids.as_deref(),
     };
-    let trace_ctx = crate::trace::outbound_trace_headers(&headers);
-    let trace_headers: Vec<(&str, &str)> =
-        trace_ctx.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    // trace context plus any client headers the operator allowlisted (#564)
+    let trace_ctx =
+        crate::trace::outbound_headers(&headers, &state.forwarder.forwarded_header_names());
+    let trace_headers: Vec<(&str, &str)> = trace_ctx
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
 
     let retry = &snap.retry;
     let cooldown = &snap.cooldown;

@@ -14,11 +14,11 @@ use rolter_core::{Error, Result};
 use super::models::{
     AccessProfile, AccessProfileAssignment, AccessProfilePolicy, AccessProfileRole,
     AdaptiveRoutingPolicy, AdaptiveRoutingTelemetry, AuditLogEntry, Budget, BusinessUnit,
-    ClusterNode, CompatibilityPolicy, CustomRole, CustomRoleGrant, Customer, EffectiveGrant,
-    FeatureFlags, GuardrailProvider, GuardrailRule, Invitation, LoggingSettings,
+    ClientSettings, ClusterNode, CompatibilityPolicy, CustomRole, CustomRoleGrant, Customer,
+    EffectiveGrant, FeatureFlags, GuardrailProvider, GuardrailRule, Invitation, LoggingSettings,
     McpGatewaySettings, McpLoginState, McpOAuthGrant, McpOAuthSession, McpServer, McpToolGroup,
-    Membership, ModelPrice, Org, OrgAuthPolicy, OwnedVirtualKey, PluginInstance, Project,
-    PromptTemplate, PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup,
+    Membership, ModelDefaults, ModelPrice, Org, OrgAuthPolicy, OwnedVirtualKey, PluginInstance,
+    Project, PromptTemplate, PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup,
     ProviderGroupMember, RateLimit, Route, RouteTarget, RuntimePolicy, ScimGroup, ScimGroupMapping,
     ScimIdentity, ScimToken, SecuritySettings, Session, Skill, SkillVersion, SsoGroupMapping,
     SsoLoginState, SsoProvider, Team, User, VirtualKey,
@@ -101,6 +101,84 @@ impl CompatibilityPolicyRepo<'_> {
         .await
         .map_err(store_err)?
         .ok_or_else(|| Error::NotFound("compatibility policy".to_string()))
+    }
+}
+
+const CLIENT_SETTINGS_COLUMNS: &str = "public_base_url, forwarded_headers, injected_headers, \
+     request_id_header, updated_at";
+
+impl ClientSettingsRepo<'_> {
+    pub async fn get(&self) -> Result<ClientSettings> {
+        sqlx::query_as(&format!(
+            "select {CLIENT_SETTINGS_COLUMNS} from client_settings where id = true"
+        ))
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn update(
+        &self,
+        public_base_url: Option<&str>,
+        forwarded_headers: &[String],
+        injected_headers: &serde_json::Value,
+        request_id_header: &str,
+    ) -> Result<ClientSettings> {
+        sqlx::query_as(&format!(
+            "update client_settings set \
+                public_base_url = $1, forwarded_headers = $2, injected_headers = $3, \
+                request_id_header = $4, updated_at = now() \
+             where id = true \
+             returning {CLIENT_SETTINGS_COLUMNS}"
+        ))
+        .bind(public_base_url)
+        .bind(forwarded_headers)
+        .bind(injected_headers)
+        .bind(request_id_header)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound("client settings".to_string()))
+    }
+}
+
+const MODEL_DEFAULTS_COLUMNS: &str = "enabled, default_model, default_temperature, \
+     default_top_p, default_max_tokens, updated_at";
+
+impl ModelDefaultsRepo<'_> {
+    pub async fn get(&self) -> Result<ModelDefaults> {
+        sqlx::query_as(&format!(
+            "select {MODEL_DEFAULTS_COLUMNS} from model_defaults where id = true"
+        ))
+        .fetch_one(self.0)
+        .await
+        .map_err(store_err)
+    }
+
+    pub async fn update(
+        &self,
+        enabled: bool,
+        default_model: Option<&str>,
+        default_temperature: Option<f64>,
+        default_top_p: Option<f64>,
+        default_max_tokens: Option<i32>,
+    ) -> Result<ModelDefaults> {
+        sqlx::query_as(&format!(
+            "update model_defaults set \
+                enabled = $1, default_model = $2, default_temperature = $3, \
+                default_top_p = $4, default_max_tokens = $5, updated_at = now() \
+             where id = true \
+             returning {MODEL_DEFAULTS_COLUMNS}"
+        ))
+        .bind(enabled)
+        .bind(default_model)
+        .bind(default_temperature)
+        .bind(default_top_p)
+        .bind(default_max_tokens)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound("model defaults".to_string()))
     }
 }
 
@@ -3746,6 +3824,8 @@ pub struct FeatureFlagsRepo<'a>(pub &'a PgPool);
 pub struct LoggingSettingsRepo<'a>(pub &'a PgPool);
 pub struct RuntimePolicyRepo<'a>(pub &'a PgPool);
 pub struct CompatibilityPolicyRepo<'a>(pub &'a PgPool);
+pub struct ClientSettingsRepo<'a>(pub &'a PgPool);
+pub struct ModelDefaultsRepo<'a>(pub &'a PgPool);
 pub struct AdaptiveRoutingPolicyRepo<'a>(pub &'a PgPool);
 pub struct GuardrailRepo<'a>(pub &'a PgPool);
 

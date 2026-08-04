@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use rustls_pki_types::{pem::PemObject, CertificateDer};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
@@ -85,6 +85,12 @@ pub struct GatewayConfig {
     /// cross-dialect translation behavior (anthropic version, default max tokens)
     #[serde(default)]
     pub compatibility: CompatibilityConfig,
+    /// header handling on the upstream leg and the base URL advertised to clients
+    #[serde(default)]
+    pub client: ClientConfig,
+    /// inference parameters filled in when a client omits them
+    #[serde(default)]
+    pub model_defaults: ModelDefaultsConfig,
     /// deployment-wide adaptive-routing policy for `adaptive` routes
     #[serde(default)]
     pub adaptive_routing: AdaptiveRoutingConfig,
@@ -1726,6 +1732,77 @@ impl Default for CompatibilityConfig {
             anthropic_version: default_anthropic_version(),
             default_max_tokens: default_translation_max_tokens(),
         }
+    }
+}
+
+fn default_request_id_header() -> String {
+    "x-request-id".to_string()
+}
+
+/// What the gateway does with headers on the upstream leg, plus the base URL
+/// the dashboard advertises in its connection snippets (#564).
+///
+/// The defaults are empty, so a deployment that never touches the Client
+/// Settings screen sends exactly the headers it sent before this existed.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ClientConfig {
+    /// base URL shown to clients; `None` means "the origin serving the
+    /// dashboard". Advisory only — the gateway never reads it
+    #[serde(default)]
+    pub public_base_url: Option<String>,
+    /// inbound client headers forwarded verbatim to the upstream provider,
+    /// lowercased. Trace-context headers propagate regardless of this list
+    #[serde(default)]
+    pub forwarded_headers: Vec<String>,
+    /// static headers added to every upstream request, lowercased names
+    #[serde(default)]
+    pub injected_headers: BTreeMap<String, String>,
+    /// header carrying the client-supplied correlation id
+    #[serde(default = "default_request_id_header")]
+    pub request_id_header: String,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self {
+            public_base_url: None,
+            forwarded_headers: Vec::new(),
+            injected_headers: BTreeMap::new(),
+            request_id_header: default_request_id_header(),
+        }
+    }
+}
+
+/// Inference parameters the gateway fills in when the client omitted them
+/// (#564).
+///
+/// Every field is opt-in and only ever *fills a gap*: a value the client sent
+/// is never overwritten, so enabling this cannot change the meaning of an
+/// existing request that was already explicit.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct ModelDefaultsConfig {
+    /// master switch; with it off the request body is forwarded untouched
+    #[serde(default)]
+    pub enabled: bool,
+    /// `model` used when the request omits one
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+}
+
+impl ModelDefaultsConfig {
+    /// Whether applying this config could change any request body.
+    pub fn is_active(&self) -> bool {
+        self.enabled
+            && (self.default_model.is_some()
+                || self.temperature.is_some()
+                || self.top_p.is_some()
+                || self.max_tokens.is_some())
     }
 }
 

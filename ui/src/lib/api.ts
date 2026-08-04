@@ -1628,6 +1628,60 @@ export function updateRuntimePolicy(
 }
 
 // ---------------------------------------------------------------------------
+// client settings: advertised base URL and upstream header handling (#564)
+
+export interface ClientSettingsDto {
+  public_base_url: string | null;
+  forwarded_headers: string[];
+  injected_headers: Record<string, string>;
+  request_id_header: string;
+  updated_at: string;
+  /// header names propagated whether or not they are listed
+  always_propagated: string[];
+  /// header names that can never be forwarded or injected
+  reserved: string[];
+}
+
+export type UpdateClientSettingsInput = Pick<
+  ClientSettingsDto,
+  "public_base_url" | "forwarded_headers" | "injected_headers" | "request_id_header"
+>;
+
+export function fetchClientSettings(): Promise<ClientSettingsDto> {
+  return getJson<ClientSettingsDto>("/api/v1/client-settings");
+}
+
+export function updateClientSettings(
+  input: UpdateClientSettingsInput,
+): Promise<ClientSettingsDto> {
+  return sendJson<ClientSettingsDto>("PUT", "/api/v1/client-settings", input);
+}
+
+// ---------------------------------------------------------------------------
+// model defaults: inference parameters filled in when a client omits them (#564)
+
+export interface ModelDefaultsDto {
+  enabled: boolean;
+  default_model: string | null;
+  default_temperature: number | null;
+  default_top_p: number | null;
+  default_max_tokens: number | null;
+  updated_at: string;
+}
+
+export type UpdateModelDefaultsInput = Omit<ModelDefaultsDto, "updated_at">;
+
+export function fetchModelDefaults(): Promise<ModelDefaultsDto> {
+  return getJson<ModelDefaultsDto>("/api/v1/model-defaults");
+}
+
+export function updateModelDefaults(
+  input: UpdateModelDefaultsInput,
+): Promise<ModelDefaultsDto> {
+  return sendJson<ModelDefaultsDto>("PUT", "/api/v1/model-defaults", input);
+}
+
+// ---------------------------------------------------------------------------
 // logging settings: request-log sampling, payload capture and retention
 
 export interface LoggingSettingsDto {

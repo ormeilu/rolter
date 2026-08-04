@@ -21,8 +21,9 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::postgres::models::{
-    AdaptiveRoutingPolicy, Budget, CompatibilityPolicy, FeatureFlags, GuardrailProvider,
-    GuardrailRule as GuardrailRuleRow, LoggingSettings, ModelPrice, RateLimit, RuntimePolicy,
+    AdaptiveRoutingPolicy, Budget, ClientSettings, CompatibilityPolicy, FeatureFlags,
+    GuardrailProvider, GuardrailRule as GuardrailRuleRow, LoggingSettings, ModelDefaults,
+    ModelPrice, RateLimit, RuntimePolicy,
 };
 use crate::ConfigStore;
 
@@ -418,6 +419,28 @@ impl PostgresConfigStore {
         sqlx::query_as(
             "select anthropic_version, default_max_tokens, updated_at \
              from compatibility_policy where id = true",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(store_err)
+    }
+
+    async fn load_client_settings(&self) -> Result<ClientSettings> {
+        sqlx::query_as(
+            "select public_base_url, forwarded_headers, injected_headers, request_id_header, \
+                    updated_at \
+             from client_settings where id = true",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(store_err)
+    }
+
+    async fn load_model_defaults(&self) -> Result<ModelDefaults> {
+        sqlx::query_as(
+            "select enabled, default_model, default_temperature, default_top_p, \
+                    default_max_tokens, updated_at \
+             from model_defaults where id = true",
         )
         .fetch_one(&self.pool)
         .await
@@ -1088,6 +1111,8 @@ impl ConfigStore for PostgresConfigStore {
         let runtime_policy = self.load_runtime_policy().await?;
         let logging = self.load_logging_settings().await?;
         let compatibility = self.load_compatibility_policy().await?;
+        let client_settings = self.load_client_settings().await?;
+        let model_defaults = self.load_model_defaults().await?;
         let adaptive = self.load_adaptive_routing_policy().await?;
         let guardrails = self.load_guardrails().await?;
         let guardrail_webhook = self.load_guardrail_webhook().await?;
@@ -1148,6 +1173,38 @@ impl ConfigStore for PostgresConfigStore {
         config.queue.block_timeout_ms = runtime_policy.queue_block_ms.max(0) as u64;
         config.compatibility.anthropic_version = compatibility.anthropic_version;
         config.compatibility.default_max_tokens = compatibility.default_max_tokens.max(1) as u32;
+        config.client = rolter_core::ClientConfig {
+            public_base_url: client_settings.public_base_url,
+            forwarded_headers: client_settings
+                .forwarded_headers
+                .iter()
+                .map(|h| h.trim().to_ascii_lowercase())
+                .filter(|h| !h.is_empty())
+                .collect(),
+            // a non-object column would mean a hand-edited row; treat it as
+            // "no injected headers" rather than failing every snapshot poll
+            injected_headers: client_settings
+                .injected_headers
+                .as_object()
+                .map(|map| {
+                    map.iter()
+                        .filter_map(|(name, value)| {
+                            let value = value.as_str()?;
+                            Some((name.trim().to_ascii_lowercase(), value.to_string()))
+                        })
+                        .filter(|(name, _)| !name.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            request_id_header: client_settings.request_id_header.to_ascii_lowercase(),
+        };
+        config.model_defaults = rolter_core::ModelDefaultsConfig {
+            enabled: model_defaults.enabled,
+            default_model: model_defaults.default_model,
+            temperature: model_defaults.default_temperature,
+            top_p: model_defaults.default_top_p,
+            max_tokens: model_defaults.default_max_tokens.map(|v| v.max(1) as u32),
+        };
         config.adaptive_routing = rolter_core::AdaptiveRoutingConfig {
             enabled: adaptive.enabled,
             latency_weight: adaptive.latency_weight,

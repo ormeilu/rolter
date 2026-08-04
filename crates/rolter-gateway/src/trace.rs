@@ -176,6 +176,32 @@ pub fn outbound_trace_headers(headers: &HeaderMap) -> Vec<(&'static str, String)
         .collect()
 }
 
+/// Trace context plus the operator-configured client headers, ready to hand to
+/// the forwarder (#564).
+///
+/// Trace headers always propagate and always win: an allowlist entry naming one
+/// of them cannot replace the context the gateway resolved, so a misconfigured
+/// list can never break correlation.
+pub fn outbound_headers(headers: &HeaderMap, forwarded: &[String]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = outbound_trace_headers(headers)
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value))
+        .collect();
+    for name in forwarded {
+        if PROPAGATED_TRACE_HEADERS.contains(&name.as_str()) {
+            continue;
+        }
+        if let Some(value) = headers
+            .get(name.as_str())
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+        {
+            out.push((name.clone(), value.to_string()));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +279,38 @@ mod tests {
             ("b3", "33333333333333333333333333333333-4444444444444444-1"),
         ]);
         assert_eq!(inbound_trace_id(&h), "11111111111111111111111111111111");
+    }
+
+    #[test]
+    fn outbound_headers_adds_only_allowlisted_client_headers() {
+        let h = headers(&[
+            ("traceparent", "00-1111-2222-01"),
+            ("x-tenant-id", "acme"),
+            ("x-secret", "nope"),
+            ("x-blank", ""),
+        ]);
+        let forwarded = vec!["x-tenant-id".to_string(), "x-blank".to_string()];
+        let out = outbound_headers(&h, &forwarded);
+
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert!(out.contains(&("traceparent".to_string(), "00-1111-2222-01".to_string())));
+        assert!(out.contains(&("x-tenant-id".to_string(), "acme".to_string())));
+    }
+
+    #[test]
+    fn outbound_headers_never_lets_the_allowlist_duplicate_trace_context() {
+        // listing a trace header must not emit it twice: the second copy would
+        // be a caller-controlled value racing the context the gateway resolved
+        let h = headers(&[("traceparent", "00-1111-2222-01")]);
+        let out = outbound_headers(&h, &["traceparent".to_string()]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].1, "00-1111-2222-01");
+    }
+
+    #[test]
+    fn outbound_headers_with_an_empty_allowlist_is_just_trace_context() {
+        let h = headers(&[("traceparent", "00-1111-2222-01"), ("x-tenant-id", "acme")]);
+        assert_eq!(outbound_headers(&h, &[]).len(), 1);
     }
 
     #[test]
