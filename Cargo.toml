@@ -104,7 +104,7 @@ jsonwebtoken = { version = "10", default-features = false, features = [
   # which mints id tokens with a key generated per test run
   "use_pem",
 ] }
-base64 = "0.22"
+base64 = "0.23"
 
 # postgres persistence (rolter-store `postgres` feature)
 argon2 = "0.5"
