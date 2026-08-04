@@ -76,7 +76,7 @@ pub async fn realtime(
         Err(response) => return response,
     };
     if let Some(key) = &virtual_key {
-        if !rolter_auth::model_allowed(&key.models, &query.model) {
+        if !key.model_permitted(&query.model) {
             return api_error(StatusCode::FORBIDDEN, "model not allowed for this key");
         }
     }
