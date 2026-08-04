@@ -3,6 +3,7 @@
 //! This crate holds the configuration model, domain error type and telemetry
 //! bootstrap that every other rolter crate depends on.
 
+pub mod access_policy;
 pub mod config;
 pub mod currency;
 pub mod error;
@@ -12,6 +13,7 @@ pub mod prompt_templates;
 pub mod slug;
 pub mod telemetry;
 
+pub use access_policy::ModelPolicy;
 pub use config::{
     AdaptiveRoutingConfig, AdvancedModelConfig, ApiKeyConfig, BackpressurePolicy,
     BalancingStrategy, BreakerConfig, BudgetConfig, BudgetPeriod, BudgetScope, CacheConfig,

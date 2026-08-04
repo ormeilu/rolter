@@ -238,6 +238,7 @@ mod tests {
     fn config(session_user: &str, session_scopes: &[&str]) -> GatewayConfig {
         let mut config = GatewayConfig::default();
         config.db_virtual_keys.push(VirtualKeyRecord {
+            access_policy: None,
             key_hash: rolter_auth::hash_key(&config.server.resolve_key_pepper(), "sk-mcp-user"),
             id: "key-1".to_string(),
             org_id: "org-1".to_string(),
