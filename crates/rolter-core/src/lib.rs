@@ -22,7 +22,7 @@ pub use config::{
     ProviderConfig, ProviderGroupConfig, ProviderKind, QueueConfig, RateLimitConfig,
     RealtimeConfig, ResponsesConfig, RetryConfig, RoleProfile, RouteCache, SemanticCacheConfig,
     ServerConfig, Target, TimeoutConfig, TlsConfig, Variant, VirtualKeyConfig, VirtualKeyRecord,
-    MAX_EXPLORATION_RATIO, RESERVED_PATHS,
+    MAX_EXPLORATION_RATIO, MCP_TRANSPORTS, RESERVED_PATHS,
 };
 pub use currency::{CurrencyConfig, CurrencyConverter, StaticRates, DEFAULT_BASE_CURRENCY};
 pub use error::{Error, Result};

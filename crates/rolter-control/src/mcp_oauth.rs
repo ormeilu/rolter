@@ -25,6 +25,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use rolter_core::Error;
+// the one authoritative MCP transport list; the check constraints and the
+// dashboard dropdown match it, pinned by `transports_match_the_schema` (#783)
+use rolter_core::MCP_TRANSPORTS as TRANSPORTS;
 use rolter_store::postgres::models::{
     McpGatewaySettings, McpOAuthGrant, McpOAuthSession, McpServer, McpToolGroup,
 };
@@ -38,10 +41,6 @@ use crate::crud::{
 use crate::rbac::{authorize, holds_admin, Principal, ScopeChain};
 use crate::rbac_matrix::{cap, Requirement};
 use crate::ControlState;
-
-/// MCP transports a registered server may speak. Mirrors the set the tool-call
-/// log already accepts, so both screens describe the same world.
-const TRANSPORTS: &[&str] = &["stdio", "sse", "streamable_http", "websocket"];
 
 pub(crate) fn router() -> Router<ControlState> {
     Router::new()
@@ -874,13 +873,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn transports_match_the_tool_call_log() {
-        // both screens must describe the same set, or a server registered here
-        // could never be attributed to its logged tool calls
-        assert_eq!(TRANSPORTS.len(), 4);
-        for transport in ["stdio", "sse", "streamable_http", "websocket"] {
-            assert!(TRANSPORTS.contains(&transport));
+    fn transports_match_the_schema() {
+        // the allowlist, the two check constraints and the dashboard dropdown
+        // describe one set. this reads the migrations rather than restating
+        // the values, so widening one side without the other fails here (#783)
+        let latest = include_str!("../../rolter-store/migrations/0059_mcp_transport_allowlist.sql");
+        let settings = include_str!("../../rolter-store/migrations/0055_mcp_management.sql");
+
+        // the SQL tuple each constraint checks against, e.g. "'sse', 'websocket'"
+        fn tuple_after(source: &str, needle: &str) -> String {
+            let at = source.find(needle).expect("constraint present");
+            let rest = &source[at + needle.len()..];
+            let open = rest.find('(').expect("open paren");
+            let close = rest.find(')').expect("close paren");
+            rest[open + 1..close].to_string()
         }
+
+        for tuple in [
+            tuple_after(latest, "check (transport in"),
+            tuple_after(settings, "check (default_transport in"),
+        ] {
+            let listed: Vec<String> = tuple
+                .split(',')
+                .map(|value| value.trim().trim_matches('\'').to_string())
+                .collect();
+            let expected: Vec<String> = TRANSPORTS.iter().map(|t| t.to_string()).collect();
+            assert_eq!(listed, expected, "constraint disagrees with TRANSPORTS");
+        }
+
+        // stdio is deliberately gone: a hosted control plane cannot dial a
+        // local subprocess, and the HTTP proxy path never served one
+        assert!(!TRANSPORTS.contains(&"stdio"));
     }
 
     #[test]

@@ -18,7 +18,7 @@ use crate::rbac::{authorize_superadmin, Principal};
 use crate::rbac_matrix::superadmin_cap;
 use crate::ControlState;
 
-const MCP_TRANSPORTS: &[&str] = &["stdio", "sse", "streamable_http", "websocket"];
+use rolter_core::MCP_TRANSPORTS;
 const MCP_STATUSES: &[&str] = &[
     "success",
     "timeout",
