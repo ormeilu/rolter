@@ -218,7 +218,7 @@ pub fn adopt_inbound(span: &tracing::Span, carrier: &TraceCarrier) {
         }
         use tracing_opentelemetry::OpenTelemetrySpanExt as _;
         let parent = opentelemetry::global::get_text_map_propagator(|p| p.extract(carrier));
-        // an unparented span is better than a failed request: a malformed
+        // a span with no parent is better than a failed request: a malformed
         // inbound context is dropped, never propagated
         let _ = span.set_parent(parent);
     }
