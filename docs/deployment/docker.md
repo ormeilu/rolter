@@ -14,7 +14,14 @@ docker compose -f docker/docker-compose.yml logs -f gateway
 - Control + UI: http://localhost:4001
 - Postgres `5432`, Redis `6379`, ClickHouse `8123/9000`
 
-DB schemas auto-apply on first start (`migrations/` → Postgres initdb, `clickhouse/` → ClickHouse initdb).
+DB schemas auto-apply on first start, by two different routes. The Postgres
+schema is owned by `sqlx::migrate!`, which `rolter-control` and `rolter-seed`
+both run on startup; Compose deliberately does *not* mount `migrations/` into
+the container's `docker-entrypoint-initdb.d`, because letting Postgres apply
+those files itself would bypass sqlx's `_sqlx_migrations` bookkeeping and make
+the next startup replay every migration against a populated database (#499).
+ClickHouse has no such runner, so `clickhouse/` *is* mounted into its initdb
+directory and is that schema's only provisioning path.
 
 ## Image
 
