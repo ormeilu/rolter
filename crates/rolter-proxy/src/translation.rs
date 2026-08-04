@@ -2241,7 +2241,12 @@ fn sse(event: Option<&str>, value: &Value) -> Bytes {
         out.push(b'\n');
     }
     out.extend_from_slice(b"data: ");
+    // a failed serialization can have written a partial value first, so rewind
+    // to the frame boundary before the fallback — otherwise the `{}` would be
+    // appended to a half-written object and the frame would not parse
+    let data_start = out.len();
     if serde_json::to_writer(&mut out, value).is_err() {
+        out.truncate(data_start);
         out.extend_from_slice(b"{}");
     }
     out.extend_from_slice(b"\n\n");
