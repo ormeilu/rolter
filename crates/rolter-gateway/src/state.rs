@@ -59,6 +59,11 @@ pub struct KeyMeta {
     /// is attributed by tenancy alone (#539)
     pub business_unit_id: String,
     pub customer_id: String,
+    /// merged model/route policy of the access profiles this key's owner holds,
+    /// resolved by the control plane when the snapshot was built. `None` is
+    /// unrestricted, which is every key on a deployment with no access profiles
+    /// and every key with no owner (#791)
+    pub access_policy: Option<rolter_core::ModelPolicy>,
 }
 
 impl KeyMeta {
@@ -69,6 +74,32 @@ impl KeyMeta {
 
     pub fn provider_allowed(&self, provider: &str) -> bool {
         self.providers.is_empty() || self.providers.iter().any(|name| name == provider)
+    }
+
+    /// Whether this key may address `model`, by both gates it has to clear: the
+    /// key's own allow-list and the access-profile policy its owner holds.
+    ///
+    /// The two are separate grants and both must permit. The key list is
+    /// what the key's creator chose to scope this credential to; the policy is
+    /// what an operator decided the *person* may reach at all. Neither can widen
+    /// the other, so a key naming a model its owner is denied stays denied.
+    pub fn model_permitted(&self, model: &str) -> bool {
+        rolter_auth::model_allowed(&self.models, model)
+            && self
+                .access_policy
+                .as_ref()
+                .is_none_or(|policy| policy.permits_model(model))
+    }
+
+    /// Whether this key may address the configured route named `route`.
+    ///
+    /// Routes are a separate axis from models: an operator restricts a route to
+    /// gate a whole named entry point, independently of the upstream model ids
+    /// that entry point happens to fan out to.
+    pub fn route_permitted(&self, route: &str) -> bool {
+        self.access_policy
+            .as_ref()
+            .is_none_or(|policy| policy.permits_route(route))
     }
 }
 
@@ -348,6 +379,7 @@ impl Snapshot {
                     cache_override: k.cache,
                     business_unit_id: k.business_unit_id.clone(),
                     customer_id: k.customer_id.clone(),
+                    access_policy: k.access_policy.clone(),
                 },
             );
         }

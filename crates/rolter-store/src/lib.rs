@@ -360,6 +360,7 @@ mod tests {
             cache: None,
             business_unit_id: String::new(),
             customer_id: String::new(),
+            access_policy: None,
         }
     }
 

@@ -133,6 +133,7 @@ async fn mcp_proxy_binds_virtual_key_owner_to_server_scopes_and_bearer() {
     let upstream = serve(Router::new().route("/{*path}", any(mcp_upstream))).await;
     let mut config = GatewayConfig::default();
     config.db_virtual_keys.push(VirtualKeyRecord {
+        access_policy: None,
         key_hash: rolter_auth::hash_key(&config.server.resolve_key_pepper(), "sk-user-owned"),
         id: "key-1".to_string(),
         org_id: "org-1".to_string(),
