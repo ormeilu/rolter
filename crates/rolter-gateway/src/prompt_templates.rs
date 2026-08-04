@@ -382,6 +382,41 @@ mod tests {
         assert_eq!(msgs[1]["content"], "(follow policy)");
     }
 
+    /// The system fold writes prepend, then the caller's own `system`, then
+    /// append, into one buffer. That ordering and its separators are the whole
+    /// contract, so pin all three positions at once — the existing test above
+    /// only exercises prepend against an existing directive.
+    #[test]
+    fn anthropic_system_fold_orders_prepend_existing_then_append() {
+        let g = engine(vec![PromptTemplate {
+            id: "both".to_string(),
+            version: 1,
+            routes: vec![],
+            scopes: vec![],
+            variables: vec![],
+            decorators: vec![
+                dec(DecoratorRole::System, DecoratorPosition::Prepend, "before"),
+                dec(DecoratorRole::System, DecoratorPosition::Append, "after"),
+            ],
+        }]);
+
+        let mut body = json!({
+            "model": "claude",
+            "system": "middle",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        apply(&g, "claude", "/v1/messages", &mut body).unwrap();
+        assert_eq!(body["system"], "before\n\nmiddle\n\nafter");
+
+        // with no caller directive the separator must not be doubled or dangle
+        let mut bare = json!({
+            "model": "claude",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        apply(&g, "claude", "/v1/messages", &mut bare).unwrap();
+        assert_eq!(bare["system"], "before\n\nafter");
+    }
+
     #[test]
     fn injected_value_cannot_break_message_structure() {
         let g = engine(vec![PromptTemplate {

@@ -43,3 +43,7 @@ artifacts/engines/
 
 # macOS Finder metadata
 .DS_Store
+
+# merge/patch leftovers — never part of a change (#787 committed three)
+*.orig
+*.rej
