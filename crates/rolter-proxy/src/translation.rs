@@ -2234,11 +2234,18 @@ fn drain_separator(buf: &mut Vec<u8>) {
 }
 
 fn sse(event: Option<&str>, value: &Value) -> Bytes {
-    let data = serde_json::to_string(value).unwrap_or_else(|_| "{}".into());
-    Bytes::from(match event {
-        Some(event) => format!("event: {event}\ndata: {data}\n\n"),
-        None => format!("data: {data}\n\n"),
-    })
+    let mut out = Vec::with_capacity(512);
+    if let Some(e) = event {
+        out.extend_from_slice(b"event: ");
+        out.extend_from_slice(e.as_bytes());
+        out.push(b'\n');
+    }
+    out.extend_from_slice(b"data: ");
+    if serde_json::to_writer(&mut out, value).is_err() {
+        out.extend_from_slice(b"{}");
+    }
+    out.extend_from_slice(b"\n\n");
+    Bytes::from(out)
 }
 
 fn openai_chunk(
