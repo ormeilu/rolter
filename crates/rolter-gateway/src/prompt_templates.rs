@@ -192,37 +192,67 @@ fn inject_anthropic(body: &mut Value, rendered: &[RenderedMessage]) {
     };
 
     // fold system decorators into the top-level `system` field
-    let system_prepend: Vec<&str> = rendered
+    let has_system_prepend = rendered
         .iter()
-        .filter(|r| r.role == DecoratorRole::System && r.position == DecoratorPosition::Prepend)
-        .map(|r| r.content.as_str())
-        .collect();
-    let system_append: Vec<&str> = rendered
+        .any(|r| r.role == DecoratorRole::System && r.position == DecoratorPosition::Prepend);
+    let has_system_append = rendered
         .iter()
-        .filter(|r| r.role == DecoratorRole::System && r.position == DecoratorPosition::Append)
-        .map(|r| r.content.as_str())
-        .collect();
-    if !system_prepend.is_empty() || !system_append.is_empty() {
+        .any(|r| r.role == DecoratorRole::System && r.position == DecoratorPosition::Append);
+
+    if has_system_prepend || has_system_append {
         let existing = object
             .get("system")
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        let mut parts: Vec<&str> = Vec::new();
-        parts.extend(system_prepend.iter().copied());
-        if !existing.is_empty() {
-            parts.push(existing.as_str());
+            .unwrap_or_default();
+
+        let mut capacity = existing.len();
+        let mut parts = 0;
+        for r in rendered.iter().filter(|r| r.role == DecoratorRole::System) {
+            capacity += r.content.len();
+            parts += 1;
         }
-        parts.extend(system_append.iter().copied());
-        object.insert("system".to_string(), Value::String(parts.join("\n\n")));
+        if !existing.is_empty() {
+            parts += 1;
+        }
+        if parts > 1 {
+            capacity += (parts - 1) * 2;
+        }
+
+        let mut new_system = String::with_capacity(capacity);
+        let mut first = true;
+        let mut push = |s: &str| {
+            if !first {
+                new_system.push_str("\n\n");
+            }
+            new_system.push_str(s);
+            first = false;
+        };
+
+        for r in rendered
+            .iter()
+            .filter(|r| r.role == DecoratorRole::System && r.position == DecoratorPosition::Prepend)
+        {
+            push(&r.content);
+        }
+        if !existing.is_empty() {
+            push(existing);
+        }
+        for r in rendered
+            .iter()
+            .filter(|r| r.role == DecoratorRole::System && r.position == DecoratorPosition::Append)
+        {
+            push(&r.content);
+        }
+
+        object.insert("system".to_string(), Value::String(new_system));
     }
 
     // non-system decorators go into the `messages` array
-    let non_system: Vec<&RenderedMessage> = rendered
+    let non_system_count = rendered
         .iter()
         .filter(|r| r.role != DecoratorRole::System)
-        .collect();
-    if non_system.is_empty() {
+        .count();
+    if non_system_count == 0 {
         return;
     }
     let existing = match object.remove("messages") {
@@ -235,17 +265,17 @@ fn inject_anthropic(body: &mut Value, rendered: &[RenderedMessage]) {
             Vec::new()
         }
     };
-    let mut messages = Vec::with_capacity(existing.len() + non_system.len());
-    for r in non_system
+    let mut messages = Vec::with_capacity(existing.len() + non_system_count);
+    for r in rendered
         .iter()
-        .filter(|r| r.position == DecoratorPosition::Prepend)
+        .filter(|r| r.role != DecoratorRole::System && r.position == DecoratorPosition::Prepend)
     {
         messages.push(message(r.role, &r.content));
     }
     messages.extend(existing);
-    for r in non_system
+    for r in rendered
         .iter()
-        .filter(|r| r.position == DecoratorPosition::Append)
+        .filter(|r| r.role != DecoratorRole::System && r.position == DecoratorPosition::Append)
     {
         messages.push(message(r.role, &r.content));
     }
@@ -350,6 +380,41 @@ mod tests {
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[1]["content"], "(follow policy)");
+    }
+
+    /// The system fold writes prepend, then the caller's own `system`, then
+    /// append, into one buffer. That ordering and its separators are the whole
+    /// contract, so pin all three positions at once — the existing test above
+    /// only exercises prepend against an existing directive.
+    #[test]
+    fn anthropic_system_fold_orders_prepend_existing_then_append() {
+        let g = engine(vec![PromptTemplate {
+            id: "both".to_string(),
+            version: 1,
+            routes: vec![],
+            scopes: vec![],
+            variables: vec![],
+            decorators: vec![
+                dec(DecoratorRole::System, DecoratorPosition::Prepend, "before"),
+                dec(DecoratorRole::System, DecoratorPosition::Append, "after"),
+            ],
+        }]);
+
+        let mut body = json!({
+            "model": "claude",
+            "system": "middle",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        apply(&g, "claude", "/v1/messages", &mut body).unwrap();
+        assert_eq!(body["system"], "before\n\nmiddle\n\nafter");
+
+        // with no caller directive the separator must not be doubled or dangle
+        let mut bare = json!({
+            "model": "claude",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        apply(&g, "claude", "/v1/messages", &mut bare).unwrap();
+        assert_eq!(bare["system"], "before\n\nafter");
     }
 
     #[test]
