@@ -60,6 +60,8 @@
               "configuration/feature-flags",
               "configuration/plugins",
               "configuration/compatibility",
+              "configuration/client-settings",
+              "configuration/model-settings",
               "configuration/gemini-interactions"
             ]
           },

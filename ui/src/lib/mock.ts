@@ -1,6 +1,7 @@
 // design-prototype mock data for the remaining screens whose backend DTOs do
 // not exist yet. each consumer labels itself as preview data; MCP Catalog was
-// removed from this file when the real registry API landed.
+// removed when the real registry API landed, and the feature flags when the
+// persisted, hot-reloaded ones did (#564).
 
 export interface RbacResource {
   key: string;
@@ -48,20 +49,4 @@ export const RBAC_ROLES: RbacRole[] = [
     desc: "Read-only access to dashboards, logs, and config.",
     caps: { virtual_keys: "v", providers: "v", budgets: "v", teams: "v", logs: "v", settings: "", rbac: "" },
   },
-];
-
-export interface FeatureFlag {
-  key: string;
-  label: string;
-  desc: string;
-  on: boolean;
-}
-
-export const FEATURE_FLAGS: FeatureFlag[] = [
-  { key: "cache", label: "Response cache", desc: "Direct + semantic response caching", on: true },
-  { key: "cache_aware", label: "Cache-aware routing", desc: "Prefer targets with a warm KV cache", on: true },
-  { key: "circuit", label: "Circuit breaker", desc: "Fail over when an endpoint degrades", on: true },
-  { key: "health", label: "Active health checks", desc: "Probe upstreams on an interval", on: true },
-  { key: "complexity", label: "Complexity router", desc: "Route by prompt complexity tier", on: false },
-  { key: "guardrails", label: "Guardrails", desc: "Input/output safety checks", on: false },
 ];

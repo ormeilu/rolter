@@ -348,6 +348,28 @@ pub struct CompatibilityPolicy {
     pub updated_at: DateTime<Utc>,
 }
 
+/// singleton client-facing settings projected into snapshots: what the gateway
+/// does with headers on the upstream leg, plus the advertised base URL (#564)
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ClientSettings {
+    pub public_base_url: Option<String>,
+    pub forwarded_headers: Vec<String>,
+    pub injected_headers: serde_json::Value,
+    pub request_id_header: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// singleton inference-parameter defaults projected into snapshots (#564)
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ModelDefaults {
+    pub enabled: bool,
+    pub default_model: Option<String>,
+    pub default_temperature: Option<f64>,
+    pub default_top_p: Option<f64>,
+    pub default_max_tokens: Option<i32>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// an OIDC identity provider registered for one org.
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct SsoProvider {

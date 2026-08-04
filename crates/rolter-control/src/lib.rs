@@ -22,6 +22,8 @@ mod auth;
 #[cfg(feature = "postgres")]
 mod auth_policy;
 #[cfg(feature = "postgres")]
+mod client_settings;
+#[cfg(feature = "postgres")]
 mod cluster;
 #[cfg(feature = "postgres")]
 mod compatibility_policy;
@@ -44,6 +46,8 @@ mod mcp_oauth;
 mod mcp_oauth_flow;
 #[cfg(feature = "postgres")]
 mod me;
+#[cfg(feature = "postgres")]
+mod model_defaults;
 #[cfg(feature = "postgres")]
 mod plugins;
 mod proxy;
@@ -411,6 +415,8 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(logging_settings::router())
             .merge(runtime_policy::router())
             .merge(compatibility_policy::router())
+            .merge(client_settings::router())
+            .merge(model_defaults::router())
             .merge(adaptive_policy::router())
             .merge(adaptive_telemetry::router())
             .merge(rbac_matrix::router())

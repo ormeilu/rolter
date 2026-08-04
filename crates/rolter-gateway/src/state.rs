@@ -701,6 +701,8 @@ impl AppState {
             egress.clone(),
         ));
         forwarder.set_compatibility(&config.compatibility);
+        forwarder.set_client_policy(&config.client);
+        forwarder.set_model_defaults(&config.model_defaults);
         let provider_queues = ProviderQueues::new(forwarder.clone(), metrics.clone());
         let cache_telemetry = crate::cache_telemetry::CacheTelemetry::new(metrics.clone());
         cache_telemetry.configure(&config.providers);
@@ -760,6 +762,9 @@ impl AppState {
         // cross-dialect translation behavior is hot-swappable: the next request
         // reads the new policy, in-flight ones keep the one they started with
         self.forwarder.set_compatibility(&config.compatibility);
+        // header policy and inference defaults are hot-swappable the same way
+        self.forwarder.set_client_policy(&config.client);
+        self.forwarder.set_model_defaults(&config.model_defaults);
         // the resolver reads this on every lookup, so a policy change takes
         // effect on the next connect without rebuilding a single client
         self.egress.store(Arc::new(config.egress.clone()));

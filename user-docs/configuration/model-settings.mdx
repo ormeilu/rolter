@@ -1,0 +1,73 @@
+---
+title: "Model Settings: Deployment-Wide Inference Defaults"
+sidebarTitle: "Model Settings"
+description: "Sampling parameters and a fallback model Rolter fills in when a client omits them — never overwriting a value the caller sent."
+---
+
+Model settings are the inference parameters Rolter supplies when a request does not. They exist so a fleet of callers you do not control — a notebook, a third-party SDK, someone's shell alias — still lands on a sane temperature and a bounded completion length.
+
+Edit them from **Settings → Model Settings** in the dashboard, or through the management API.
+
+---
+
+## Defaults only ever fill a gap
+
+A parameter the client sent is never overwritten. That includes an explicit `null`, which is a deliberate "use the provider's own default" and is left alone.
+
+This is what makes the feature safe to turn on mid-flight: enabling it cannot change the meaning of a request that was already explicit. It can only change requests that said nothing.
+
+The whole feature is off by default. With `enabled` false — or with every field empty — request bodies reach the provider untouched.
+
+---
+
+## Sampling
+
+| Field | Range | Notes |
+| --- | --- | --- |
+| Temperature | 0 – 2 | |
+| Top-p | 0 – 1 | |
+| Max tokens | 1 – 1000000 | Completion-length cap |
+
+These apply to chat-shaped traffic only: `/v1/chat/completions`, `/v1/messages` and `/v1/responses`. Embeddings, audio and image endpoints take no sampling parameters and are left alone.
+
+Rolter writes the key the **upstream** dialect actually reads, after any translation — `max_tokens` for OpenAI chat and Anthropic Messages, `max_output_tokens` for the Responses API. A request that already set `max_completion_tokens` on OpenAI chat has stated its cap, so no default is added.
+
+Gemini nests these parameters under `generationConfig` and does not take defaults from this screen.
+
+---
+
+## Default model
+
+Used when a request arrives without a `model` field, or with an empty one. It can name a routed model or a `group-slug/model` address.
+
+Leave it empty to keep rejecting such requests. That is usually what you want: silently picking a model for a caller who did not name one makes their bill and their latency depend on a setting they cannot see.
+
+---
+
+## What lives elsewhere
+
+Upstream timeouts and the retry budget are deployment-wide and are configured under **Settings → Performance Tuning** — see [Performance tuning](/reliability/performance-tuning). They are not duplicated here, so there is one source of truth for each.
+
+---
+
+## API
+
+Both endpoints are **superadmin only**, and every update is audited.
+
+```bash
+curl -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  https://control.example.com/api/v1/model-defaults
+
+curl -X PUT -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "enabled": true,
+        "default_model": "gpt-4o-mini",
+        "default_temperature": 0.7,
+        "default_top_p": null,
+        "default_max_tokens": 2048
+      }' \
+  https://control.example.com/api/v1/model-defaults
+```
+
+Any field may be `null`, meaning "no default for this parameter".

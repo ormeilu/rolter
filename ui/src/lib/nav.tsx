@@ -174,7 +174,7 @@ export const META: Record<string, [string, string]> = {
   "complexity-router": ["Complexity Router", "Route by prompt complexity tier to balance cost and quality."],
   "circuit-breaker": ["Circuit Breaker", "Automatic failover when a primary endpoint degrades."],
   "pricing-overrides": ["Pricing Overrides", "Scoped per-model pricing overrides for accurate cost tracking."],
-  "model-settings": ["Model Settings", "Defaults for parameters, timeouts, and retries."],
+  "model-settings": ["Model Settings", "Deployment-wide defaults for sampling parameters and the model."],
   mcp: ["MCP Gateway", "Expose and govern Model Context Protocol tool servers."],
   "mcp-catalog": ["MCP Catalog", "Registered MCP tool servers and their exposed tools."],
   "mcp-library": ["MCP Library", "Install curated MCP servers in one click."],
@@ -207,7 +207,7 @@ export const META: Record<string, [string, string]> = {
   "prompt-repo": ["Prompt Repository", "Version-controlled prompts with variables and tests."],
   "skills-repo": ["Skills Repository", "Reusable agent skills shared across your org."],
   settings: ["Settings", "Client, caching, security, API keys, and feature flags."],
-  "client-settings": ["Client Settings", "Base URL, headers, and client defaults."],
+  "client-settings": ["Client Settings", "Base URL, forwarded and injected headers, request correlation."],
   compatibility: ["Compatibility", "OpenAI/Anthropic-compatible conversion settings."],
   caching: ["Caching", "Direct and semantic response caching."],
   security: ["Security", "Configure security and access-control settings for the gateway."],
@@ -263,6 +263,8 @@ export const BUILT = new Set([
   "user-provisioning",
   "prompt-repo",
   "skills-repo",
+  "client-settings",
+  "model-settings",
 ]);
 
 // every navigable leaf key (parents with children are toggles, not screens)

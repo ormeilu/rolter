@@ -17,14 +17,14 @@ pub use access_policy::ModelPolicy;
 pub use config::{
     AdaptiveRoutingConfig, AdvancedModelConfig, ApiKeyConfig, BackpressurePolicy,
     BalancingStrategy, BreakerConfig, BudgetConfig, BudgetPeriod, BudgetScope, CacheConfig,
-    CompatibilityConfig, CooldownConfig, EgressPolicy, FeatureFlagsConfig, GatewayConfig,
-    GroupMember, HealthConfig, KvEventsConfig, LmCacheConfig, LoggingConfig, McpOAuthSessionConfig,
-    McpServerConfig, MetricsScrapeConfig, ModelLimits, ModelPriceConfig, ModelRoute,
-    ModelUsagePricing, ModelVisibility, OverrideMode, ParamPolicy, PayloadCaptureConfig,
-    ProviderConfig, ProviderGroupConfig, ProviderKind, QueueConfig, RateLimitConfig,
-    RealtimeConfig, ResponsesConfig, RetryConfig, RoleProfile, RouteCache, SemanticCacheConfig,
-    ServerConfig, Target, TimeoutConfig, TlsConfig, Variant, VirtualKeyConfig, VirtualKeyRecord,
-    MAX_EXPLORATION_RATIO, MCP_TRANSPORTS, RESERVED_PATHS,
+    ClientConfig, CompatibilityConfig, CooldownConfig, EgressPolicy, FeatureFlagsConfig,
+    GatewayConfig, GroupMember, HealthConfig, KvEventsConfig, LmCacheConfig, LoggingConfig,
+    McpOAuthSessionConfig, McpServerConfig, MetricsScrapeConfig, ModelDefaultsConfig, ModelLimits,
+    ModelPriceConfig, ModelRoute, ModelUsagePricing, ModelVisibility, OverrideMode, ParamPolicy,
+    PayloadCaptureConfig, ProviderConfig, ProviderGroupConfig, ProviderKind, QueueConfig,
+    RateLimitConfig, RealtimeConfig, ResponsesConfig, RetryConfig, RoleProfile, RouteCache,
+    SemanticCacheConfig, ServerConfig, Target, TimeoutConfig, TlsConfig, Variant, VirtualKeyConfig,
+    VirtualKeyRecord, MAX_EXPLORATION_RATIO, MCP_TRANSPORTS, RESERVED_PATHS,
 };
 pub use currency::{CurrencyConfig, CurrencyConverter, StaticRates, DEFAULT_BASE_CURRENCY};
 pub use error::{Error, Result};

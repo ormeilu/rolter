@@ -10,7 +10,9 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures_util::Stream;
-use rolter_core::{CompatibilityConfig, Error, ProviderKind, Result, RoleProfile};
+use rolter_core::{
+    CompatibilityConfig, Error, ModelDefaultsConfig, ProviderKind, Result, RoleProfile,
+};
 use serde_json::{json, Map, Value};
 
 /// Public wire dialect presented by a client or accepted by an upstream.
@@ -138,6 +140,69 @@ fn apply_max_tokens_default(value: &mut Value, upstream: Protocol, default_max_t
     }
 }
 
+/// The upstream dialect's key for a completion-length cap. Gemini nests it
+/// inside `generationConfig` and `Passthrough` covers non-chat endpoints
+/// (embeddings, audio, images), so neither takes a default here.
+fn max_tokens_key(upstream: Protocol) -> Option<&'static str> {
+    match upstream {
+        Protocol::OpenAiChat | Protocol::AnthropicMessages => Some("max_tokens"),
+        Protocol::OpenAiResponses => Some("max_output_tokens"),
+        Protocol::GeminiGenerate | Protocol::GeminiInteractions | Protocol::Passthrough => None,
+    }
+}
+
+/// Fill in the deployment's inference defaults for keys the request left out
+/// (#564).
+///
+/// Runs in the *upstream* dialect, after any translation, so the key names
+/// match what the provider actually reads. Every write is gated on the key
+/// being absent: an explicit client value always wins, including an explicit
+/// `null`, which is a deliberate "use the provider's own default".
+pub(crate) fn apply_model_defaults(
+    value: &mut Value,
+    upstream: Protocol,
+    defaults: &ModelDefaultsConfig,
+) {
+    let Some(max_tokens_key) = max_tokens_key(upstream) else {
+        return;
+    };
+    if !defaults.is_active() {
+        return;
+    }
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    // an empty `model` is as good as absent — some clients send one rather
+    // than omitting the field
+    if let Some(model) = &defaults.default_model {
+        let missing = match obj.get("model") {
+            None => true,
+            Some(Value::String(existing)) => existing.trim().is_empty(),
+            Some(_) => false,
+        };
+        if missing {
+            obj.insert("model".into(), json!(model));
+        }
+    }
+    if let Some(temperature) = defaults.temperature {
+        obj.entry("temperature")
+            .or_insert_with(|| json!(temperature));
+    }
+    if let Some(top_p) = defaults.top_p {
+        obj.entry("top_p").or_insert_with(|| json!(top_p));
+    }
+    if let Some(max_tokens) = defaults.max_tokens {
+        // openai chat accepts either spelling; a request that set the newer one
+        // has already said what it wants
+        let already_capped =
+            upstream == Protocol::OpenAiChat && obj.contains_key("max_completion_tokens");
+        if !already_capped {
+            obj.entry(max_tokens_key)
+                .or_insert_with(|| json!(max_tokens));
+        }
+    }
+}
+
 fn registered_pair(source: Protocol, target: Protocol) -> Option<&'static TranslationPair> {
     TRANSLATION_PAIRS
         .iter()
@@ -260,6 +325,23 @@ impl TranslationPlan {
         serde_json::to_vec(&value).map(Bytes::from).map_err(|err| {
             Error::Config(format!("role_capability: failed to encode request: {err}"))
         })
+    }
+
+    /// Fill in the deployment's inference defaults on an already-translated
+    /// body.
+    ///
+    /// Returns the body untouched — without parsing it — whenever the feature
+    /// is off or the upstream dialect takes no defaults, so a deployment that
+    /// never enables this pays nothing on the hot path.
+    pub fn apply_model_defaults(self, body: Bytes, defaults: &ModelDefaultsConfig) -> Bytes {
+        if !defaults.is_active() || max_tokens_key(self.upstream).is_none() {
+            return body;
+        }
+        let Ok(mut value) = serde_json::from_slice::<Value>(&body) else {
+            return body;
+        };
+        apply_model_defaults(&mut value, self.upstream, defaults);
+        serde_json::to_vec(&value).map(Bytes::from).unwrap_or(body)
     }
 
     /// Translate a complete JSON response or a fully buffered SSE response.
@@ -2336,6 +2418,100 @@ mod tests {
         let out = plan.translate_request(body).unwrap();
         let v: Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(v["max_tokens"], 1024);
+    }
+
+    fn defaults() -> ModelDefaultsConfig {
+        ModelDefaultsConfig {
+            enabled: true,
+            default_model: Some("gpt-4o-mini".to_string()),
+            temperature: Some(0.5),
+            top_p: Some(0.8),
+            max_tokens: Some(256),
+        }
+    }
+
+    #[test]
+    fn model_defaults_fill_only_the_keys_the_caller_left_out() {
+        let plan = plan(Protocol::OpenAiChat, Protocol::OpenAiChat);
+        let body = Bytes::from_static(br#"{"messages":[{"role":"user","content":"hi"}]}"#);
+        let out = plan.apply_model_defaults(body, &defaults());
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["model"], "gpt-4o-mini");
+        assert_eq!(v["temperature"], 0.5);
+        assert_eq!(v["top_p"], 0.8);
+        assert_eq!(v["max_tokens"], 256);
+
+        // an explicit value always wins, including an explicit null
+        let explicit = Bytes::from_static(
+            br#"{"model":"claude","temperature":0,"top_p":null,"max_tokens":9,"messages":[]}"#,
+        );
+        let out = plan.apply_model_defaults(explicit, &defaults());
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["model"], "claude");
+        assert_eq!(v["temperature"], 0);
+        assert!(v["top_p"].is_null());
+        assert_eq!(v["max_tokens"], 9);
+    }
+
+    #[test]
+    fn model_defaults_use_the_upstream_dialects_token_key() {
+        let responses = plan(Protocol::OpenAiResponses, Protocol::OpenAiResponses);
+        let out =
+            responses.apply_model_defaults(Bytes::from_static(br#"{"input":"hi"}"#), &defaults());
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["max_output_tokens"], 256);
+        assert!(v.get("max_tokens").is_none());
+
+        // openai chat accepts either spelling; the newer one is already a cap
+        let chat = plan(Protocol::OpenAiChat, Protocol::OpenAiChat);
+        let out = chat.apply_model_defaults(
+            Bytes::from_static(br#"{"max_completion_tokens":16,"messages":[]}"#),
+            &defaults(),
+        );
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert!(v.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn model_defaults_leave_non_chat_and_disabled_bodies_untouched() {
+        let body = Bytes::from_static(br#"{"input":"hi"}"#);
+
+        // embeddings, audio and images resolve to Passthrough and take no
+        // sampling parameters
+        let passthrough = plan(Protocol::Passthrough, Protocol::Passthrough);
+        assert_eq!(
+            passthrough.apply_model_defaults(body.clone(), &defaults()),
+            body
+        );
+
+        // gemini nests these under generationConfig, so it opts out too
+        let gemini = plan(Protocol::OpenAiChat, Protocol::GeminiGenerate);
+        assert_eq!(gemini.apply_model_defaults(body.clone(), &defaults()), body);
+
+        let chat = plan(Protocol::OpenAiChat, Protocol::OpenAiChat);
+        let off = ModelDefaultsConfig {
+            enabled: false,
+            ..defaults()
+        };
+        assert_eq!(chat.apply_model_defaults(body.clone(), &off), body);
+
+        // enabled but with nothing set is also a no-op
+        let empty = ModelDefaultsConfig {
+            enabled: true,
+            ..ModelDefaultsConfig::default()
+        };
+        assert_eq!(chat.apply_model_defaults(body.clone(), &empty), body);
+    }
+
+    #[test]
+    fn a_blank_model_string_counts_as_absent() {
+        let chat = plan(Protocol::OpenAiChat, Protocol::OpenAiChat);
+        let out = chat.apply_model_defaults(
+            Bytes::from_static(br#"{"model":"  ","messages":[]}"#),
+            &defaults(),
+        );
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["model"], "gpt-4o-mini");
     }
 
     #[test]

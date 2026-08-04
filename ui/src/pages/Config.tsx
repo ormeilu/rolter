@@ -1,21 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
-import { Check, ShieldCheck } from "lucide-react";
-import * as React from "react";
+import { ArrowRight, Check, ShieldCheck } from "lucide-react";
+import { Link } from "react-router-dom";
 
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import { fetchConfig } from "@/lib/api";
-import { FEATURE_FLAGS, type FeatureFlag } from "@/lib/mock";
 
 const SECTION_TH =
   "border-b border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] px-3.5 py-2 text-[0.6875rem] uppercase tracking-[0.07em] text-[color:var(--text-subtle)]";
 
-// effective config from the design prototype: structured read-only provider /
-// route tables on the left, feature-flag cards on the right
+// effective config: structured read-only provider / route tables. feature flags
+// used to render here from a mock; they are persisted and hot-reloaded now, so
+// this screen points at the real one rather than shipping a second, fake copy
+// of the same switches (#564)
 export default function Config() {
   const config = useQuery({ queryKey: ["config"], queryFn: fetchConfig });
-  const [flags, setFlags] = React.useState<FeatureFlag[]>(FEATURE_FLAGS);
 
   const cfg = config.data;
   const summary = cfg
@@ -96,32 +94,43 @@ export default function Config() {
       </div>
 
       <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-base font-medium">Feature flags</h2>
-          <Badge tone="warning" className="font-mono text-[10px] uppercase">
-            preview
-          </Badge>
-        </div>
-        <div className="flex flex-col gap-2.5">
-          {flags.map((f) => (
-            <div
-              key={f.key}
-              className="flex items-center gap-3 rounded-[10px] border border-[color:var(--border-default)] bg-card px-4 py-3.5"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="text-sm">{f.label}</div>
-                <div className="text-xs text-muted-foreground">{f.desc}</div>
-              </div>
-              <Switch
-                checked={f.on}
-                onCheckedChange={(on) =>
-                  setFlags((fs) => fs.map((x) => (x.key === f.key ? { ...x, on } : x)))
-                }
-              />
-            </div>
-          ))}
-        </div>
+        <h2 className="text-base font-medium">Related settings</h2>
+        <RelatedLink
+          to="/feature-flags"
+          title="Feature flags"
+          desc="Toggle experimental gateway features. Persisted and hot-reloaded — no restart."
+        />
+        <RelatedLink
+          to="/client-settings"
+          title="Client settings"
+          desc="Base URL, forwarded and injected headers, request correlation."
+        />
+        <RelatedLink
+          to="/model-settings"
+          title="Model settings"
+          desc="Deployment-wide defaults for sampling parameters and the model."
+        />
+        <RelatedLink
+          to="/performance"
+          title="Performance tuning"
+          desc="Upstream retries, timeouts, and the bounded admission queue."
+        />
       </div>
     </div>
+  );
+}
+
+function RelatedLink({ to, title, desc }: { to: string; title: string; desc: string }) {
+  return (
+    <Link
+      to={to}
+      className="group flex items-center gap-3 rounded-[10px] border border-[color:var(--border-default)] bg-card px-4 py-3.5 transition-colors hover:border-[color:var(--red-folk)]"
+    >
+      <div className="min-w-0 flex-1">
+        <div className="text-sm">{title}</div>
+        <div className="text-xs text-muted-foreground">{desc}</div>
+      </div>
+      <ArrowRight className="h-4 w-4 flex-none text-[color:var(--text-subtle)] transition-colors group-hover:text-[color:var(--red-folk)]" />
+    </Link>
   );
 }
