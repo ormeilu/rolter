@@ -23,12 +23,18 @@
 `rolter-core::telemetry` owns both directions, and both are inert unless an OTLP
 endpoint is configured:
 
-- **Extract.** The `continue_trace` middleware (`rolter-gateway::trace`) builds a
-  carrier from the inbound trace headers and makes the extracted context the
-  *parent* of the axum request span. A B3-only caller is normalized into an
-  equivalent `traceparent` first, so one W3C propagator serves both wire formats.
-  Without this the gateway's spans were disconnected roots — the trace id reached
-  the request log, but nothing joined the caller's trace.
+- **Extract.** `GatewayMakeSpan` (`rolter-gateway::trace`) is the `TraceLayer`'s
+  span-maker: it builds the request span and makes the extracted inbound context
+  its *parent*. A B3-only caller is normalized into an equivalent `traceparent`
+  first, so one W3C propagator serves both wire formats. Without this the
+  gateway's spans were disconnected roots — the trace id reached the request log,
+  but nothing joined the caller's trace.
+
+  It has to be the span-maker rather than a middleware layered inside the
+  `TraceLayer`: `DefaultMakeSpan` builds the request span at **DEBUG**, so under
+  the default `RUST_LOG=info` it is disabled, and setting a parent on a disabled
+  span silently does nothing. With no pipeline installed it falls back to that
+  stock DEBUG span, so the untraced path costs what it always did.
 - **Inject.** The context handed to the provider is injected from the *current*
   span, inside the per-attempt `upstream.request` span, rather than copied from
   the caller. Copying it verbatim made the provider call a child of the caller's
@@ -57,13 +63,46 @@ One span per stage, so a slow request is attributable rather than merely slow:
 
 `queue.wait` spans enqueue→dequeue only: the span travels with the queued job and
 the worker closes it the moment it picks the job up, so it measures the wait and
-not the wait plus the upstream call. Names follow the OTel
+not the wait plus the upstream call. The job carries the caller's span alongside
+it, and the worker instruments the forward with it — the queue worker runs on its
+own task where nothing is in scope, so without that the forwarder's own
+`translate.request` span becomes an orphan root in a trace of its own. Names
+follow the OTel
 [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
 where they fit, so a backend's built-in GenAI views work.
 
 Spans never carry prompt or completion content, API keys, virtual-key plaintext,
 or injected header values — those are credential material, and redaction stays
 owned by the existing `logging_settings` machinery rather than a second policy.
+
+### Running it locally
+
+The observability overlay starts a collector and a trace UI alongside the normal
+stack:
+
+```
+docker compose -f docker/docker-compose.yml \
+               -f docker/docker-compose.observability.yml up
+```
+
+Traces land at <http://localhost:16686>; the collector takes OTLP on 4317/4318
+and re-exposes collected metrics on 8889. The overlay sets
+`OTEL_EXPORTER_OTLP_ENDPOINT` on the `gateway` and `control` services, so
+bringing it up is the only step — without it that variable is unset and tracing
+stays off.
+
+The collector binds `0.0.0.0`, not `localhost`: one bound to loopback inside its
+container is unreachable from the gateway container.
+
+The overlay ships Jaeger rather than the SigNoz #805 first called for. SigNoz
+deprecated its own docker-compose manifests in v0.130.0 in favour of its Foundry
+CLI, and hand-reproducing that stack needs a vendored 56 KB ClickHouse config, a
+Zookeeper, and a second ClickHouse that would collide with the one rolter already
+runs — for the same outcome this overlay exists to give, a correctly-parented
+waterfall you can read. To use SigNoz instead, install it via Foundry and repoint
+the exporter in `infra/otel/collector.compose.yaml` at its collector; nothing
+else changes, because everything upstream of that exporter is vendor-neutral
+OTLP.
 
 ### Cost when tracing is off
 

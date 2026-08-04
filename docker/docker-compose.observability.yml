@@ -1,0 +1,58 @@
+# Opt-in observability overlay (#805): an OTel collector and a trace UI, so a
+# local rolter deployment has somewhere to send spans and somewhere to look at
+# them.
+#
+#   docker compose -f docker/docker-compose.yml \
+#                  -f docker/docker-compose.observability.yml up
+#
+# Traces: http://localhost:16686 (Jaeger UI)
+# Collector OTLP: 4317 (gRPC) / 4318 (HTTP), collector metrics on 8889.
+#
+# It is an overlay rather than part of the default `up` so the everyday stack
+# stays light. Bringing it up is the only change needed — the gateway and
+# control plane pick the collector up from `OTEL_EXPORTER_OTLP_ENDPOINT` below,
+# and with the overlay absent that variable is unset and tracing stays off.
+#
+# On SigNoz: #805 originally called for SigNoz here, but SigNoz deprecated its
+# own docker-compose manifests in v0.130.0 in favour of its Foundry CLI, and
+# reproducing that stack by hand needs a vendored 56 KB ClickHouse config, a
+# Zookeeper, and a ClickHouse that would collide with the one rolter already
+# runs. Jaeger gives the same thing this overlay is for — a correctly-parented
+# waterfall you can read — in one container with no ClickHouse at all. To use
+# SigNoz instead, install it via Foundry (`curl -fsSL https://signoz.io/foundry.sh | bash`)
+# and repoint the `otlp/jaeger` exporter in `infra/otel/collector.compose.yaml`
+# at its collector; nothing else here changes.
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.158.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ../infra/otel/collector.compose.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+      - "8889:8889" # collected metrics, in prometheus format
+
+  # all-in-one trace store + UI. keeps its spans in memory: this is a local
+  # dev aid, so there is no volume to collide with rolter's own and nothing
+  # survives a restart by design
+  jaeger:
+    image: jaegertracing/jaeger:2.20.0
+    restart: unless-stopped
+    ports:
+      - "16686:16686" # trace UI
+    # OTLP ports are deliberately not published: the collector reaches jaeger
+    # over the compose network, and publishing them would fight the collector
+    # for 4317/4318 on the host
+
+  gateway:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: rolter-gateway
+
+  control:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: rolter-control

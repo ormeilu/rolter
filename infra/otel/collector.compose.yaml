@@ -1,0 +1,64 @@
+# OpenTelemetry Collector config for the compose observability overlay.
+#
+# Used by `docker/docker-compose.observability.yml`. It differs from the
+# standalone `collector.yaml` in one way: traces are forwarded to the Jaeger
+# service the overlay also starts, so there is somewhere to look rather than
+# just a debug log. Everything stays inside the compose network — no external
+# backend, so the overlay is safe to run air-gapped.
+#
+# To send to a different backend (SigNoz, Tempo, Honeycomb, ...), replace the
+# `otlp/jaeger` exporter with that backend's OTLP endpoint and credentials.
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        # must bind 0.0.0.0, not localhost: a collector listening on loopback
+        # inside the container is unreachable from the gateway container
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: rolter-gateway
+          static_configs:
+            - targets: [gateway:4000]
+        # Add vLLM, SGLang, or TGI target addresses here when they are present.
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+  batch:
+
+exporters:
+  debug:
+    verbosity: basic
+  prometheus:
+    endpoint: 0.0.0.0:8889
+  # `otlp_grpc` rather than the bare `otlp` alias, which 0.158 deprecates
+  otlp_grpc/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_grpc/jaeger]
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]
