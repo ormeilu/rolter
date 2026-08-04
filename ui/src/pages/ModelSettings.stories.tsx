@@ -92,7 +92,7 @@ export const Forbidden: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() =>
-      expect(canvas.getByText(/needs superadmin access/)).toBeVisible(),
+      expect(canvas.getByText(/need superadmin access/)).toBeVisible(),
     );
   },
 };
