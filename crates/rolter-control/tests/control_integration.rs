@@ -2286,15 +2286,16 @@ mod stub_idp {
             std::sync::OnceLock::new();
         KEY.get_or_init(|| {
             use base64::Engine;
-            use p256::elliptic_curve::sec1::ToEncodedPoint;
+            use p256::elliptic_curve::sec1::ToSec1Point;
+            use p256::elliptic_curve::Generate;
             use p256::pkcs8::EncodePrivateKey;
 
-            let secret = p256::SecretKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+            let secret = p256::SecretKey::generate();
             let pem = secret.to_pkcs8_pem(p256::pkcs8::LineEnding::LF).unwrap();
             let encoding = jsonwebtoken::EncodingKey::from_ec_pem(pem.as_bytes()).unwrap();
             // the jwk carries the affine coordinates, so publish them from the
             // uncompressed sec1 point: 0x04 || x || y
-            let point = secret.public_key().to_encoded_point(false);
+            let point = secret.public_key().to_sec1_point(false);
             let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
             (
                 encoding,

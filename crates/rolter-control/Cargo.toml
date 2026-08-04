@@ -45,7 +45,10 @@ sha2 = { workspace = true, optional = true }
 [dev-dependencies]
 # the sso tests stand up a stub identity provider and need to mint id tokens;
 # the key is generated per test run rather than checked in
-p256 = { version = "0.14", features = ["ecdsa", "pkcs8", "pem"] }
+# `getrandom` supplies `Generate::generate()`, which draws the test signing key
+# straight from the system RNG; 0.14 deprecated `SecretKey::random` and its
+# `rand_core` re-export no longer carries an `OsRng` this graph can reach
+p256 = { version = "0.14", features = ["ecdsa", "pkcs8", "pem", "getrandom"] }
 
 [features]
 default = []
