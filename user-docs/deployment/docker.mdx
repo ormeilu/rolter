@@ -115,6 +115,19 @@ docker run --rm -p 4000:4000 \
 
 ## Database schemas
 
-Schema migrations are applied automatically on first container start — no manual SQL or migration commands needed. Both PostgreSQL and ClickHouse schemas are initialised by the Compose setup before the application containers start.
+Schema migrations are applied automatically on first container start — no manual SQL or migration commands needed.
+
+The PostgreSQL schema is applied by rolter itself: both the control plane and
+the seed tool run the migration set on startup and record what they applied.
+ClickHouse is initialised by the Compose setup before the application
+containers start.
 
 Subsequent starts skip already-applied migrations, so it is safe to bring the stack up and down repeatedly.
+
+<Note>
+Do not mount `crates/rolter-store/migrations` into the Postgres container's
+`docker-entrypoint-initdb.d`. PostgreSQL would run those files itself on first
+init, outside rolter's migration runner, so rolter would see an untracked
+database and try to reapply every migration to it — failing on the first
+statement that cannot run twice.
+</Note>

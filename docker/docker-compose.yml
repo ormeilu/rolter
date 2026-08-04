@@ -11,8 +11,12 @@ services:
     ports:
       - "5432:5432"
     volumes:
+      # no initdb.d mount: `sqlx::migrate!` owns this schema. postgres would
+      # run the migration files itself on first init, outside sqlx's runner,
+      # leaving `_sqlx_migrations` empty — the next control/seed startup then
+      # replays 0001 onward against a database that already has the final
+      # schema and dies on the first non-idempotent statement (#499)
       - pgdata:/var/lib/postgresql/data
-      - ../crates/rolter-store/migrations:/docker-entrypoint-initdb.d
 
   redis:
     image: redis:8-alpine
