@@ -8,6 +8,13 @@
 //! B3 header so the request log adopts the caller's trace instead of starting a
 //! disconnected one; the id is stored on each [`RequestLog`](crate::logging::RequestLog)
 //! and surfaces in ClickHouse for cross-service correlation.
+//!
+//! [`continue_trace`] takes that further (#805): it makes the inbound context the
+//! real OpenTelemetry *parent* of the request span, and [`outbound_headers`]
+//! injects the gateway's own span into the upstream call rather than copying the
+//! caller's header verbatim. Together those are what put a dashboard click, the
+//! gateway, and the provider request in one correctly-parented trace. All of it
+//! is inert unless an OTLP endpoint is configured.
 
 use std::time::Duration;
 
@@ -20,6 +27,11 @@ use tracing::Span;
 
 /// header carrying the end-to-end request id
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
+
+/// Pipeline-stage span, defined in `rolter-core` so the proxy's translation
+/// stages use the same one. Re-exported here because that is where the gateway
+/// reaches for tracing helpers.
+pub(crate) use rolter_core::stage_span;
 
 /// Ensure the request has an `x-request-id` (generating one when absent or
 /// blank), expose it to downstream handlers via the request headers, and mirror
@@ -47,6 +59,40 @@ pub async fn ensure_request_id(mut req: Request, next: Next) -> Response {
 
 fn new_request_id() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+/// Adopt the caller's inbound trace context as the parent of the request span
+/// (#805).
+///
+/// Without this every gateway span is a disconnected root: the caller's
+/// `traceparent` was parsed into a string for the request log but never became
+/// an OpenTelemetry parent, so a dashboard click and the gateway work it caused
+/// were two unrelated traces. Layer this *inside* the
+/// [`TraceLayer`](tower_http::trace::TraceLayer) so `Span::current()` is the
+/// request span it should parent.
+///
+/// Costs one relaxed atomic load when no OTLP pipeline is installed.
+pub async fn continue_trace(req: Request, next: Next) -> Response {
+    if rolter_core::telemetry::is_active() {
+        let mut carrier = rolter_core::telemetry::TraceCarrier::new();
+        for name in PROPAGATED_TRACE_HEADERS {
+            if let Some(value) = req.headers().get(*name).and_then(|v| v.to_str().ok()) {
+                carrier.insert(name, value);
+            }
+        }
+        rolter_core::telemetry::adopt_inbound(&Span::current(), &carrier.finish());
+    }
+    next.run(req).await
+}
+
+/// The trace id to stamp on this request's [`RequestLog`](crate::logging::RequestLog).
+///
+/// Prefers the id of the span actually being exported, so ClickHouse and the
+/// trace backend agree by construction; falls back to parsing the inbound
+/// header when no pipeline is installed, which is the pre-#805 behaviour and
+/// the only path an untraced deployment takes.
+pub fn request_trace_id(headers: &HeaderMap) -> String {
+    rolter_core::telemetry::current_trace_id().unwrap_or_else(|| inbound_trace_id(headers))
 }
 
 /// [`TraceLayer`](tower_http::trace::TraceLayer) response hook that surfaces
@@ -176,17 +222,40 @@ pub fn outbound_trace_headers(headers: &HeaderMap) -> Vec<(&'static str, String)
         .collect()
 }
 
+/// Trace context injected from the current span, or `None` when no OTLP
+/// pipeline is installed or the current span has no valid context — in which
+/// case the caller falls back to copying the inbound headers.
+fn injected_trace_headers() -> Option<Vec<(String, String)>> {
+    if !rolter_core::telemetry::is_active() {
+        return None;
+    }
+    let injected = rolter_core::telemetry::inject_current();
+    (!injected.is_empty()).then_some(injected)
+}
+
 /// Trace context plus the operator-configured client headers, ready to hand to
 /// the forwarder (#564).
 ///
 /// Trace headers always propagate and always win: an allowlist entry naming one
 /// of them cannot replace the context the gateway resolved, so a misconfigured
 /// list can never break correlation.
+///
+/// With an OTLP pipeline installed the trace context is *injected from the
+/// current span* rather than copied from the caller (#805). That is the
+/// difference between the provider call being a child of the gateway span and
+/// being its sibling — copying the inbound header verbatim parented the upstream
+/// leg to the caller, which made every waterfall built from the data wrong. Call
+/// this from inside the span the upstream request should hang off.
+///
+/// With no pipeline installed it copies the caller's headers verbatim, exactly
+/// as before.
 pub fn outbound_headers(headers: &HeaderMap, forwarded: &[String]) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = outbound_trace_headers(headers)
-        .into_iter()
-        .map(|(name, value)| (name.to_string(), value))
-        .collect();
+    let mut out: Vec<(String, String)> = injected_trace_headers().unwrap_or_else(|| {
+        outbound_trace_headers(headers)
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value))
+            .collect()
+    });
     for name in forwarded {
         if PROPAGATED_TRACE_HEADERS.contains(&name.as_str()) {
             continue;
@@ -305,6 +374,39 @@ mod tests {
         let out = outbound_headers(&h, &["traceparent".to_string()]);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].1, "00-1111-2222-01");
+    }
+
+    #[test]
+    fn without_a_pipeline_outbound_headers_still_copies_the_caller_verbatim() {
+        // #805 changed where trace context comes from, but only when an OTLP
+        // pipeline is installed. with none — the default — the caller's headers
+        // are copied exactly as before, so an untraced deployment sees no change
+        assert!(!rolter_core::telemetry::is_active());
+        let h = headers(&[
+            (
+                "traceparent",
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            ),
+            ("tracestate", "rojo=00f067aa0ba902b7"),
+        ]);
+        let out = outbound_headers(&h, &[]);
+        assert_eq!(out.len(), 2);
+        assert!(out.contains(&(
+            "traceparent".to_string(),
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string()
+        )));
+    }
+
+    #[test]
+    fn request_trace_id_falls_back_to_the_inbound_header() {
+        // with no pipeline there is no span context to read, so the log keeps
+        // taking the id off the wire exactly as it did before
+        let h = headers(&[(
+            "traceparent",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        )]);
+        assert_eq!(request_trace_id(&h), "4bf92f3577b34da6a3ce929d0e0e4736");
+        assert_eq!(request_trace_id(&headers(&[])), "");
     }
 
     #[test]

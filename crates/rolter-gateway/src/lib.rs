@@ -284,6 +284,9 @@ pub fn build_router(state: AppState, metrics_path: &str, max_body_bytes: usize) 
         // ensure every request carries an x-request-id (generated when absent)
         // and echo it on the response, for end-to-end correlation
         .layer(axum::middleware::from_fn(trace::ensure_request_id))
+        // adopt the caller's inbound trace context as the parent of the request
+        // span; layered inside TraceLayer so `Span::current()` is that span
+        .layer(axum::middleware::from_fn(trace::continue_trace))
         // surface 4xx/5xx on the terminal at the default `info` filter; the stock
         // hook logs every response at `debug`, hiding errors in `uvx rolter`
         // (ROL-230). on_failure is disabled so classified 5xx are not double-logged

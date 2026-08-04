@@ -18,6 +18,61 @@
 - **Outbound to engines**: inject the active trace context into upstream requests so vLLM/SGLang/TGI spans join the **same** distributed trace. vLLM and SGLang support OpenTelemetry tracing (e.g. vLLM `--otlp-traces-endpoint`); point them at the same OTLP collector so engine prefill/decode spans line up with rolter's request span.
 - A per-request `request_id` is echoed in a response header and stamped on logs, metric exemplars and spans for correlation.
 
+### How the context actually moves
+
+`rolter-core::telemetry` owns both directions, and both are inert unless an OTLP
+endpoint is configured:
+
+- **Extract.** The `continue_trace` middleware (`rolter-gateway::trace`) builds a
+  carrier from the inbound trace headers and makes the extracted context the
+  *parent* of the axum request span. A B3-only caller is normalized into an
+  equivalent `traceparent` first, so one W3C propagator serves both wire formats.
+  Without this the gateway's spans were disconnected roots — the trace id reached
+  the request log, but nothing joined the caller's trace.
+- **Inject.** The context handed to the provider is injected from the *current*
+  span, inside the per-attempt `upstream.request` span, rather than copied from
+  the caller. Copying it verbatim made the provider call a child of the caller's
+  span and therefore a **sibling** of the gateway's own work, which silently
+  invalidated every waterfall built from the data. The allowlisted client headers
+  from `Forwarder::forwarded_header_names` are unaffected; only the trace headers
+  changed hands.
+- **Log correlation.** `RequestLog.trace_id` is read off the span context when a
+  pipeline is installed and falls back to parsing the inbound header otherwise,
+  so ClickHouse and the trace backend agree by construction.
+
+### Pipeline spans
+
+One span per stage, so a slow request is attributable rather than merely slow:
+
+| Span | Attributes |
+|---|---|
+| `auth` | — |
+| `guardrails.pre` | `redacted`, `webhook` |
+| `route.select` | `route`, `strategy`, `candidates` |
+| `cache.lookup` | `hit`, `kind` (`exact` / `semantic`) |
+| `queue.wait` | `provider` |
+| `upstream.request` | `attempt`, `gen_ai.system`, `gen_ai.request.model`, `http.response.status_code` |
+| `translate.request` | — |
+| `guardrails.post` | — |
+
+`queue.wait` spans enqueue→dequeue only: the span travels with the queued job and
+the worker closes it the moment it picks the job up, so it measures the wait and
+not the wait plus the upstream call. Names follow the OTel
+[GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
+where they fit, so a backend's built-in GenAI views work.
+
+Spans never carry prompt or completion content, API keys, virtual-key plaintext,
+or injected header values — those are credential material, and redaction stays
+owned by the existing `logging_settings` machinery rather than a second policy.
+
+### Cost when tracing is off
+
+With no `OTEL_EXPORTER_OTLP_ENDPOINT` (the default) behaviour and hot-path cost
+are unchanged: `telemetry::is_active()` is a single relaxed atomic load, stage
+spans are `Span::none()` (no allocation, and instrumenting a future with one is a
+no-op), no carrier is built, and outbound trace headers are copied verbatim
+exactly as before.
+
 ## Exporters (OTel-compatible)
 
 rolter emits traces and metrics via **OpenTelemetry OTLP** (gRPC/HTTP), so any OTel-compatible backend works without code changes — just set an endpoint and headers:
