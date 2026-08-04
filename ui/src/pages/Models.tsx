@@ -197,7 +197,7 @@ export default function Models() {
             type="button"
             onClick={() => setOrigin(key)}
             className={cn(
-              "inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors",
+              "inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
               origin === key
                 ? "border-[color:var(--red-500)] bg-[color:var(--red-tint)] text-foreground"
                 : "border-[color:var(--border-subtle)] text-muted-foreground hover:text-foreground",
@@ -319,8 +319,9 @@ export default function Models() {
                 <button
                   type="button"
                   title="Delete model"
+                  aria-label={`Delete model ${r.name}`}
                   onClick={() => setDeleteTarget(r.entry)}
-                  className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)]"
+                  className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
