@@ -98,6 +98,78 @@ Rolter participates in distributed tracing on both sides of the gateway:
   </Step>
 </Steps>
 
+## What's inside a gateway span
+
+Rolter emits one span per pipeline stage, so a slow request is attributable to a
+named stage rather than merely slow. A trace of a single chat completion looks
+like this:
+
+```text
+POST /v1/chat/completions
+├─ auth
+├─ route.select          strategy, candidates, route
+├─ guardrails.pre        redacted, webhook
+├─ cache.lookup          hit, kind (exact | semantic)
+└─ upstream.request      attempt, gen_ai.system, gen_ai.request.model, status
+   ├─ queue.wait         provider
+   └─ translate.request
+```
+
+`queue.wait` measures only the time the request spent waiting for a provider
+worker — not the wait plus the upstream call — so queue pressure is
+distinguishable from a slow provider.
+
+Attributes follow the OpenTelemetry [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
+where they fit, so backends with built-in GenAI views light up without extra
+configuration.
+
+<Warning>
+  Spans never carry prompt or completion content, API keys, virtual-key
+  plaintext, or the values of headers you forward upstream. Only structural
+  facts — which route, which provider, cache hit or miss, how long — are
+  recorded. Redaction stays governed by your existing log settings rather than a
+  second policy.
+</Warning>
+
+## Metrics over OTLP
+
+The same counters and gauges Rolter serves on `/metrics` are also exported over
+OTLP when an endpoint is configured. The Prometheus endpoint is unchanged — this
+is a second exporter over the same numbers, so both always agree.
+
+Metrics are collected on the SDK's own interval
+(`OTEL_METRIC_EXPORT_INTERVAL`, default 60s) by reading counters the gateway has
+already incremented, so exporting them adds nothing to the request path.
+
+## Trying it locally
+
+Rolter ships two opt-in Docker Compose overlays so you can see traces without
+signing up for anything:
+
+<CodeGroup>
+```bash Jaeger (light, traces only)
+docker compose -f docker/docker-compose.yml \
+               -f docker/docker-compose.observability.yml up
+# traces at http://localhost:16686
+```
+
+```bash SigNoz (traces, metrics and logs)
+docker compose -f docker/docker-compose.yml \
+               -f docker/docker-compose.signoz.yml up
+# SigNoz at http://localhost:8080
+```
+</CodeGroup>
+
+Both wire `OTEL_EXPORTER_OTLP_ENDPOINT` into the gateway and control plane for
+you, so bringing one up is the only step. They are mutually exclusive — each
+publishes OTLP on 4317/4318.
+
+<Note>
+  With no `OTEL_*` environment set, tracing is off and costs nothing: no
+  exporter is built, no trace context is parsed beyond what the request log
+  already needed, and the request path is unchanged.
+</Note>
+
 ## Recommended topology
 
 For production setups, deploy an OpenTelemetry Collector as an intermediary between Rolter and your backends. This decouples your gateway from vendor specifics and lets you fan out to multiple backends or change destinations without restarting Rolter.
