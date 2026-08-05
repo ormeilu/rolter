@@ -152,6 +152,26 @@ and it vendors 3.6 KB of ClickHouse config — the cluster topology and the
 `{shard}`/`{replica}` macros that `ReplicatedMergeTree` needs — rather than
 SigNoz's full 56 KB `config.xml`, which the stock image defaults cover.
 
+### Metrics over OTLP
+
+The counters and gauges `rolter-gateway::metrics` computes are exported over
+OTLP as well as served on `/metrics`. The Prometheus endpoint is unchanged —
+this is a second exporter over the same numbers.
+
+Both read one list, `Metrics::scalars()`, so they cannot drift: a counter added
+there reaches Prometheus and OTLP without a second edit. Counters export as
+counters and gauges as gauges, since exporting a counter as a gauge would break
+`rate()` on the backend.
+
+The instruments are **observable**: nothing is pushed on the request path. The
+SDK invokes the callback on its own schedule (`OTEL_METRIC_EXPORT_INTERVAL`,
+default 60s) and reads the same atomics the Prometheus renderer does, so the hot
+path still only does `fetch_add`. With no OTLP endpoint configured no meter
+provider, exporter or callback is built at all.
+
+Per-model histograms and label-bearing counters stay Prometheus-only for now;
+the scalar set is what OTLP carries.
+
 ### Cost when tracing is off
 
 With no `OTEL_EXPORTER_OTLP_ENDPOINT` (the default) behaviour and hot-path cost
