@@ -120,6 +120,30 @@ Nothing in the Rust differs between them: the gateway speaks vendor-neutral OTLP
 and only the destination changes. Any other OTLP backend works the same way —
 repoint the exporter in `infra/otel/collector.compose.yaml`.
 
+#### Querying SigNoz from an agent (MCP)
+
+The SigNoz overlay also starts SigNoz's MCP server on `http://localhost:8000/mcp`,
+so an agent can query traces, run ClickHouse queries, and manage dashboards
+against the local instance. Point an MCP client at that URL; the
+[SigNoz agent-skills plugin](https://github.com/SigNoz/agent-skills) ships a
+`signoz` server entry to fill in.
+
+It needs a SigNoz API key, which is created in the UI (**Settings → API Keys**,
+admin only) and supplied to the *server*, not the client:
+
+```
+set -x SIGNOZ_API_KEY (pass show rolter/signoz-api-key)
+docker compose -f docker/docker-compose.yml \
+               -f docker/docker-compose.signoz.yml up -d signoz-mcp
+```
+
+The key is read from the environment and never written to a tracked file. With
+no key set the container still starts, but every call returns
+`Authorization or SIGNOZ-API-KEY header required`.
+
+The MCP dashboard tools need SigNoz v0.135.0 or newer, which is why the `signoz`
+image is pinned ahead of the collector/ClickHouse pair.
+
 The SigNoz overlay is a pinned equivalent of what SigNoz's Foundry CLI generates,
 since SigNoz deprecated its own compose manifests in v0.130.0. Two things to know
 before touching it: its four images are a **tested set** and must be bumped

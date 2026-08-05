@@ -17,11 +17,15 @@
 # Everything rolter emits is vendor-neutral OTLP, so nothing in the Rust changes
 # between the two overlays — only where the spans are posted.
 #
-# On versions: these four images are pinned as a **tested set**, taken from
-# SigNoz v0.129.0's own manifest. Do not bump one alone — mixing a newer
-# collector with this ClickHouse fails migration with "Unknown setting
-# 'object_serialization_version'", because the migrator emits settings the older
-# server does not know. Regenerate the whole set from Foundry to upgrade.
+# On versions: the collector/migrator and ClickHouse are pinned as a **tested
+# pair** from SigNoz v0.129.0's manifest. Do not bump the collector alone — a
+# newer migrator against this ClickHouse fails with "Unknown setting
+# 'object_serialization_version'", because it emits settings the older server
+# does not know. Regenerate the set from Foundry to upgrade.
+#
+# The `signoz` UI image is deliberately ahead of that pair: its MCP server's
+# dashboard tools need v0.135.0 or newer, and the UI reads the schema the
+# migrator writes rather than writing it itself.
 #
 # SigNoz's own docker-compose manifests were deprecated in v0.130.0
 # in favour of the Foundry CLI (`curl -fsSL https://signoz.io/foundry.sh | bash`),
@@ -93,7 +97,7 @@ services:
         /signoz-otel-collector migrate async up
 
   signoz:
-    image: signoz/signoz:v0.129.0
+    image: signoz/signoz:v0.136.0
     restart: unless-stopped
     depends_on:
       signoz-clickhouse:
@@ -127,6 +131,29 @@ services:
     volumes:
       - ./signoz/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
     command: ["--config=/etc/otel-collector-config.yaml"]
+
+  # SigNoz's MCP server, so an agent can query traces, run ClickHouse queries and
+  # manage dashboards against this local instance.
+  #
+  # SIGNOZ_API_KEY is read from the environment and never written to a file:
+  # create the key in the SigNoz UI under Settings -> API Keys, store it in
+  # `pass`, and export it before `up`:
+  #
+  #   set -x SIGNOZ_API_KEY (pass show rolter/signoz-api-key)
+  #
+  # With no key set the container still starts but every call is unauthorized.
+  signoz-mcp:
+    image: signoz/signoz-mcp-server:latest
+    restart: unless-stopped
+    depends_on:
+      - signoz
+    ports:
+      - "8000:8000" # MCP endpoint at /mcp
+    environment:
+      - TRANSPORT_MODE=http
+      - MCP_SERVER_PORT=8000
+      - SIGNOZ_URL=http://signoz:8080
+      - SIGNOZ_API_KEY=${SIGNOZ_API_KEY:-}
 
   gateway:
     environment:
