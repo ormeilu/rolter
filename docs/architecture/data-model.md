@@ -65,6 +65,27 @@ Most tables flow control plane → gateway. Two flow the other way, written from
 
 Neither carries a `bump_config_version()` trigger, and neither may grow one: the data plane does not consume them, and a version bump on every heartbeat or sample would make routine bookkeeping look like a config change and wake the whole fleet.
 
+## ClickHouse tables
+
+PostgreSQL holds configuration; ClickHouse holds the high-volume append-only
+streams, all partitioned by day with a 90-day TTL and written in batches off the
+hot path. Schema lives in [`clickhouse/`](../../clickhouse/), applied by the
+container's init directory:
+
+- `request_logs` — one row per proxied request, with cost and token counts.
+- `provider_health_events` — per-target health observations from every signal.
+- `mcp_tool_call_logs` — MCP tool invocations.
+- `ui_events` — dashboard UX events (#805): screen views and time-to-interactive,
+  navigation and back-outs, form submit/abandon and which validation rules fire,
+  empty- and error-state impressions, save-to-confirmation latency. Carries
+  `trace_id`, so a UX event and the gateway request it caused are one join apart.
+
+`ui_events` is **structurally incapable** of holding content: every column is a
+key, an enum, a duration or an id, so "no form values, no prompt text" is a
+property of the schema rather than a policy applied on write. None of these
+tables is read by the data plane, so none carries a `bump_config_version()`
+trigger.
+
 ## Migrations are append-only
 
 Migrations are embedded with `sqlx::migrate!` and sqlx stores a checksum of every
