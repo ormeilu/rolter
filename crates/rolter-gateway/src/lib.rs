@@ -130,6 +130,16 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     state.managed_auth = args.snapshot_url.is_some();
     let state = state;
 
+    // export the counters the Prometheus endpoint already renders over OTLP too
+    // (#805). observable instruments, so nothing is pushed on the request path:
+    // the SDK reads the same atomics on its own interval. `None` — and no cost —
+    // when no OTLP endpoint is configured. held for the lifetime of `run` so
+    // metrics flush on shutdown
+    let _metrics_export = {
+        let metrics = state.metrics.clone();
+        rolter_core::telemetry::install_metrics(move || metrics.scalars_for_export())
+    };
+
     // the health prober is always spawned; it self-gates on the live snapshot so a
     // hot-reload can enable/disable and re-tune probing without a restart (ROL-125)
     if config.health.enabled {

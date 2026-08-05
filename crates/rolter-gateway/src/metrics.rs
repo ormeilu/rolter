@@ -543,6 +543,16 @@ impl Metrics {
             },
         ]
     }
+    /// The scalar metrics as plain tuples, for the OTLP exporter (#805).
+    ///
+    /// Same list `render()` walks — the two exporters cannot drift apart.
+    pub fn scalars_for_export(&self) -> Vec<rolter_core::telemetry::ScalarMetric> {
+        self.scalars()
+            .into_iter()
+            .map(|s| (s.kind, s.name, s.help, s.value))
+            .collect()
+    }
+
     /// Render the counters in Prometheus text exposition format.
     pub fn render(&self) -> String {
         let mut out = String::new();

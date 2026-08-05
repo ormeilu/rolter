@@ -179,6 +179,96 @@ pub fn init() -> TelemetryGuard {
     TelemetryGuard::default()
 }
 
+/// One scalar metric to export: Prometheus type, name, help text, value.
+///
+/// Mirrors what the gateway's `Metrics::scalars()` produces, expressed in plain
+/// types so `rolter-core` needs no dependency on the gateway.
+pub type ScalarMetric = (&'static str, &'static str, &'static str, u64);
+
+/// Guard holding the OTLP meter provider, flushing metrics on drop.
+#[must_use = "bind the guard to a named local so metrics flush on exit"]
+#[derive(Default)]
+pub struct MetricsGuard {
+    #[cfg(feature = "otlp")]
+    provider: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
+}
+
+impl Drop for MetricsGuard {
+    fn drop(&mut self) {
+        #[cfg(feature = "otlp")]
+        if let Some(provider) = self.provider.take() {
+            let _ = provider.shutdown();
+        }
+    }
+}
+
+/// Export the gateway's existing counters and gauges over OTLP (#805).
+///
+/// A *second exporter over the same numbers*, not a rewrite: `collect` hands
+/// back whatever the Prometheus endpoint would render, and both stay in step
+/// because they read one list. The Prometheus endpoint is untouched.
+///
+/// Instruments are observable — nothing is pushed on the request path. The SDK
+/// invokes `collect` on its own periodic interval (`OTEL_METRIC_EXPORT_INTERVAL`,
+/// default 60s), so the hot path keeps doing nothing but `fetch_add` on an
+/// atomic.
+///
+/// Returns `None` when no OTLP endpoint is configured, leaving the untraced
+/// deployment exactly as it was.
+pub fn install_metrics<F>(collect: F) -> Option<MetricsGuard>
+where
+    F: Fn() -> Vec<ScalarMetric> + Send + Sync + Clone + 'static,
+{
+    #[cfg(feature = "otlp")]
+    {
+        let provider = otlp::try_build_meter_provider()?;
+        let meter = {
+            use opentelemetry::metrics::MeterProvider as _;
+            provider.meter("rolter")
+        };
+
+        // the instrument set is fixed at install time from one snapshot; each
+        // instrument then re-reads its own value by name on every collection
+        for (kind, name, help, _) in collect() {
+            let pick = collect.clone();
+            let observe = move |value: &dyn Fn(u64)| {
+                if let Some((_, _, _, v)) = pick().into_iter().find(|(_, n, _, _)| *n == name) {
+                    value(v);
+                }
+            };
+            match kind {
+                // a gauge can go down; a counter is monotonic. exporting a
+                // counter as a gauge would break rate() on the backend
+                "gauge" => {
+                    let o = observe.clone();
+                    meter
+                        .u64_observable_gauge(name)
+                        .with_description(help)
+                        .with_callback(move |obs| o(&|v| obs.observe(v, &[])))
+                        .build();
+                }
+                _ => {
+                    let o = observe.clone();
+                    meter
+                        .u64_observable_counter(name)
+                        .with_description(help)
+                        .with_callback(move |obs| o(&|v| obs.observe(v, &[])))
+                        .build();
+                }
+            }
+        }
+
+        Some(MetricsGuard {
+            provider: Some(provider),
+        })
+    }
+    #[cfg(not(feature = "otlp"))]
+    {
+        let _ = collect;
+        None
+    }
+}
+
 /// Build a span for one pipeline stage, or a disabled span when no OTLP
 /// pipeline is installed (#805).
 ///
@@ -597,6 +687,42 @@ mod otlp {
             .build();
         opentelemetry::global::set_tracer_provider(provider.clone());
         Some(provider)
+    }
+
+    /// Build an OTLP meter provider from the same `OTEL_*` environment the
+    /// tracer uses, or `None` when no endpoint is configured.
+    pub fn try_build_meter_provider() -> Option<opentelemetry_sdk::metrics::SdkMeterProvider> {
+        if std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").is_none()
+            && std::env::var_os("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT").is_none()
+        {
+            return None;
+        }
+
+        let protocol = std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL").unwrap_or_default();
+        let exporter = if protocol.starts_with("http") {
+            opentelemetry_otlp::MetricExporter::builder()
+                .with_http()
+                .build()
+        } else {
+            opentelemetry_otlp::MetricExporter::builder()
+                .with_tonic()
+                .build()
+        };
+        let exporter = match exporter {
+            Ok(exporter) => exporter,
+            Err(err) => {
+                // as with traces: a bad collector must not take the gateway down
+                eprintln!("rolter: OTLP metric exporter init failed, metrics stay local: {err}");
+                return None;
+            }
+        };
+
+        Some(
+            opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+                .with_periodic_exporter(exporter)
+                .with_resource(resource())
+                .build(),
+        )
     }
 
     fn resource() -> Resource {
