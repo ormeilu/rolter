@@ -135,11 +135,18 @@ services:
   # SigNoz's MCP server, so an agent can query traces, run ClickHouse queries and
   # manage dashboards against this local instance.
   #
-  # SIGNOZ_API_KEY is read from the environment and never written to a file:
-  # create the key in the SigNoz UI under Settings -> API Keys, store it in
-  # `pass`, and export it before `up`:
+  # Create the key in the SigNoz UI under Settings -> API Keys, then supply it
+  # one of two ways. Either export it for the shell that runs `up`:
   #
   #   set -x SIGNOZ_API_KEY (pass show rolter/signoz-api-key)
+  #
+  # or put it in `docker/.env`, which is gitignored and which compose reads
+  # automatically because this file's directory is the project directory:
+  #
+  #   SIGNOZ_API_KEY=...
+  #
+  # A repo-root `.env` will *not* work — compose resolves the project directory
+  # from the first `-f` file, so it reads `docker/.env` and nothing above it.
   #
   # With no key set the container still starts but every call is unauthorized.
   signoz-mcp:
