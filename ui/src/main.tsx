@@ -7,7 +7,13 @@ import "@fontsource-variable/geist-mono";
 
 import App from "@/App";
 import { AuthProvider } from "@/lib/auth";
+import { initTelemetry } from "@/lib/telemetry";
 import "@/index.css";
+
+// browser tracing, off unless the control plane injected an OTLP endpoint into
+// window.__ROLTER_CONFIG__ (#805). started before render so document-load and
+// the first interactions are captured
+void initTelemetry();
 
 const queryClient = new QueryClient();
 
