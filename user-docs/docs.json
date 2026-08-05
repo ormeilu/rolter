@@ -118,7 +118,8 @@
               "api/messages",
               "api/mcp",
               "api/models",
-              "api/health-and-metrics"
+              "api/health-and-metrics",
+              "api/ui-events"
             ]
           }
         ]

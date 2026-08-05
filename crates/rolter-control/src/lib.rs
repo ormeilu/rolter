@@ -67,6 +67,8 @@ mod security;
 pub mod seed;
 #[cfg(feature = "postgres")]
 mod sso;
+#[cfg(feature = "postgres")]
+mod ui_events;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -408,6 +410,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(me::router())
             .merge(plugins::router())
             .merge(mcp_logs::router())
+            .merge(ui_events::router())
             .merge(mcp_oauth::router())
             .merge(mcp_oauth_flow::router())
             .merge(feature_flags::router())
