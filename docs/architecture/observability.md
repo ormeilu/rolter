@@ -94,15 +94,39 @@ stays off.
 The collector binds `0.0.0.0`, not `localhost`: one bound to loopback inside its
 container is unreachable from the gateway container.
 
-The overlay ships Jaeger rather than the SigNoz #805 first called for. SigNoz
-deprecated its own docker-compose manifests in v0.130.0 in favour of its Foundry
-CLI, and hand-reproducing that stack needs a vendored 56 KB ClickHouse config, a
-Zookeeper, and a second ClickHouse that would collide with the one rolter already
-runs — for the same outcome this overlay exists to give, a correctly-parented
-waterfall you can read. To use SigNoz instead, install it via Foundry and repoint
-the exporter in `infra/otel/collector.compose.yaml` at its collector; nothing
-else changes, because everything upstream of that exporter is vendor-neutral
-OTLP.
+#### Choosing an overlay
+
+There are two, and they are mutually exclusive — both publish OTLP on 4317/4318.
+
+| | `docker-compose.observability.yml` (default) | `docker-compose.signoz.yml` |
+|---|---|---|
+| backend | Jaeger v2 | SigNoz |
+| signals | traces only | traces, metrics, logs |
+| containers | 2 | 5, incl. its own ClickHouse + Zookeeper |
+| storage | in memory, lost on restart | persistent |
+| use it for | reading a waterfall, fast iteration | aggregate views, dashboards, dogfooding over time |
+
+```
+docker compose -f docker/docker-compose.yml \
+               -f docker/docker-compose.signoz.yml up      # SigNoz on :8080
+```
+
+Jaeger is the default because it is two containers and starts in seconds, and
+because reading a correctly-parented waterfall is what the tracing work needed.
+Reach for SigNoz when "which stage is slow *across all requests*" matters, which
+Jaeger cannot answer.
+
+Nothing in the Rust differs between them: the gateway speaks vendor-neutral OTLP
+and only the destination changes. Any other OTLP backend works the same way —
+repoint the exporter in `infra/otel/collector.compose.yaml`.
+
+The SigNoz overlay is a pinned equivalent of what SigNoz's Foundry CLI generates,
+since SigNoz deprecated its own compose manifests in v0.130.0. Two things to know
+before touching it: its four images are a **tested set** and must be bumped
+together (a newer migrator emits ClickHouse settings an older server rejects),
+and it vendors 3.6 KB of ClickHouse config — the cluster topology and the
+`{shard}`/`{replica}` macros that `ReplicatedMergeTree` needs — rather than
+SigNoz's full 56 KB `config.xml`, which the stock image defaults cover.
 
 ### Cost when tracing is off
 
