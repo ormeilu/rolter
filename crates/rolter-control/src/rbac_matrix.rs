@@ -1129,6 +1129,7 @@ mod tests {
         ("security.rs", include_str!("security.rs")),
         ("seed.rs", include_str!("seed.rs")),
         ("sso.rs", include_str!("sso.rs")),
+        ("ui_config.rs", include_str!("ui_config.rs")),
     ];
 
     /// A module the checks below skip, and why.
