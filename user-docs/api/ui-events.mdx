@@ -88,6 +88,33 @@ most **100** events per request; a larger batch is rejected with `400`.
   unbounded one and degrades the table.
 </Warning>
 
+## What the dashboard sends
+
+You do not have to call this endpoint to get data — the bundled dashboard emits
+against it already.
+
+Navigation is instrumented once in the app shell, so `screen_view`, `navigate`
+and `back_out` cover every screen without per-screen wiring. `back_out` is
+recorded when the user leaves by pressing the browser's back button rather than
+by acting on the screen, and carries how long they had been there: backing out
+after eight seconds is a navigation mistake, backing out after four minutes is a
+dead end.
+
+`empty_state` is emitted by the shared placeholder component, so every zero-data
+screen reports itself.
+
+`time_to_interactive`, `error_state` and the form lifecycle (`form_submit`,
+`form_abandon`, `validation_error`, `save_confirmed`) are per-screen, because
+only the screen knows which of its several requests is the one the user is
+actually waiting for. Screens are being wired progressively; an unwired screen
+is silent for those actions rather than wrong.
+
+Events are queued in the browser and flushed every few seconds, when a full
+batch accumulates, and when the tab is hidden. If the endpoint answers `401`,
+`403`, `404` or `405` the dashboard stops sending for the life of the tab, so an
+older control plane or a proxy that drops the route costs one request rather
+than one per flush.
+
 ## Turning it off
 
 Two independent switches:

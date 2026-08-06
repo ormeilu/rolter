@@ -34,6 +34,35 @@ declare global {
 let started = false;
 
 /**
+ * The `@opentelemetry/api` trace accessor, captured when the SDK loads.
+ *
+ * Held here rather than imported statically so that `currentTraceId` costs
+ * nothing — and downloads nothing — on a deployment with tracing off, which is
+ * the default. Typed structurally for the same reason: a static type import
+ * would defeat the point of the dynamic one.
+ */
+let traceApi:
+  | { getActiveSpan(): { spanContext(): { traceId: string } } | undefined }
+  | undefined;
+
+/**
+ * The trace id of the span currently in context, or `""` when tracing is off or
+ * nothing is active.
+ *
+ * This is what lets a UX event (see `ux.ts`) join the gateway request it caused,
+ * so "this screen felt slow" and "this request took 4s" are one row apart
+ * rather than two systems apart.
+ */
+export function currentTraceId(): string {
+  try {
+    return traceApi?.getActiveSpan()?.spanContext().traceId ?? "";
+  } catch {
+    // never let correlation break the thing it is describing
+    return "";
+  }
+}
+
+/**
  * Start browser tracing when an endpoint is configured.
  *
  * The SDK is imported dynamically, so a deployment with telemetry off never
@@ -65,6 +94,7 @@ export async function initTelemetry(
     { resourceFromAttributes },
     { BatchSpanProcessor, WebTracerProvider },
     { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION },
+    { trace },
   ] = await Promise.all([
     import("@opentelemetry/context-zone"),
     import("@opentelemetry/exporter-trace-otlp-http"),
@@ -75,6 +105,7 @@ export async function initTelemetry(
     import("@opentelemetry/resources"),
     import("@opentelemetry/sdk-trace-web"),
     import("@opentelemetry/semantic-conventions"),
+    import("@opentelemetry/api"),
   ]);
 
   const provider = new WebTracerProvider({
@@ -109,6 +140,7 @@ export async function initTelemetry(
     ],
   });
 
+  traceApi = trace;
   started = true;
   return true;
 }
@@ -120,4 +152,5 @@ function escapeRegExp(value: string): string {
 /** Test seam: forget that telemetry was started. */
 export function resetTelemetryForTests(): void {
   started = false;
+  traceApi = undefined;
 }

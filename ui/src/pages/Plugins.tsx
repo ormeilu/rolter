@@ -99,7 +99,7 @@ export default function Plugins() {
           <Button className="mt-4" variant="outline" onClick={() => void query.refetch()}>Try again</Button>
         </section>
       ) : plugins.length === 0 ? (
-        <EmptyState
+        <EmptyState uxTarget="plugin-list"
           icon={<Puzzle />}
           title="No plugin configurations"
           description="Install a webhook configuration, choose its pipeline stage, and keep it paused until the gateway plugin runtime is available."

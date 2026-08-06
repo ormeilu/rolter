@@ -209,7 +209,7 @@ export default function SkillsRepository() {
   if (scope.isLoading || skills.isLoading) return <LoadingState />;
   if (scope.error || skills.isError) {
     return (
-      <EmptyState
+      <EmptyState uxTarget="skill-list"
         icon={<BookOpen />}
         title="Skills repository unavailable"
         description={scope.error ?? (skills.error as Error).message}
@@ -233,7 +233,7 @@ export default function SkillsRepository() {
 
         {!selected ? (
           <main className="flex min-h-[32rem] items-center justify-center rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-raised)] xl:col-span-2">
-            <EmptyState
+            <EmptyState uxTarget="skill-versions"
               icon={<FilePlus2 />}
               title="Share your first skill"
               description="Create an org skill, define who can resolve it, then save inline content or a credential-free artifact reference."
@@ -251,7 +251,7 @@ export default function SkillsRepository() {
           </main>
         ) : versions.isError ? (
           <main className="flex min-h-[32rem] items-center justify-center rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-raised)]">
-            <EmptyState
+            <EmptyState uxTarget="skill-files"
               icon={<FileCode2 />}
               title="Skill versions unavailable"
               description={(versions.error as Error).message}

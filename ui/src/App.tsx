@@ -10,6 +10,7 @@ import { logout } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
+import { UxScreenProvider, useRouteTelemetry, useUxContext } from "@/lib/ux-react";
 import Account from "@/pages/Account";
 import { AlertChannels, AlertHistory, AlertRules } from "@/pages/Alerting";
 import AdaptiveDashboard from "@/pages/AdaptiveDashboard";
@@ -181,12 +182,16 @@ function MenuRow({
 function Screen({ screen }: { screen: string }) {
   const [title, subtitle] = META[screen] ?? [screen, ""];
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <ScreenHeader title={title} subtitle={subtitle} />
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {BUILT.has(screen) ? SCREENS[screen] : <Stub screen={screen} />}
+    // names the screen for every UX event emitted below it (#805), so shared
+    // components like EmptyState are instrumented without a prop per screen
+    <UxScreenProvider screen={screen}>
+      <div className="flex h-full min-h-0 flex-col">
+        <ScreenHeader title={title} subtitle={subtitle} />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {BUILT.has(screen) ? SCREENS[screen] : <Stub screen={screen} />}
+        </div>
       </div>
-    </div>
+    </UxScreenProvider>
   );
 }
 
@@ -195,6 +200,18 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const scope = useScope();
+
+  // route key, computed before the early returns below so the telemetry hooks
+  // that follow are called unconditionally
+  const key = location.pathname.replace(/^\/+|\/+$/g, "");
+  const activeKey = LEAVES.has(key) ? key : "dashboard";
+
+  // the navigation half of the UX stream (#805): screen_view, navigate and
+  // back_out for the whole dashboard, emitted once from the shell rather than
+  // per screen. an empty key while signed out is dropped by `track`, which is
+  // what keeps the login screen out of the funnel
+  useRouteTelemetry(email ? activeKey : "");
+  useUxContext(scope);
 
   // revoke the server-side session (if any) before clearing local state;
   // best-effort so a network hiccup still logs the user out locally
@@ -214,9 +231,7 @@ export default function App() {
     return <Login />;
   }
 
-  const key = location.pathname.replace(/^\/+|\/+$/g, "");
   const redirect = LEGACY[key];
-  const activeKey = LEAVES.has(key) ? key : "dashboard";
   const orgName = scope.orgs.find((o) => o.id === scope.orgId)?.name;
   const navGroups: NavGroup[] = [{ items: NAV.map(toNavItem) }];
   const initials = (email.trim()[0] ?? "?").toUpperCase();

@@ -168,7 +168,7 @@ export default function UserProvisioning() {
 
       {!forbidden &&
         (rows.length === 0 ? (
-          <EmptyState
+          <EmptyState uxTarget="provisioning-list"
             icon={<BookUser />}
             title="No provisioning tokens yet"
             description="Issue a token, paste it into your identity provider's SCIM connector, and it will sync users into this org. The token is shown once, at creation."

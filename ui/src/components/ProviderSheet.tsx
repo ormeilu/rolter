@@ -7,6 +7,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Sheet, SheetBody, SheetFooter, SheetHeader } from "@/components/ui/sheet";
+import { useFormTelemetry } from "@/lib/ux-react";
 import {
   createProvider,
   PROVIDER_KINDS,
@@ -95,6 +96,11 @@ export function ProviderSheet({
   // unchanged, send "" to clear it, send a value to set/rotate it. api_key is
   // left out entirely unless the operator typed a new one — never pre-filled,
   // so an empty submit must not clear a credential that's just not being rotated
+  // form lifecycle for the UX stream (#805). the target names the form and the
+  // mode, never anything the operator typed into it — this sheet holds provider
+  // credentials, so the distinction is not academic
+  const ux = useFormTelemetry(mode === "add" ? "provider-create" : "provider-edit", open);
+
   const save = useMutation({
     mutationFn: () => {
       if (mode === "add") {
@@ -119,9 +125,11 @@ export function ProviderSheet({
       });
     },
     onSuccess: (created) => {
+      ux.saved();
       onDone(created);
       onOpenChange(false);
     },
+    onError: () => ux.failed(),
   });
 
   const title = mode === "add" ? "Add provider" : `Edit ${provider?.name ?? ""}`;
@@ -240,7 +248,13 @@ export function ProviderSheet({
           <Button variant="ghost" onClick={() => guard() && onOpenChange(false)}>
             Cancel
           </Button>
-          <Button disabled={!canSave} onClick={() => save.mutate()}>
+          <Button
+            disabled={!canSave}
+            onClick={() => {
+              ux.submitted();
+              save.mutate();
+            }}
+          >
             {cta}
           </Button>
         </div>
