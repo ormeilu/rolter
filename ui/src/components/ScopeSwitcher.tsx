@@ -174,7 +174,7 @@ function ScopeRow({
           type="button"
           aria-label={`Add ${label.toLowerCase()}`}
           onClick={onAdd}
-          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
@@ -184,7 +184,7 @@ function ScopeRow({
           type="button"
           aria-label={`Delete ${label.toLowerCase()}`}
           onClick={onDelete}
-          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-destructive"
+          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>

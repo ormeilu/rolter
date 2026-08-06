@@ -23,7 +23,7 @@ export function Tag({ onRemove, className, children, ...props }: TagProps) {
           type="button"
           onClick={onRemove}
           aria-label="Remove"
-          className="-mr-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+          className="-mr-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <X className="h-2.5 w-2.5" />
         </button>
