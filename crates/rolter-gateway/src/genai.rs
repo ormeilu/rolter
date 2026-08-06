@@ -61,6 +61,21 @@ pub(crate) const SYSTEM: &str = "gen_ai.system";
 pub(crate) const REQUEST_MODEL: &str = "gen_ai.request.model";
 /// `gen_ai.response.model` — the model the provider says it actually served.
 pub(crate) const RESPONSE_MODEL: &str = "gen_ai.response.model";
+/// `gen_ai.response.finish_reasons` — **Recommended**; why generation stopped.
+///
+/// The spec types this as an array of strings, one per generation. `tracing`
+/// has no array field type — its `Value` set is scalars, `&str` and `Debug` —
+/// so a multi-choice response is recorded as one comma-joined string rather
+/// than a list. Single-choice responses, which is nearly all traffic, are
+/// unaffected either way, and a joined string still answers the question the
+/// attribute exists for ("did this get truncated?").
+///
+/// The values stay provider-native: OpenAI's `stop`/`length`/`content_filter`,
+/// Anthropic's `end_turn`/`max_tokens`/`stop_sequence`/`tool_use`. The spec's
+/// own examples are provider-native, and normalising them would erase real
+/// distinctions — Anthropic's `end_turn` and `stop_sequence` are both "finished
+/// naturally" but only one of them means the caller's stop sequence fired.
+pub(crate) const RESPONSE_FINISH_REASONS: &str = "gen_ai.response.finish_reasons";
 /// `gen_ai.output.type` — output modality, for the non-text routes.
 pub(crate) const OUTPUT_TYPE: &str = "gen_ai.output.type";
 /// `gen_ai.usage.input_tokens` — recommended.
@@ -185,6 +200,7 @@ mod tests {
         assert_eq!(SYSTEM, "gen_ai.system");
         assert_eq!(REQUEST_MODEL, "gen_ai.request.model");
         assert_eq!(RESPONSE_MODEL, "gen_ai.response.model");
+        assert_eq!(RESPONSE_FINISH_REASONS, "gen_ai.response.finish_reasons");
         assert_eq!(OUTPUT_TYPE, "gen_ai.output.type");
         assert_eq!(USAGE_INPUT_TOKENS, "gen_ai.usage.input_tokens");
         assert_eq!(USAGE_OUTPUT_TOKENS, "gen_ai.usage.output_tokens");
