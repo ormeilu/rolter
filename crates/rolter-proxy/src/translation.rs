@@ -1382,7 +1382,12 @@ fn openai_to_interactions(mut v: Value) -> Value {
             _ => None,
         })
         .unwrap_or_default();
+    // `system_text` alone cannot stand in for the old `Vec<String>`: a system
+    // turn carrying empty content is still a turn, and `join("\n")` emitted a
+    // separator for it and produced a (possibly empty) string. count the turns
+    // so emptiness of the text is not mistaken for absence of the turns
     let mut system_text = String::new();
+    let mut system_turns = 0usize;
     let mut input = Vec::with_capacity(messages.len());
     for message in messages {
         let role = message
@@ -1391,9 +1396,10 @@ fn openai_to_interactions(mut v: Value) -> Value {
             .unwrap_or("user");
         match role {
             "system" | "developer" => {
-                if !system_text.is_empty() {
+                if system_turns > 0 {
                     system_text.push('\n');
                 }
+                system_turns += 1;
                 system_text.push_str(&content_text(message.get("content")));
             }
             "tool" => {
@@ -1439,7 +1445,7 @@ fn openai_to_interactions(mut v: Value) -> Value {
         out.insert("model".into(), model);
     }
     out.insert("input".into(), Value::Array(input));
-    if !system_text.is_empty() {
+    if system_turns > 0 {
         out.insert("system_instruction".into(), json!(system_text));
     }
     if obj.remove("stream").and_then(|v| v.as_bool()) == Some(true) {
@@ -2368,6 +2374,39 @@ fn openai_chunk(
 
 #[cfg(test)]
 mod tests {
+
+    /// A system turn with empty content is still a turn.
+    ///
+    /// The `Vec<String>` this loop used to build was joined with `"\n"`, so an
+    /// empty turn contributed a separator, and a request whose only system turn
+    /// was empty still emitted `system_instruction: ""`. Accumulating straight
+    /// into a `String` makes "the text is empty" and "there were no turns" look
+    /// identical, which silently drops the field and the leading separator.
+    #[test]
+    fn an_empty_system_turn_is_still_a_system_turn() {
+        let out = openai_to_interactions(json!({
+            "model": "m",
+            "messages": [{"role": "system"}, {"role": "user", "content": "hi"}]
+        }));
+        assert_eq!(out.get("system_instruction"), Some(&json!("")));
+
+        let out = openai_to_interactions(json!({
+            "model": "m",
+            "messages": [
+                {"role": "system", "content": ""},
+                {"role": "system", "content": "abc"},
+                {"role": "user", "content": "hi"}
+            ]
+        }));
+        assert_eq!(out.get("system_instruction"), Some(&json!("\nabc")));
+
+        // and no system turn at all still omits the field entirely
+        let out = openai_to_interactions(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}]
+        }));
+        assert!(out.get("system_instruction").is_none());
+    }
     use super::*;
 
     fn plan(client: Protocol, upstream: Protocol) -> TranslationPlan {
