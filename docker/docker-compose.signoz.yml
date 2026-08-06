@@ -1,0 +1,171 @@
+# SigNoz observability overlay (#805) — the heavier alternative to
+# `docker-compose.observability.yml`.
+#
+#   docker compose -f docker/docker-compose.yml \
+#                  -f docker/docker-compose.signoz.yml up
+#
+# SigNoz UI: http://localhost:8080
+#
+# Use this one instead of the Jaeger overlay when you want **metrics and logs**
+# alongside traces, aggregate views, or dashboards. Jaeger is traces-only, which
+# is enough to read a waterfall but not to answer "which stage is slow across
+# all requests". Use the Jaeger overlay when you want something light.
+#
+# The two are mutually exclusive: both publish OTLP on 4317/4318, so bring up
+# one or the other, not both.
+#
+# Everything rolter emits is vendor-neutral OTLP, so nothing in the Rust changes
+# between the two overlays — only where the spans are posted.
+#
+# On versions: the collector/migrator and ClickHouse are pinned as a **tested
+# pair** from SigNoz v0.129.0's manifest. Do not bump the collector alone — a
+# newer migrator against this ClickHouse fails with "Unknown setting
+# 'object_serialization_version'", because it emits settings the older server
+# does not know. Regenerate the set from Foundry to upgrade.
+#
+# The `signoz` UI image is deliberately ahead of that pair: its MCP server's
+# dashboard tools need v0.135.0 or newer, and the UI reads the schema the
+# migrator writes rather than writing it itself.
+#
+# SigNoz's own docker-compose manifests were deprecated in v0.130.0
+# in favour of the Foundry CLI (`curl -fsSL https://signoz.io/foundry.sh | bash`),
+# which generates compose with `foundryctl forge`. This file is a pinned,
+# de-collided equivalent so the overlay stays a plain `docker compose` command.
+# If it drifts, regenerate from Foundry rather than patching it by hand.
+#
+# Collisions with rolter's own services are handled deliberately:
+#   - every service is named `signoz-*`, so SigNoz's ClickHouse does not clash
+#     with the `clickhouse` service rolter already runs
+#   - SigNoz's ClickHouse publishes no ports, so 8123/9000 stay rolter's
+#   - volumes are named `signoz-*` for the same reason
+
+services:
+  signoz-zookeeper:
+    image: signoz/zookeeper:3.7.1
+    restart: unless-stopped
+    user: root
+    environment:
+      - ZOO_SERVER_ID=1
+      - ALLOW_ANONYMOUS_LOGIN=yes
+      - ZOO_AUTOPURGE_INTERVAL=1
+    volumes:
+      - signoz-zookeeper:/bitnami/zookeeper
+
+  signoz-clickhouse:
+    image: clickhouse/clickhouse-server:25.5.6
+    restart: unless-stopped
+    tty: true
+    depends_on:
+      - signoz-zookeeper
+    # no `ports:` — rolter's own clickhouse owns 8123/9000 on the host
+    volumes:
+      # only the cluster topology is vendored (3 KB). SigNoz's full config.xml
+      # is 56 KB of third-party configuration we would then own and have to keep
+      # in step; the stock image defaults cover everything else for a single node
+      - ./signoz/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - signoz-clickhouse:/var/lib/clickhouse/
+    environment:
+      - CLICKHOUSE_SKIP_USER_SETUP=1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "0.0.0.0:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # creates and migrates SigNoz's ClickHouse schema, then exits
+  signoz-schema-migrator:
+    image: signoz/signoz-otel-collector:v0.144.5
+    restart: on-failure
+    depends_on:
+      signoz-clickhouse:
+        condition: service_healthy
+    environment:
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN=tcp://signoz-clickhouse:9000
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_CLUSTER=cluster
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_REPLICATION=true
+      - SIGNOZ_OTEL_COLLECTOR_TIMEOUT=10m
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        /signoz-otel-collector migrate bootstrap &&
+        /signoz-otel-collector migrate sync up &&
+        /signoz-otel-collector migrate async up
+
+  signoz:
+    image: signoz/signoz:v0.136.0
+    restart: unless-stopped
+    depends_on:
+      signoz-clickhouse:
+        condition: service_healthy
+    ports:
+      - "8080:8080" # SigNoz UI
+    volumes:
+      - signoz-sqlite:/var/lib/signoz/
+    environment:
+      - SIGNOZ_ALERTMANAGER_PROVIDER=signoz
+      - SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN=tcp://signoz-clickhouse:9000
+      - SIGNOZ_SQLSTORE_SQLITE_PATH=/var/lib/signoz/signoz.db
+      # local dev only — a real deployment must set its own secret
+      - SIGNOZ_TOKENIZER_JWT_SECRET=rolter-local-dev
+
+  signoz-otel-collector:
+    image: signoz/signoz-otel-collector:v0.144.5
+    restart: unless-stopped
+    depends_on:
+      signoz-clickhouse:
+        condition: service_healthy
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    environment:
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN=tcp://signoz-clickhouse:9000
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_CLUSTER=cluster
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_REPLICATION=true
+      - SIGNOZ_OTEL_COLLECTOR_TIMEOUT=10m
+      - OTEL_RESOURCE_ATTRIBUTES=host.name=signoz-host,os.type=linux
+    volumes:
+      - ./signoz/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    command: ["--config=/etc/otel-collector-config.yaml"]
+
+  # SigNoz's MCP server, so an agent can query traces, run ClickHouse queries and
+  # manage dashboards against this local instance.
+  #
+  # SIGNOZ_API_KEY is read from the environment and never written to a file:
+  # create the key in the SigNoz UI under Settings -> API Keys, store it in
+  # `pass`, and export it before `up`:
+  #
+  #   set -x SIGNOZ_API_KEY (pass show rolter/signoz-api-key)
+  #
+  # With no key set the container still starts but every call is unauthorized.
+  signoz-mcp:
+    image: signoz/signoz-mcp-server:latest
+    restart: unless-stopped
+    depends_on:
+      - signoz
+    ports:
+      - "8000:8000" # MCP endpoint at /mcp
+    environment:
+      - TRANSPORT_MODE=http
+      - MCP_SERVER_PORT=8000
+      - SIGNOZ_URL=http://signoz:8080
+      - SIGNOZ_API_KEY=${SIGNOZ_API_KEY:-}
+
+  gateway:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://signoz-otel-collector:4317
+      OTEL_SERVICE_NAME: rolter-gateway
+
+  control:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://signoz-otel-collector:4317
+      OTEL_SERVICE_NAME: rolter-control
+
+volumes:
+  signoz-clickhouse:
+  signoz-sqlite:
+  signoz-zookeeper:

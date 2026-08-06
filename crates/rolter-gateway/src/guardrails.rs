@@ -332,6 +332,9 @@ impl<'a> OutputGuard<'a> {
     /// Callers apply this to successful responses only, so this is not the path
     /// an upstream error body takes.
     pub fn apply(&self, bytes: &bytes::Bytes) -> OutputDecision {
+        // response-side scanning is its own attributable stage: masking a large
+        // body costs real time, and it lands after the upstream leg (#805)
+        let _stage = crate::trace::stage_span!("guardrails.post");
         let Ok(mut parsed) = serde_json::from_slice::<Value>(bytes) else {
             return OutputDecision::Unchanged;
         };

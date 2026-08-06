@@ -13,6 +13,7 @@ use dashmap::DashMap;
 use rolter_core::{BackpressurePolicy, Error, ProviderConfig, QueueConfig, Result};
 use rolter_proxy::Forwarder;
 use tokio::sync::{mpsc, oneshot, Mutex};
+use tracing::Instrument;
 
 use crate::metrics::Metrics;
 
@@ -38,6 +39,8 @@ enum Job {
         upstream_model: Option<String>,
         trace_headers: Vec<(String, String)>,
         reply: oneshot::Sender<Result<reqwest::Response>>,
+        wait: tracing::Span,
+        parent: tracing::Span,
     },
     Raw {
         provider: ProviderConfig,
@@ -47,7 +50,20 @@ enum Job {
         api_key: Option<String>,
         trace_headers: Vec<(String, String)>,
         reply: oneshot::Sender<Result<reqwest::Response>>,
+        wait: tracing::Span,
+        parent: tracing::Span,
     },
+}
+
+/// Span covering the time a job sits in the provider queue (#805).
+///
+/// Created on the caller's task inside its `upstream.request` span and dropped
+/// by the worker the moment it picks the job up, so its duration is the queue
+/// wait itself — not the wait plus the upstream call, which is what wrapping
+/// the whole dispatch would have measured. Disabled (and free) when no OTLP
+/// pipeline is installed, and never created at all when queueing is off.
+fn queue_wait_span(provider: &str) -> tracing::Span {
+    crate::trace::stage_span!("queue.wait", provider = %provider)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +120,11 @@ impl ProviderQueues {
             upstream_model: upstream_model.map(str::to_string),
             trace_headers: owned_headers(trace_headers),
             reply,
+            wait: queue_wait_span(&provider.name),
+            // the worker runs on its own task, where nothing is in scope: carry
+            // the caller's span across so the forwarder's own stages land under
+            // `upstream.request` instead of becoming orphan roots (#805)
+            parent: tracing::Span::current(),
         };
         self.dispatch(config, &provider.name, job, result).await
     }
@@ -134,6 +155,11 @@ impl ProviderQueues {
             api_key: api_key.map(str::to_string),
             trace_headers: owned_headers(trace_headers),
             reply,
+            wait: queue_wait_span(&provider.name),
+            // the worker runs on its own task, where nothing is in scope: carry
+            // the caller's span across so the forwarder's own stages land under
+            // `upstream.request` instead of becoming orphan roots (#805)
+            parent: tracing::Span::current(),
         };
         self.dispatch(config, &provider.name, job, result).await
     }
@@ -213,8 +239,14 @@ async fn run_job(forwarder: &Forwarder, job: Job) {
             upstream_model,
             trace_headers,
             reply,
+            wait,
+            parent,
         } => {
+            // the job is off the queue: close the wait span before doing any work
+            drop(wait);
             let headers = borrowed_headers(&trace_headers);
+            // `.instrument`, not `.enter()`: an entered guard is `!Send` and this
+            // future is spawned onto the worker task
             let _ = reply.send(
                 forwarder
                     .forward_json(
@@ -225,6 +257,7 @@ async fn run_job(forwarder: &Forwarder, job: Job) {
                         upstream_model.as_deref(),
                         &headers,
                     )
+                    .instrument(parent)
                     .await,
             );
         }
@@ -236,8 +269,14 @@ async fn run_job(forwarder: &Forwarder, job: Job) {
             api_key,
             trace_headers,
             reply,
+            wait,
+            parent,
         } => {
+            // the job is off the queue: close the wait span before doing any work
+            drop(wait);
             let headers = borrowed_headers(&trace_headers);
+            // `.instrument`, not `.enter()`: an entered guard is `!Send` and this
+            // future is spawned onto the worker task
             let _ = reply.send(
                 forwarder
                     .forward_raw(
@@ -248,6 +287,7 @@ async fn run_job(forwarder: &Forwarder, job: Job) {
                         api_key.as_deref(),
                         &headers,
                     )
+                    .instrument(parent)
                     .await,
             );
         }

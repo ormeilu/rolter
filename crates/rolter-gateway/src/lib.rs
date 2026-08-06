@@ -130,6 +130,16 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     state.managed_auth = args.snapshot_url.is_some();
     let state = state;
 
+    // export the counters the Prometheus endpoint already renders over OTLP too
+    // (#805). observable instruments, so nothing is pushed on the request path:
+    // the SDK reads the same atomics on its own interval. `None` — and no cost —
+    // when no OTLP endpoint is configured. held for the lifetime of `run` so
+    // metrics flush on shutdown
+    let _metrics_export = {
+        let metrics = state.metrics.clone();
+        rolter_core::telemetry::install_metrics(move || metrics.scalars_for_export())
+    };
+
     // the health prober is always spawned; it self-gates on the live snapshot so a
     // hot-reload can enable/disable and re-tune probing without a restart (ROL-125)
     if config.health.enabled {
@@ -289,6 +299,11 @@ pub fn build_router(state: AppState, metrics_path: &str, max_body_bytes: usize) 
         // (ROL-230). on_failure is disabled so classified 5xx are not double-logged
         .layer(
             TraceLayer::new_for_http()
+                // builds the request span at INFO and adopts the caller's trace
+                // context as its parent when a pipeline is installed (#805); the
+                // stock DEBUG span is disabled at the default filter, and a
+                // disabled span cannot be parented or exported
+                .make_span_with(trace::GatewayMakeSpan)
                 .on_response(trace::StatusAwareOnResponse)
                 .on_failure(()),
         )

@@ -171,6 +171,22 @@ pub struct Metrics {
     by_complexity: DashMap<(String, String, String, String), AtomicU64>,
 }
 
+/// One scalar metric: its Prometheus type, name, help text, and current value.
+///
+/// Deliberately flat and owned-free — building the list is a walk over atomics,
+/// cheap enough to do on every scrape and on every OTLP collection interval.
+#[derive(Debug, Clone, Copy)]
+pub struct Scalar {
+    /// prometheus metric type: `counter` or `gauge`
+    pub kind: &'static str,
+    /// fully-qualified metric name, e.g. `rolter_requests_total`
+    pub name: &'static str,
+    /// one-line description, used as the Prometheus HELP text
+    pub help: &'static str,
+    /// value at the moment the list was built
+    pub value: u64,
+}
+
 impl Metrics {
     /// Record one completed request's total latency and time-to-first-token
     /// against the `model` label. Called once per request from the log sink.
@@ -232,328 +248,323 @@ impl Metrics {
             .fetch_add(1, Relaxed);
     }
 
+    /// Every scalar counter and gauge, in a stable order.
+    ///
+    /// Single source of truth for the two exporters that read these numbers:
+    /// the Prometheus text endpoint below and the OTLP metrics exporter (#805).
+    /// A counter added here reaches both without a second edit — the point of
+    /// #805 being "a second exporter over the same numbers, not a rewrite".
+    ///
+    /// Per-model histograms and label-bearing counters are not scalars and are
+    /// rendered separately.
+    pub fn scalars(&self) -> Vec<Scalar> {
+        vec![
+            Scalar {
+                kind: "counter",
+                name: "rolter_requests_total",
+                help: "total proxied requests",
+                value: self.requests_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_upstream_errors_total",
+                help: "upstream request failures",
+                value: self.upstream_errors_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_auth_failures_total",
+                help: "requests rejected due to auth",
+                value: self.auth_failures_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "gauge",
+                name: "rolter_config_version",
+                help: "config version applied to the live snapshot",
+                value: self.config_version.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_config_reloads_total",
+                help: "successful config hot-reloads applied",
+                value: self.config_reloads_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_config_reload_failures_total",
+                help: "failed config snapshot fetches",
+                value: self.config_reload_failures_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_logs_written_total",
+                help: "request-log rows written to clickhouse",
+                value: self.logs_written_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_logs_dropped_total",
+                help: "request-log rows dropped (queue full or write failed)",
+                value: self.logs_dropped_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_health_events_written_total",
+                help: "provider-health-event rows written to clickhouse",
+                value: self.health_events_written_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_health_events_dropped_total",
+                help: "provider-health-event rows dropped (queue full or write failed)",
+                value: self.health_events_dropped_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_budget_blocks_total",
+                help: "requests rejected due to an exhausted budget",
+                value: self.budget_blocks_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_rate_limit_blocks_total",
+                help: "requests rejected due to an exhausted rate limit",
+                value: self.rate_limit_blocks_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_guardrail_blocks_total",
+                help: "requests rejected by a built-in guardrail block rule",
+                value: self.guardrail_blocks_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_guardrail_redactions_total",
+                help: "guardrail redactions applied to request content",
+                value: self.guardrail_redactions_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_guardrail_output_blocks_total",
+                help: "responses withheld by a post-call guardrail block rule",
+                value: self.guardrail_output_blocks_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_guardrail_output_redactions_total",
+                help: "guardrail redactions applied to response content",
+                value: self.guardrail_output_redactions_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_guardrail_stream_rejections_total",
+                help: "streamed requests refused because the route has post-call rules",
+                value: self.guardrail_stream_rejections_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_prompt_template_decorations_total",
+                help: "decorator messages injected by prompt templates at admission",
+                value: self.prompt_template_decorations_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_prompt_template_rejections_total",
+                help: "requests rejected for invalid prompt-template variables",
+                value: self.prompt_template_rejections_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_guardrail_webhook_blocks_total",
+                help: "requests rejected by the custom guardrail webhook",
+                value: self.guardrail_webhook_blocks_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_guardrail_webhook_transforms_total",
+                help: "request bodies transformed by the custom guardrail webhook",
+                value: self.guardrail_webhook_transforms_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_guardrail_webhook_errors_total",
+                help: "custom-guardrail-webhook calls that failed transport",
+                value: self.guardrail_webhook_errors_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_provider_queue_rejections_total",
+                help: "requests rejected because a provider queue was full or unavailable",
+                value: self.provider_queue_rejections_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_provider_queue_timeouts_total",
+                help: "requests that timed out waiting for a provider queue slot",
+                value: self.provider_queue_timeouts_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_retries_total",
+                help: "upstream attempts retried after a transient failure",
+                value: self.retries_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_cooldowns_tripped_total",
+                help: "targets parked on a cooldown after a transient failure",
+                value: self.cooldowns_tripped_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_key_cooldowns_tripped_total",
+                help: "api keys parked on a cooldown after a key-level failure",
+                value: self.key_cooldowns_tripped_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_health_down_total",
+                help: "providers marked unhealthy by an active health probe",
+                value: self.health_down_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_health_recovered_total",
+                help: "providers restored to healthy by an active health probe",
+                value: self.health_recovered_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_status_page_degraded_total",
+                help: "status-page polls that saw a non-operational provider (secondary signal)",
+                value: self.status_page_degraded_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_breaker_opened_total",
+                help: "targets tripped open by the circuit breaker after sustained failures",
+                value: self.breaker_opened_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_breaker_closed_total",
+                help: "targets closed by the circuit breaker after a successful half-open probe",
+                value: self.breaker_closed_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_metrics_scrapes_total",
+                help: "upstream /metrics scrape sweeps completed",
+                value: self.metrics_scrapes_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_cache_hits_total",
+                help: "requests served from the response cache",
+                value: self.cache_hits_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_cache_misses_total",
+                help: "cache-eligible requests not found in the response cache",
+                value: self.cache_misses_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_cache_stores_total",
+                help: "successful responses written into the response cache",
+                value: self.cache_stores_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_semantic_cache_hits_total",
+                help: "responses served from semantic cache",
+                value: self.semantic_cache_hits_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_semantic_cache_misses_total",
+                help: "semantic cache lookups below the similarity threshold",
+                value: self.semantic_cache_misses_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_semantic_cache_stores_total",
+                help: "responses stored in semantic cache indexes",
+                value: self.semantic_cache_stores_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_kv_events_total",
+                help: "validated vLLM KV events consumed",
+                value: self.kv_events_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_kv_events_malformed_total",
+                help: "malformed vLLM KV event batches ignored",
+                value: self.kv_events_malformed_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_kv_event_stream_failures_total",
+                help: "vLLM KV event stream disconnects and connection failures",
+                value: self.kv_event_stream_failures_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_kv_cache_decisions_total",
+                help: "routing decisions using fresh exact KV residency",
+                value: self.kv_cache_decisions_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_lmcache_refreshes_total",
+                help: "successful LMCache controller refreshes",
+                value: self.lmcache_refreshes_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_lmcache_refresh_failures_total",
+                help: "failed or malformed LMCache controller refreshes",
+                value: self.lmcache_refresh_failures_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_lmcache_decisions_total",
+                help: "routing decisions using fresh LMCache signals",
+                value: self.lmcache_decisions_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_cache_too_large_total",
+                help: "cacheable responses skipped for exceeding cache.max_entry_bytes",
+                value: self.cache_too_large_total.load(Relaxed),
+            },
+        ]
+    }
+    /// The scalar metrics as plain tuples, for the OTLP exporter (#805).
+    ///
+    /// Same list `render()` walks — the two exporters cannot drift apart.
+    pub fn scalars_for_export(&self) -> Vec<rolter_core::telemetry::ScalarMetric> {
+        self.scalars()
+            .into_iter()
+            .map(|s| (s.kind, s.name, s.help, s.value))
+            .collect()
+    }
+
     /// Render the counters in Prometheus text exposition format.
     pub fn render(&self) -> String {
         let mut out = String::new();
-        metric(
-            &mut out,
-            "counter",
-            "rolter_requests_total",
-            "total proxied requests",
-            self.requests_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_upstream_errors_total",
-            "upstream request failures",
-            self.upstream_errors_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_auth_failures_total",
-            "requests rejected due to auth",
-            self.auth_failures_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "gauge",
-            "rolter_config_version",
-            "config version applied to the live snapshot",
-            self.config_version.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_config_reloads_total",
-            "successful config hot-reloads applied",
-            self.config_reloads_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_config_reload_failures_total",
-            "failed config snapshot fetches",
-            self.config_reload_failures_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_logs_written_total",
-            "request-log rows written to clickhouse",
-            self.logs_written_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_logs_dropped_total",
-            "request-log rows dropped (queue full or write failed)",
-            self.logs_dropped_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_health_events_written_total",
-            "provider-health-event rows written to clickhouse",
-            self.health_events_written_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_health_events_dropped_total",
-            "provider-health-event rows dropped (queue full or write failed)",
-            self.health_events_dropped_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_budget_blocks_total",
-            "requests rejected due to an exhausted budget",
-            self.budget_blocks_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_rate_limit_blocks_total",
-            "requests rejected due to an exhausted rate limit",
-            self.rate_limit_blocks_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_guardrail_blocks_total",
-            "requests rejected by a built-in guardrail block rule",
-            self.guardrail_blocks_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_guardrail_redactions_total",
-            "guardrail redactions applied to request content",
-            self.guardrail_redactions_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_guardrail_output_blocks_total",
-            "responses withheld by a post-call guardrail block rule",
-            self.guardrail_output_blocks_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_guardrail_output_redactions_total",
-            "guardrail redactions applied to response content",
-            self.guardrail_output_redactions_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_guardrail_stream_rejections_total",
-            "streamed requests refused because the route has post-call rules",
-            self.guardrail_stream_rejections_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_prompt_template_decorations_total",
-            "decorator messages injected by prompt templates at admission",
-            self.prompt_template_decorations_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_prompt_template_rejections_total",
-            "requests rejected for invalid prompt-template variables",
-            self.prompt_template_rejections_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_guardrail_webhook_blocks_total",
-            "requests rejected by the custom guardrail webhook",
-            self.guardrail_webhook_blocks_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_guardrail_webhook_transforms_total",
-            "request bodies transformed by the custom guardrail webhook",
-            self.guardrail_webhook_transforms_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_guardrail_webhook_errors_total",
-            "custom-guardrail-webhook calls that failed transport",
-            self.guardrail_webhook_errors_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_provider_queue_rejections_total",
-            "requests rejected because a provider queue was full or unavailable",
-            self.provider_queue_rejections_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_provider_queue_timeouts_total",
-            "requests that timed out waiting for a provider queue slot",
-            self.provider_queue_timeouts_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_retries_total",
-            "upstream attempts retried after a transient failure",
-            self.retries_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_cooldowns_tripped_total",
-            "targets parked on a cooldown after a transient failure",
-            self.cooldowns_tripped_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_key_cooldowns_tripped_total",
-            "api keys parked on a cooldown after a key-level failure",
-            self.key_cooldowns_tripped_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_health_down_total",
-            "providers marked unhealthy by an active health probe",
-            self.health_down_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_health_recovered_total",
-            "providers restored to healthy by an active health probe",
-            self.health_recovered_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_status_page_degraded_total",
-            "status-page polls that saw a non-operational provider (secondary signal)",
-            self.status_page_degraded_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_breaker_opened_total",
-            "targets tripped open by the circuit breaker after sustained failures",
-            self.breaker_opened_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_breaker_closed_total",
-            "targets closed by the circuit breaker after a successful half-open probe",
-            self.breaker_closed_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_metrics_scrapes_total",
-            "upstream /metrics scrape sweeps completed",
-            self.metrics_scrapes_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_cache_hits_total",
-            "requests served from the response cache",
-            self.cache_hits_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_cache_misses_total",
-            "cache-eligible requests not found in the response cache",
-            self.cache_misses_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_cache_stores_total",
-            "successful responses written into the response cache",
-            self.cache_stores_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_semantic_cache_hits_total",
-            "responses served from semantic cache",
-            self.semantic_cache_hits_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_semantic_cache_misses_total",
-            "semantic cache lookups below the similarity threshold",
-            self.semantic_cache_misses_total.load(Relaxed),
-        );
-        metric(
-            &mut out,
-            "counter",
-            "rolter_semantic_cache_stores_total",
-            "responses stored in semantic cache indexes",
-            self.semantic_cache_stores_total.load(Relaxed),
-        );
-        for (name, help, value) in [
-            (
-                "rolter_kv_events_total",
-                "validated vLLM KV events consumed",
-                self.kv_events_total.load(Relaxed),
-            ),
-            (
-                "rolter_kv_events_malformed_total",
-                "malformed vLLM KV event batches ignored",
-                self.kv_events_malformed_total.load(Relaxed),
-            ),
-            (
-                "rolter_kv_event_stream_failures_total",
-                "vLLM KV event stream disconnects and connection failures",
-                self.kv_event_stream_failures_total.load(Relaxed),
-            ),
-            (
-                "rolter_kv_cache_decisions_total",
-                "routing decisions using fresh exact KV residency",
-                self.kv_cache_decisions_total.load(Relaxed),
-            ),
-            (
-                "rolter_lmcache_refreshes_total",
-                "successful LMCache controller refreshes",
-                self.lmcache_refreshes_total.load(Relaxed),
-            ),
-            (
-                "rolter_lmcache_refresh_failures_total",
-                "failed or malformed LMCache controller refreshes",
-                self.lmcache_refresh_failures_total.load(Relaxed),
-            ),
-            (
-                "rolter_lmcache_decisions_total",
-                "routing decisions using fresh LMCache signals",
-                self.lmcache_decisions_total.load(Relaxed),
-            ),
-        ] {
-            metric(&mut out, "counter", name, help, value);
+        for scalar in self.scalars() {
+            metric(
+                &mut out,
+                scalar.kind,
+                scalar.name,
+                scalar.help,
+                scalar.value,
+            );
         }
-        metric(
-            &mut out,
-            "counter",
-            "rolter_cache_too_large_total",
-            "cacheable responses skipped for exceeding cache.max_entry_bytes",
-            self.cache_too_large_total.load(Relaxed),
-        );
         self.render_histogram(
             &mut out,
             "rolter_request_latency_ms",

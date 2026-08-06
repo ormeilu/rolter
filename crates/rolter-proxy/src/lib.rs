@@ -358,9 +358,14 @@ impl Forwarder {
         let compatibility = self.compatibility.load();
         let client_policy = self.client_policy.load();
         let injected = &client_policy.injected_headers;
+        // dialect translation is its own attributable stage: a large body being
+        // rewritten between the OpenAI and Anthropic shapes is real time spent
+        // in the gateway rather than at the provider (#805)
+        let translate_stage = rolter_core::stage_span!("translate.request");
         let body = translation.translate_request_with(body, &compatibility)?;
         let body = translation.apply_model_defaults(body, &self.model_defaults.load());
         let body = translation::normalize_prompt_cache_control(body, provider.kind)?;
+        drop(translate_stage);
         // gemini native takes no top-level `model` field (it is in the url)
         let body = if translation.is_gemini_generate() {
             body

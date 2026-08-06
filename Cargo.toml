@@ -58,6 +58,9 @@ opentelemetry-otlp = { version = "0.32", features = [
   "grpc-tonic",
   "http-proto",
   "reqwest-client",
+  # metrics export (#805): a second exporter over the numbers metrics.rs
+  # already computes, alongside the Prometheus endpoint
+  "metrics",
 ] }
 tracing-opentelemetry = "0.33"
 

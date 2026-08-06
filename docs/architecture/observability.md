@@ -18,6 +18,168 @@
 - **Outbound to engines**: inject the active trace context into upstream requests so vLLM/SGLang/TGI spans join the **same** distributed trace. vLLM and SGLang support OpenTelemetry tracing (e.g. vLLM `--otlp-traces-endpoint`); point them at the same OTLP collector so engine prefill/decode spans line up with rolter's request span.
 - A per-request `request_id` is echoed in a response header and stamped on logs, metric exemplars and spans for correlation.
 
+### How the context actually moves
+
+`rolter-core::telemetry` owns both directions, and both are inert unless an OTLP
+endpoint is configured:
+
+- **Extract.** `GatewayMakeSpan` (`rolter-gateway::trace`) is the `TraceLayer`'s
+  span-maker: it builds the request span and makes the extracted inbound context
+  its *parent*. A B3-only caller is normalized into an equivalent `traceparent`
+  first, so one W3C propagator serves both wire formats. Without this the
+  gateway's spans were disconnected roots — the trace id reached the request log,
+  but nothing joined the caller's trace.
+
+  It has to be the span-maker rather than a middleware layered inside the
+  `TraceLayer`: `DefaultMakeSpan` builds the request span at **DEBUG**, so under
+  the default `RUST_LOG=info` it is disabled, and setting a parent on a disabled
+  span silently does nothing. With no pipeline installed it falls back to that
+  stock DEBUG span, so the untraced path costs what it always did.
+- **Inject.** The context handed to the provider is injected from the *current*
+  span, inside the per-attempt `upstream.request` span, rather than copied from
+  the caller. Copying it verbatim made the provider call a child of the caller's
+  span and therefore a **sibling** of the gateway's own work, which silently
+  invalidated every waterfall built from the data. The allowlisted client headers
+  from `Forwarder::forwarded_header_names` are unaffected; only the trace headers
+  changed hands.
+- **Log correlation.** `RequestLog.trace_id` is read off the span context when a
+  pipeline is installed and falls back to parsing the inbound header otherwise,
+  so ClickHouse and the trace backend agree by construction.
+
+### Pipeline spans
+
+One span per stage, so a slow request is attributable rather than merely slow:
+
+| Span | Attributes |
+|---|---|
+| `auth` | — |
+| `guardrails.pre` | `redacted`, `webhook` |
+| `route.select` | `route`, `strategy`, `candidates` |
+| `cache.lookup` | `hit`, `kind` (`exact` / `semantic`) |
+| `queue.wait` | `provider` |
+| `upstream.request` | `attempt`, `gen_ai.system`, `gen_ai.request.model`, `http.response.status_code` |
+| `translate.request` | — |
+| `guardrails.post` | — |
+
+`queue.wait` spans enqueue→dequeue only: the span travels with the queued job and
+the worker closes it the moment it picks the job up, so it measures the wait and
+not the wait plus the upstream call. The job carries the caller's span alongside
+it, and the worker instruments the forward with it — the queue worker runs on its
+own task where nothing is in scope, so without that the forwarder's own
+`translate.request` span becomes an orphan root in a trace of its own. Names
+follow the OTel
+[GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
+where they fit, so a backend's built-in GenAI views work.
+
+Spans never carry prompt or completion content, API keys, virtual-key plaintext,
+or injected header values — those are credential material, and redaction stays
+owned by the existing `logging_settings` machinery rather than a second policy.
+
+### Running it locally
+
+The observability overlay starts a collector and a trace UI alongside the normal
+stack:
+
+```
+docker compose -f docker/docker-compose.yml \
+               -f docker/docker-compose.observability.yml up
+```
+
+Traces land at <http://localhost:16686>; the collector takes OTLP on 4317/4318
+and re-exposes collected metrics on 8889. The overlay sets
+`OTEL_EXPORTER_OTLP_ENDPOINT` on the `gateway` and `control` services, so
+bringing it up is the only step — without it that variable is unset and tracing
+stays off.
+
+The collector binds `0.0.0.0`, not `localhost`: one bound to loopback inside its
+container is unreachable from the gateway container.
+
+#### Choosing an overlay
+
+There are two, and they are mutually exclusive — both publish OTLP on 4317/4318.
+
+| | `docker-compose.observability.yml` (default) | `docker-compose.signoz.yml` |
+|---|---|---|
+| backend | Jaeger v2 | SigNoz |
+| signals | traces only | traces, metrics, logs |
+| containers | 2 | 5, incl. its own ClickHouse + Zookeeper |
+| storage | in memory, lost on restart | persistent |
+| use it for | reading a waterfall, fast iteration | aggregate views, dashboards, dogfooding over time |
+
+```
+docker compose -f docker/docker-compose.yml \
+               -f docker/docker-compose.signoz.yml up      # SigNoz on :8080
+```
+
+Jaeger is the default because it is two containers and starts in seconds, and
+because reading a correctly-parented waterfall is what the tracing work needed.
+Reach for SigNoz when "which stage is slow *across all requests*" matters, which
+Jaeger cannot answer.
+
+Nothing in the Rust differs between them: the gateway speaks vendor-neutral OTLP
+and only the destination changes. Any other OTLP backend works the same way —
+repoint the exporter in `infra/otel/collector.compose.yaml`.
+
+#### Querying SigNoz from an agent (MCP)
+
+The SigNoz overlay also starts SigNoz's MCP server on `http://localhost:8000/mcp`,
+so an agent can query traces, run ClickHouse queries, and manage dashboards
+against the local instance. Point an MCP client at that URL; the
+[SigNoz agent-skills plugin](https://github.com/SigNoz/agent-skills) ships a
+`signoz` server entry to fill in.
+
+It needs a SigNoz API key, which is created in the UI (**Settings → API Keys**,
+admin only) and supplied to the *server*, not the client:
+
+```
+set -x SIGNOZ_API_KEY (pass show rolter/signoz-api-key)
+docker compose -f docker/docker-compose.yml \
+               -f docker/docker-compose.signoz.yml up -d signoz-mcp
+```
+
+The key is read from the environment and never written to a tracked file. With
+no key set the container still starts, but every call returns
+`Authorization or SIGNOZ-API-KEY header required`.
+
+The MCP dashboard tools need SigNoz v0.135.0 or newer, which is why the `signoz`
+image is pinned ahead of the collector/ClickHouse pair.
+
+The SigNoz overlay is a pinned equivalent of what SigNoz's Foundry CLI generates,
+since SigNoz deprecated its own compose manifests in v0.130.0. Two things to know
+before touching it: its four images are a **tested set** and must be bumped
+together (a newer migrator emits ClickHouse settings an older server rejects),
+and it vendors 3.6 KB of ClickHouse config — the cluster topology and the
+`{shard}`/`{replica}` macros that `ReplicatedMergeTree` needs — rather than
+SigNoz's full 56 KB `config.xml`, which the stock image defaults cover.
+
+### Metrics over OTLP
+
+The counters and gauges `rolter-gateway::metrics` computes are exported over
+OTLP as well as served on `/metrics`. The Prometheus endpoint is unchanged —
+this is a second exporter over the same numbers.
+
+Both read one list, `Metrics::scalars()`, so they cannot drift: a counter added
+there reaches Prometheus and OTLP without a second edit. Counters export as
+counters and gauges as gauges, since exporting a counter as a gauge would break
+`rate()` on the backend.
+
+The instruments are **observable**: nothing is pushed on the request path. The
+SDK invokes the callback on its own schedule (`OTEL_METRIC_EXPORT_INTERVAL`,
+default 60s) and reads the same atomics the Prometheus renderer does, so the hot
+path still only does `fetch_add`. With no OTLP endpoint configured no meter
+provider, exporter or callback is built at all.
+
+Per-model histograms and label-bearing counters stay Prometheus-only for now;
+the scalar set is what OTLP carries.
+
+### Cost when tracing is off
+
+With no `OTEL_EXPORTER_OTLP_ENDPOINT` (the default) behaviour and hot-path cost
+are unchanged: `telemetry::is_active()` is a single relaxed atomic load, stage
+spans are `Span::none()` (no allocation, and instrumenting a future with one is a
+no-op), no carrier is built, and outbound trace headers are copied verbatim
+exactly as before.
+
 ## Exporters (OTel-compatible)
 
 rolter emits traces and metrics via **OpenTelemetry OTLP** (gRPC/HTTP), so any OTel-compatible backend works without code changes — just set an endpoint and headers:

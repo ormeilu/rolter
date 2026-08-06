@@ -13,6 +13,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use tracing::Instrument;
 
 use rolter_balancer::complexity::POLICY_PARAM;
 use rolter_balancer::RouteContext;
@@ -728,9 +729,16 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
 
     let snap = state.snapshot.load();
 
-    let vk = match authenticate(&state, &snap, &headers) {
-        Ok(vk) => vk,
-        Err(resp) => return resp,
+    let vk = {
+        // the span is held, not entered: `authenticate` opens no child spans, and
+        // an entered guard is `!Send`, which would make the whole handler future
+        // `!Send`. a held span still parents to the request span and still times
+        // the stage from creation to drop
+        let _stage = crate::trace::stage_span!("auth");
+        match authenticate(&state, &snap, &headers) {
+            Ok(vk) => vk,
+            Err(resp) => return resp,
+        }
     };
     if let Some(vk) = &vk {
         if !vk.model_permitted(&model) {
@@ -810,6 +818,15 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
     // contains '/'. only on a miss do we try `provider-slug/model` addressing
     // (ADR-0017), which pins a provider and forwards `model` as the upstream
     // model through the same classic-pool machinery (owned entry held here).
+    //
+    // route resolution through the key's access checks is one attributable
+    // stage; `strategy` and `candidates` are recorded once the route is known
+    let route_stage = crate::trace::stage_span!(
+        "route.select",
+        route = tracing::field::Empty,
+        strategy = tracing::field::Empty,
+        candidates = tracing::field::Empty
+    );
     let pinned = if snap.routes.contains_key(&model) {
         None
     } else {
@@ -888,6 +905,12 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
             .into_response();
         }
     }
+    // the route survived every access check: record what was chosen and close
+    // the stage, so what follows is not nested under route selection
+    route_stage.record("route", entry.route.model.as_str());
+    route_stage.record("strategy", tracing::field::debug(&entry.route.strategy));
+    route_stage.record("candidates", entry.route.targets.len());
+    drop(route_stage);
 
     if let Some(max_output) = entry.route.advanced.limits.output_tokens {
         for field in ["max_tokens", "max_completion_tokens", "max_output_tokens"] {
@@ -947,6 +970,16 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
             }
         }
     }
+
+    // both the built-in scan and the webhook consult are pre-call guardrail work,
+    // so they share one stage: a request slowed by a sluggish guardrail service
+    // shows up here rather than inside the upstream leg. never carries the
+    // matched content — only whether a rule fired
+    let guardrails_pre_stage = crate::trace::stage_span!(
+        "guardrails.pre",
+        redacted = tracing::field::Empty,
+        webhook = snap.guardrail_webhook.enabled
+    );
 
     // built-in guardrails: scan request content before proxying. a block rule
     // rejects with an OpenAI-compatible error; redactions rewrite `parsed` in
@@ -1021,6 +1054,8 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
             }
         }
     }
+    guardrails_pre_stage.record("redacted", guardrail_redacted || webhook_transformed);
+    drop(guardrails_pre_stage);
 
     // inject the admin's per-model param defaults (temperature, max_tokens, ...)
     // before forwarding; caller values survive only where the override policy
@@ -1094,7 +1129,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         .unwrap_or_default()
         .to_string();
     // adopt the caller's distributed trace when one was propagated inbound
-    let trace_id = crate::trace::inbound_trace_id(&headers);
+    let trace_id = crate::trace::request_trace_id(&headers);
     // scope identity for log attribution (empty for config-defined keys)
     let (vk_id, org_id, team_id, project_id) = (
         scope.key.clone(),
@@ -1122,11 +1157,16 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         prompt,
         token_ids: token_ids.as_deref(),
     };
-    // the caller's inbound trace context, propagated verbatim to whichever
-    // upstream is chosen so it continues the same distributed trace (ROL-61)
-    // trace context plus any client headers the operator allowlisted (#564)
-    let trace_ctx =
-        crate::trace::outbound_headers(&headers, &state.forwarder.forwarded_header_names());
+    // trace context plus any client headers the operator allowlisted (#564).
+    //
+    // this is the *fallback* set, used when no OTLP pipeline is installed: it
+    // copies the caller's trace headers verbatim, as before #805. With a
+    // pipeline installed the trace context is re-injected per attempt from
+    // inside that attempt's `upstream.request` span, so the provider call
+    // parents to the gateway rather than to the caller (see `forwarded_names`
+    // below and its use in the retry loop)
+    let forwarded_names = state.forwarder.forwarded_header_names();
+    let trace_ctx = crate::trace::outbound_headers(&headers, &forwarded_names);
     let trace_headers: Vec<(&str, &str)> = trace_ctx
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -1141,6 +1181,13 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
     // a virtual key may override its route's cache decision (ROL-235 part 2):
     // Some(false) opts the key out, Some(true) opts it in even on a route that
     // didn't; None inherits the route flag. the global switch still gates all
+    // exact and semantic lookups are one stage: a cache that is slow to answer
+    // is as interesting as one that misses, and both delay the same request
+    let cache_stage = crate::trace::stage_span!(
+        "cache.lookup",
+        hit = tracing::field::Empty,
+        kind = tracing::field::Empty
+    );
     let cache_ttl = entry.route.cache_ttl_secs(snap.cache.default_ttl_secs);
     let cache_eligible = path != "/v1/responses"
         && vk
@@ -1165,6 +1212,8 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
     if let Some(key) = &cache_key {
         if let Some(hit) = state.response_cache.get(key).await {
             state.metrics.cache_hits_total.fetch_add(1, Relaxed);
+            cache_stage.record("hit", true);
+            cache_stage.record("kind", "exact");
             return cached_response(
                 hit,
                 &state.log,
@@ -1218,6 +1267,8 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                         .metrics
                         .semantic_cache_hits_total
                         .fetch_add(1, Relaxed);
+                    cache_stage.record("hit", true);
+                    cache_stage.record("kind", "semantic");
                     return cached_response(
                         hit,
                         &state.log,
@@ -1250,6 +1301,10 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
             }
         }
     }
+
+    // every lookup that could answer this request has missed
+    cache_stage.record("hit", false);
+    drop(cache_stage);
 
     // pick a target and forward, retrying transient failures on a fresh target
     // (exponential backoff + jitter). retries happen before any body bytes reach
@@ -1353,6 +1408,32 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
             last_key_fingerprint = api_key.map(provider_key_fingerprint);
             let upstream_model = target.model.as_deref();
 
+            // one span per attempt, following the OTel GenAI conventions so
+            // SigNoz's built-in views work. the trace context handed to the
+            // provider is injected from *inside* this span, which is what makes
+            // the provider call a child of the gateway rather than a sibling
+            // parented to the caller (#805)
+            let upstream_stage = crate::trace::stage_span!(
+                "upstream.request",
+                attempt = attempt,
+                gen_ai.system = %target.provider,
+                gen_ai.request.model = %upstream_model.unwrap_or(model.as_str()),
+                http.response.status_code = tracing::field::Empty
+            );
+            let injected_ctx;
+            let injected_refs;
+            let attempt_headers: &[(&str, &str)] = if rolter_core::telemetry::is_active() {
+                injected_ctx = upstream_stage
+                    .in_scope(|| crate::trace::outbound_headers(&headers, &forwarded_names));
+                injected_refs = injected_ctx
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect::<Vec<_>>();
+                &injected_refs
+            } else {
+                &trace_headers
+            };
+
             match state
                 .provider_queues
                 .forward_json(
@@ -1362,12 +1443,14 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                     forward_body.clone(),
                     api_key,
                     upstream_model,
-                    &trace_headers,
+                    attempt_headers,
                 )
+                .instrument(upstream_stage.clone())
                 .await
             {
                 Ok(response) => {
                     let status = response.status().as_u16();
+                    upstream_stage.record("http.response.status_code", status);
                     // a 429/401 on a multi-key provider is a key-level
                     // failure: park the key, keep the target in rotation
                     // and retry — a sibling key usually succeeds
@@ -1823,7 +1906,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_string();
-    let trace_id = crate::trace::inbound_trace_id(&headers);
+    let trace_id = crate::trace::request_trace_id(&headers);
     let (vk_id, org_id, team_id, project_id) = (
         scope.key.clone(),
         scope.org.clone(),

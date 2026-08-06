@@ -47,3 +47,9 @@ artifacts/engines/
 # merge/patch leftovers — never part of a change (#787 committed three)
 *.orig
 *.rej
+
+# local environment files — `.env.example` is the tracked template and tells
+# developers to create these, which carry provider keys and SIGNOZ_API_KEY
+.env
+.env.*
+!.env.example
