@@ -67,6 +67,7 @@ mod security;
 pub mod seed;
 #[cfg(feature = "postgres")]
 mod sso;
+mod ui_config;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -74,7 +75,7 @@ use std::sync::Arc;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use clap::Parser;
@@ -98,6 +99,19 @@ pub struct Args {
     /// directory holding the built UI (index.html + assets)
     #[arg(long, env = "ROLTER_UI_DIR", default_value = "ui/dist")]
     pub ui_dir: PathBuf,
+    /// OTLP/HTTP traces endpoint for the *dashboard's* browser tracing, e.g.
+    /// `http://localhost:4318/v1/traces`. Injected into the served HTML as
+    /// `window.__ROLTER_CONFIG__`; unset (the default) leaves browser tracing
+    /// off, loading no SDK and changing no headers. This is deliberately not
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT`: that one is the backend's own gRPC
+    /// exporter, while a browser needs an HTTP endpoint reachable from the
+    /// user's machine rather than from inside the cluster
+    #[arg(long, env = "ROLTER_UI_OTEL_ENDPOINT")]
+    pub ui_otel_endpoint: Option<String>,
+    /// `service.name` reported by the dashboard's spans; the dashboard falls
+    /// back to `rolter-ui` when this is unset
+    #[arg(long, env = "ROLTER_UI_OTEL_SERVICE_NAME")]
+    pub ui_otel_service_name: Option<String>,
     /// base URL of the rolter-gateway data plane; the dashboard Playground's
     /// `/gw/*` calls are reverse-proxied here (see `crate::proxy`)
     #[arg(
@@ -337,9 +351,42 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     // the public router at all — the plaintext-credential channel is absent
     // from that surface rather than merely gated on it
     let split_internal = args.internal_addr.is_some();
+    // the dashboard is built ahead of time, so per-deployment values are
+    // injected into its html on the way out rather than baked in at build
+    // time. rendered once: none of it can change without a restart
+    let ui_runtime = ui_config::UiRuntimeConfig {
+        otel_endpoint: args.ui_otel_endpoint.clone(),
+        otel_service_name: args.ui_otel_service_name.clone(),
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+    };
+    if ui_runtime.is_configured() {
+        tracing::info!(
+            endpoint = ui_runtime.otel_endpoint.as_deref().unwrap_or_default(),
+            "dashboard browser tracing enabled"
+        );
+    }
+    let index = load_index(&args.ui_dir, &ui_runtime);
+
     let app = build_app_with(state.clone(), !split_internal)
-        // anything not matched by the api falls through to the built SPA
-        .fallback_service(ServeDir::new(&args.ui_dir));
+        // anything not matched by the api falls through to the built SPA.
+        // ServeDir must not serve index.html on its own: every route that ends
+        // at the SPA has to come through the fallback, or it arrives without
+        // the injected runtime config and the dashboard's tracing stays inert.
+        // Routing every miss there is also what lets a deep link like /models
+        // survive a refresh instead of 404ing
+        .fallback_service(
+            ServeDir::new(&args.ui_dir)
+                .append_index_html_on_directories(false)
+                .fallback(get(move || {
+                    let index = index.clone();
+                    async move {
+                        match index {
+                            Some(html) => Html(html).into_response(),
+                            None => StatusCode::NOT_FOUND.into_response(),
+                        }
+                    }
+                })),
+        );
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
     tracing::info!(%addr, ui_dir = %args.ui_dir.display(), "rolter-control listening");
@@ -360,6 +407,28 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         axum::serve(internal_listener, internal).await
     },)?;
     Ok(())
+}
+
+/// Read the dashboard's `index.html` out of `ui_dir` and inject the runtime
+/// config into it.
+///
+/// Returns `None` when the dashboard was never built into `ui_dir`. The control
+/// plane is a perfectly useful API without a dashboard — `rolter-control` is
+/// run headless in plenty of deployments — so a missing SPA is a warning and a
+/// 404 on the dashboard routes, not a refusal to start.
+fn load_index(ui_dir: &std::path::Path, config: &ui_config::UiRuntimeConfig) -> Option<String> {
+    let path = ui_dir.join("index.html");
+    match std::fs::read_to_string(&path) {
+        Ok(html) => Some(ui_config::inject(&html, config)),
+        Err(err) => {
+            tracing::warn!(
+                path = %path.display(),
+                %err,
+                "no dashboard index.html; serving the api without a dashboard"
+            );
+            None
+        }
+    }
 }
 
 /// Assemble the control-plane API router (no SPA fallback) with `state` applied.
@@ -971,6 +1040,54 @@ async fn get_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scratch `ui_dir`, removed when the guard drops. No `tempfile` in this
+    /// crate's dev-dependencies, and one directory is not worth adding one.
+    struct ScratchUiDir(std::path::PathBuf);
+
+    impl ScratchUiDir {
+        fn with_index(name: &str, html: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("rolter-ui-{}-{name}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("create scratch ui dir");
+            std::fs::write(dir.join("index.html"), html).expect("write index.html");
+            Self(dir)
+        }
+    }
+
+    impl Drop for ScratchUiDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn load_index_injects_the_runtime_config_into_the_built_dashboard() {
+        let dir = ScratchUiDir::with_index(
+            "injects",
+            "<!doctype html><html><head><title>rolter</title></head><body></body></html>",
+        );
+        let config = ui_config::UiRuntimeConfig {
+            otel_endpoint: Some("http://localhost:4318/v1/traces".to_string()),
+            ..Default::default()
+        };
+
+        let html = load_index(&dir.0, &config).expect("index.html was read");
+
+        assert!(html.contains("window.__ROLTER_CONFIG__"), "{html}");
+        assert!(html.contains("http://localhost:4318/v1/traces"), "{html}");
+        assert!(
+            html.contains("<title>rolter</title>"),
+            "original kept: {html}"
+        );
+    }
+
+    #[test]
+    fn load_index_is_none_when_the_dashboard_was_never_built() {
+        let missing = std::env::temp_dir().join(format!("rolter-no-ui-{}", std::process::id()));
+        // a headless control plane is a supported deployment, so this must be
+        // an absent dashboard rather than a startup failure
+        assert!(load_index(&missing, &ui_config::UiRuntimeConfig::default()).is_none());
+    }
 
     #[cfg(feature = "postgres")]
     #[test]
