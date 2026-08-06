@@ -399,22 +399,23 @@ pub fn normalize_prompt_cache_control(body: Bytes, provider: ProviderKind) -> Re
         }
         marker["ttl"] = Value::String(ttl.to_string());
     }
-    let breakpoints = control
-        .get("breakpoints")
-        .and_then(Value::as_array)
-        .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-        .unwrap_or_else(|| vec!["system"]);
-    for breakpoint in breakpoints {
-        match breakpoint {
-            "system" => mark_last_content(&mut value, "system", &marker),
-            "tools" => mark_last_item(&mut value, "tools", &marker),
-            "messages" => mark_last_message_content(&mut value, &marker),
-            other => {
-                return Err(Error::Config(format!(
-                    "prompt_cache: unsupported breakpoint '{other}' (use system|tools|messages)"
-                )));
+    if let Some(values) = control.get("breakpoints").and_then(Value::as_array) {
+        for v in values {
+            if let Some(breakpoint) = v.as_str() {
+                match breakpoint {
+                    "system" => mark_last_content(&mut value, "system", &marker),
+                    "tools" => mark_last_item(&mut value, "tools", &marker),
+                    "messages" => mark_last_message_content(&mut value, &marker),
+                    other => {
+                        return Err(Error::Config(format!(
+                            "prompt_cache: unsupported breakpoint '{other}' (use system|tools|messages)"
+                        )));
+                    }
+                }
             }
         }
+    } else {
+        mark_last_content(&mut value, "system", &marker);
     }
     serde_json::to_vec(&value)
         .map(Bytes::from)
@@ -1381,7 +1382,7 @@ fn openai_to_interactions(mut v: Value) -> Value {
             _ => None,
         })
         .unwrap_or_default();
-    let mut system = Vec::new();
+    let mut system_text = String::new();
     let mut input = Vec::with_capacity(messages.len());
     for message in messages {
         let role = message
@@ -1389,7 +1390,12 @@ fn openai_to_interactions(mut v: Value) -> Value {
             .and_then(Value::as_str)
             .unwrap_or("user");
         match role {
-            "system" | "developer" => system.push(content_text(message.get("content"))),
+            "system" | "developer" => {
+                if !system_text.is_empty() {
+                    system_text.push('\n');
+                }
+                system_text.push_str(&content_text(message.get("content")));
+            }
             "tool" => {
                 let mut item = json!({
                     "type": "function_result",
@@ -1433,8 +1439,8 @@ fn openai_to_interactions(mut v: Value) -> Value {
         out.insert("model".into(), model);
     }
     out.insert("input".into(), Value::Array(input));
-    if !system.is_empty() {
-        out.insert("system_instruction".into(), json!(system.join("\n")));
+    if !system_text.is_empty() {
+        out.insert("system_instruction".into(), json!(system_text));
     }
     if obj.remove("stream").and_then(|v| v.as_bool()) == Some(true) {
         out.insert("stream".into(), json!(true));
