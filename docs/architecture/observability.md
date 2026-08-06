@@ -172,6 +172,25 @@ provider, exporter or callback is built at all.
 Per-model histograms and label-bearing counters stay Prometheus-only for now;
 the scalar set is what OTLP carries.
 
+### Turning telemetry off explicitly
+
+`ROLTER_TELEMETRY_ENABLED=false` hard-disables every export — traces, metrics and
+the dashboard's browser tracing — regardless of which `OTEL_*` endpoints are set
+(#812). Unset means enabled, which changes nothing for an existing deployment:
+with no endpoint configured nothing is exported anyway.
+
+The switch can only *subtract*. It never turns export on by itself, and an
+unrecognized value leaves export on rather than silently blinding a deployment;
+only `0`, `false`, `no` and `off` disable it.
+
+It exists because "off" was previously implicit — achieved by leaving an endpoint
+unset — which does not survive somebody setting the endpoint for one signal and
+gives an operator nothing to point at in a security review. It is deliberately
+environment-only and has no config-file equivalent; see
+[ADR-0026](../adr/2026-08-06-tenant-telemetry-destinations.md), which also
+records why per-tenant telemetry destinations belong in the collector rather than
+in rolter.
+
 ### Cost when tracing is off
 
 With no `OTEL_EXPORTER_OTLP_ENDPOINT` (the default) behaviour and hot-path cost
