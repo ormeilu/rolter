@@ -72,7 +72,7 @@ export default function Dashboard() {
     return (
       <PageBody>
         <div className="rounded-lg border border-[color:var(--border-default)]">
-          <EmptyState
+          <EmptyState uxTarget="dashboard-analytics"
             title="Analytics not configured"
             description="Traffic, spend, and latency appear here once requests flow through the gateway. Set clickhouse_url on the control plane to enable logging."
           />

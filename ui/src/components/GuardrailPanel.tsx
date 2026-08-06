@@ -26,7 +26,7 @@ export function GuardrailEmpty({
   action: React.ReactNode;
 }) {
   return (
-    <EmptyState
+    <EmptyState uxTarget="guardrail-list"
       icon={<ShieldCheck />}
       title={title}
       description={description}

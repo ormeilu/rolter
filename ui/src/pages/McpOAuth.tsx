@@ -228,7 +228,7 @@ export function OAuthGrants() {
           <ScopeNote noun="grant" />
 
           {rows.length === 0 ? (
-            <EmptyState
+            <EmptyState uxTarget="oauth-grants"
               icon={<Shield />}
               title="No consent granted yet"
               description="A grant appears the first time a user completes the OAuth flow for an MCP server. Nothing is created here — consent is only ever given by the user."
@@ -396,7 +396,7 @@ export function AuthSessions() {
           <ScopeNote noun="session" />
 
           {rows.length === 0 ? (
-            <EmptyState
+            <EmptyState uxTarget="auth-sessions"
               icon={<KeyRound />}
               title="No sessions yet"
               description="A session is minted when a user's consent is exchanged for a token. Grant an MCP server access from a client to see one here."

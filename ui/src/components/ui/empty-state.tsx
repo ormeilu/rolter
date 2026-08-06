@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { cn } from "@/lib/utils";
+import { useEmptyState } from "@/lib/ux-react";
 
 // centered empty/zero-data placeholder. one of the two sanctioned places the
 // folkloric вышивка thread is allowed to show — a quiet cross-stitch rule under
@@ -11,6 +12,16 @@ export interface EmptyStateProps extends Omit<React.HTMLAttributes<HTMLDivElemen
   description?: React.ReactNode;
   actions?: React.ReactNode;
   thread?: boolean;
+  /**
+   * Stable name of the list that came back empty (`virtual-keys`, `plugins`),
+   * recorded on the `empty_state` UX event (#805).
+   *
+   * Deliberately a separate prop rather than something derived from `title`:
+   * the title is prose written for a human, and deriving a key from it would
+   * put a sentence into a `LowCardinality` column. Omitting it still records
+   * that *a* placeholder was shown on this screen.
+   */
+  uxTarget?: string;
 }
 
 export function EmptyState({
@@ -19,9 +30,12 @@ export function EmptyState({
   description,
   actions,
   thread = true,
+  uxTarget,
   className,
   ...props
 }: EmptyStateProps) {
+  // no-ops outside a UxScreenProvider, which is what Storybook and the tests get
+  useEmptyState(uxTarget);
   return (
     <div
       className={cn(

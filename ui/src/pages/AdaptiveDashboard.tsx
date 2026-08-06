@@ -142,7 +142,7 @@ export default function AdaptiveDashboard() {
       </div>
 
       {routes.length === 0 ? (
-        <EmptyState
+        <EmptyState uxTarget="adaptive-routes"
           icon={<Activity aria-hidden="true" />}
           title="No fresh adaptive routing telemetry"
           description={`A gateway appears here after it serves a route on the adaptive strategy and reports to the control plane. Reports older than ${view?.fresh_window_secs ?? 60} seconds are hidden.`}
