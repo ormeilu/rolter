@@ -14,6 +14,43 @@
 - Optional global or per-provider **custom CA bundles** add private PKI roots to outbound upstream clients while retaining public roots, certificate-chain validation, and hostname verification.
 - Terminate TLS at the gateway or a fronting proxy/ingress in production.
 
+## Cross-origin policy (CORS)
+
+`security_settings.allowed_origins` and `allowed_headers` are enforced by a
+middleware on the **control plane** (`crates/rolter-control/src/cors.rs`). The
+policy is read from an `ArcSwap` per request, so an edit through
+`PUT /api/v1/security-settings` applies immediately rather than at the next
+restart.
+
+Only the control plane has one, because it is the only origin a browser talks
+to: it serves the dashboard, and the Playground reaches the data plane through
+the `/gw/*` reverse proxy rather than calling the gateway directly. A gateway
+CORS layer would govern requests browsers do not make, and would need
+`SecuritySettings` in the snapshot to do it.
+
+Behaviour:
+
+- **No origins configured is the default**, and the same-origin deployment
+  everyone runs. The middleware adds no headers at all and the request path is
+  unchanged — CORS is not needed when the control plane serves both the
+  dashboard and the API.
+- Matching is **exact** against the configured list, modulo case and a trailing
+  slash. There is no wildcard and no suffix match, so `evil-dash.example.com`
+  and `dash.example.com.evil.test` do not inherit an entry for
+  `dash.example.com`. `validate_origin` already rejects `*` at write time.
+- A denied origin gets a normal response with no CORS headers; the browser
+  enforces the block. `Vary: Origin` is set on every answer so a shared cache
+  cannot serve one origin's response to another.
+- Preflights are answered by the middleware with `204` and never reach the
+  router, since they carry no credentials.
+- `authorization`, `content-type`, `traceparent`, `tracestate` and
+  `x-request-id` are **always** allowed, unioned with whatever is configured.
+  The trace headers are what let the dashboard's spans join the gateway's on a
+  split-origin deployment; leaving them to configuration means browser trace
+  propagation silently does not work until someone remembers them.
+- `x-request-id` is exposed via `Access-Control-Expose-Headers`, so a browser
+  can read the correlation id the API already echoes.
+
 ## Egress policy (SSRF)
 
 A provider's `api_base` decides where the gateway sends traffic, so an admin
