@@ -53,3 +53,11 @@ artifacts/engines/
 .env
 .env.*
 !.env.example
+
+# agent worktrees — `worktree-path` in the worktrunk user config puts every
+# worktree under the repo it belongs to instead of a sibling directory, so the
+# checkout contains its own worktrees and must not try to track them
+.worktrees/
+
+# storybook writes this next to `ui/` whenever a dev-server boot fails
+ui/debug-storybook.log

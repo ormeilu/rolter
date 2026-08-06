@@ -122,6 +122,12 @@ fn control_args(args: &EasyUpArgs, database_url: Option<String>) -> rolter_contr
         host: args.host.clone(),
         port: args.control_port,
         ui_dir: args.ui_dir.clone(),
+        // these args are built by hand rather than parsed, so clap's `env =`
+        // never runs for them. read the same variables here or `easy-up` would
+        // silently ignore a browser-tracing endpoint that works verbatim under
+        // `rolter control` — and local dev is exactly where it gets set (#805)
+        ui_otel_endpoint: std::env::var("ROLTER_UI_OTEL_ENDPOINT").ok(),
+        ui_otel_service_name: std::env::var("ROLTER_UI_OTEL_SERVICE_NAME").ok(),
         gateway_url: format!("http://127.0.0.1:{}", args.gateway_port),
         config: Some(args.config.clone()),
         #[cfg(feature = "postgres")]

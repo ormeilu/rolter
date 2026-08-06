@@ -98,6 +98,42 @@ Rolter participates in distributed tracing on both sides of the gateway:
   </Step>
 </Steps>
 
+## Browser tracing for the dashboard
+
+The dashboard can start its own trace in the browser, so a slow screen and the
+request behind it are one trace rather than two unrelated stories. It is off by
+default.
+
+The dashboard is built ahead of time and served as static assets by the control
+plane, so its collector endpoint cannot be baked in at build time. The control
+plane injects it into the served HTML instead, as a `window.__ROLTER_CONFIG__`
+block. Point it at an **OTLP/HTTP** endpoint:
+
+```bash
+ROLTER_UI_OTEL_ENDPOINT=http://localhost:4318/v1/traces \
+ROLTER_UI_OTEL_SERVICE_NAME=rolter-ui \
+  rolter control
+```
+
+<Note>
+  This is not `OTEL_EXPORTER_OTLP_ENDPOINT`. That variable configures the
+  gateway's own exporter, which speaks gRPC from inside your network. A browser
+  needs an OTLP/HTTP endpoint reachable from the **user's** machine, so the two
+  are almost never the same URL.
+</Note>
+
+With no endpoint set, the dashboard loads no tracing SDK at all — nothing is
+downloaded, nothing is exported, and no request headers change. Turning it on
+makes the dashboard emit document-load, user-interaction and fetch spans, and
+send `traceparent` on its API calls so those spans join the gateway's.
+
+<Warning>
+  If you serve the dashboard from a different origin than the control plane, the
+  browser will not send `traceparent` cross-origin until that header is allowed
+  by CORS, and the dashboard's spans will not join the gateway's. The default
+  deployment serves both from the control plane, where this does not arise.
+</Warning>
+
 ## What's inside a gateway span
 
 Rolter emits one span per pipeline stage, so a slow request is attributable to a

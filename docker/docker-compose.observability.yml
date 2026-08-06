@@ -56,3 +56,10 @@ services:
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_SERVICE_NAME: rolter-control
+      # browser tracing for the dashboard (#805). the control plane injects
+      # this into the served html, but the exporter runs in the operator's
+      # browser, so the URL must resolve from the host — `otel-collector:4318`
+      # is a compose-network name no browser can reach. the collector publishes
+      # 4318 above, which is what makes localhost work here
+      ROLTER_UI_OTEL_ENDPOINT: http://localhost:4318/v1/traces
+      ROLTER_UI_OTEL_SERVICE_NAME: rolter-ui
