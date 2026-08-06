@@ -549,6 +549,17 @@ const CAPABILITIES: &[Capability] = &[
         update: SUPER,
         delete: NA,
     },
+    // outbound telemetry export is a deployment-wide egress decision, so it
+    // sits at the same level as the security settings above rather than being
+    // delegable per org (#511)
+    Capability {
+        resource: "connector",
+        scope: "deployment",
+        read: SUPER,
+        create: SUPER,
+        update: SUPER,
+        delete: SUPER,
+    },
     Capability {
         resource: "alert_channel",
         scope: "deployment",

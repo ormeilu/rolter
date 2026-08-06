@@ -1,0 +1,93 @@
+---
+title: "Connectors: Shipping Telemetry to External Sinks"
+sidebarTitle: "Connectors"
+description: "Configure outbound destinations for Rolter's request logs, traces and metrics — endpoint, credential and sampling rate — and verify each one with a test delivery before you turn it on."
+---
+
+Rolter keeps its analytics in ClickHouse. A **connector** adds an outbound
+destination on top of that: somewhere your telemetry is also shipped.
+
+Connectors live under **Observability → Connectors** in the dashboard, and on
+`/api/v1/connectors`.
+
+<Note>
+  Connectors are **strictly opt-in and off by default**. A deployment with no
+  connectors has no egress path at all, and creating one does not turn it on —
+  `enabled` is a separate switch. Air-gapped deployments are unaffected.
+</Note>
+
+## Kinds
+
+| Kind | Status |
+|---|---|
+| `otlp_http` | Supported |
+| Datadog, Prometheus remote-write, Langfuse | Planned |
+
+OTLP is first deliberately. Every other sink here can be reached *through* an
+OpenTelemetry Collector, so shipping OTLP makes the rest a collector
+configuration change rather than more code in Rolter. If you already run a
+collector, point a connector at it and fan out there — that is also where
+per-tenant routing belongs (see ADR-0026).
+
+## Fields
+
+| Field | Meaning |
+|---|---|
+| `name` | Unique label for the connector |
+| `kind` | `otlp_http` |
+| `endpoint` | The `http(s)` URL telemetry is POSTed to |
+| `enabled` | Off by default; nothing is sent until this is on |
+| `sampling_rate` | `0.0`–`1.0`. `0.0` sends nothing, `1.0` sends everything |
+| `auth_secret_ref` | A reference into your external secret manager |
+| `managed_auth_secret` | Write-only bearer token, sealed before storage |
+
+### Credentials are write-only
+
+A `managed_auth_secret` is encrypted with the deployment KEK before it reaches
+Postgres. It is **never** returned by the API and never appears in an audit
+entry; responses carry only `auth_secret_configured`, a boolean. Storing one
+requires the KEK environment variable to be set.
+
+Editing a connector without resending the secret leaves the stored one in
+place, so changing a sampling rate cannot silently drop the credential.
+
+If you would rather Rolter never hold the secret at all, use `auth_secret_ref`
+and keep it in your own secret manager.
+
+### Endpoints go through the egress policy
+
+A connector endpoint is a URL your deployment will POST to, which is the same
+SSRF surface as a provider's `api_base` — so it passes the same
+[egress policy](/configuration/egress) check, both when it is saved and again at
+delivery time. A policy tightened after a connector was created applies to that
+connector: a stored row is not a standing permission to egress.
+
+## Test delivery
+
+Every connector has a **Test** button, and a `POST /api/v1/connectors/{id}/test`
+endpoint behind it.
+
+It sends one OTLP request with an empty `resourceLogs` payload. That is a
+well-formed request carrying no data, so it exercises the whole path — DNS, TLS,
+the URL and the credential — without putting synthetic records into your
+backend.
+
+The result is stored as the connector's health (`healthy` / `unhealthy`, with a
+timestamp and, on failure, a short reason) and shown in the connector list.
+Failure reasons are the HTTP status or the transport failure class, never the
+sink's response body — an error body can echo the credential it just rejected.
+
+Test delivery runs whether or not the connector is enabled. That is the point:
+check it before you turn it on.
+
+<Tip>
+  A connector that has never been tested shows `unknown` health rather than
+  claiming to be healthy. If a connector reads `unknown`, nothing has verified
+  it.
+</Tip>
+
+## Permissions
+
+Connectors are a deployment-wide egress decision, so all four operations
+require superadmin — the same level as the security settings, rather than
+something delegable per organization.

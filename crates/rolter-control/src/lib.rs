@@ -28,6 +28,8 @@ mod cluster;
 #[cfg(feature = "postgres")]
 mod compatibility_policy;
 #[cfg(feature = "postgres")]
+mod connectors;
+#[cfg(feature = "postgres")]
 mod crud;
 #[cfg(feature = "postgres")]
 mod feature_flags;
@@ -496,6 +498,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(scim_groups::router())
             .merge(sso::router())
             .merge(cluster::router())
+            .merge(connectors::router())
             .merge(security::router());
     }
 
