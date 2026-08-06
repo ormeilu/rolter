@@ -441,7 +441,8 @@ async fn evaluate_rule(state: &ControlState, previous: Rule) -> ApiResult<Evalua
         .and_then(|row| row.get("value"))
         .and_then(serde_json::Value::as_f64)
         .unwrap_or(0.0);
-    let next_state = if value >= previous.threshold {
+    let notified = previous.state != "unknown"
+        && previous.state != next_state
         "firing"
     } else {
         "ok"
