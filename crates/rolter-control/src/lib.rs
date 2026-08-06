@@ -982,6 +982,10 @@ async fn get_snapshot(
     headers: axum::http::HeaderMap,
     Query(query): Query<SnapshotQuery>,
 ) -> Response {
+    // snapshot generation is fleet-wide propagation delay: every gateway waits
+    // on it for its config, and until #809 it was invisible. the stage span
+    // costs nothing when no OTLP pipeline is installed
+    let _span = rolter_core::stage_span!("snapshot.build");
     // a node that identifies itself is recorded in the cluster inventory; the
     // poll it already makes is the heartbeat, so there is no second channel
     #[cfg(feature = "postgres")]
@@ -1007,6 +1011,7 @@ async fn get_snapshot(
             // prune rows that are only unservable by themselves (a route whose
             // targets aren't set up yet) so one half-built entry can't 500 the
             // snapshot and freeze config propagation for every other tenant
+            let _load = rolter_core::stage_span!("snapshot.sanitize");
             let omitted = config.sanitize_for_snapshot();
             if !omitted.is_empty() {
                 tracing::warn!(

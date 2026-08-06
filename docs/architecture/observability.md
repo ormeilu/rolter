@@ -172,6 +172,52 @@ provider, exporter or callback is built at all.
 Per-model histograms and label-bearing counters stay Prometheus-only for now;
 the scalar set is what OTLP carries.
 
+### Logs over OTLP
+
+Logs export alongside traces and metrics, gated on the same environment
+(`OTEL_EXPORTER_OTLP_ENDPOINT`, or the logs-specific
+`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`). With neither set no exporter is built and
+logging is stdout-only, exactly as before.
+
+It is **additive, not a replacement**: the stdout `fmt` layer is untouched, so
+`docker logs` shows what it always did and the collector additionally receives
+the same records.
+
+Records carry `trace_id` and `span_id`, which is most of the value — a log joins
+the trace it came from instead of being a separate pile of text.
+`tracing-opentelemetry` publishes the OpenTelemetry context when a span is
+entered, and the logs SDK stamps it onto each record. That correlation is
+asserted by a unit test rather than assumed from a dependency default, since it
+would fail silently if the default ever changed.
+
+Redaction is unaffected: this exports the same `tracing` events the stdout layer
+renders, so anything already kept out of logs stays out of them.
+
+### Process metrics
+
+Alongside the domain counters, the process reports its own vitals: resident and
+virtual memory, CPU time, open file descriptors, thread count and uptime. These
+are the numbers an operator reaches for first when a node degrades, and the
+gateway previously answered none of them.
+
+They are observable instruments read from `/proc`, so nothing touches the request
+path. On a platform where `/proc` is unavailable the instruments are **not
+registered at all**, rather than registered and always zero — a metric that reads
+zero forever is worse than an absent one, because a dashboard cannot tell it from
+a healthy process. Names follow the OTel `process.*` conventions.
+
+### Resource attributes
+
+Every signal carries `service.name`, `service.version` (the crate version), and
+where configured `service.instance.id` and `deployment.environment.name`.
+`OTEL_RESOURCE_ATTRIBUTES` is honoured by the SDK for anything else.
+
+`service.instance.id` deliberately uses the same precedence as the cluster
+watcher — `ROLTER_NODE_ID`, then `HOSTNAME`, then nothing — so a node in
+`cluster_nodes` and a node in the trace backend are the same node by
+construction. When neither is set it is omitted rather than invented per restart,
+which would churn the identity on every deploy.
+
 ### Cost when tracing is off
 
 With no `OTEL_EXPORTER_OTLP_ENDPOINT` (the default) behaviour and hot-path cost

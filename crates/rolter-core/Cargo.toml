@@ -23,6 +23,7 @@ opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
+opentelemetry-appender-tracing = { workspace = true, optional = true }
 
 [features]
 default = ["otlp"]
@@ -31,4 +32,10 @@ otlp = [
   "dep:opentelemetry_sdk",
   "dep:opentelemetry-otlp",
   "dep:tracing-opentelemetry",
+  "dep:opentelemetry-appender-tracing",
 ]
+
+[dev-dependencies]
+# in-memory span and log exporters, so the #809 trace-correlation guarantee is
+# asserted rather than assumed from a dependency default
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
