@@ -1,6 +1,6 @@
 import { Bug, KeyRound, LogOut } from "lucide-react";
 import * as React from "react";
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 
 import { ScopeSwitcher } from "@/components/ScopeSwitcher";
 import { ScreenHeader } from "@/components/ScreenHeader";
