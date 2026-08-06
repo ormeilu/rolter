@@ -518,17 +518,48 @@ async fn audit(
         .await
     {
         tracing::warn!(error = %error, action, "failed to write alert audit log");
+
     }
-}
+    fn rules_reject_negative_threshold() {
 
 #[cfg(test)]
 mod tests {
     use super::*;
+            window_secs: 60,
+            channel_id: None,
+            enabled: false,
+        };
+        assert!(validate_rule(&bad).is_err());
+    }
+
+    #[test]
+    fn rules_reject_out_of_bounds_window_secs() {
+        let bad = RuleInput {
+            name: "x".into(),
+            signal: "error_rate".into(),
+            threshold: 0.5,
     #[test]
     fn rules_reject_unsafe_bounds() {
         let bad = RuleInput {
             name: "x".into(),
             signal: "error_rate".into(),
+    }
+
+    #[test]
+    fn rules_reject_unknown_signal() {
+        let bad = RuleInput {
+            name: "x".into(),
+            signal: "not_a_real_signal".into(),
+            threshold: 0.5,
+            window_secs: 60,
+            channel_id: None,
+            enabled: false,
+        };
+        assert!(validate_rule(&bad).is_err());
+    }
+
+    #[test]
+    fn metric_sql_uses_expected_tables() {
             threshold: -1.0,
             window_secs: 30,
             channel_id: None,
@@ -536,6 +567,7 @@ mod tests {
         };
         assert!(validate_rule(&bad).is_err());
         assert!(metric_sql("error_rate", 60)
+
             .unwrap()
             .contains("request_logs"));
         assert!(metric_sql("provider_health_flaps", 60)
@@ -546,6 +578,28 @@ mod tests {
     fn channels_accept_exact_http_endpoints() {
         let channel = ChannelInput {
             name: "ops".into(),
+
+    #[test]
+    fn channels_reject_empty_managed_secret() {
+        let channel = ChannelInput {
+            name: "ops".into(),
+            endpoint: "https://hooks.example/rolter".into(),
+            enabled: false,
+            managed_secret: Some("".into()),
+        };
+        assert!(validate_channel(&channel).is_err());
+    }
+
+    #[test]
+    fn channels_reject_endpoints_with_userinfo() {
+        let channel = ChannelInput {
+            name: "ops".into(),
+            endpoint: "https://user:pass@hooks.example/rolter".into(),
+            enabled: false,
+            managed_secret: None,
+        };
+        assert!(validate_channel(&channel).is_err());
+    }
             endpoint: "https://hooks.example/rolter".into(),
             enabled: false,
             managed_secret: None,
