@@ -175,7 +175,7 @@ export default function Cluster() {
       </div>
 
       {rows.length === 0 ? (
-        <EmptyState
+        <EmptyState uxTarget="cluster-nodes"
           icon={<Network />}
           title="No nodes have reported in"
           description="Nodes appear here once a gateway identifies itself on its snapshot poll. A single-node deployment that sends no identity headers stays out of the inventory."

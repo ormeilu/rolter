@@ -2174,6 +2174,18 @@ pub struct LoggingConfig {
     /// payloads can contain prompts, completions, and other sensitive data.
     #[serde(default)]
     pub payload_capture: PayloadCaptureConfig,
+    /// dashboard UX events (#805): screen views, time-to-interactive, form
+    /// abandons, error states. On by default, unlike `payload_capture`, because
+    /// the `ui_events` schema is structural only — every column is a key, an
+    /// enum, a duration or an id, so there is nowhere for a form value or
+    /// prompt to land. Set `false` to drop them at the ingest endpoint; the
+    /// stream is inert anyway without `clickhouse_url`.
+    #[serde(default = "default_ui_events")]
+    pub ui_events: bool,
+}
+
+fn default_ui_events() -> bool {
+    true
 }
 
 impl Default for LoggingConfig {
@@ -2185,6 +2197,7 @@ impl Default for LoggingConfig {
             queue_capacity: default_log_queue_capacity(),
             sample_rate: default_log_sample_rate(),
             payload_capture: PayloadCaptureConfig::default(),
+            ui_events: default_ui_events(),
         }
     }
 }

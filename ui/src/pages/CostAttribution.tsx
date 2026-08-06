@@ -277,7 +277,7 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
       </div>
 
       {rows.length === 0 ? (
-        <EmptyState
+        <EmptyState uxTarget="cost-attribution"
           icon={kind === "unit" ? <Building2 /> : <WalletCards />}
           title={`No ${plural} yet`}
           description={

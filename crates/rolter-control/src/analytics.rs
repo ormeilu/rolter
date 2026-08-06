@@ -107,6 +107,40 @@ impl ClickHouseClient {
         let body = response.text().await.unwrap_or_default();
         anyhow::bail!("clickhouse MCP event insert failed ({status}): {body}")
     }
+
+    /// Persist a batch of already-validated dashboard UX events. Like the MCP
+    /// insert above, the table and statement are fixed here rather than passed
+    /// in, so event data can never reach ClickHouse as SQL.
+    ///
+    /// `JSONEachRow` is one object per line, which is why a batch costs one
+    /// round trip rather than one per event.
+    // only reachable via the postgres-gated ui-events router
+    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
+    pub(crate) async fn insert_ui_events(&self, rows: &[Value]) -> anyhow::Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut body = String::new();
+        for row in rows {
+            body.push_str(&serde_json::to_string(row)?);
+            body.push('\n');
+        }
+        let response = self
+            .client
+            .post(format!(
+                "{}/?query=INSERT%20INTO%20ui_events%20FORMAT%20JSONEachRow",
+                self.base
+            ))
+            .body(body)
+            .send()
+            .await?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        anyhow::bail!("clickhouse UX event insert failed ({status}): {text}")
+    }
 }
 
 /// Map a bucket name to a ClickHouse start-of-interval function. Whitelisted so

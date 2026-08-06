@@ -29,6 +29,7 @@ import {
   type VirtualKeyRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useFormTelemetry, useScreenReady } from "@/lib/ux-react";
 
 const KEYS_QUERY_KEY = ["virtual-keys"];
 
@@ -66,6 +67,11 @@ export default function Keys() {
   const [deleteTarget, setDeleteTarget] = React.useState<VirtualKeyRow | null>(null);
   const [created, setCreated] = React.useState<CreatedVirtualKey | null>(null);
   const [search, setSearch] = React.useState("");
+
+  // UX stream (#805); the screen key comes from the enclosing UxScreenProvider
+  useScreenReady(!keys.isLoading);
+  useErrorState(!!keys.error, "virtual-key-list");
+  const deleteUx = useFormTelemetry("virtual-key-delete", !!deleteTarget);
 
   const scopeBlocked = !scope.isLoading && !!scope.error;
 
@@ -189,7 +195,7 @@ export default function Keys() {
           </ListRow>
         ))}
         {!keys.isLoading && rows.length === 0 && (
-          <EmptyState icon={<Key />} title="No keys found" description="Create a virtual key to authenticate your applications." />
+          <EmptyState uxTarget="virtual-keys" icon={<Key />} title="No keys found" description="Create a virtual key to authenticate your applications." />
         )}
       </ListTable>
       <div className="flex items-center justify-between px-0.5 text-xs text-muted-foreground">
@@ -233,8 +239,13 @@ export default function Keys() {
             onClick={() => {
 
               if (!deleteTarget) return;
+              deleteUx.submitted();
               removeKey.mutate(deleteTarget.id, {
-                onSuccess: () => setDeleteTarget(null),
+                onSuccess: () => {
+                  deleteUx.saved();
+                  setDeleteTarget(null);
+                },
+                onError: () => deleteUx.failed(),
               });
             }}
           >
@@ -264,6 +275,9 @@ function AddKeyDialog({
   const [modelsText, setModelsText] = React.useState("");
   const [cache, setCache] = React.useState<"inherit" | "off" | "on">("inherit");
 
+  // names the form, never its contents — this dialog mints a credential
+  const ux = useFormTelemetry("virtual-key-create", open);
+
   React.useEffect(() => {
     if (open) {
       setName("");
@@ -283,9 +297,11 @@ function AddKeyDialog({
         cache: parseCacheMode(cache),
       }),
     onSuccess: (key) => {
+      ux.saved();
       onOpenChange(false);
       onCreated(key);
     },
+    onError: () => ux.failed(),
   });
 
   return (
@@ -332,7 +348,13 @@ function AddKeyDialog({
         <Button variant="outline" onClick={() => onOpenChange(false)}>
           Cancel
         </Button>
-        <Button disabled={create.isPending} onClick={() => create.mutate()}>
+        <Button
+          disabled={create.isPending}
+          onClick={() => {
+            ux.submitted();
+            create.mutate();
+          }}
+        >
           {create.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Create
         </Button>

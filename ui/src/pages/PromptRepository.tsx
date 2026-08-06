@@ -247,7 +247,7 @@ export default function PromptRepository() {
   if (scope.isLoading || templates.isLoading) return <LoadingState />;
   if (scope.error || templates.isError) {
     return (
-      <EmptyState
+      <EmptyState uxTarget="prompt-list"
         icon={<GitBranch />}
         title="Prompt repository unavailable"
         description={scope.error ?? (templates.error as Error).message}
@@ -271,7 +271,7 @@ export default function PromptRepository() {
 
         {!selected ? (
           <main className="flex min-h-[32rem] items-center justify-center rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-raised)]">
-            <EmptyState
+            <EmptyState uxTarget="prompt-versions"
               icon={<FilePlus2 />}
               title="Start with a prompt template"
               description="Create a named template, then add variables, ordered decorators, and its first deployment scope."

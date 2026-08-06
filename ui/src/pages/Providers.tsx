@@ -16,6 +16,7 @@ import {
 import { CopyButton } from "@/components/CopyButton";
 import { deleteProvider, fetchProviders, type ProviderRow } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useFormTelemetry, useScreenReady } from "@/lib/ux-react";
 
 const PROVIDERS_QUERY_KEY = ["providers"];
 
@@ -43,6 +44,11 @@ export default function Providers() {
   } | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<ProviderRow | null>(null);
   const [search, setSearch] = React.useState("");
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider
+  useScreenReady(!providers.isLoading);
+  useErrorState(!!providers.error, "provider-list");
+  const deleteUx = useFormTelemetry("provider-delete", !!deleteTarget);
 
   const scopeBlocked = !scope.isLoading && !!scope.error;
 
@@ -179,8 +185,13 @@ export default function Providers() {
             disabled={removeProvider.isPending}
             onClick={() => {
               if (!deleteTarget) return;
+              deleteUx.submitted();
               removeProvider.mutate(deleteTarget.id, {
-                onSuccess: () => setDeleteTarget(null),
+                onSuccess: () => {
+                  deleteUx.saved();
+                  setDeleteTarget(null);
+                },
+                onError: () => deleteUx.failed(),
               });
             }}
           >

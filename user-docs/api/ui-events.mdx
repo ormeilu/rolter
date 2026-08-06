@@ -1,0 +1,133 @@
+---
+title: "Dashboard UX Event Ingestion for the Rolter Control Plane"
+sidebarTitle: "UX Events"
+description: "POST /api/v1/ui-events records structural dashboard usability telemetry — screen views, time-to-interactive, form abandons and error states — into ClickHouse alongside request logs."
+---
+
+Browser spans tell you how long a screen took and whether it errored. They do
+not tell you whether it was *usable*: which screens are slow to become
+interactive, where people back out, which forms get abandoned, which error
+states are actually reached. `POST /api/v1/ui-events` is the endpoint behind
+that stream.
+
+Events land in the `ui_events` ClickHouse table next to `request_logs` — same
+deployment, same retention, same redaction — and join against gateway traffic on
+`trace_id`.
+
+## Two properties worth knowing
+
+<Note>
+  **Events are structural only.** Every accepted field is a key, an enum, a
+  duration or an id. There is no field a form value, prompt or free-text body
+  could travel in. `target` carries the *name* of a form, control or validation
+  rule — never what was typed into it. The schema is the guarantee, rather than
+  a policy applied on write.
+</Note>
+
+<Note>
+  **Attribution is server-side.** `user_id` is filled from the authenticated
+  session and is not read from the request body, so a caller cannot file events
+  against somebody else. Do not send it.
+</Note>
+
+## POST /api/v1/ui-events
+
+Authenticated by a live dashboard session (a bearer session token), not the
+admin token. Any logged-in account may file its own events.
+
+```bash
+curl -X POST http://localhost:4001/api/v1/ui-events \
+  -H "Authorization: Bearer $ROLTER_SESSION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "events": [
+      {
+        "event_id": "01J8Z0QK3M",
+        "screen": "models",
+        "action": "time_to_interactive",
+        "duration_ms": 412,
+        "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+        "app_version": "1.4.2"
+      }
+    ]
+  }'
+```
+
+Returns `202 Accepted`.
+
+### Batching
+
+Browsers batch these — a `visibilitychange` beacon flushes whatever queued since
+the last one — so a batch is the normal shape rather than an optimization. At
+most **100** events per request; a larger batch is rejected with `400`.
+
+### Fields
+
+| Field | Required | Notes |
+|---|---|---|
+| `event_id` | yes | client-generated id, ≤ 96 chars |
+| `screen` | yes | stable screen key (a route id), **not** a URL |
+| `action` | yes | see the enum below |
+| `outcome` | no | `ok`, `error` or `cancelled`; defaults to `ok` |
+| `target` | no | name of the form, control or validation rule |
+| `from_screen` | no | previous screen, so navigation paths are queryable |
+| `duration_ms` | no | time-to-interactive, form dwell, or save-to-confirmation |
+| `trace_id` | no | joins to the gateway request this caused |
+| `session_id` | no | groups a single browsing session |
+| `org_id` / `team_id` / `project_id` | no | grouping labels |
+| `app_version` | no | dashboard build |
+
+`action` is one of `screen_view`, `time_to_interactive`, `navigate`,
+`back_out`, `form_submit`, `form_abandon`, `validation_error`, `empty_state`,
+`error_state`, `save_confirmed`.
+
+<Warning>
+  `screen`, `target` and `from_screen` are `LowCardinality` ClickHouse columns
+  and are capped at 96 characters. Send a stable key such as `models`, not a URL
+  — a URL carries ids and query parameters, which turns a key column into an
+  unbounded one and degrades the table.
+</Warning>
+
+## What the dashboard sends
+
+You do not have to call this endpoint to get data — the bundled dashboard emits
+against it already.
+
+Navigation is instrumented once in the app shell, so `screen_view`, `navigate`
+and `back_out` cover every screen without per-screen wiring. `back_out` is
+recorded when the user leaves by pressing the browser's back button rather than
+by acting on the screen, and carries how long they had been there: backing out
+after eight seconds is a navigation mistake, backing out after four minutes is a
+dead end.
+
+`empty_state` is emitted by the shared placeholder component, so every zero-data
+screen reports itself.
+
+`time_to_interactive`, `error_state` and the form lifecycle (`form_submit`,
+`form_abandon`, `validation_error`, `save_confirmed`) are per-screen, because
+only the screen knows which of its several requests is the one the user is
+actually waiting for. Screens are being wired progressively; an unwired screen
+is silent for those actions rather than wrong.
+
+Events are queued in the browser and flushed every few seconds, when a full
+batch accumulates, and when the tab is hidden. If the endpoint answers `401`,
+`403`, `404` or `405` the dashboard stops sending for the life of the tab, so an
+older control plane or a proxy that drops the route costs one request rather
+than one per flush.
+
+## Turning it off
+
+Two independent switches:
+
+- **No `clickhouse_url`** — the stream is inert; there is nowhere to write.
+- **`logging.ui_events = false`** in `rolter.toml` — a deployment-level opt-out.
+  The endpoint still answers `202`, and stores nothing.
+
+```toml
+[logging]
+clickhouse_url = "http://localhost:8123"
+ui_events = false
+```
+
+It is on by default, unlike `logging.payload_capture`, precisely because the
+schema cannot carry sensitive content.
