@@ -75,6 +75,31 @@ Spans never carry prompt or completion content, API keys, virtual-key plaintext,
 or injected header values — those are credential material, and redaction stays
 owned by the existing `logging_settings` machinery rather than a second policy.
 
+### Tenant attributes
+
+The `gateway.request` span carries `rolter.org.id`, `rolter.team.id` and
+`rolter.project.id`, recorded once the virtual key resolves. The span itself is
+built by the tower layer, which runs before auth, so the fields start empty and
+are filled in rather than passed at construction.
+
+These exist so per-tenant telemetry destinations are routable. ADR-0026 decided
+that fan-out to tenant-owned backends belongs in an OpenTelemetry Collector
+rather than in-process exporters — one egress path in the gateway no matter how
+many tenants, and no data-plane process POSTing to operator-supplied URLs — and
+that rolter's job in that design is to *stamp the attribute the collector routes
+on*. Until this landed there was nothing to stamp: the request logs in
+ClickHouse always carried tenant identity, but no exported span ever did, which
+made the routing half unimplementable.
+
+An unattributed request — a config-defined key, which has no org — records
+nothing rather than an empty string. An attribute that is present-but-blank on
+some spans and absent on others is harder to write a routing rule against than
+one that is consistently absent.
+
+The names are deliberately rolter-local. The GenAI and HTTP conventions define
+nothing for tenancy, and a convention-shaped guess like `tenant.id` would be
+worse than an obviously-local name if the spec later defines it differently.
+
 ### Running it locally
 
 The observability overlay starts a collector and a trace UI alongside the normal
