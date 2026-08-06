@@ -14,6 +14,7 @@ import {
   type FeatureFlagsDto,
   type UnavailableFlagDto,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 interface FlagCopy {
   title: string;
@@ -64,6 +65,11 @@ export default function FeatureFlags() {
     queryFn: fetchFeatureFlags,
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `flags` is the query the user is actually waiting on for this screen
+  useScreenReady(!flags.isLoading);
+  useErrorState(!!flags.error, "feature-flags");
 
   const [form, setForm] = React.useState<FeatureFlagValues | null>(null);
   const [saved, setSaved] = React.useState(false);

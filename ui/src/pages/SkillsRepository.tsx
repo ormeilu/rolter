@@ -44,6 +44,7 @@ import {
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 type SourceMode = "inline" | "reference";
 
@@ -116,6 +117,15 @@ export default function SkillsRepository() {
     queryFn: () => fetchSkills(scope.orgId as string),
     enabled: !!scope.orgId,
   });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `skills` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!skills.isLoading);
+
+  useErrorState(!!skills.error, "skills-repository");
   const selected = skills.data?.find((skill) => skill.id === selectedId);
 
   React.useEffect(() => {

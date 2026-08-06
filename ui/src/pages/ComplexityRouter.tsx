@@ -21,6 +21,7 @@ import {
   type RouteRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // bounded input-size tiers per route: requests below each byte ceiling are
 // re-routed to the tier's model; the catch-all tier (no ceiling) closes the
@@ -32,6 +33,11 @@ export default function ComplexityRouter() {
     queryFn: () => fetchRoutes(scope.projectId as string),
     enabled: !!scope.projectId,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `routes` is the query the user is actually waiting on for this screen
+  useScreenReady(!routes.isLoading);
+  useErrorState(!!routes.error, "complexity-router");
 
   const policyQueries = useQueries({
     queries: (routes.data ?? []).map((r) => ({

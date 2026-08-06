@@ -22,6 +22,7 @@ import {
   fetchInvocations,
   type InvocationRow,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const num = (v: number | string | undefined): number => Number(v ?? 0);
 const money = (n: number) =>
@@ -49,6 +50,11 @@ export default function Dashboard() {
     queryFn: () => fetchAnalyticsSummary(WINDOW),
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `summary` is the query the user is actually waiting on for this screen
+  useScreenReady(!summary.isLoading);
+  useErrorState(!!summary.error, "dashboard");
   const series = useQuery({
     queryKey: ["analytics", "timeseries", "24h"],
     queryFn: () => fetchAnalyticsTimeseries(WINDOW),

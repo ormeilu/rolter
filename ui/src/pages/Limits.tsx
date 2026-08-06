@@ -35,6 +35,7 @@ import {
   type RateLimitRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // budgets and rate limits share a scope (scope_type + scope_id), so this
 // page combines both concerns behind one scope picker. defaults to the
@@ -59,6 +60,19 @@ export default function Limits() {
     queryFn: () => fetchVirtualKeys(scope.projectId as string),
     enabled: scopeType === "virtual_key" && !!scope.projectId,
   });
+
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+
+  // `virtualKeys` is the query the user is actually waiting on for this screen
+
+
+  useScreenReady(!virtualKeys.isLoading);
+
+
+  useErrorState(!!virtualKeys.error, "limits");
 
   const budgets = useQuery({
     queryKey: ["budgets", scopeType, scopeId],

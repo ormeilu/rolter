@@ -33,6 +33,7 @@ import {
   type McpToolRef,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const TRANSPORTS = ["streamable_http", "sse", "websocket"];
 const slugify = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 63);
@@ -67,6 +68,10 @@ export function McpCatalog() {
   const { orgId } = useScope();
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["mcp-servers", orgId], queryFn: () => fetchMcpServers(orgId as string), enabled: !!orgId, retry: false });
+
+  // UX stream (#805); screen key comes from the enclosing UxScreenProvider
+  useScreenReady(!query.isLoading);
+  useErrorState(!!query.error, "mcp-servers");
   const [editing, setEditing] = React.useState<McpServerRow | null | undefined>(undefined);
   const [deleting, setDeleting] = React.useState<McpServerRow | null>(null);
   const save = useMutation({
@@ -112,6 +117,10 @@ export function McpLibrary() {
   const { orgId } = useScope();
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["mcp-library", orgId], queryFn: () => fetchMcpLibrary(orgId as string), enabled: !!orgId, retry: false });
+
+  // UX stream (#805); screen key comes from the enclosing UxScreenProvider
+  useScreenReady(!query.isLoading);
+  useErrorState(!!query.error, "mcp-library");
   const install = useMutation({ mutationFn: (item: McpLibraryItem) => createMcpServer(orgId as string, { ...item, enabled: true, source: "library" }), onSuccess: () => { void client.invalidateQueries({ queryKey: ["mcp-library", orgId] }); void client.invalidateQueries({ queryKey: ["mcp-servers", orgId] }); } });
   return <PageBody><PageLead eyebrow="curated endpoints">Install a reviewed server definition into this organization. OAuth consent remains per user; installation never stores a token.</PageLead>
     {query.isLoading ? <LoadingGrid count={4} /> : query.error ? <QueryError error={query.error} retry={() => void query.refetch()} /> : <div className="grid gap-3 md:grid-cols-2">{query.data?.map((item) => <article key={item.slug} className="rounded-[10px] border border-[color:var(--border-default)] bg-card p-5"><div className="flex items-start gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-subtle)]"><Boxes className="h-5 w-5" aria-hidden /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="font-semibold">{item.name}</h2><Badge tone="info">{item.transport.replace("_", " ")}</Badge></div><p className="mt-1 text-sm text-muted-foreground">{item.description}</p></div></div><div className="mt-4"><ToolBadges tools={item.tools} /></div><div className="mt-5 flex items-center border-t border-[color:var(--border-subtle)] pt-4"><span className="text-xs text-muted-foreground">{item.required_scopes.length ? `${item.required_scopes.length} OAuth scopes` : "No OAuth scopes"}</span><Button className="ml-auto" variant={item.installed ? "outline" : "default"} disabled={item.installed || install.isPending} onClick={() => install.mutate(item)}>{item.installed ? "Installed" : "Install"}</Button></div></article>)}</div>}
@@ -122,6 +131,10 @@ export function ToolGroups() {
   const { orgId } = useScope();
   const client = useQueryClient();
   const groups = useQuery({ queryKey: ["mcp-tool-groups", orgId], queryFn: () => fetchMcpToolGroups(orgId as string), enabled: !!orgId, retry: false });
+
+  // UX stream (#805); screen key comes from the enclosing UxScreenProvider
+  useScreenReady(!groups.isLoading);
+  useErrorState(!!groups.error, "tool-groups");
   const servers = useQuery({ queryKey: ["mcp-servers", orgId], queryFn: () => fetchMcpServers(orgId as string), enabled: !!orgId, retry: false });
   const [editing, setEditing] = React.useState<McpToolGroupRow | null | undefined>(undefined);
   const save = useMutation({ mutationFn: ({ initial, input }: { initial: McpToolGroupRow | null; input: Omit<McpToolGroupRow, "id" | "org_id" | "created_at" | "updated_at"> }) => initial ? updateMcpToolGroup(initial.id, input) : createMcpToolGroup(orgId as string, input), onSuccess: () => { void client.invalidateQueries({ queryKey: ["mcp-tool-groups", orgId] }); setEditing(undefined); } });
@@ -142,6 +155,10 @@ function ToolGroupDialog({ initial, servers, pending, error, onClose, onSave }: 
 export function McpSettings() {
   const { orgId } = useScope(); const client = useQueryClient();
   const query = useQuery({ queryKey: ["mcp-settings", orgId], queryFn: () => fetchMcpSettings(orgId as string), enabled: !!orgId, retry: false });
+
+  // UX stream (#805); screen key comes from the enclosing UxScreenProvider
+  useScreenReady(!query.isLoading);
+  useErrorState(!!query.error, "mcp-settings");
   if (!orgId) return <PageBody><EmptyState uxTarget="mcp-settings-no-org" icon={<Settings2 />} title="Choose an organization" description="MCP defaults are organization scoped." /></PageBody>;
   if (query.isLoading) return <PageBody><LoadingGrid count={2} /></PageBody>;
   if (query.error) return <PageBody><QueryError error={query.error} retry={() => void query.refetch()} /></PageBody>;

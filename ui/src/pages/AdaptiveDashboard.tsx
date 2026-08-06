@@ -14,6 +14,7 @@ import {
   type AdaptiveRouteTelemetryDto,
   type AdaptiveTargetTelemetryDto,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const count = new Intl.NumberFormat();
 const decimal = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
@@ -72,6 +73,11 @@ export default function AdaptiveDashboard() {
     retry: false,
     refetchInterval: 15_000,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `telemetry` is the query the user is actually waiting on for this screen
+  useScreenReady(!telemetry.isLoading);
+  useErrorState(!!telemetry.error, "adaptive-dashboard");
 
   if (telemetry.isLoading) {
     return (

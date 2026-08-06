@@ -24,6 +24,7 @@ import {
   type CustomerRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // the server's slug rule, mirrored so a bad value is caught before the round
 // trip. slugs are the stable attribution identity, not a display name
@@ -390,6 +391,13 @@ export function BusinessUnits() {
     enabled: !!orgId,
     retry: false,
   });
+
+
+  // UX stream (#805); screen key comes from the enclosing UxScreenProvider
+
+  useScreenReady(!units.isLoading);
+
+  useErrorState(!!units.error, "business-units");
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["business-units", orgId] });
 
@@ -457,6 +465,13 @@ export function Customers() {
     enabled: !!orgId,
     retry: false,
   });
+
+
+  // UX stream (#805); screen key comes from the enclosing UxScreenProvider
+
+  useScreenReady(!customers.isLoading);
+
+  useErrorState(!!customers.error, "customers");
   // needed for the assignment dropdown and to name the unit on each card
   const units = useQuery({
     queryKey: ["business-units", orgId],

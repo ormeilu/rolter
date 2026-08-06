@@ -32,6 +32,7 @@ import {
   type ProviderGroupRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const GRID = "1.2fr 1fr 1.2fr 2fr 108px";
 
@@ -44,6 +45,15 @@ export default function ProviderGroups() {
     queryFn: () => fetchProviderGroups(scope.orgId as string),
     enabled: !!scope.orgId,
   });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `groups` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!groups.isLoading);
+
+  useErrorState(!!groups.error, "provider-groups");
   const providers = useQuery({
     queryKey: ["providers", scope.orgId],
     queryFn: () => fetchProviders(scope.orgId as string),

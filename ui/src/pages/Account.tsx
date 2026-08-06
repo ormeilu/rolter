@@ -34,6 +34,7 @@ import {
   type OwnedKeyRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // end-user self-service panel (ROL-224): view/rotate/delete the virtual keys you
 // personally minted and see your own usage/spend. no admin role required — the
@@ -43,6 +44,15 @@ export default function Account() {
   const scope = useScope();
 
   const keys = useQuery({ queryKey: ["my-keys"], queryFn: fetchMyKeys });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `keys` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!keys.isLoading);
+
+  useErrorState(!!keys.error, "account");
   const usage = useQuery({
     queryKey: ["my-usage"],
     queryFn: () => fetchMyUsage(),

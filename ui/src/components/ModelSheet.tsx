@@ -36,6 +36,7 @@ import {
   type RouteRow,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useFormTelemetry } from "@/lib/ux-react";
 
 // ---------------------------------------------------------------------------
 // draft model — one object carries the whole form (see design handoff)
@@ -795,6 +796,9 @@ export function ModelSheet({
   // default params with the lock policy, enabled flag, and pricing. the
   // capability / network / header / rbac sections are forward-looking — they
   // render and preview but have no backing DTOs yet.
+  // form lifecycle for the UX stream (#805); names the form, never its contents
+  const ux = useFormTelemetry(mode === "add" ? "model-create" : "model-edit", open);
+
   const save = useMutation({
     mutationFn: async () => {
       const { params, paramPolicy } = paramsToApi(draft);
@@ -859,11 +863,13 @@ export function ModelSheet({
       }
     },
     onSuccess: () => {
+      ux.saved();
       queryClient.invalidateQueries({ queryKey: ["route-targets", route?.id] });
       queryClient.invalidateQueries({ queryKey: ["model-prices"] });
       onDone();
       onOpenChange(false);
     },
+    onError: () => ux.failed(),
   });
 
   const runTest = () => {
@@ -1631,7 +1637,13 @@ export function ModelSheet({
               </Button>
             )}
             {canSave && (
-              <Button disabled={save.isPending} onClick={() => save.mutate()}>
+              <Button
+                disabled={save.isPending}
+                onClick={() => {
+                  ux.submitted();
+                  save.mutate();
+                }}
+              >
                 {cta}
               </Button>
             )}

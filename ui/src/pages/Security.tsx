@@ -11,6 +11,7 @@ import {
   updateSecuritySettings,
   type SecuritySettingsDto,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 interface FormState {
   authEnabled: boolean;
@@ -67,6 +68,11 @@ export default function Security() {
     queryFn: fetchSecuritySettings,
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `settings` is the query the user is actually waiting on for this screen
+  useScreenReady(!settings.isLoading);
+  useErrorState(!!settings.error, "security");
 
   const [form, setForm] = React.useState<FormState | null>(null);
   const [saved, setSaved] = React.useState(false);

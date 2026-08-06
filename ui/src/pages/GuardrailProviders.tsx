@@ -18,6 +18,7 @@ import {
   type GuardrailProviderInput,
   type GuardrailProviderRow,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const EMPTY: GuardrailProviderInput = {
   name: "",
@@ -35,6 +36,11 @@ const EMPTY: GuardrailProviderInput = {
 export default function GuardrailProviders() {
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["guardrail-providers"], queryFn: fetchGuardrailProviders, retry: false });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `query` is the query the user is actually waiting on for this screen
+  useScreenReady(!query.isLoading);
+  useErrorState(!!query.error, "guardrail-providers");
   const [editing, setEditing] = React.useState<GuardrailProviderRow | null | undefined>();
   const save = useMutation({
     mutationFn: (body: GuardrailProviderInput) => editing ? updateGuardrailProvider(editing.id, body) : createGuardrailProvider(body),

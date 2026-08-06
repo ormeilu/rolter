@@ -16,6 +16,7 @@ import {
   type InvocationRow,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const PAGE_SIZE = 50;
 type StatusFilter = "all" | "error" | "success";
@@ -58,6 +59,15 @@ export default function Logs() {
   );
 
   const models = useQuery({ queryKey: ["models"], queryFn: fetchModels });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `models` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!models.isLoading);
+
+  useErrorState(!!models.error, "logs");
 
   React.useEffect(() => setPage(0), [status, modelSel]);
 

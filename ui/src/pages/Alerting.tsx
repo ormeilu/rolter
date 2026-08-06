@@ -30,6 +30,7 @@ import {
   type AlertChannelRow,
   type AlertRuleRow,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const STATE_TONE: Record<string, [string, string]> = {
   ok: ["var(--status-success)", "rgba(22,163,74,.14)"],
@@ -46,6 +47,10 @@ const stateTone = (state: string) => STATE_TONE[state] ?? STATE_TONE.unknown;
 export function AlertChannels() {
   const queryClient = useQueryClient();
   const channels = useQuery({ queryKey: ["alert-channels"], queryFn: fetchAlertChannels, retry: false });
+
+  // UX stream (#805); screen key comes from the enclosing UxScreenProvider
+  useScreenReady(!channels.isLoading);
+  useErrorState(!!channels.error, "alert-channels");
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["alert-channels"] });
 
   const toggle = useMutation({
@@ -207,6 +212,10 @@ function AddChannelDialog({
 export function AlertRules() {
   const queryClient = useQueryClient();
   const rules = useQuery({ queryKey: ["alert-rules"], queryFn: fetchAlertRules, retry: false });
+
+  // UX stream (#805); screen key comes from the enclosing UxScreenProvider
+  useScreenReady(!rules.isLoading);
+  useErrorState(!!rules.error, "alert-rules");
   const channels = useQuery({ queryKey: ["alert-channels"], queryFn: fetchAlertChannels, retry: false });
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["alert-rules"] });
 
@@ -453,6 +462,10 @@ export function AlertHistory() {
     queryFn: () => fetchAlertHistory(200),
     retry: false,
   });
+
+  // UX stream (#805); screen key comes from the enclosing UxScreenProvider
+  useScreenReady(!history.isLoading);
+  useErrorState(!!history.error, "alert-history");
   const rules = useQuery({ queryKey: ["alert-rules"], queryFn: fetchAlertRules, retry: false });
   const ruleName = (id: string) => rules.data?.find((r) => r.id === id)?.name ?? id.slice(0, 8);
 

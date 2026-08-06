@@ -14,6 +14,7 @@ import {
   MAX_EXPLORATION_RATIO,
   type AdaptiveRoutingPolicyDto,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 interface FormState {
   enabled: boolean;
@@ -76,6 +77,11 @@ export default function AdaptiveSettings() {
     queryFn: fetchAdaptiveRoutingPolicy,
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `policy` is the query the user is actually waiting on for this screen
+  useScreenReady(!policy.isLoading);
+  useErrorState(!!policy.error, "adaptive-settings");
 
   const [form, setForm] = React.useState<FormState | null>(null);
   const [saved, setSaved] = React.useState(false);

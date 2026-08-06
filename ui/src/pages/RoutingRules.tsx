@@ -25,6 +25,7 @@ import {
   type RouteTargetRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const STRATEGY_TONE: Record<string, [string, string]> = {
   cache_aware: ["var(--status-info)", "rgba(59,130,246,.14)"],
@@ -47,6 +48,15 @@ export default function RoutingRules() {
     queryFn: () => fetchRoutes(scope.projectId as string),
     enabled: !!scope.projectId,
   });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `routes` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!routes.isLoading);
+
+  useErrorState(!!routes.error, "routing-rules");
   const providers = useQuery({
     queryKey: ["providers", scope.orgId],
     queryFn: () => fetchProviders(scope.orgId as string),

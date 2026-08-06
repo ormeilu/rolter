@@ -34,6 +34,7 @@ import {
   type UserRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // both screens read crates/rolter-control/src/mcp_oauth.rs, whose three rules
 // they exist to make visible: no token material crosses the API boundary, a
@@ -172,6 +173,12 @@ export function OAuthGrants() {
   const scope = useScope();
   const queryClient = useQueryClient();
   const { servers, grants, sessions, users } = useOrgOAuth(scope.orgId);
+
+  // UX stream (#805); screen key comes from the enclosing UxScreenProvider.
+  // readiness tracks `grants` alone — `users` is best-effort and the screen
+  // renders without it, so waiting on it would overstate time-to-interactive
+  useScreenReady(!grants.isLoading);
+  useErrorState(!!grants.error, "oauth-grants");
   const [confirming, setConfirming] = React.useState<McpOAuthGrantRow | null>(null);
   const now = Date.now();
 
@@ -346,6 +353,12 @@ export function AuthSessions() {
   const scope = useScope();
   const queryClient = useQueryClient();
   const { servers, grants, sessions, users } = useOrgOAuth(scope.orgId);
+
+  // UX stream (#805); screen key comes from the enclosing UxScreenProvider.
+  // readiness tracks `sessions` alone — `users` is best-effort and the screen
+  // renders without it, so waiting on it would overstate time-to-interactive
+  useScreenReady(!sessions.isLoading);
+  useErrorState(!!sessions.error, "auth-sessions");
   // one clock for every relative timestamp, so rows do not drift apart
   const [now, setNow] = React.useState(() => Date.now());
   React.useEffect(() => {

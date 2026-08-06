@@ -14,6 +14,7 @@ import {
   setClusterNodeDrain,
   type ClusterNodeRow,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // nodes fall out of the liveness window in under a minute, so the inventory is
 // only useful if it refreshes on its own
@@ -55,6 +56,11 @@ export default function Cluster() {
     refetchInterval: REFETCH_MS,
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `nodes` is the query the user is actually waiting on for this screen
+  useScreenReady(!nodes.isLoading);
+  useErrorState(!!nodes.error, "cluster");
   // one clock for every relative timestamp, so the rows do not drift apart
   const [now, setNow] = React.useState(() => Date.now());
   React.useEffect(() => {
