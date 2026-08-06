@@ -136,8 +136,22 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     // when no OTLP endpoint is configured. held for the lifetime of `run` so
     // metrics flush on shutdown
     let _metrics_export = {
-        let metrics = state.metrics.clone();
-        rolter_core::telemetry::install_metrics(move || metrics.scalars_for_export())
+        let scalars = state.metrics.clone();
+        let labelled = state.metrics.clone();
+        let guard =
+            rolter_core::telemetry::install_metrics(rolter_core::telemetry::MetricsExport {
+                scalars: move || scalars.scalars_for_export(),
+                labelled_families: metrics::LABELLED_FAMILIES,
+                labelled: move || labelled.labelled_for_export(),
+                latency_buckets_ms: metrics::Metrics::latency_buckets_ms(),
+            });
+        // the latency/TTFT histograms are the one instrument that cannot be
+        // observable, so the request path needs a handle to record into. absent
+        // this call — and on every deployment without OTLP — it records nothing
+        if let Some(guard) = &guard {
+            state.metrics.set_otlp_histograms(guard.histograms());
+        }
+        guard
     };
 
     // the health prober is always spawned; it self-gates on the live snapshot so a
