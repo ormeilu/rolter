@@ -26,7 +26,7 @@ export function FilterSection({ title, defaultOpen, count, children }: FilterSec
       <button
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium text-foreground transition-colors hover:bg-muted"
+        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         <ChevronDown
           className={cn(
@@ -68,7 +68,7 @@ export function FilterCheckList({ options, selected, onChange }: FilterCheckList
             aria-checked={checked}
             onClick={() => toggle(o.value)}
             className={cn(
-              "flex items-center gap-2 bg-[color:var(--surface-base)] px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted",
+              "flex items-center gap-2 bg-[color:var(--surface-base)] px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
               i > 0 && "border-t border-[color:var(--border-subtle)]",
               checked ? "text-foreground" : "text-muted-foreground",
             )}
@@ -148,7 +148,7 @@ function FilterCheckListInner({ options, selected, onChange }: FilterCheckListPr
             aria-checked={checked}
             onClick={() => toggle(o.value)}
             className={cn(
-              "flex items-center gap-2 border-t border-[color:var(--border-subtle)] bg-[color:var(--surface-base)] px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted",
+              "flex items-center gap-2 border-t border-[color:var(--border-subtle)] bg-[color:var(--surface-base)] px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
               checked ? "text-foreground" : "text-muted-foreground",
             )}
           >
@@ -197,7 +197,7 @@ export function FilterPanel({
           <button
             title="Hide filters"
             onClick={onHide}
-            className="rounded-md p-1 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground"
+            className="rounded-md p-1 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <PanelLeftClose className="h-4 w-4" />
           </button>

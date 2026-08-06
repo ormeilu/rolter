@@ -57,7 +57,7 @@ export interface NavSidebarProps extends React.HTMLAttributes<HTMLElement> {
 }
 
 const itemBase =
-  "relative flex w-full items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-sm transition-colors [&>svg]:h-4 [&>svg]:w-4 [&>svg]:flex-none";
+  "relative flex w-full items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-sm transition-colors [&>svg]:h-4 [&>svg]:w-4 [&>svg]:flex-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 const itemIdle = "text-muted-foreground hover:bg-muted hover:text-foreground";
 const itemActive =
   "bg-[color:var(--surface-subtle)] text-foreground before:absolute before:-left-px before:top-1/2 before:h-4 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-[color:var(--red-folk)] before:content-['']";
@@ -184,7 +184,7 @@ export function NavSidebar({
           <button
             title="Collapse sidebar"
             onClick={() => setCollapsed(true)}
-            className="ml-auto rounded-md p-1 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground"
+            className="ml-auto rounded-md p-1 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <PanelLeftClose className="h-4 w-4" />
           </button>
@@ -198,7 +198,7 @@ export function NavSidebar({
             title="Expand sidebar"
             aria-label="Expand sidebar"
             onClick={() => setCollapsed(false)}
-            className="absolute inset-0 flex items-center justify-center rounded-md bg-[color:var(--surface-app)] text-[color:var(--text-subtle)] opacity-0 transition-opacity duration-200 hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+            className="absolute inset-0 flex items-center justify-center rounded-md bg-[color:var(--surface-app)] text-[color:var(--text-subtle)] opacity-0 transition-opacity duration-200 hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <PanelLeftOpen className="h-4 w-4" />
           </button>
@@ -219,7 +219,7 @@ export function NavSidebar({
             <button
               onClick={() => setQuery("")}
               title="Clear search"
-              className="-my-1 -mr-1 rounded p-1 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground"
+              className="-my-1 -mr-1 rounded p-1 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -255,7 +255,7 @@ export function NavSidebar({
                   target="_blank"
                   rel="noreferrer"
                   title={l.title}
-                  className="rounded-md p-1.5 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground [&>svg]:h-4 [&>svg]:w-4"
+                  className="rounded-md p-1.5 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground [&>svg]:h-4 [&>svg]:w-4 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   {l.icon}
                 </a>
@@ -264,7 +264,7 @@ export function NavSidebar({
                   key={l.key}
                   onClick={l.onClick}
                   title={l.title}
-                  className="rounded-md p-1.5 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground [&>svg]:h-4 [&>svg]:w-4"
+                  className="rounded-md p-1.5 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground [&>svg]:h-4 [&>svg]:w-4 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   {l.icon}
                 </button>
@@ -300,7 +300,7 @@ export function NavSidebar({
             aria-expanded={userMenu ? userOpen : undefined}
             title={collapsed && typeof user.name === "string" ? user.name : undefined}
             className={cn(
-              "flex items-center gap-2 rounded-md transition-colors",
+              "flex items-center gap-2 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
               collapsed
                 ? "justify-center p-0.5 hover:bg-muted"
                 : "border border-[color:var(--border-subtle)] bg-[color:var(--surface-base)] px-2 py-1.5 hover:border-[color:var(--border-default)]",
