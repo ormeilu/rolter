@@ -8,6 +8,7 @@
 //! never blocked on. Token and cost fields are captured in a later phase; this
 //! writer establishes the plumbing and the record shape.
 
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
@@ -246,6 +247,116 @@ pub fn parse_response_model(is_sse: bool, buf: &[u8]) -> Option<String> {
     None
 }
 
+/// Why the model stopped generating, for `gen_ai.response.finish_reasons`
+/// (#835).
+///
+/// This is the attribute that separates "the model finished" from "we cut it
+/// off at the token limit" or "a guardrail stopped it" — a distinction the
+/// other GenAI attributes cannot express at all, since a truncated completion
+/// and a complete one look identical in latency and token counts.
+///
+/// Each dialect spells it differently, so all three are read from the one
+/// buffer `parse_usage` already walks:
+///
+/// - OpenAI chat and completions: `choices[].finish_reason`, one per choice,
+///   `null` on every streamed chunk but the last
+/// - Anthropic messages: `stop_reason`, top level when buffered, on
+///   `message_delta`'s `delta` when streamed (and present-but-null under
+///   `message` on `message_start`)
+/// - Responses API: `incomplete_details.reason` when the response stopped
+///   short, otherwise the terminal `status`; nested under `response` in its SSE
+///   events
+///
+/// Values stay provider-native — see `genai::RESPONSE_FINISH_REASONS` for why.
+/// Returns empty when the response carries no reason, which is the honest
+/// answer for a request that failed before generation or a route (embeddings,
+/// images) that has no such concept.
+pub fn parse_finish_reasons(is_sse: bool, buf: &[u8]) -> Vec<String> {
+    // OpenAI reports one reason per choice, so they are collected by choice
+    // index: streaming repeats the index across frames, and keying on it stops
+    // an n>1 response from recording the same reason several times. the other
+    // dialects describe a single generation and have no index at all
+    let mut by_choice: BTreeMap<u64, String> = BTreeMap::new();
+    let mut single: Option<String> = None;
+
+    if is_sse {
+        for line in buf.split(|&b| b == b'\n') {
+            let line = trim_ascii(line);
+            let Some(rest) = line.strip_prefix(b"data:") else {
+                continue;
+            };
+            let rest = trim_ascii(rest);
+            if rest == b"[DONE]" {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_slice::<Value>(rest) {
+                merge_finish_reasons(&mut by_choice, &mut single, &value);
+            }
+        }
+    } else if let Ok(value) = serde_json::from_slice::<Value>(buf) {
+        merge_finish_reasons(&mut by_choice, &mut single, &value);
+    }
+
+    if by_choice.is_empty() {
+        return single.into_iter().collect();
+    }
+    by_choice.into_values().collect()
+}
+
+/// Merge any finish reason found in `value`, whichever dialect wrote it.
+fn merge_finish_reasons(
+    by_choice: &mut BTreeMap<u64, String>,
+    single: &mut Option<String>,
+    value: &Value,
+) {
+    fn non_empty(value: Option<&Value>) -> Option<&str> {
+        value.and_then(Value::as_str).filter(|s| !s.is_empty())
+    }
+
+    // openai: choices[].finish_reason, null until the final chunk
+    if let Some(choices) = value.get("choices").and_then(Value::as_array) {
+        for (position, choice) in choices.iter().enumerate() {
+            let index = choice
+                .get("index")
+                .and_then(Value::as_u64)
+                .unwrap_or(position as u64);
+            if let Some(reason) = non_empty(choice.get("finish_reason")) {
+                by_choice.insert(index, reason.to_string());
+            }
+        }
+    }
+
+    // anthropic: top level when buffered, under `delta` on message_delta. the
+    // last writer wins because a stream only ever resolves the reason once, on
+    // the final event — earlier occurrences are null and filtered out above
+    for candidate in [
+        value.get("stop_reason"),
+        value.pointer("/delta/stop_reason"),
+        value.pointer("/message/stop_reason"),
+    ] {
+        if let Some(reason) = non_empty(candidate) {
+            *single = Some(reason.to_string());
+        }
+    }
+
+    // responses api: the object is the payload when buffered and sits under
+    // `response` in every SSE event
+    for response in [Some(value), value.get("response")].into_iter().flatten() {
+        // only a terminal status is a finish reason; `response.created` and
+        // every delta event carry `in_progress`, which describes nothing
+        let terminal = non_empty(response.get("status"))
+            .filter(|s| matches!(*s, "completed" | "incomplete" | "failed" | "cancelled"));
+        let Some(status) = terminal else { continue };
+        // a stop-short reason is the specific answer; the status is the
+        // fallback that at least says generation ended normally
+        *single = Some(
+            non_empty(response.pointer("/incomplete_details/reason"))
+                .unwrap_or(status)
+                .to_string(),
+        );
+    }
+}
+
 /// Token usage extracted from an upstream response.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Usage {
@@ -438,6 +549,15 @@ impl UsageLoggingStream {
             // provider-side substitution all show up here and nowhere else
             if let Some(model) = parse_response_model(self.is_sse, &self.buf) {
                 span.record(crate::genai::RESPONSE_MODEL, model.as_str());
+            }
+            // whether the model stopped on its own or was cut short; joined
+            // because `tracing` has no array field type (#835)
+            let reasons = parse_finish_reasons(self.is_sse, &self.buf);
+            if !reasons.is_empty() {
+                span.record(
+                    crate::genai::RESPONSE_FINISH_REASONS,
+                    reasons.join(",").as_str(),
+                );
             }
         }
         if let Some(observer) = self.completion_observer.take() {
@@ -899,6 +1019,92 @@ data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":25}}\n\n";
     #[test]
     fn missing_usage_is_zero() {
         assert_eq!(parse_usage(false, b"{\"id\":\"x\"}"), Usage::default());
+    }
+
+    #[test]
+    fn parses_openai_non_stream_finish_reason() {
+        let body = br#"{"id":"x","choices":[{"index":0,"finish_reason":"stop"}]}"#;
+        assert_eq!(parse_finish_reasons(false, body), vec!["stop"]);
+    }
+
+    /// The case the attribute exists for: the completion did not finish, it ran
+    /// out of room. Nothing else on the span says so.
+    #[test]
+    fn parses_openai_length_truncation() {
+        let body = br#"{"choices":[{"index":0,"finish_reason":"length"}]}"#;
+        assert_eq!(parse_finish_reasons(false, body), vec!["length"]);
+    }
+
+    /// `n>1` yields one reason per choice, in choice order rather than the
+    /// order the frames happened to arrive in.
+    #[test]
+    fn parses_one_reason_per_choice_in_index_order() {
+        let body = br#"{"choices":[
+            {"index":1,"finish_reason":"length"},
+            {"index":0,"finish_reason":"stop"}
+        ]}"#;
+        assert_eq!(parse_finish_reasons(false, body), vec!["stop", "length"]);
+    }
+
+    /// Every streamed chunk carries `finish_reason: null` until the last one,
+    /// so a naive scan would record nothing and a repeated scan would record
+    /// the same reason many times.
+    #[test]
+    fn parses_openai_sse_finish_reason_from_the_final_chunk_only() {
+        let sse = b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n\
+data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n";
+        assert_eq!(parse_finish_reasons(true, sse), vec!["stop"]);
+    }
+
+    #[test]
+    fn parses_anthropic_non_stream_stop_reason() {
+        let body = br#"{"type":"message","stop_reason":"end_turn"}"#;
+        assert_eq!(parse_finish_reasons(false, body), vec!["end_turn"]);
+    }
+
+    /// Anthropic resolves the reason on `message_delta`; `message_start`
+    /// carries the key with a null value, which must not win.
+    #[test]
+    fn parses_anthropic_sse_stop_reason_from_message_delta() {
+        let sse = b"event: message_start\n\
+data: {\"type\":\"message_start\",\"message\":{\"stop_reason\":null}}\n\n\
+event: message_delta\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n";
+        assert_eq!(parse_finish_reasons(true, sse), vec!["max_tokens"]);
+    }
+
+    /// The Responses API has no `finish_reason` key at all: a response that
+    /// stopped short says so through `incomplete_details`.
+    #[test]
+    fn parses_responses_api_incomplete_reason() {
+        let body = br#"{"object":"response","status":"incomplete",
+            "incomplete_details":{"reason":"max_output_tokens"}}"#;
+        assert_eq!(parse_finish_reasons(false, body), vec!["max_output_tokens"]);
+    }
+
+    #[test]
+    fn parses_responses_api_completed_status() {
+        let body = br#"{"object":"response","status":"completed"}"#;
+        assert_eq!(parse_finish_reasons(false, body), vec!["completed"]);
+    }
+
+    /// `in_progress` describes nothing, and the Responses stream emits it on
+    /// every event before the last. Only a terminal status is a finish reason.
+    #[test]
+    fn ignores_non_terminal_responses_api_status() {
+        let sse =
+            b"data: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n";
+        assert_eq!(parse_finish_reasons(true, sse), vec!["completed"]);
+    }
+
+    /// Embeddings, images and any request that failed before generation have
+    /// no finish reason; the attribute is then absent rather than invented.
+    #[test]
+    fn missing_finish_reason_is_empty() {
+        assert!(parse_finish_reasons(false, br#"{"id":"x"}"#).is_empty());
+        assert!(parse_finish_reasons(false, br#"{"data":[{"embedding":[0.1]}]}"#).is_empty());
     }
 
     #[test]
