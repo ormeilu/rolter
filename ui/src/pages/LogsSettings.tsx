@@ -11,6 +11,7 @@ import {
   updateLoggingSettings,
   type LoggingSettingsDto,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 interface FormState {
   samplePercent: string;
@@ -79,6 +80,11 @@ export default function LogsSettings() {
     queryFn: fetchLoggingSettings,
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `settings` is the query the user is actually waiting on for this screen
+  useScreenReady(!settings.isLoading);
+  useErrorState(!!settings.error, "logs-settings");
 
   const [form, setForm] = React.useState<FormState | null>(null);
   const [saved, setSaved] = React.useState(false);

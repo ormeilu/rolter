@@ -9,6 +9,7 @@ import { Select } from "@/components/ui/select";
 import { Table, type TableColumn } from "@/components/ui/table";
 import { fetchAuditLogPage, type AuditLogEntry } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const PAGE_SIZE = 25;
 
@@ -109,6 +110,15 @@ export default function AuditLog() {
       }),
     enabled: !!scope.orgId,
   });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `page` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!page.isLoading);
+
+  useErrorState(!!page.error, "audit-log");
 
   // reset to the first page whenever the filter set changes
   React.useEffect(() => {

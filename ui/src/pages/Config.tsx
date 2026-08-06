@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchConfig } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const SECTION_TH =
   "border-b border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] px-3.5 py-2 text-[0.6875rem] uppercase tracking-[0.07em] text-[color:var(--text-subtle)]";
@@ -14,6 +15,11 @@ const SECTION_TH =
 // of the same switches (#564)
 export default function Config() {
   const config = useQuery({ queryKey: ["config"], queryFn: fetchConfig });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `config` is the query the user is actually waiting on for this screen
+  useScreenReady(!config.isLoading);
+  useErrorState(!!config.error, "config");
 
   const cfg = config.data;
   const summary = cfg

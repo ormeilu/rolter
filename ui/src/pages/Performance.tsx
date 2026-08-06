@@ -13,6 +13,7 @@ import {
   type BackpressurePolicy,
   type RuntimePolicyDto,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 interface FormState {
   retryMaxRetries: string;
@@ -88,6 +89,11 @@ export default function Performance() {
     queryFn: fetchRuntimePolicy,
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `policy` is the query the user is actually waiting on for this screen
+  useScreenReady(!policy.isLoading);
+  useErrorState(!!policy.error, "performance");
 
   const [form, setForm] = React.useState<FormState | null>(null);
   const [saved, setSaved] = React.useState(false);

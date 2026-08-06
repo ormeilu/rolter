@@ -20,6 +20,7 @@ import {
   upsertModelPrice,
   type ModelPriceRow,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const PRICES_QUERY_KEY = ["model-prices"];
 
@@ -32,6 +33,15 @@ export default function Pricing() {
     queryKey: PRICES_QUERY_KEY,
     queryFn: fetchModelPrices,
   });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `prices` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!prices.isLoading);
+
+  useErrorState(!!prices.error, "pricing");
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: PRICES_QUERY_KEY });

@@ -47,6 +47,7 @@ import {
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 interface Draft {
   variables: PromptTemplateVariable[];
@@ -118,6 +119,15 @@ export default function PromptRepository() {
     queryFn: () => fetchPromptTemplates(scope.orgId as string),
     enabled: !!scope.orgId,
   });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `templates` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!templates.isLoading);
+
+  useErrorState(!!templates.error, "prompt-repository");
   const selected = templates.data?.find((template) => template.id === selectedId);
 
   React.useEffect(() => {

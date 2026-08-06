@@ -38,6 +38,7 @@ import {
   type UserRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // admin surface for the user/team lifecycle (ROL-223): invite accounts into the
 // current org, grant/revoke roles at org/team/project scope, and
@@ -54,6 +55,15 @@ export default function Users() {
     queryFn: () => fetchUsers(orgId as string),
     enabled: !!orgId,
   });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `users` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!users.isLoading);
+
+  useErrorState(!!users.error, "users");
 
   const memberships = useQuery({
     queryKey: ["memberships", orgId],

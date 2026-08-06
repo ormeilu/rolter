@@ -1,0 +1,267 @@
+---
+title: "What to Look At in Rolter Telemetry"
+sidebarTitle: "What to look at"
+description: "The handful of queries and trace views that answer why a request was slow and whether a dashboard screen is usable — with the shape of a healthy answer, so you can tell a real problem from noise."
+---
+
+Collecting telemetry is easy; using it is the part that gets skipped. This page
+is the short list — the queries worth running, and what a healthy answer looks
+like, so a number means something the first time you see it.
+
+Two questions, two data sources:
+
+- **Why was a request slow?** → traces in SigNoz ([Tracing](/observability/tracing))
+- **Is a dashboard screen usable?** → the `ui_events` table in ClickHouse ([UX Events](/api/ui-events))
+
+Both carry `trace_id`, so the two are one join apart rather than two systems apart.
+
+<Note>
+  Every query below is plain ClickHouse SQL against the deployment you already
+  run. Paste them into `clickhouse-client`, or the SigNoz **Logs → ClickHouse
+  Query** panel, or a Grafana ClickHouse datasource. There is nothing to install.
+</Note>
+
+## Performance: why was that request slow?
+
+### Where the time actually goes
+
+Rolter emits one span per pipeline stage, so a slow request is attributable to a
+named stage rather than merely slow. In SigNoz, open **Traces**, filter
+`service.name = rolter-gateway`, and sort by duration descending.
+
+Read the waterfall top-down and ask which stage is wide:
+
+| Wide stage | What it usually means |
+|---|---|
+| `queue.wait` | you are at the concurrency limit — the upstream is fine, you are throttling yourself |
+| `upstream.request` | the provider is slow; check the retry attribute for a silent retry |
+| `guardrails.pre` / `guardrails.post` | a guardrail provider is in the request path and slow |
+| `route.select` | unusual — check candidate count; a large pool with health probing can drift |
+| `translate.*` | large payloads; correlate with token counts |
+| `cache.lookup` | cache backend latency, not a cache miss — a miss is fast |
+
+<Warning>
+  If every gateway span looks like a disconnected root with no parent, the
+  browser or the calling client is not sending `traceparent`. That is a
+  propagation problem, not a performance one — see
+  [Tracing](/observability/tracing).
+</Warning>
+
+### p95 latency by model, from the request log
+
+Traces are sampled; the request log is not. For "is this actually getting
+worse", use the log.
+
+```sql
+SELECT
+    model,
+    count()                                    AS requests,
+    round(quantile(0.50)(latency_ms))          AS p50_ms,
+    round(quantile(0.95)(latency_ms))          AS p95_ms,
+    round(100 * countIf(status >= 400) / count(), 2) AS error_pct
+FROM request_logs
+WHERE ts > now() - INTERVAL 24 HOUR
+GROUP BY model
+ORDER BY requests DESC
+LIMIT 20;
+```
+
+**Healthy shape:** `p95_ms` within roughly 3× of `p50_ms`. A much wider gap
+means a slow minority — usually queueing or retries, and the trace waterfall
+will say which.
+
+## UX: is the dashboard usable?
+
+### Which screens are slow to become usable
+
+`time_to_interactive` is emitted when a screen's primary data lands, so this is
+time-to-*usable*, not time-to-first-paint.
+
+```sql
+SELECT
+    screen,
+    count()                           AS views,
+    round(quantile(0.50)(duration_ms)) AS p50_ms,
+    round(quantile(0.95)(duration_ms)) AS p95_ms
+FROM ui_events
+WHERE action = 'time_to_interactive'
+  AND ts > now() - INTERVAL 7 DAY
+GROUP BY screen
+HAVING views > 20
+ORDER BY p95_ms DESC
+LIMIT 20;
+```
+
+**Healthy shape:** p95 under ~1s for list screens. Anything over 3s is a screen
+people will describe as broken, whatever the p50 says.
+
+### Which screens people back out of
+
+A back-out is leaving via the browser's back button rather than by acting on the
+screen. The dwell time is what makes it meaningful.
+
+```sql
+SELECT
+    screen,
+    count()                            AS back_outs,
+    round(quantile(0.50)(duration_ms)) AS p50_dwell_ms
+FROM ui_events
+WHERE action = 'back_out'
+  AND ts > now() - INTERVAL 7 DAY
+GROUP BY screen
+ORDER BY back_outs DESC
+LIMIT 20;
+```
+
+**How to read it:** a short dwell (under ~5s) with many back-outs is a
+*navigation* problem — people are landing somewhere they did not intend, so the
+route in is mislabelled. A long dwell is a *content* problem — they meant to be
+there, tried, and gave up.
+
+### Which forms get abandoned
+
+```sql
+SELECT
+    screen,
+    target                                          AS form,
+    countIf(action = 'form_submit')                 AS submits,
+    countIf(action = 'form_abandon')                AS abandons,
+    round(100 * countIf(action = 'form_abandon')
+          / nullIf(countIf(action IN ('form_submit','form_abandon')), 0), 1) AS abandon_pct,
+    round(quantileIf(0.50)(duration_ms, action = 'form_abandon')) AS p50_dwell_ms
+FROM ui_events
+WHERE action IN ('form_submit', 'form_abandon')
+  AND ts > now() - INTERVAL 30 DAY
+GROUP BY screen, target
+HAVING submits + abandons > 10
+ORDER BY abandon_pct DESC;
+```
+
+**How to read it:** high `abandon_pct` with a *short* dwell means the form was
+opened by mistake — usually an ambiguous button. High abandon with a *long*
+dwell means people tried and could not finish, which is the one worth fixing.
+
+### Which validation rules actually fire
+
+`target` is the rule's name; the value that failed it is never recorded.
+
+```sql
+SELECT screen, target AS rule, count() AS hits
+FROM ui_events
+WHERE action = 'validation_error'
+  AND ts > now() - INTERVAL 30 DAY
+GROUP BY screen, rule
+ORDER BY hits DESC
+LIMIT 20;
+```
+
+A rule at the top of this list is usually a field whose format is not explained
+before it is enforced.
+
+### Dead states and hot error states
+
+> A state we wrote and nobody ever sees is dead code; one we ship and everyone
+> hits is a bug.
+
+```sql
+SELECT
+    screen,
+    target                                    AS region,
+    countIf(action = 'empty_state')           AS empty_impressions,
+    countIf(action = 'error_state')           AS error_impressions
+FROM ui_events
+WHERE action IN ('empty_state', 'error_state')
+  AND ts > now() - INTERVAL 30 DAY
+GROUP BY screen, region
+ORDER BY error_impressions DESC, empty_impressions DESC;
+```
+
+Sustained `error_impressions` on one screen is a bug report nobody filed. High
+`empty_impressions` on a screen that should have data usually means a scope or
+permission problem, not an authoring one.
+
+### Save-to-confirmation latency
+
+How long the user waits between pressing save and being told it worked.
+
+```sql
+SELECT
+    screen,
+    target                              AS form,
+    count()                             AS saves,
+    round(quantile(0.95)(duration_ms))  AS p95_ms
+FROM ui_events
+WHERE action = 'save_confirmed'
+  AND ts > now() - INTERVAL 7 DAY
+GROUP BY screen, form
+ORDER BY p95_ms DESC;
+```
+
+**Healthy shape:** under ~1s. Past about 2s people press save twice, so this
+number predicts duplicate writes.
+
+## Joining the two: a slow screen and the request behind it
+
+This is the reason both streams carry `trace_id`. When a screen is slow, this
+says whether the dashboard or the gateway is responsible.
+
+```sql
+SELECT
+    e.screen,
+    e.duration_ms          AS screen_ms,
+    r.model,
+    r.latency_ms           AS gateway_ms,
+    r.status
+FROM ui_events AS e
+INNER JOIN request_logs AS r ON r.trace_id = e.trace_id
+WHERE e.action = 'time_to_interactive'
+  AND e.duration_ms > 2000
+  AND e.ts > now() - INTERVAL 24 HOUR
+ORDER BY e.duration_ms DESC
+LIMIT 50;
+```
+
+**How to read it:** if `gateway_ms` is a small fraction of `screen_ms`, the
+backend was fine and the time went on the client — rendering, or requests the
+screen makes in series that could be parallel. If the two are close, fix the
+gateway path first.
+
+<Note>
+  `trace_id` is only populated when browser tracing is switched on. With it off,
+  UX events still record everything else; this one join is the only thing that
+  needs it.
+</Note>
+
+## Before you trust any of it
+
+Three checks, in order — each one explains an empty result you would otherwise
+misread as good news.
+
+1. **Are events arriving at all?**
+
+   ```sql
+   SELECT action, count() FROM ui_events
+   WHERE ts > now() - INTERVAL 1 HOUR GROUP BY action ORDER BY 2 DESC;
+   ```
+
+   Nothing at all means `clickhouse_url` is unset, `logging.ui_events = false`,
+   or nobody has used the dashboard in an hour.
+
+2. **Is a screen missing on purpose?** `screen_view`, `navigate`, `back_out` and
+   `empty_state` are wired centrally and cover every screen.
+   `time_to_interactive` and `error_state` are per-screen. A screen absent from
+   those is un-instrumented, not fast.
+
+3. **Compare like with like.** `app_version` is on every row. After a deploy,
+   filter to one version before concluding a screen got slower:
+
+   ```sql
+   ... WHERE app_version = '1.4.2'
+   ```
+
+## Retention
+
+`ui_events` carries the same 90-day TTL and daily partitioning as
+`request_logs`, so none of this needs its own retention policy. For anything you
+want to keep beyond that, roll it into a summary table on your own schedule —
+these queries all aggregate cleanly by day.

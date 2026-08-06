@@ -28,6 +28,7 @@ import {
   type ScimTokenRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const TOKENS_QUERY_KEY = ["scim-tokens"];
 
@@ -56,6 +57,15 @@ export default function UserProvisioning() {
     enabled: !!orgId,
     retry: false,
   });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `tokens` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!tokens.isLoading);
+
+  useErrorState(!!tokens.error, "user-provisioning");
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: [...TOKENS_QUERY_KEY, orgId] });

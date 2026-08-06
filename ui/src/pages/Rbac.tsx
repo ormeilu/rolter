@@ -4,6 +4,7 @@ import { PageBody } from "@/components/screen";
 import { fetchMemberships } from "@/lib/api";
 import { RBAC_RESOURCES, RBAC_ROLES } from "@/lib/mock";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const OPS: { letter: string; op: string; title: string }[] = [
   { letter: "V", op: "v", title: "View" },
@@ -23,6 +24,11 @@ export default function Rbac() {
     enabled: !!scope.orgId,
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `memberships` is the query the user is actually waiting on for this screen
+  useScreenReady(!memberships.isLoading);
+  useErrorState(!!memberships.error, "rbac");
 
   const memberCount = (role: string) =>
     new Set(

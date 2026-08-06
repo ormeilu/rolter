@@ -11,6 +11,7 @@ import {
   updateClientSettings,
   type ClientSettingsDto,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // injected headers are edited as an ordered list rather than an object so a
 // half-typed name does not collide with an existing key while it is being typed
@@ -91,6 +92,11 @@ export default function ClientSettings() {
     queryFn: fetchClientSettings,
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `settings` is the query the user is actually waiting on for this screen
+  useScreenReady(!settings.isLoading);
+  useErrorState(!!settings.error, "client-settings");
 
   const [form, setForm] = React.useState<FormState | null>(null);
   const [saved, setSaved] = React.useState(false);

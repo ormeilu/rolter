@@ -8,6 +8,7 @@ import {
   type TimelineRow,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const SLA = 0.99;
 
@@ -53,6 +54,11 @@ export default function Health() {
     queryKey: ["health-uptime", SLA],
     queryFn: () => fetchUptime(SLA),
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `uptime` is the query the user is actually waiting on for this screen
+  useScreenReady(!uptime.isLoading);
+  useErrorState(!!uptime.error, "health");
   const mttr = useQuery({ queryKey: ["health-mttr"], queryFn: fetchMttr });
   const timeline = useQuery({
     queryKey: ["health-timeline"],

@@ -17,6 +17,7 @@ import {
   type ProviderGroupRow,
   type ProviderRow,
 } from "@/lib/api";
+import { useFormTelemetry } from "@/lib/ux-react";
 
 export type ProviderGroupSheetMode = "add" | "edit";
 
@@ -206,6 +207,13 @@ export function ProviderGroupSheet({
     return window.confirm("Discard unsaved changes?");
   }, [dirty]);
 
+  // form lifecycle for the UX stream (#805). the target names the form and the
+  // mode; nothing derived from what was typed into it
+  const ux = useFormTelemetry(
+    mode === "add" ? "provider-group-create" : "provider-group-edit",
+    open,
+  );
+
   const save = useMutation({
     mutationFn: () => {
       const members = toMemberInputs(draft.members);
@@ -228,9 +236,11 @@ export function ProviderGroupSheet({
       });
     },
     onSuccess: () => {
+      ux.saved();
       onDone();
       onOpenChange(false);
     },
+    onError: () => ux.failed(),
   });
 
   const title = mode === "add" ? "Add provider group" : `Edit ${group?.name ?? ""}`;
@@ -333,7 +343,13 @@ export function ProviderGroupSheet({
           <Button variant="ghost" onClick={() => guard() && onOpenChange(false)}>
             Cancel
           </Button>
-          <Button disabled={!canSave} onClick={() => save.mutate()}>
+          <Button
+            disabled={!canSave}
+            onClick={() => {
+              ux.submitted();
+              save.mutate();
+            }}
+          >
             {cta}
           </Button>
         </div>

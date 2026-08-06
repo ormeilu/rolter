@@ -11,6 +11,7 @@ import {
   updateModelDefaults,
   type ModelDefaultsDto,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // every field is optional, so the form keeps raw strings and an empty string
 // means "leave this to the provider" rather than "send zero"
@@ -74,6 +75,11 @@ export default function ModelSettings() {
     queryFn: fetchModelDefaults,
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `defaults` is the query the user is actually waiting on for this screen
+  useScreenReady(!defaults.isLoading);
+  useErrorState(!!defaults.error, "model-settings");
 
   const [form, setForm] = React.useState<FormState | null>(null);
   const [saved, setSaved] = React.useState(false);

@@ -30,6 +30,7 @@ import {
   type GuardrailRuleInput,
   type GuardrailRuleRow,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const EMPTY: GuardrailRuleInput = {
   name: "",
@@ -51,6 +52,11 @@ export default function GuardrailRules() {
     queryFn: fetchGuardrailRules,
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `query` is the query the user is actually waiting on for this screen
+  useScreenReady(!query.isLoading);
+  useErrorState(!!query.error, "guardrail-rules");
   const [editing, setEditing] = React.useState<GuardrailRuleRow | null | undefined>();
 
   const save = useMutation({

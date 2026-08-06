@@ -15,6 +15,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { createTeam, fetchBudgets, fetchMemberships, fetchTeams } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // teams from the design prototype: card per team with member count, the
 // team-scoped budget (when one exists), and the team admin
@@ -27,6 +28,15 @@ export default function Teams() {
     queryFn: () => fetchTeams(scope.orgId as string),
     enabled: !!scope.orgId,
   });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `teams` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!teams.isLoading);
+
+  useErrorState(!!teams.error, "teams");
   const memberships = useQuery({
     queryKey: ["memberships", scope.orgId],
     queryFn: () => fetchMemberships(scope.orgId as string),

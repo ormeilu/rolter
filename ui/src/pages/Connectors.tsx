@@ -22,6 +22,7 @@ import {
   updateConnector,
   type ConnectorRow,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const HEALTH_TONE: Record<string, [string, string]> = {
   healthy: ["var(--status-success)", "rgba(22,163,74,.14)"],
@@ -49,6 +50,11 @@ export default function Connectors() {
     queryFn: fetchConnectors,
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `connectors` is the query the user is actually waiting on for this screen
+  useScreenReady(!connectors.isLoading);
+  useErrorState(!!connectors.error, "connectors");
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["connectors"] });
 
   const toggle = useMutation({

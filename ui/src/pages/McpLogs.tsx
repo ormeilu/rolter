@@ -14,6 +14,7 @@ import {
   MCP_TRANSPORTS,
   type McpLogRow,
 } from "@/lib/api";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const STATUS_TONE: Record<string, [string, string]> = {
   success: ["var(--status-success)", "rgba(22,163,74,.14)"],
@@ -41,6 +42,15 @@ export default function McpLogs() {
     queryFn: () => fetchMcpSummary({ since: new Date(Date.now() - 86_400_000).toISOString() }),
     retry: false,
   });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `summary` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!summary.isLoading);
+
+  useErrorState(!!summary.error, "mcp-logs");
   const logs = useQuery({
     queryKey: ["mcp-logs", status, transport, cursor],
     queryFn: () =>

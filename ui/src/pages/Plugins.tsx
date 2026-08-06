@@ -27,6 +27,7 @@ import {
   type PluginInstanceRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 type Stage = PluginInstanceRow["stage"];
 
@@ -60,6 +61,11 @@ export default function Plugins() {
     enabled: Boolean(scope.orgId),
     retry: false,
   });
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+  // `query` is the query the user is actually waiting on for this screen
+  useScreenReady(!query.isLoading);
+  useErrorState(!!query.error, "plugins");
   const [editing, setEditing] = React.useState<PluginInstanceRow | null | undefined>();
   const invalidate = () => client.invalidateQueries({ queryKey: ["plugins", scope.orgId] });
   const toggle = useMutation({

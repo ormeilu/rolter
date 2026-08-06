@@ -35,6 +35,7 @@ import {
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
+import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const GRID = "1.5fr 0.95fr 0.95fr 0.9fr 1.05fr 0.55fr 108px";
 
@@ -62,6 +63,15 @@ export default function Models() {
   const scope = useScope();
 
   const models = useQuery({ queryKey: ["models"], queryFn: fetchModels });
+
+
+  // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
+
+  // `models` is the query the user is actually waiting on for this screen
+
+  useScreenReady(!models.isLoading);
+
+  useErrorState(!!models.error, "models");
   const routes = useQuery({
     queryKey: ["routes", scope.projectId],
     queryFn: () => fetchRoutes(scope.projectId as string),
