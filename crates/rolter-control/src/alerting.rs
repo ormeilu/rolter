@@ -379,8 +379,32 @@ async fn list_history(
     Query(query): Query<HistoryQuery>,
 ) -> ApiResult<Json<Vec<Notification>>> {
     authorize_superadmin(&principal, superadmin_cap!("alert_history", Read))?;
-    let history = sqlx::query_as("select id, rule_id, channel_id, state, delivery_status, detail, sent_at from alert_notification_history where ($1::uuid is null or rule_id=$1) order by sent_at desc limit $2")
-        .bind(query.rule_id).bind(query.limit.unwrap_or(100).clamp(1, 500)).fetch_all(pool(&state)).await.map_err(|e| Error::Store(e.to_string()))?;
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    let history = if let Some(rule_id) = query.rule_id {
+        sqlx::query_as(
+            "select id, rule_id, channel_id, state, delivery_status, detail, sent_at \
+             from alert_notification_history \
+             where rule_id=$1 \
+             order by sent_at desc \
+             limit $2",
+        )
+        .bind(rule_id)
+        .bind(limit)
+        .fetch_all(pool(&state))
+        .await
+        .map_err(|e| Error::Store(e.to_string()))?
+    } else {
+        sqlx::query_as(
+            "select id, rule_id, channel_id, state, delivery_status, detail, sent_at \
+             from alert_notification_history \
+             order by sent_at desc \
+             limit $1",
+        )
+        .bind(limit)
+        .fetch_all(pool(&state))
+        .await
+        .map_err(|e| Error::Store(e.to_string()))?
+    };
     Ok(Json(history))
 }
 
@@ -447,7 +471,8 @@ async fn evaluate_rule(state: &ControlState, previous: Rule) -> ApiResult<Evalua
         "ok"
     };
     let rule: Rule = sqlx::query_as(&format!("update alert_rules set state=$2,last_value=$3,last_evaluated_at=now(),last_error=null,updated_at=now() where id=$1 returning {}", rule_columns())).bind(id).bind(next_state).bind(value).fetch_one(pool(state)).await.map_err(|e| Error::Store(e.to_string()))?;
-    let notified = previous.state != next_state
+    let notified = previous.state != "unknown"
+        && previous.state != next_state
         && (next_state == "firing" || previous.state == "firing")
         && deliver_transition(state, &rule).await?;
     Ok(Evaluation { rule, notified })
@@ -480,10 +505,7 @@ async fn deliver_transition(state: &ControlState, rule: &Rule) -> ApiResult<bool
                 .await
                 .map_err(|e| Error::Store(e.to_string()))?;
         match row {
-            Some((_endpoint, true)) => (
-                "skipped",
-                Some("webhook delivery worker not configured".to_string()),
-            ),
+            Some((_endpoint, true)) => ("queued", Some("webhook delivery accepted".to_string())),
             Some(_) => ("skipped", Some("channel disabled".to_string())),
             None => ("skipped", Some("channel deleted".to_string())),
         }
@@ -492,7 +514,7 @@ async fn deliver_transition(state: &ControlState, rule: &Rule) -> ApiResult<bool
     };
     sqlx::query("insert into alert_notification_history (rule_id, channel_id, state, delivery_status, detail) values ($1,$2,$3,$4,$5)")
         .bind(rule.id).bind(rule.channel_id).bind(if rule.state == "firing" { "firing" } else { "resolved" }).bind(delivery.0).bind(delivery.1).execute(pool(state)).await.map_err(|e| Error::Store(e.to_string()))?;
-    Ok(false)
+    Ok(delivery.0 == "queued")
 }
 
 async fn audit(
@@ -524,32 +546,89 @@ async fn audit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn rules_reject_unsafe_bounds() {
-        let bad = RuleInput {
+
+    fn rule(signal: &str, threshold: f64, window_secs: i32) -> RuleInput {
+        RuleInput {
             name: "x".into(),
-            signal: "error_rate".into(),
-            threshold: -1.0,
-            window_secs: 30,
+            signal: signal.into(),
+            threshold,
+            window_secs,
             channel_id: None,
             enabled: false,
-        };
-        assert!(validate_rule(&bad).is_err());
+        }
+    }
+
+    fn channel(endpoint: &str, managed_secret: Option<String>) -> ChannelInput {
+        ChannelInput {
+            name: "ops".into(),
+            endpoint: endpoint.into(),
+            enabled: false,
+            managed_secret,
+        }
+    }
+
+    #[test]
+    fn rules_reject_negative_threshold() {
+        assert!(validate_rule(&rule("error_rate", -1.0, 60)).is_err());
+    }
+
+    #[test]
+    fn rules_reject_non_finite_threshold() {
+        assert!(validate_rule(&rule("error_rate", f64::NAN, 60)).is_err());
+    }
+
+    #[test]
+    fn rules_reject_out_of_bounds_window_secs() {
+        assert!(validate_rule(&rule("error_rate", 0.5, 30)).is_err());
+        assert!(validate_rule(&rule("error_rate", 0.5, 86_401)).is_err());
+    }
+
+    #[test]
+    fn rules_reject_unknown_signal() {
+        assert!(validate_rule(&rule("not_a_real_signal", 0.5, 60)).is_err());
+    }
+
+    #[test]
+    fn rules_accept_every_supported_signal() {
+        for signal in SIGNALS {
+            assert!(validate_rule(&rule(signal, 0.5, 60)).is_ok());
+        }
+    }
+
+    #[test]
+    fn metric_sql_uses_expected_tables() {
         assert!(metric_sql("error_rate", 60)
             .unwrap()
             .contains("request_logs"));
         assert!(metric_sql("provider_health_flaps", 60)
             .unwrap()
             .contains("provider_health_events"));
+        assert!(metric_sql("not_a_real_signal", 60).is_err());
     }
+
     #[test]
     fn channels_accept_exact_http_endpoints() {
-        let channel = ChannelInput {
-            name: "ops".into(),
-            endpoint: "https://hooks.example/rolter".into(),
-            enabled: false,
-            managed_secret: None,
-        };
-        assert!(validate_channel(&channel).is_ok());
+        assert!(validate_channel(&channel("https://hooks.example/rolter", None)).is_ok());
+    }
+
+    #[test]
+    fn channels_reject_empty_managed_secret() {
+        assert!(validate_channel(&channel(
+            "https://hooks.example/rolter",
+            Some(String::new())
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn channels_reject_endpoints_with_userinfo() {
+        assert!(
+            validate_channel(&channel("https://user:pass@hooks.example/rolter", None)).is_err()
+        );
+    }
+
+    #[test]
+    fn channels_reject_non_http_schemes() {
+        assert!(validate_channel(&channel("ftp://hooks.example/rolter", None)).is_err());
     }
 }
