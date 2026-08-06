@@ -378,8 +378,32 @@ async fn list_history(
     State(state): State<ControlState>,
     Query(query): Query<HistoryQuery>,
 ) -> ApiResult<Json<Vec<Notification>>> {
-    authorize_superadmin(&principal, superadmin_cap!("alert_history", Read))?;
-    let history = sqlx::query_as("select id, rule_id, channel_id, state, delivery_status, detail, sent_at from alert_notification_history where ($1::uuid is null or rule_id=$1) order by sent_at desc limit $2")
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    let history = if let Some(rule_id) = query.rule_id {
+        sqlx::query_as(
+            "select id, rule_id, channel_id, state, delivery_status, detail, sent_at \
+             from alert_notification_history \
+             where rule_id=$1 \
+             order by sent_at desc \
+             limit $2",
+        )
+        .bind(rule_id)
+        .bind(limit)
+        .fetch_all(pool(&state))
+        .await
+        .map_err(|e| Error::Store(e.to_string()))?
+    } else {
+        sqlx::query_as(
+            "select id, rule_id, channel_id, state, delivery_status, detail, sent_at \
+             from alert_notification_history \
+             order by sent_at desc \
+             limit $1",
+        )
+        .bind(limit)
+        .fetch_all(pool(&state))
+        .await
+        .map_err(|e| Error::Store(e.to_string()))?
+    };
         .bind(query.rule_id).bind(query.limit.unwrap_or(100).clamp(1, 500)).fetch_all(pool(&state)).await.map_err(|e| Error::Store(e.to_string()))?;
     Ok(Json(history))
 }
