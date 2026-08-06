@@ -34,7 +34,7 @@ export function Tabs({ tabs = [], value, onChange, className, ...props }: TabsPr
             aria-selected={active}
             onClick={() => onChange?.(t.value)}
             className={cn(
-              "relative cursor-pointer border-none bg-transparent px-2 py-2 text-sm font-medium transition-colors",
+              "relative cursor-pointer border-none bg-transparent px-2 py-2 text-sm font-medium transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
               active
                 ? "text-foreground after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-foreground"
                 : "text-muted-foreground hover:text-foreground",

@@ -25,8 +25,10 @@ I am learning that Linear tickets are no longer used for PR titles.
 ## 2026-08-03 - [Missing accessibility on generic tab filters and action icons]
 **Learning:** Found a recurring pattern in the app (such as the origins filter and delete model icons in `Models.tsx`) where custom list filters and table row action icons use raw `<button>` elements instead of the standard `<Button>` component. As a result, they frequently lack critical accessibility attributes like `aria-label` (making icon-only buttons unreadable by screen readers) and `focus-visible` states (making keyboard navigation invisible).
 **Action:** Always check custom filter tabs and raw `<button>` elements used for icons in list views. Ensure they explicitly include `aria-label` and `focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring` classes for accessible keyboard navigation and screen reader support.
-## 2024-05-18 - Missing focus-visible states on custom components
+## 2026-08-06 - Missing focus-visible states on custom components
 
 **Learning:** When building custom icon-only buttons or interactive elements (like the close buttons in Dialogs and Sheets, or the Add/Delete buttons in ScopeSwitcher), developers often forget to add explicit `focus-visible:` Tailwind states for keyboard navigation. While `hover:` states are usually present, keyboard accessibility relies heavily on `focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring` being applied to these custom `<button>` elements to ensure they are visually distinct when tabbed to.
 
-**Action:** Always check custom components containing raw `<button>` elements for `focus-visible` utility classes to ensure keyboard accessibility.
+**Learning (follow-up):** Sweeping the leaf components first missed the component that mattered most. `nav-sidebar.tsx` builds every nav item from a shared `itemBase` class string that had no focus state, so the dashboard's primary navigation — the first thing a keyboard user tabs into — was the least accessible part of the app while the dialogs were already fixed. A shared class string is invisible to a per-`<button>` search.
+
+**Action:** Always check custom components containing raw `<button>` elements for `focus-visible` utility classes. Search the shared class *constants* too (`itemBase`-style strings, `cva` bases), not just the JSX, and start with navigation and filters rather than leaf icons — they carry more keyboard traffic.
