@@ -92,9 +92,13 @@ impl<B> MakeSpan<B> for GatewayMakeSpan {
 
         // `otel.name` is what a backend shows as the span name; method + route
         // reads better in a waterfall than the bare path
+        // `otel.kind=server` marks this as the inbound leg. rolter is a server
+        // in the GenAI conventions' sense, and the kind was previously never
+        // set at all — `otel.kind` appeared nowhere in the gateway (#808)
         let span = tracing::info_span!(
             "gateway.request",
             otel.name = %format!("{} {}", req.method(), req.uri().path()),
+            otel.kind = "server",
             http.request.method = %req.method(),
             url.path = %req.uri().path(),
         );

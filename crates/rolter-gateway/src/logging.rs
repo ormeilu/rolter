@@ -208,6 +208,44 @@ fn redact_json(value: &mut Value, redact_fields: &[String]) {
     }
 }
 
+/// The `model` the upstream reported on its response, for
+/// `gen_ai.response.model` (#808).
+///
+/// Reads the same buffer `parse_usage` walks. For SSE the first frame carrying
+/// a `model` wins: every frame of one completion reports the same model, so
+/// scanning further would only cost time. Anthropic nests it under `message` on
+/// `message_start`, which is handled alongside the top-level OpenAI shape.
+pub fn parse_response_model(is_sse: bool, buf: &[u8]) -> Option<String> {
+    fn model_of(value: &serde_json::Value) -> Option<String> {
+        value
+            .get("model")
+            .or_else(|| value.pointer("/message/model"))
+            .and_then(|m| m.as_str())
+            .filter(|m| !m.is_empty())
+            .map(str::to_string)
+    }
+
+    if !is_sse {
+        return model_of(&serde_json::from_slice::<serde_json::Value>(buf).ok()?);
+    }
+    for line in buf.split(|&b| b == b'\n') {
+        let line = trim_ascii(line);
+        let Some(rest) = line.strip_prefix(b"data:") else {
+            continue;
+        };
+        let rest = trim_ascii(rest);
+        if rest == b"[DONE]" {
+            break;
+        }
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(rest) {
+            if let Some(model) = model_of(&value) {
+                return Some(model);
+            }
+        }
+    }
+    None
+}
+
 /// Token usage extracted from an upstream response.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Usage {
@@ -331,6 +369,9 @@ pub struct UsageLoggingStream {
     pending: Option<RequestLog>,
     // optional response-body observer invoked once before the buffer is recycled
     completion_observer: Option<CompletionObserver>,
+    /// upstream span held open so `gen_ai.usage.*` can be recorded once the
+    /// body has been consumed (#808)
+    genai_span: Option<tracing::Span>,
 }
 
 impl UsageLoggingStream {
@@ -361,6 +402,7 @@ impl UsageLoggingStream {
             _inflight_guard: inflight_guard,
             pending: Some(log),
             completion_observer: None,
+            genai_span: None,
         }
     }
 
@@ -369,11 +411,35 @@ impl UsageLoggingStream {
         self
     }
 
+    /// Attach the upstream span so token usage can be recorded on it (#808).
+    ///
+    /// Usage is only known once the response body has been consumed, which is
+    /// after the upstream request itself returned. Holding a clone of the span
+    /// keeps it open until `finalize`, so `gen_ai.usage.*` lands on the span the
+    /// conventions expect rather than on nothing. `None` when no OTLP pipeline
+    /// is installed, in which case this costs a moved `Option`.
+    pub fn with_genai_span(mut self, span: Option<tracing::Span>) -> Self {
+        self.genai_span = span;
+        self
+    }
+
     fn finalize(&mut self) {
         let Some(mut log) = self.pending.take() else {
             return;
         };
         let usage = parse_usage(self.is_sse, &self.buf);
+        // the conventions want token counts on the inference span, and this is
+        // the first moment they are known (#808)
+        if let Some(span) = self.genai_span.take() {
+            span.record(crate::genai::USAGE_INPUT_TOKENS, usage.prompt);
+            span.record(crate::genai::USAGE_OUTPUT_TOKENS, usage.completion);
+            // the model the provider says it actually served, which is not
+            // always the one asked for: an alias, a dated snapshot, or a
+            // provider-side substitution all show up here and nowhere else
+            if let Some(model) = parse_response_model(self.is_sse, &self.buf) {
+                span.record(crate::genai::RESPONSE_MODEL, model.as_str());
+            }
+        }
         if let Some(observer) = self.completion_observer.take() {
             observer(&self.buf);
         }
@@ -559,8 +625,13 @@ impl LogSink {
         // observe latency/ttft histograms + passive per-target outcome for every
         // completed request, even when clickhouse logging is disabled (metrics
         // are always present)
-        self.metrics
-            .observe_request(&record.model, record.latency_ms, record.ttft_ms);
+        self.metrics.observe_request(
+            &record.provider,
+            &record.model,
+            record.latency_ms,
+            record.ttft_ms,
+            record.completion_tokens,
+        );
         self.metrics.observe_target(
             &record.provider,
             &record.target,
