@@ -81,13 +81,38 @@ function getSessionId(): string {
   return sessionId;
 }
 
+/** Monotonic tail for the last-resort id, so uniqueness survives without WebCrypto. */
+let idCounter = 0;
+
+/**
+ * A unique id for an event or a session.
+ *
+ * The session id is the one that matters: it groups a person's whole visit, so
+ * a guessable one would let a caller file events into somebody else's session
+ * and skew their funnel. `Math.random` is not good enough for that, and neither
+ * is it good enough for CodeQL, which flags it here — correctly.
+ *
+ * `crypto.randomUUID` is the nice answer but requires a secure context, and a
+ * dashboard served over plain http on a private network is a supported
+ * deployment. `crypto.getRandomValues` carries no such restriction, so it is
+ * the one that actually holds across the deployments rolter runs in.
+ */
 function randomId(): string {
   try {
     return crypto.randomUUID();
   } catch {
-    // randomUUID needs a secure context; a dashboard served over plain http on
-    // a private network is a supported deployment, so it must not throw here
-    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    // not a secure context — fall through
+  }
+  try {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    // no WebCrypto at all. ids still have to be distinct or every event
+    // collides, so fall back to something merely unique rather than something
+    // weakly random — a counter is honest about not being unpredictable
+    idCounter += 1;
+    return `seq-${Date.now().toString(36)}-${idCounter.toString(36)}`;
   }
 }
 
