@@ -185,12 +185,106 @@ pub fn init() -> TelemetryGuard {
 /// types so `rolter-core` needs no dependency on the gateway.
 pub type ScalarMetric = (&'static str, &'static str, &'static str, u64);
 
+/// One series of a labelled counter: `(family name, attributes, value)`.
+///
+/// Separate from [`ScalarMetric`] because the *set of series* is discovered at
+/// runtime — a model, target or variant only exists once traffic has used it —
+/// while the family it belongs to is fixed. The attribute values are owned
+/// because they come from `DashMap` keys that may change under the collection.
+pub type LabelledMetric = (&'static str, Vec<(&'static str, String)>, u64);
+
+/// A labelled counter family: `(name, help)`.
+///
+/// Declared up front rather than inferred from the first collection, because at
+/// install time a gateway has served nothing and every family is legitimately
+/// empty. Inferring would silently export nothing until a restart.
+pub type LabelledFamily = (&'static str, &'static str);
+
+/// What the gateway hands the exporter. A struct rather than four positional
+/// arguments so the call site says which is which.
+pub struct MetricsExport<S, L> {
+    /// Unlabelled counters and gauges — the same list the Prometheus endpoint renders.
+    pub scalars: S,
+    /// Fixed set of labelled counter families.
+    pub labelled_families: &'static [LabelledFamily],
+    /// Every currently-known series across those families.
+    pub labelled: L,
+    /// Explicit histogram bucket boundaries, in milliseconds.
+    ///
+    /// Passed in rather than defaulted so the OTLP histogram and the Prometheus
+    /// one share boundaries. Two exporters of the same measurement disagreeing
+    /// about where the buckets fall is worse than either alone, because the
+    /// numbers look comparable and are not.
+    pub latency_buckets_ms: Vec<f64>,
+}
+
+/// Records per-request latency and time-to-first-token as OTLP histograms.
+///
+/// Unlike the counters, this cannot be an observable instrument: OTel builds a
+/// histogram from individual measurements, and the gateway's pre-bucketed
+/// counters cannot be handed over after the fact. So this is the one part of
+/// metrics export that touches the request path — and it does so only when an
+/// OTLP endpoint is configured.
+///
+/// A default-constructed value records nothing, which is what every deployment
+/// without OTLP holds. Cloning is cheap; the instruments are shared.
+#[derive(Clone, Default)]
+pub struct RequestHistograms {
+    #[cfg(feature = "otlp")]
+    inner: Option<std::sync::Arc<HistogramSet>>,
+}
+
+#[cfg(feature = "otlp")]
+struct HistogramSet {
+    latency: opentelemetry::metrics::Histogram<u64>,
+    ttft: opentelemetry::metrics::Histogram<u64>,
+}
+
+impl RequestHistograms {
+    /// Record one completed request against the `model` attribute.
+    ///
+    /// Does nothing, and allocates nothing, when metrics export is off.
+    pub fn record(&self, model: &str, latency_ms: u32, ttft_ms: u32) {
+        #[cfg(feature = "otlp")]
+        if let Some(inner) = &self.inner {
+            // one attribute set for both instruments — `model` is the same
+            // bounded label the Prometheus histogram already uses, so this adds
+            // no cardinality the deployment was not already carrying
+            let attrs = [opentelemetry::KeyValue::new("model", model.to_string())];
+            inner.latency.record(u64::from(latency_ms), &attrs);
+            inner.ttft.record(u64::from(ttft_ms), &attrs);
+            return;
+        }
+        let _ = (model, latency_ms, ttft_ms);
+    }
+
+    /// Whether anything is actually being recorded.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        // a `let` per feature rather than a cfg'd `return`, which clippy reads
+        // as a needless return on the branch that is actually compiled
+        #[cfg(feature = "otlp")]
+        let active = self.inner.is_some();
+        #[cfg(not(feature = "otlp"))]
+        let active = false;
+        active
+    }
+}
+
 /// Guard holding the OTLP meter provider, flushing metrics on drop.
 #[must_use = "bind the guard to a named local so metrics flush on exit"]
 #[derive(Default)]
 pub struct MetricsGuard {
     #[cfg(feature = "otlp")]
     provider: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
+    histograms: RequestHistograms,
+}
+
+impl MetricsGuard {
+    /// The histogram recorder to hand the request path. Inert when export is off.
+    pub fn histograms(&self) -> RequestHistograms {
+        self.histograms.clone()
+    }
 }
 
 impl Drop for MetricsGuard {
@@ -215,12 +309,19 @@ impl Drop for MetricsGuard {
 ///
 /// Returns `None` when no OTLP endpoint is configured, leaving the untraced
 /// deployment exactly as it was.
-pub fn install_metrics<F>(collect: F) -> Option<MetricsGuard>
+pub fn install_metrics<S, L>(export: MetricsExport<S, L>) -> Option<MetricsGuard>
 where
-    F: Fn() -> Vec<ScalarMetric> + Send + Sync + Clone + 'static,
+    S: Fn() -> Vec<ScalarMetric> + Send + Sync + Clone + 'static,
+    L: Fn() -> Vec<LabelledMetric> + Send + Sync + Clone + 'static,
 {
     #[cfg(feature = "otlp")]
     {
+        let MetricsExport {
+            scalars: collect,
+            labelled_families,
+            labelled,
+            latency_buckets_ms,
+        } = export;
         let provider = otlp::try_build_meter_provider()?;
         let meter = {
             use opentelemetry::metrics::MeterProvider as _;
@@ -258,13 +359,57 @@ where
             }
         }
 
+        // one observable counter per family; the callback emits every series
+        // that family currently holds. registering per-series instead would
+        // freeze the set at install time, when the gateway has served nothing
+        for (family, help) in labelled_families {
+            let pick = labelled.clone();
+            meter
+                .u64_observable_counter(*family)
+                .with_description(*help)
+                .with_callback(move |obs| {
+                    for (name, attrs, value) in pick() {
+                        if name != *family {
+                            continue;
+                        }
+                        let kv: Vec<opentelemetry::KeyValue> = attrs
+                            .into_iter()
+                            .map(|(k, v)| opentelemetry::KeyValue::new(k, v))
+                            .collect();
+                        obs.observe(value, &kv);
+                    }
+                })
+                .build();
+        }
+
+        // histograms are the one instrument that cannot be observable: OTel
+        // builds them from individual measurements, so the gateway's
+        // pre-bucketed counters cannot be handed over after the fact
+        let histograms = RequestHistograms {
+            inner: Some(std::sync::Arc::new(HistogramSet {
+                latency: meter
+                    .u64_histogram("rolter_request_latency_ms")
+                    .with_description("total request latency in milliseconds")
+                    .with_unit("ms")
+                    .with_boundaries(latency_buckets_ms.clone())
+                    .build(),
+                ttft: meter
+                    .u64_histogram("rolter_request_ttft_ms")
+                    .with_description("time to first token in milliseconds")
+                    .with_unit("ms")
+                    .with_boundaries(latency_buckets_ms)
+                    .build(),
+            })),
+        };
+
         Some(MetricsGuard {
             provider: Some(provider),
+            histograms,
         })
     }
     #[cfg(not(feature = "otlp"))]
     {
-        let _ = collect;
+        let _ = export;
         None
     }
 }

@@ -8,6 +8,30 @@ use dashmap::DashMap;
 /// represented by the observation `count`.
 const LATENCY_BUCKETS_MS: [u32; 13] = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
 
+/// Labelled counter family names, shared by the Prometheus renderers and the
+/// OTLP exporter so the two cannot name the same series differently.
+const LABELLED_TARGET: &str = "rolter_target_requests_total";
+const LABELLED_VARIANT: &str = "rolter_variant_requests_total";
+const LABELLED_COMPLEXITY: &str = "rolter_complexity_route_requests_total";
+
+/// The labelled families, declared up front for the OTLP exporter. At install
+/// time the gateway has served nothing, so every family is legitimately empty
+/// and the set cannot be inferred from a first collection.
+pub const LABELLED_FAMILIES: &[rolter_core::telemetry::LabelledFamily] = &[
+    (
+        LABELLED_TARGET,
+        "proxied requests per upstream target by outcome",
+    ),
+    (
+        LABELLED_VARIANT,
+        "proxied requests per A/B variant by model",
+    ),
+    (
+        LABELLED_COMPLEXITY,
+        "complexity routing decisions by requested model, tier, selected route and outcome",
+    ),
+];
+
 /// A hand-rolled Prometheus histogram: non-cumulative bucket counters plus a
 /// running sum and total count. Buckets are cumulated only at render time so the
 /// observe path does a single atomic add.
@@ -160,6 +184,10 @@ pub struct Metrics {
     pub lmcache_refreshes_total: AtomicU64,
     pub lmcache_refresh_failures_total: AtomicU64,
     pub lmcache_decisions_total: AtomicU64,
+    /// OTLP histogram recorder, installed at startup when an OTLP endpoint is
+    /// configured (#805). `None` on every other deployment, which is what keeps
+    /// the untraced request path free of extra work
+    otlp_histograms: std::sync::OnceLock<rolter_core::telemetry::RequestHistograms>,
     /// per-model latency + TTFT histograms, keyed by public model name
     by_model: DashMap<String, ModelHist>,
     /// passive per-target success/error tally, keyed by (provider, target)
@@ -197,6 +225,13 @@ impl Metrics {
             .or_insert_with(ModelHist::new);
         hist.latency.observe(latency_ms);
         hist.ttft.observe(ttft_ms);
+        // and to OTLP, when an endpoint is configured. a histogram cannot be
+        // observable — OTel builds one from individual measurements — so this
+        // is the only metric that costs the request path anything, and only
+        // where the operator asked for it
+        if let Some(otlp) = self.otlp_histograms.get() {
+            otlp.record(model, latency_ms, ttft_ms);
+        }
     }
 
     /// Record one completed request's outcome against its upstream target.
@@ -553,6 +588,74 @@ impl Metrics {
             .collect()
     }
 
+    /// Every labelled counter series, for the OTLP exporter (#805).
+    ///
+    /// The counterpart of `render_target_counters`, `render_variant_counters`
+    /// and `render_complexity_counters`, which write the same numbers in
+    /// Prometheus text. Labels are unescaped here on purpose: escaping exists
+    /// for the Prometheus text format, and OTLP carries attribute values as
+    /// typed strings that need no quoting.
+    pub fn labelled_for_export(&self) -> Vec<rolter_core::telemetry::LabelledMetric> {
+        let mut out = Vec::new();
+        for entry in self.by_target.iter() {
+            let (provider, target) = entry.key();
+            let stats = entry.value();
+            for (outcome, value) in [
+                ("ok", stats.ok.load(Relaxed)),
+                ("error", stats.err.load(Relaxed)),
+            ] {
+                out.push((
+                    LABELLED_TARGET,
+                    vec![
+                        ("provider", provider.clone()),
+                        ("target", target.clone()),
+                        ("outcome", outcome.to_string()),
+                    ],
+                    value,
+                ));
+            }
+        }
+        for entry in self.by_variant.iter() {
+            let (model, variant) = entry.key();
+            out.push((
+                LABELLED_VARIANT,
+                vec![("model", model.clone()), ("variant", variant.clone())],
+                entry.value().load(Relaxed),
+            ));
+        }
+        for entry in self.by_complexity.iter() {
+            let (model, tier, route, outcome) = entry.key();
+            out.push((
+                LABELLED_COMPLEXITY,
+                vec![
+                    ("model", model.clone()),
+                    ("tier", tier.clone()),
+                    ("route", route.clone()),
+                    ("outcome", outcome.clone()),
+                ],
+                entry.value().load(Relaxed),
+            ));
+        }
+        out
+    }
+
+    /// Hand the request path an OTLP histogram recorder.
+    ///
+    /// Called once at startup, after the meter provider exists. Before this —
+    /// and forever, on a deployment with no OTLP endpoint — `observe_request`
+    /// sees `None` and does nothing extra.
+    pub fn set_otlp_histograms(&self, histograms: rolter_core::telemetry::RequestHistograms) {
+        let _ = self.otlp_histograms.set(histograms);
+    }
+
+    /// The Prometheus bucket boundaries as `f64`, so the OTLP histogram can be
+    /// built with the same ones. Two exporters of one measurement disagreeing
+    /// about bucket edges is worse than either alone: the numbers look
+    /// comparable and are not.
+    pub fn latency_buckets_ms() -> Vec<f64> {
+        LATENCY_BUCKETS_MS.iter().map(|&b| f64::from(b)).collect()
+    }
+
     /// Render the counters in Prometheus text exposition format.
     pub fn render(&self) -> String {
         let mut out = String::new();
@@ -587,7 +690,7 @@ impl Metrics {
     /// with existing request latency/cost telemetry to show policy impact
     /// without retaining prompt content.
     fn render_complexity_counters(&self, out: &mut String) {
-        let name = "rolter_complexity_route_requests_total";
+        let name = LABELLED_COMPLEXITY;
         let _ = writeln!(
             out,
             "# HELP {name} complexity routing decisions by requested model, tier, selected route and outcome"
@@ -613,7 +716,7 @@ impl Metrics {
     /// (model, variant). Lets Prometheus/Grafana show A/B traffic splits without
     /// querying ClickHouse.
     fn render_variant_counters(&self, out: &mut String) {
-        let name = "rolter_variant_requests_total";
+        let name = LABELLED_VARIANT;
         let _ = writeln!(
             out,
             "# HELP {name} proxied requests per A/B variant by model"
@@ -634,7 +737,7 @@ impl Metrics {
     /// outcome}` series per (target, outcome). A per-target error rate / uptime
     /// is `sum(rate(..{outcome="error"})) / sum(rate(..))` in Prometheus.
     fn render_target_counters(&self, out: &mut String) {
-        let name = "rolter_target_requests_total";
+        let name = LABELLED_TARGET;
         let _ = writeln!(
             out,
             "# HELP {name} proxied requests per upstream target by outcome"
@@ -719,6 +822,133 @@ fn escape_label(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Every labelled series the Prometheus text carries must also be exported
+    /// over OTLP, and with the same value.
+    ///
+    /// This is the invariant the whole design rests on: two exporters over one
+    /// set of numbers. If they can drift, a dashboard built on one and an alert
+    /// built on the other disagree, and the disagreement is invisible.
+    #[test]
+    fn otlp_labelled_export_matches_the_prometheus_text() {
+        let m = Metrics::default();
+        m.observe_target("openai", "gpt-4o", true);
+        m.observe_target("openai", "gpt-4o", false);
+        m.observe_target("anthropic", "sonnet", true);
+        m.observe_variant("gpt-4o", "b");
+        m.observe_complexity("gpt-4o", "cheap", "mini", false);
+        m.observe_complexity("gpt-4o", "cheap", "mini", true);
+
+        let text = m.render();
+        for (family, attrs, value) in m.labelled_for_export() {
+            // rebuild the Prometheus series this OTLP series corresponds to
+            let labels = attrs
+                .iter()
+                .map(|(k, v)| format!("{k}=\"{v}\""))
+                .collect::<Vec<_>>()
+                .join(",");
+            let line = format!("{family}{{{labels}}} {value}");
+            assert!(
+                text.contains(&line),
+                "OTLP series absent from prometheus text: {line}"
+            );
+        }
+    }
+
+    /// Escaping is a Prometheus text-format concern and must not leak into OTLP.
+    ///
+    /// The parity test above only uses values that need no escaping, so this
+    /// pins the one place the two exporters are legitimately allowed to differ:
+    /// Prometheus quotes the value into its line, OTLP carries it as a typed
+    /// attribute string. Escaping it twice would show `gpt\\"4o` in the backend.
+    #[test]
+    fn otlp_attributes_are_not_prometheus_escaped() {
+        let m = Metrics::default();
+        m.observe_variant("gpt\"4o", "b");
+
+        let text = m.render();
+        assert!(
+            text.contains(r#"model="gpt\"4o""#),
+            "prometheus text must escape"
+        );
+
+        let (_, attrs, _) = m
+            .labelled_for_export()
+            .into_iter()
+            .next()
+            .expect("one series");
+        let model = attrs
+            .iter()
+            .find(|(k, _)| *k == "model")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            model,
+            Some("gpt\"4o"),
+            "otlp attribute must carry the raw value"
+        );
+    }
+
+    /// ... and nothing is exported over OTLP that the text does not carry.
+    #[test]
+    fn otlp_labelled_export_has_no_extra_series() {
+        let m = Metrics::default();
+        m.observe_target("openai", "gpt-4o", true);
+        m.observe_variant("gpt-4o", "b");
+        m.observe_complexity("gpt-4o", "cheap", "mini", false);
+
+        // one ok + one error per target, one per variant, one per complexity key
+        assert_eq!(m.labelled_for_export().len(), 2 + 1 + 1);
+    }
+
+    /// Every family the exporter registers must be one the gateway actually
+    /// produces, or the backend shows a permanently empty metric.
+    #[test]
+    fn every_declared_family_is_produced() {
+        let m = Metrics::default();
+        m.observe_target("openai", "gpt-4o", true);
+        m.observe_variant("gpt-4o", "b");
+        m.observe_complexity("gpt-4o", "cheap", "mini", false);
+
+        let produced: Vec<&str> = m
+            .labelled_for_export()
+            .into_iter()
+            .map(|(family, _, _)| family)
+            .collect();
+        for (family, help) in LABELLED_FAMILIES {
+            assert!(
+                produced.contains(family),
+                "declared but never produced: {family}"
+            );
+            assert!(!help.is_empty(), "{family} has no help text");
+        }
+    }
+
+    /// The OTLP histogram must use the boundaries the Prometheus one uses.
+    /// Two exporters of one measurement disagreeing about bucket edges is worse
+    /// than either alone: the numbers look comparable and are not.
+    #[test]
+    fn otlp_histogram_buckets_match_the_prometheus_boundaries() {
+        let buckets = Metrics::latency_buckets_ms();
+        assert_eq!(buckets.len(), LATENCY_BUCKETS_MS.len());
+        for (got, want) in buckets.iter().zip(LATENCY_BUCKETS_MS.iter()) {
+            assert!((got - f64::from(*want)).abs() < f64::EPSILON);
+        }
+    }
+
+    /// A deployment with no OTLP endpoint never installs a recorder, and
+    /// `observe_request` must stay exactly as cheap as it was.
+    #[test]
+    fn request_observation_works_without_an_otlp_recorder() {
+        let m = Metrics::default();
+        // the OnceLock is empty here, which is the default deployment
+        m.observe_request("gpt-4o", 42, 7);
+        assert!(m.render().contains("rolter_request_latency_ms"));
+
+        // and an inert recorder is safe to install and record into
+        m.set_otlp_histograms(rolter_core::telemetry::RequestHistograms::default());
+        m.observe_request("gpt-4o", 9, 3);
+        assert!(!rolter_core::telemetry::RequestHistograms::default().is_active());
+    }
+
     use super::*;
 
     #[test]

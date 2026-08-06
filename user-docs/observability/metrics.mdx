@@ -119,3 +119,68 @@ Both histograms are labelled `{model="..."}` so you can track latency per model 
     Alert on a rising `rate(rolter_auth_failures_total[5m])` to detect misconfigured clients or credential rotation issues before they affect users.
   </Card>
 </CardGroup>
+
+## Exporting the same metrics over OTLP
+
+Everything above is also exported to an OpenTelemetry collector when one is
+configured, so a deployment already sending traces to SigNoz gets the metrics
+there too without standing up Prometheus.
+
+This is a **second exporter over the same numbers**, not a second metrics
+system. The Prometheus endpoint is untouched, and both exporters read one list —
+they cannot drift apart and report different values for the same counter.
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 rolter gateway
+```
+
+With no OTLP endpoint set, nothing is installed and nothing is exported. That is
+the default.
+
+### What is exported
+
+| Kind | Metrics | How |
+|---|---|---|
+| Counters and gauges | every `rolter_*_total`, `rolter_config_version` | observable |
+| Labelled counters | `rolter_target_requests_total`, `rolter_variant_requests_total`, `rolter_complexity_route_requests_total` | observable |
+| Histograms | `rolter_request_latency_ms`, `rolter_request_ttft_ms` | recorded per request |
+
+Counters and gauges are **observable instruments**: nothing is pushed on the
+request path, and the SDK reads the same atomics on its own schedule
+(`OTEL_METRIC_EXPORT_INTERVAL`, default 60s). The request path keeps doing
+nothing but an atomic add.
+
+Histograms are the one exception. OpenTelemetry builds a histogram from
+individual measurements, so rolter's pre-bucketed counters cannot be handed over
+after the fact — the value is recorded when the request completes. That work
+happens only where an OTLP endpoint is configured; without one the recorder is
+inert and allocates nothing.
+
+<Note>
+  The OTLP histograms use the **same bucket boundaries** as the Prometheus ones
+  (1ms → 10s). Two exporters of one measurement disagreeing about where the
+  buckets fall would be worse than either alone, because the numbers look
+  comparable and would not be.
+</Note>
+
+### Labels become attributes
+
+Prometheus labels are exported as OTLP attributes with the same names:
+`provider`, `target`, `outcome` on target counters; `model` and `variant` on
+variant counters; `model`, `tier`, `route`, `outcome` on complexity counters;
+and `model` on both histograms.
+
+Values are carried raw. The backslash-escaping you see in the Prometheus text
+format exists for that format only — OTLP carries attribute values as typed
+strings, and escaping them twice would show `gpt\"4o` in your backend.
+
+### Choosing a protocol
+
+The metrics exporter reads the same environment as the trace exporter:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` — or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` to
+  send metrics somewhere other than traces
+- `OTEL_EXPORTER_OTLP_PROTOCOL` — `grpc` (default) or `http/protobuf`
+
+If the exporter cannot start, rolter logs the failure and carries on with local
+metrics only. A broken collector must never take the gateway down.
