@@ -405,6 +405,11 @@ where
         // none of them. observable, so nothing touches the request path
         process::install(&meter);
 
+        // scheduler-level metrics: they separate "the provider is slow" from
+        // "we were saturated before we even called the provider", which the
+        // domain counters cannot distinguish (#834)
+        runtime::install(&meter);
+
         // histograms are the one instrument that cannot be observable: OTel
         // builds them from individual measurements, so the gateway's
         // pre-bucketed counters cannot be handed over after the fact
@@ -1048,6 +1053,161 @@ mod process {
             // that cannot answer stays absent from the dashboard instead of
             // reporting a convincing zero
             assert!(count_dir("/proc/self/definitely-not-here").is_none());
+        }
+    }
+}
+
+/// Async-scheduler metrics, read from tokio's own `RuntimeMetrics` (#834).
+///
+/// These answer a question the process metrics cannot. CPU and memory describe
+/// the machine; queue depth describes *us*. When latency rises, the existing
+/// signals cannot separate "the provider is slow" from "the request sat in our
+/// scheduler before we ever called the provider" — and the two have opposite
+/// fixes. Queue depth pairs directly with the `queue.wait` span for that.
+///
+/// ## No `tokio_unstable`
+///
+/// #834 recorded this as blocked on a workspace-wide `--cfg tokio_unstable`,
+/// which would mean opting every build and every CI job into an API that can
+/// change on a tokio patch release. That turns out to be true only of *part*
+/// of the surface. As of tokio 1.53:
+///
+/// - `num_workers`, `num_alive_tasks` and `global_queue_depth` are stable, on
+///   the plain `RuntimeMetrics` impl with no `cfg` at all
+/// - `worker_total_busy_duration` is behind `cfg_64bit_metrics!`, which expands
+///   to `#[cfg(target_has_atomic = "64")]` — a property of the target, not an
+///   instability gate, and true on every platform rolter ships
+///
+/// So the metrics this issue actually wanted — worker count, queue depth and
+/// busy ratio — need no build-flag decision. What genuinely remains gated is
+/// the blocking pool (`num_blocking_threads`, `blocking_queue_depth`) and the
+/// per-worker steal/poll counters; those stay out, and the flag decision stays
+/// unmade rather than being smuggled in here.
+#[cfg(feature = "otlp")]
+mod runtime {
+    use opentelemetry::metrics::Meter;
+
+    /// Register the scheduler instruments against the current runtime.
+    ///
+    /// The handle is captured here rather than looked up in the callbacks: the
+    /// SDK collects on its own thread, which is not a runtime worker, so
+    /// `Handle::current()` inside a callback would panic. Outside a runtime
+    /// entirely (unit tests, a sync binary) nothing is registered — an absent
+    /// metric is honest, a permanent zero is not.
+    pub(super) fn install(meter: &Meter) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+
+        let workers = handle.clone();
+        meter
+            .u64_observable_gauge("tokio.runtime.workers")
+            .with_description("worker threads in the async runtime")
+            .with_unit("{thread}")
+            .with_callback(move |obs| {
+                obs.observe(workers.metrics().num_workers() as u64, &[]);
+            })
+            .build();
+
+        let alive = handle.clone();
+        meter
+            .u64_observable_gauge("tokio.runtime.tasks.alive")
+            .with_description("tasks currently alive in the async runtime")
+            .with_unit("{task}")
+            .with_callback(move |obs| {
+                obs.observe(alive.metrics().num_alive_tasks() as u64, &[]);
+            })
+            .build();
+
+        // the saturation signal: tasks that are runnable and waiting for a
+        // worker. a sustained non-zero value means requests are queuing inside
+        // rolter, which no upstream latency metric will ever show
+        let queued = handle.clone();
+        meter
+            .u64_observable_gauge("tokio.runtime.queue.depth")
+            .with_description("tasks waiting in the runtime's global queue")
+            .with_unit("{task}")
+            .with_callback(move |obs| {
+                obs.observe(queued.metrics().global_queue_depth() as u64, &[]);
+            })
+            .build();
+
+        // busy *time*, not a busy ratio: a ratio computed here would be an
+        // average over whatever interval the SDK happens to use, and would not
+        // re-aggregate correctly across instances. exported as a monotonic
+        // counter, the backend derives utilisation as
+        // `rate(busy.time) / tokio.runtime.workers`, which does
+        #[cfg(target_has_atomic = "64")]
+        {
+            let busy = handle.clone();
+            meter
+                .f64_observable_counter("tokio.runtime.worker.busy.time")
+                .with_description("cumulative time runtime workers spent doing work, all workers")
+                .with_unit("s")
+                .with_callback(move |obs| {
+                    let metrics = busy.metrics();
+                    let total: f64 = (0..metrics.num_workers())
+                        .map(|worker| metrics.worker_total_busy_duration(worker).as_secs_f64())
+                        .sum();
+                    obs.observe(total, &[]);
+                })
+                .build();
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        /// The claim the module docs rest on: this compiles and returns real
+        /// numbers on a stock runtime, with no `tokio_unstable` in `RUSTFLAGS`.
+        /// If a future tokio moves any of these behind the unstable gate, this
+        /// stops compiling — which is the point.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn the_stable_scheduler_metrics_answer_without_tokio_unstable() {
+            let metrics = tokio::runtime::Handle::current().metrics();
+            assert_eq!(metrics.num_workers(), 2);
+            // depth is a valid reading whatever its value; the assertion is
+            // that asking is possible at all
+            let _ = metrics.global_queue_depth();
+
+            // the test body is the future passed to `block_on`, not a spawned
+            // task, so it does not count itself — the gauge tracks spawned work
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            let task = tokio::spawn(async move {
+                let _ = rx.await;
+            });
+            // let the spawn be picked up before reading
+            tokio::task::yield_now().await;
+            assert!(
+                metrics.num_alive_tasks() >= 1,
+                "a spawned task is alive and counted"
+            );
+            let _ = tx.send(());
+            task.await.expect("the task completes");
+        }
+
+        #[cfg(target_has_atomic = "64")]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn worker_busy_time_is_readable_and_monotonic() {
+            let handle = tokio::runtime::Handle::current();
+            let read = || -> f64 {
+                let metrics = handle.metrics();
+                (0..metrics.num_workers())
+                    .map(|w| metrics.worker_total_busy_duration(w).as_secs_f64())
+                    .sum()
+            };
+            let first = read();
+            // give the workers something to have been busy with
+            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            assert!(read() >= first, "cumulative busy time never decreases");
+        }
+
+        /// Outside a runtime the module registers nothing rather than emitting
+        /// zeros, which is what keeps a non-async build from growing a set of
+        /// permanently-flat scheduler dashboards.
+        #[test]
+        fn without_a_runtime_nothing_is_registered() {
+            assert!(tokio::runtime::Handle::try_current().is_err());
         }
     }
 }

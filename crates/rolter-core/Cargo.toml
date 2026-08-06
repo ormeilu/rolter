@@ -24,6 +24,10 @@ opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry-appender-tracing = { workspace = true, optional = true }
+# only for `runtime::Handle`, to read the scheduler's own metrics (#834). the
+# otlp stack already pulls tokio in through opentelemetry_sdk's rt-tokio, so
+# this names an existing graph edge rather than adding one
+tokio = { workspace = true, optional = true }
 
 [features]
 default = ["otlp"]
@@ -33,9 +37,12 @@ otlp = [
   "dep:opentelemetry-otlp",
   "dep:tracing-opentelemetry",
   "dep:opentelemetry-appender-tracing",
+  "dep:tokio",
 ]
 
 [dev-dependencies]
 # in-memory span and log exporters, so the #809 trace-correlation guarantee is
 # asserted rather than assumed from a dependency default
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
+# `#[tokio::test]` for the scheduler-metrics assertions (#834)
+tokio = { workspace = true }

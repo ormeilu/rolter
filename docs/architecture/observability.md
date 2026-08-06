@@ -206,6 +206,51 @@ registered at all**, rather than registered and always zero — a metric that re
 zero forever is worse than an absent one, because a dashboard cannot tell it from
 a healthy process. Names follow the OTel `process.*` conventions.
 
+### Runtime metrics
+
+The process metrics describe the machine; these describe the scheduler.
+`tokio.runtime.queue.depth` is the one that matters: when latency rises, no
+other signal separates "the provider is slow" from "the request sat in our own
+run queue before we ever called the provider", and the two have opposite fixes.
+It pairs directly with the `queue.wait` span. Alongside it are
+`tokio.runtime.workers`, `tokio.runtime.tasks.alive` and
+`tokio.runtime.worker.busy.time`.
+
+Busy *time* is exported, not a busy ratio: a ratio computed in-process would
+average over whatever interval the SDK happens to use and would not re-aggregate
+across instances. As a monotonic counter the backend derives utilisation with
+`rate(tokio.runtime.worker.busy.time) / tokio.runtime.workers`, which does.
+
+None of this requires `--cfg tokio_unstable`. #834 assumed it did, and that is
+true only of part of tokio's surface: `num_workers`, `num_alive_tasks` and
+`global_queue_depth` are stable, and `worker_total_busy_duration` sits behind
+`cfg_64bit_metrics!`, which is `#[cfg(target_has_atomic = "64")]` — a property
+of the target, not an instability gate. What remains genuinely gated is the
+blocking pool and the per-worker steal/poll counters, which are therefore not
+exported; the workspace-wide flag decision stays unmade rather than being
+smuggled in with a telemetry change.
+
+Outside an async runtime the instruments are not registered, for the same reason
+the process metrics are absent without `/proc`.
+
+### Connection-pool metrics
+
+`rolter_upstream_connections_total` and `rolter_upstream_connect_errors_total`
+count connections established to providers, and attempts that never got that
+far.
+
+Pool exhaustion presents as latency with healthy providers — the failure mode
+the other metrics cannot explain. `reqwest` and `hyper` expose no pool
+introspection at all, so this is instrumented rather than read: a tower layer
+over the connector (`ClientBuilder::connector_layer`) sees every connection
+hyper builds because it had none to reuse. The signal is the ratio
+`rate(rolter_upstream_connections_total) / rate(rolter_requests_total)` — near
+zero when the pool is working, approaching one when every request is paying a
+fresh TCP and TLS handshake.
+
+Idle-versus-active counts stay unavailable: that needs the connection object's
+drop, and the connector layer's response type is opaque outside `reqwest`.
+
 ### Resource attributes
 
 Every signal carries `service.name`, `service.version` (the crate version), and

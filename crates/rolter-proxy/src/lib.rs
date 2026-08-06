@@ -8,6 +8,7 @@
 //! the gateway while they stream back to the caller.
 
 pub mod egress_resolver;
+pub mod pool;
 mod translation;
 
 pub use translation::{Protocol, TranslatedStream, TranslationPlan};
@@ -635,7 +636,10 @@ fn build_client(
         // classify what DNS actually returns, immediately before connecting:
         // the only point that catches a hostname pointing at cloud instance
         // metadata, or a name that rebinds to one after it was configured
-        .dns_resolver(Arc::new(EgressResolver::new(egress.clone())));
+        .dns_resolver(Arc::new(EgressResolver::new(egress.clone())))
+        // every call into this layer is hyper building a connection it could
+        // not reuse, which is the only pool signal the client exposes (#834)
+        .connector_layer(crate::pool::CountingConnectorLayer);
     if let Some(ct) = connect_timeout {
         builder = builder.connect_timeout(ct);
     }
