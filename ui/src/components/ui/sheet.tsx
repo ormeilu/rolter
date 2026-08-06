@@ -77,7 +77,7 @@ export function SheetHeader({
         title="Close"
         aria-label="Close"
         onClick={onClose}
-        className="flex flex-none rounded-md border border-[color:var(--border-subtle)] p-1.5 text-muted-foreground transition-colors hover:bg-[color:var(--surface-hover)] hover:text-foreground"
+        className="flex flex-none rounded-md border border-[color:var(--border-subtle)] p-1.5 text-muted-foreground transition-colors hover:bg-[color:var(--surface-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         <X className="h-[17px] w-[17px]" />
       </button>
