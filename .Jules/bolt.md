@@ -26,3 +26,10 @@ To solve this, we can pre-collect all the keys required into a `Vec<String>`, pe
 
 **Learning:** When refactoring to eliminate intermediate `Vec` allocations during string formatting (like `inject_anthropic`), relying solely on a two-pass `String::with_capacity` approach combined with iterative closure evaluation can cause severe CPU regressions if the closure mapping involves expensive lookups (like JSON property resolution on each iteration). The original implementation was building intermediate `Vec<&str>` via `collect()`, converting an `Option` to `String`, checking lengths, extending vectors and eventually calling `join("\n\n")`. By pre-calculating the final target length (including separator offsets `(parts - 1) * 2`) and using a single mutable lambda `push` to handle inserting conditional `\n\n` dividers, we eliminated 4 vectors and an unneeded String heap allocation while retaining O(n) traversal.
 **Action:** When migrating away from `.collect::<Vec<_>>().join(sep)`, pre-calculate capacity exactly (accounting for separators `(N - 1) * sep.len()`) and use a stateful boolean loop flag (`first = true`) alongside `String::push_str` to build exactly what's needed without intermediate container allocations.
+## 2026-08-04 - Array iteration allocations
+**Learning:** When processing `serde_json::Value` arrays (like prompt cache `breakpoints`) in tight loops, using `.collect::<Vec<_>>().into_iter()` introduces an unnecessary heap allocation just to iterate.
+**Action:** Iterate directly over the Option/Array via `if let Some(values) = ...and_then(Value::as_array)` to consume values without allocating an intermediate `Vec`.
+
+## 2026-08-04 - Avoiding intermediate string buffers and joining
+**Learning:** During JSON-to-JSON request translation (like in `openai_to_interactions`), pushing concatenated string output into a `Vec<String>` and calling `.join("\\n")` later incurs unnecessary string allocations and an intermediate collection.
+**Action:** Accumulate string output directly into a single `String::new()` via `.push_str()` inside the translation loop, managing separators manually.

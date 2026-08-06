@@ -399,22 +399,23 @@ pub fn normalize_prompt_cache_control(body: Bytes, provider: ProviderKind) -> Re
         }
         marker["ttl"] = Value::String(ttl.to_string());
     }
-    let breakpoints = control
-        .get("breakpoints")
-        .and_then(Value::as_array)
-        .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-        .unwrap_or_else(|| vec!["system"]);
-    for breakpoint in breakpoints {
-        match breakpoint {
-            "system" => mark_last_content(&mut value, "system", &marker),
-            "tools" => mark_last_item(&mut value, "tools", &marker),
-            "messages" => mark_last_message_content(&mut value, &marker),
-            other => {
-                return Err(Error::Config(format!(
-                    "prompt_cache: unsupported breakpoint '{other}' (use system|tools|messages)"
-                )));
+    if let Some(values) = control.get("breakpoints").and_then(Value::as_array) {
+        for v in values {
+            if let Some(breakpoint) = v.as_str() {
+                match breakpoint {
+                    "system" => mark_last_content(&mut value, "system", &marker),
+                    "tools" => mark_last_item(&mut value, "tools", &marker),
+                    "messages" => mark_last_message_content(&mut value, &marker),
+                    other => {
+                        return Err(Error::Config(format!(
+                            "prompt_cache: unsupported breakpoint '{other}' (use system|tools|messages)"
+                        )));
+                    }
+                }
             }
         }
+    } else {
+        mark_last_content(&mut value, "system", &marker);
     }
     serde_json::to_vec(&value)
         .map(Bytes::from)
@@ -1381,7 +1382,12 @@ fn openai_to_interactions(mut v: Value) -> Value {
             _ => None,
         })
         .unwrap_or_default();
-    let mut system = Vec::new();
+    // `system_text` alone cannot stand in for the old `Vec<String>`: a system
+    // turn carrying empty content is still a turn, and `join("\n")` emitted a
+    // separator for it and produced a (possibly empty) string. count the turns
+    // so emptiness of the text is not mistaken for absence of the turns
+    let mut system_text = String::new();
+    let mut system_turns = 0usize;
     let mut input = Vec::with_capacity(messages.len());
     for message in messages {
         let role = message
@@ -1389,7 +1395,13 @@ fn openai_to_interactions(mut v: Value) -> Value {
             .and_then(Value::as_str)
             .unwrap_or("user");
         match role {
-            "system" | "developer" => system.push(content_text(message.get("content"))),
+            "system" | "developer" => {
+                if system_turns > 0 {
+                    system_text.push('\n');
+                }
+                system_turns += 1;
+                system_text.push_str(&content_text(message.get("content")));
+            }
             "tool" => {
                 let mut item = json!({
                     "type": "function_result",
@@ -1433,8 +1445,8 @@ fn openai_to_interactions(mut v: Value) -> Value {
         out.insert("model".into(), model);
     }
     out.insert("input".into(), Value::Array(input));
-    if !system.is_empty() {
-        out.insert("system_instruction".into(), json!(system.join("\n")));
+    if system_turns > 0 {
+        out.insert("system_instruction".into(), json!(system_text));
     }
     if obj.remove("stream").and_then(|v| v.as_bool()) == Some(true) {
         out.insert("stream".into(), json!(true));
@@ -2362,6 +2374,39 @@ fn openai_chunk(
 
 #[cfg(test)]
 mod tests {
+
+    /// A system turn with empty content is still a turn.
+    ///
+    /// The `Vec<String>` this loop used to build was joined with `"\n"`, so an
+    /// empty turn contributed a separator, and a request whose only system turn
+    /// was empty still emitted `system_instruction: ""`. Accumulating straight
+    /// into a `String` makes "the text is empty" and "there were no turns" look
+    /// identical, which silently drops the field and the leading separator.
+    #[test]
+    fn an_empty_system_turn_is_still_a_system_turn() {
+        let out = openai_to_interactions(json!({
+            "model": "m",
+            "messages": [{"role": "system"}, {"role": "user", "content": "hi"}]
+        }));
+        assert_eq!(out.get("system_instruction"), Some(&json!("")));
+
+        let out = openai_to_interactions(json!({
+            "model": "m",
+            "messages": [
+                {"role": "system", "content": ""},
+                {"role": "system", "content": "abc"},
+                {"role": "user", "content": "hi"}
+            ]
+        }));
+        assert_eq!(out.get("system_instruction"), Some(&json!("\nabc")));
+
+        // and no system turn at all still omits the field entirely
+        let out = openai_to_interactions(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}]
+        }));
+        assert!(out.get("system_instruction").is_none());
+    }
     use super::*;
 
     fn plan(client: Protocol, upstream: Protocol) -> TranslationPlan {
