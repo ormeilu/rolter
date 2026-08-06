@@ -130,8 +130,11 @@ fn seal(secret: &str) -> ApiResult<(Vec<u8>, Vec<u8>)> {
             "storing connector credentials requires {KEK_ENV}"
         )));
     };
-    kek.encrypt(secret)
-        .map_err(|_| ApiError::Core(Error::Store("failed to encrypt connector credential".into())))
+    kek.encrypt(secret).map_err(|_| {
+        ApiError::Core(Error::Store(
+            "failed to encrypt connector credential".into(),
+        ))
+    })
 }
 
 async fn list(
@@ -389,7 +392,11 @@ mod tests {
     #[test]
     fn a_well_formed_connector_validates() {
         let egress = rolter_core::EgressPolicy::default();
-        assert!(validate(&input("https://collector.example.com/v1/logs", 1.0), &egress).is_ok());
+        assert!(validate(
+            &input("https://collector.example.com/v1/logs", 1.0),
+            &egress
+        )
+        .is_ok());
     }
 
     #[test]
@@ -398,7 +405,10 @@ mod tests {
         // not http(s) has no business here
         let egress = rolter_core::EgressPolicy::default();
         for endpoint in ["file:///etc/passwd", "collector.example.com", ""] {
-            assert!(validate(&input(endpoint, 1.0), &egress).is_err(), "{endpoint}");
+            assert!(
+                validate(&input(endpoint, 1.0), &egress).is_err(),
+                "{endpoint}"
+            );
         }
     }
 
@@ -407,7 +417,10 @@ mod tests {
         // the SSRF guard a provider api_base passes must apply here too — a
         // connector endpoint is the same primitive
         let egress = rolter_core::EgressPolicy::default();
-        let blocked = validate(&input("http://169.254.169.254/latest/meta-data", 1.0), &egress);
+        let blocked = validate(
+            &input("http://169.254.169.254/latest/meta-data", 1.0),
+            &egress,
+        );
         assert!(
             blocked.is_err(),
             "the cloud metadata endpoint must not be reachable as a connector"
