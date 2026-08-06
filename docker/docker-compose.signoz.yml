@@ -171,6 +171,11 @@ services:
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://signoz-otel-collector:4317
       OTEL_SERVICE_NAME: rolter-control
+      # browser tracing for the dashboard (#805). the exporter runs in the
+      # operator's browser, so this must resolve from the host rather than over
+      # the compose network; the collector publishes 4318 above
+      ROLTER_UI_OTEL_ENDPOINT: http://localhost:4318/v1/traces
+      ROLTER_UI_OTEL_SERVICE_NAME: rolter-ui
 
 volumes:
   signoz-clickhouse:
