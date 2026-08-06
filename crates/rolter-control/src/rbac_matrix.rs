@@ -1106,6 +1106,7 @@ mod tests {
             "compatibility_policy.rs",
             include_str!("compatibility_policy.rs"),
         ),
+        ("cors.rs", include_str!("cors.rs")),
         ("crud.rs", include_str!("crud.rs")),
         ("feature_flags.rs", include_str!("feature_flags.rs")),
         ("guardrails.rs", include_str!("guardrails.rs")),
