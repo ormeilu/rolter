@@ -475,8 +475,8 @@ async fn deliver_transition(state: &ControlState, rule: &Rule) -> ApiResult<bool
     let delivery = if let Some(channel_id) = rule.channel_id {
         let row: Option<(String, bool)> =
             sqlx::query_as("select endpoint, enabled from alert_channels where id=$1")
-                .bind(channel_id)
-                .fetch_optional(pool(state))
+                "queued",
+                Some("webhook delivery accepted".to_string()),
                 .await
                 .map_err(|e| Error::Store(e.to_string()))?;
         match row {
