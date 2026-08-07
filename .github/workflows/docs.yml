@@ -33,12 +33,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # mdbook-mermaid is required, not optional: without the preprocessor the
+      # build still succeeds and quietly ships every diagram as a code block.
       - name: install mdbook
         uses: taiki-e/install-action@1beb33eee6d086258184383af9a538940be190ed # v2.85.6
         with:
-          tool: mdbook
+          tool: mdbook,mdbook-mermaid
       - name: build
         run: mdbook build docs
+      - name: verify diagrams rendered
+        run: |
+          fences=$(grep -rl '^```mermaid' docs --include='*.md' | wc -l)
+          blocks=$(grep -rl 'class="mermaid"' docs/book --include='*.html' | wc -l)
+          echo "source files with mermaid fences: $fences; built pages with mermaid blocks: $blocks"
+          if [ "$blocks" -eq 0 ] && [ "$fences" -gt 0 ]; then
+            echo "::error::mdbook-mermaid did not run - diagrams would ship as code blocks"
+            exit 1
+          fi
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
