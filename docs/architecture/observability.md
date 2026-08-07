@@ -17,6 +17,7 @@
 - **Inbound**: accept W3C `traceparent`/`tracestate` (and `b3`) from clients and continue the trace; honor `x-request-id` / `x-correlation-id`.
 - **Outbound to engines**: inject the active trace context into upstream requests so vLLM/SGLang/TGI spans join the **same** distributed trace. vLLM and SGLang support OpenTelemetry tracing (e.g. vLLM `--otlp-traces-endpoint`); point them at the same OTLP collector so engine prefill/decode spans line up with rolter's request span.
 - A per-request `request_id` is echoed in a response header and stamped on logs, metric exemplars and spans for correlation.
+- **Events**: rolter calls no span-event API directly, but `tracing-opentelemetry` turns every `tracing` event fired inside an active span into an OTel span event. That API is deprecated upstream in favour of log-based events; the target model, and the sequencing it forces, are recorded in [ADR-0025](../adr/2026-08-06-events-as-logs.md).
 
 ### How the context actually moves
 
@@ -74,6 +75,31 @@ where they fit, so a backend's built-in GenAI views work.
 Spans never carry prompt or completion content, API keys, virtual-key plaintext,
 or injected header values — those are credential material, and redaction stays
 owned by the existing `logging_settings` machinery rather than a second policy.
+
+### Tenant attributes
+
+The `gateway.request` span carries `rolter.org.id`, `rolter.team.id` and
+`rolter.project.id`, recorded once the virtual key resolves. The span itself is
+built by the tower layer, which runs before auth, so the fields start empty and
+are filled in rather than passed at construction.
+
+These exist so per-tenant telemetry destinations are routable. ADR-0026 decided
+that fan-out to tenant-owned backends belongs in an OpenTelemetry Collector
+rather than in-process exporters — one egress path in the gateway no matter how
+many tenants, and no data-plane process POSTing to operator-supplied URLs — and
+that rolter's job in that design is to *stamp the attribute the collector routes
+on*. Until this landed there was nothing to stamp: the request logs in
+ClickHouse always carried tenant identity, but no exported span ever did, which
+made the routing half unimplementable.
+
+An unattributed request — a config-defined key, which has no org — records
+nothing rather than an empty string. An attribute that is present-but-blank on
+some spans and absent on others is harder to write a routing rule against than
+one that is consistently absent.
+
+The names are deliberately rolter-local. The GenAI and HTTP conventions define
+nothing for tenancy, and a convention-shaped guess like `tenant.id` would be
+worse than an obviously-local name if the spec later defines it differently.
 
 ### Running it locally
 
@@ -171,6 +197,97 @@ provider, exporter or callback is built at all.
 
 Per-model histograms and label-bearing counters stay Prometheus-only for now;
 the scalar set is what OTLP carries.
+
+### Logs over OTLP
+
+Logs export alongside traces and metrics, gated on the same environment
+(`OTEL_EXPORTER_OTLP_ENDPOINT`, or the logs-specific
+`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`). With neither set no exporter is built and
+logging is stdout-only, exactly as before.
+
+It is **additive, not a replacement**: the stdout `fmt` layer is untouched, so
+`docker logs` shows what it always did and the collector additionally receives
+the same records.
+
+Records carry `trace_id` and `span_id`, which is most of the value — a log joins
+the trace it came from instead of being a separate pile of text.
+`tracing-opentelemetry` publishes the OpenTelemetry context when a span is
+entered, and the logs SDK stamps it onto each record. That correlation is
+asserted by a unit test rather than assumed from a dependency default, since it
+would fail silently if the default ever changed.
+
+Redaction is unaffected: this exports the same `tracing` events the stdout layer
+renders, so anything already kept out of logs stays out of them.
+
+### Process metrics
+
+Alongside the domain counters, the process reports its own vitals: resident and
+virtual memory, CPU time, open file descriptors, thread count and uptime. These
+are the numbers an operator reaches for first when a node degrades, and the
+gateway previously answered none of them.
+
+They are observable instruments read from `/proc`, so nothing touches the request
+path. On a platform where `/proc` is unavailable the instruments are **not
+registered at all**, rather than registered and always zero — a metric that reads
+zero forever is worse than an absent one, because a dashboard cannot tell it from
+a healthy process. Names follow the OTel `process.*` conventions.
+
+### Runtime metrics
+
+The process metrics describe the machine; these describe the scheduler.
+`tokio.runtime.queue.depth` is the one that matters: when latency rises, no
+other signal separates "the provider is slow" from "the request sat in our own
+run queue before we ever called the provider", and the two have opposite fixes.
+It pairs directly with the `queue.wait` span. Alongside it are
+`tokio.runtime.workers`, `tokio.runtime.tasks.alive` and
+`tokio.runtime.worker.busy.time`.
+
+Busy *time* is exported, not a busy ratio: a ratio computed in-process would
+average over whatever interval the SDK happens to use and would not re-aggregate
+across instances. As a monotonic counter the backend derives utilisation with
+`rate(tokio.runtime.worker.busy.time) / tokio.runtime.workers`, which does.
+
+None of this requires `--cfg tokio_unstable`. #834 assumed it did, and that is
+true only of part of tokio's surface: `num_workers`, `num_alive_tasks` and
+`global_queue_depth` are stable, and `worker_total_busy_duration` sits behind
+`cfg_64bit_metrics!`, which is `#[cfg(target_has_atomic = "64")]` — a property
+of the target, not an instability gate. What remains genuinely gated is the
+blocking pool and the per-worker steal/poll counters, which are therefore not
+exported; the workspace-wide flag decision stays unmade rather than being
+smuggled in with a telemetry change.
+
+Outside an async runtime the instruments are not registered, for the same reason
+the process metrics are absent without `/proc`.
+
+### Connection-pool metrics
+
+`rolter_upstream_connections_total` and `rolter_upstream_connect_errors_total`
+count connections established to providers, and attempts that never got that
+far.
+
+Pool exhaustion presents as latency with healthy providers — the failure mode
+the other metrics cannot explain. `reqwest` and `hyper` expose no pool
+introspection at all, so this is instrumented rather than read: a tower layer
+over the connector (`ClientBuilder::connector_layer`) sees every connection
+hyper builds because it had none to reuse. The signal is the ratio
+`rate(rolter_upstream_connections_total) / rate(rolter_requests_total)` — near
+zero when the pool is working, approaching one when every request is paying a
+fresh TCP and TLS handshake.
+
+Idle-versus-active counts stay unavailable: that needs the connection object's
+drop, and the connector layer's response type is opaque outside `reqwest`.
+
+### Resource attributes
+
+Every signal carries `service.name`, `service.version` (the crate version), and
+where configured `service.instance.id` and `deployment.environment.name`.
+`OTEL_RESOURCE_ATTRIBUTES` is honoured by the SDK for anything else.
+
+`service.instance.id` deliberately uses the same precedence as the cluster
+watcher — `ROLTER_NODE_ID`, then `HOSTNAME`, then nothing — so a node in
+`cluster_nodes` and a node in the trace backend are the same node by
+construction. When neither is set it is omitted rather than invented per restart,
+which would churn the identity on every deploy.
 
 ### Cost when tracing is off
 

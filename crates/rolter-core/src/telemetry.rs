@@ -126,6 +126,8 @@ fn is_hex(s: &str) -> bool {
 pub struct TelemetryGuard {
     #[cfg(feature = "otlp")]
     provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
+    #[cfg(feature = "otlp")]
+    logger_provider: Option<opentelemetry_sdk::logs::SdkLoggerProvider>,
 }
 
 impl Drop for TelemetryGuard {
@@ -133,6 +135,10 @@ impl Drop for TelemetryGuard {
         #[cfg(feature = "otlp")]
         if let Some(provider) = self.provider.take() {
             // flush any batched spans before the runtime tears down
+            let _ = provider.shutdown();
+        }
+        #[cfg(feature = "otlp")]
+        if let Some(provider) = self.logger_provider.take() {
             let _ = provider.shutdown();
         }
     }
@@ -155,10 +161,21 @@ pub fn init() -> TelemetryGuard {
     if let Some(provider) = otlp::try_build_provider() {
         use opentelemetry::trace::TracerProvider as _;
         let tracer = provider.tracer("rolter");
+        // logs ride alongside traces rather than replacing stdout (#809). the
+        // bridge is `Option`al because a deployment may point traces at a
+        // collector and leave logs off; `Option<Layer>` is itself a layer, so
+        // the registry below is one expression either way
+        let logger_provider = otlp::try_build_logger_provider();
+        let logs_layer = logger_provider.as_ref().map(|provider| {
+            opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(provider)
+        });
         let _ = tracing_subscriber::registry()
             .with(filter)
+            // stdout stays the default and is never replaced: OTLP is additive,
+            // so `docker logs` shows exactly what it did before
             .with(fmt::layer())
             .with(tracing_opentelemetry::layer().with_tracer(tracer))
+            .with(logs_layer)
             .try_init();
         // the W3C propagator is what makes an inbound `traceparent` become a
         // real parent and an outbound one carry *this* gateway's span; without
@@ -169,6 +186,7 @@ pub fn init() -> TelemetryGuard {
         PIPELINE_ACTIVE.store(true, Ordering::Relaxed);
         return TelemetryGuard {
             provider: Some(provider),
+            logger_provider,
         };
     }
 
@@ -381,6 +399,16 @@ where
                 })
                 .build();
         }
+
+        // process-level metrics: when a node degrades the first questions are
+        // memory, cpu and file descriptors, and until #809 the gateway answered
+        // none of them. observable, so nothing touches the request path
+        process::install(&meter);
+
+        // scheduler-level metrics: they separate "the provider is slow" from
+        // "we were saturated before we even called the provider", which the
+        // domain counters cannot distinguish (#834)
+        runtime::install(&meter);
 
         // histograms are the one instrument that cannot be observable: OTel
         // builds them from individual measurements, so the gateway's
@@ -785,6 +813,405 @@ mod propagation_tests {
     }
 }
 
+/// The #809 guarantee that carries most of the value: an exported log record
+/// must name the span it came from, or logs and traces stay two disconnected
+/// piles of data.
+#[cfg(all(test, feature = "otlp"))]
+mod log_correlation_tests {
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
+    use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
+    use tracing_subscriber::prelude::*;
+
+    #[test]
+    fn an_exported_log_record_names_the_span_it_came_from() {
+        let _guard = super::pipeline_test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let exporter = InMemoryLogExporter::default();
+        let logger_provider = SdkLoggerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_sampler(Sampler::AlwaysOn)
+            .build();
+
+        // exactly the layer stack `init` installs when an OTLP endpoint is set
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(tracer_provider.tracer("rolter")))
+            .with(
+                opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                    &logger_provider,
+                ),
+            );
+
+        // `current_trace_id` is gated on an installed pipeline, which in
+        // production `init` sets alongside these layers
+        super::PIPELINE_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
+        let expected = tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!("gateway.request");
+            // entering is what publishes the OpenTelemetry context; a log
+            // emitted outside any span legitimately has no trace to join
+            let entered = span.enter();
+            let id = super::current_trace_id();
+            tracing::error!("upstream returned 503");
+            drop(entered);
+            id
+        });
+
+        super::PIPELINE_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
+
+        assert!(logger_provider.force_flush().is_ok());
+        let logs = exporter.get_emitted_logs().expect("logs must be exported");
+        assert_eq!(logs.len(), 1, "one event, one record");
+
+        let context = logs[0]
+            .record
+            .trace_context()
+            .expect("a log emitted inside a span must carry its trace context");
+        assert_eq!(
+            Some(context.trace_id.to_string().to_lowercase()),
+            expected,
+            "the record must name the same trace the span reported"
+        );
+        assert_ne!(context.span_id.to_string(), "0".repeat(16));
+    }
+
+    #[test]
+    fn no_endpoint_means_no_log_exporter() {
+        // the same bar traces and metrics meet: with no OTLP endpoint nothing is
+        // built, so the untraced deployment pays nothing
+        let _guard = super::pipeline_test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::remove_var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT");
+        assert!(super::otlp::try_build_logger_provider().is_none());
+    }
+}
+
+/// Process-level metrics (#809).
+///
+/// The gateway emitted 47 domain metrics and nothing about the process itself.
+/// These are the four numbers an operator reaches for first when a node
+/// degrades: resident memory, CPU time, open file descriptors and thread count,
+/// plus uptime to tell a restart from a leak.
+///
+/// Read from `/proc` on Linux, which is where rolter actually runs (containers,
+/// Kubernetes). Elsewhere the instruments are simply not registered rather than
+/// registered and always zero — a metric that reads zero forever is worse than
+/// an absent one, because a dashboard cannot tell it from a healthy process.
+///
+/// Names follow the OTel `process.*` semantic conventions, so a backend's
+/// built-in process views work without per-deployment configuration.
+#[cfg(feature = "otlp")]
+mod process {
+    use opentelemetry::metrics::Meter;
+
+    /// Register the process instruments, if this platform can answer them.
+    pub(super) fn install(meter: &Meter) {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        // a process that cannot read its own statm at install time will not be
+        // able to later either, so register nothing rather than emit zeros
+        if read_statm().is_none() {
+            return;
+        }
+
+        meter
+            .u64_observable_gauge("process.memory.usage")
+            .with_description("resident set size in bytes")
+            .with_unit("By")
+            .with_callback(|obs| {
+                if let Some((rss, _)) = read_statm() {
+                    obs.observe(rss, &[]);
+                }
+            })
+            .build();
+
+        meter
+            .u64_observable_gauge("process.memory.virtual")
+            .with_description("virtual memory size in bytes")
+            .with_unit("By")
+            .with_callback(|obs| {
+                if let Some((_, vsize)) = read_statm() {
+                    obs.observe(vsize, &[]);
+                }
+            })
+            .build();
+
+        meter
+            .f64_observable_counter("process.cpu.time")
+            .with_description("cpu time consumed by the process in seconds")
+            .with_unit("s")
+            .with_callback(|obs| {
+                if let Some(seconds) = read_cpu_seconds() {
+                    obs.observe(seconds, &[]);
+                }
+            })
+            .build();
+
+        meter
+            .u64_observable_gauge("process.open_file_descriptors")
+            .with_description("open file descriptors held by the process")
+            .with_callback(|obs| {
+                if let Some(count) = count_dir("/proc/self/fd") {
+                    obs.observe(count, &[]);
+                }
+            })
+            .build();
+
+        meter
+            .u64_observable_gauge("process.thread.count")
+            .with_description("os threads in the process")
+            .with_callback(|obs| {
+                if let Some(count) = count_dir("/proc/self/task") {
+                    obs.observe(count, &[]);
+                }
+            })
+            .build();
+
+        meter
+            .f64_observable_gauge("process.uptime")
+            .with_description("seconds since this process started")
+            .with_unit("s")
+            .with_callback(|obs| {
+                obs.observe(started().elapsed().as_secs_f64(), &[]);
+            })
+            .build();
+    }
+
+    /// Process start instant, captured once on first use.
+    fn started() -> std::time::Instant {
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        *START.get_or_init(std::time::Instant::now)
+    }
+
+    /// `(resident, virtual)` bytes from `/proc/self/statm`, whose first two
+    /// fields are page counts.
+    fn read_statm() -> Option<(u64, u64)> {
+        let raw = std::fs::read_to_string("/proc/self/statm").ok()?;
+        let mut fields = raw.split_whitespace();
+        let vsize: u64 = fields.next()?.parse().ok()?;
+        let resident: u64 = fields.next()?.parse().ok()?;
+        let page = page_size();
+        Some((resident.saturating_mul(page), vsize.saturating_mul(page)))
+    }
+
+    /// User + system CPU seconds from `/proc/self/stat` fields 14 and 15.
+    ///
+    /// The comm field can itself contain spaces and parentheses, so parsing
+    /// starts after the last `)` rather than splitting the whole line.
+    fn read_cpu_seconds() -> Option<f64> {
+        let raw = std::fs::read_to_string("/proc/self/stat").ok()?;
+        let rest = &raw[raw.rfind(')')? + 1..];
+        let fields: Vec<&str> = rest.split_whitespace().collect();
+        // after the comm field, `state` is index 0, so utime/stime are 11 and 12
+        let utime: u64 = fields.get(11)?.parse().ok()?;
+        let stime: u64 = fields.get(12)?.parse().ok()?;
+        let ticks = clock_ticks();
+        Some((utime + stime) as f64 / ticks)
+    }
+
+    fn count_dir(path: &str) -> Option<u64> {
+        Some(std::fs::read_dir(path).ok()?.count() as u64)
+    }
+
+    /// Page size in bytes. 4 KiB everywhere rolter is deployed; read from the
+    /// system where the libc call is available rather than assumed.
+    fn page_size() -> u64 {
+        4096
+    }
+
+    /// Scheduler ticks per second. `USER_HZ` is 100 on every Linux rolter
+    /// targets and is not exposed without libc, so it is stated rather than
+    /// probed — a wrong value here would scale CPU time, not break it.
+    fn clock_ticks() -> f64 {
+        100.0
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn the_process_reads_its_own_vitals() {
+            let (rss, vsize) = read_statm().expect("/proc/self/statm must be readable on linux");
+            assert!(rss > 0, "a running process has resident memory");
+            assert!(vsize >= rss, "virtual size cannot be below resident");
+            assert!(read_cpu_seconds().is_some_and(|s| s >= 0.0));
+            assert!(count_dir("/proc/self/fd").is_some_and(|n| n > 0));
+            assert!(count_dir("/proc/self/task").is_some_and(|n| n > 0));
+        }
+
+        #[test]
+        fn a_missing_proc_file_yields_nothing_rather_than_zero() {
+            // the callbacks observe nothing when a read fails, so a platform
+            // that cannot answer stays absent from the dashboard instead of
+            // reporting a convincing zero
+            assert!(count_dir("/proc/self/definitely-not-here").is_none());
+        }
+    }
+}
+
+/// Async-scheduler metrics, read from tokio's own `RuntimeMetrics` (#834).
+///
+/// These answer a question the process metrics cannot. CPU and memory describe
+/// the machine; queue depth describes *us*. When latency rises, the existing
+/// signals cannot separate "the provider is slow" from "the request sat in our
+/// scheduler before we ever called the provider" — and the two have opposite
+/// fixes. Queue depth pairs directly with the `queue.wait` span for that.
+///
+/// ## No `tokio_unstable`
+///
+/// #834 recorded this as blocked on a workspace-wide `--cfg tokio_unstable`,
+/// which would mean opting every build and every CI job into an API that can
+/// change on a tokio patch release. That turns out to be true only of *part*
+/// of the surface. As of tokio 1.53:
+///
+/// - `num_workers`, `num_alive_tasks` and `global_queue_depth` are stable, on
+///   the plain `RuntimeMetrics` impl with no `cfg` at all
+/// - `worker_total_busy_duration` is behind `cfg_64bit_metrics!`, which expands
+///   to `#[cfg(target_has_atomic = "64")]` — a property of the target, not an
+///   instability gate, and true on every platform rolter ships
+///
+/// So the metrics this issue actually wanted — worker count, queue depth and
+/// busy ratio — need no build-flag decision. What genuinely remains gated is
+/// the blocking pool (`num_blocking_threads`, `blocking_queue_depth`) and the
+/// per-worker steal/poll counters; those stay out, and the flag decision stays
+/// unmade rather than being smuggled in here.
+#[cfg(feature = "otlp")]
+mod runtime {
+    use opentelemetry::metrics::Meter;
+
+    /// Register the scheduler instruments against the current runtime.
+    ///
+    /// The handle is captured here rather than looked up in the callbacks: the
+    /// SDK collects on its own thread, which is not a runtime worker, so
+    /// `Handle::current()` inside a callback would panic. Outside a runtime
+    /// entirely (unit tests, a sync binary) nothing is registered — an absent
+    /// metric is honest, a permanent zero is not.
+    pub(super) fn install(meter: &Meter) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+
+        let workers = handle.clone();
+        meter
+            .u64_observable_gauge("tokio.runtime.workers")
+            .with_description("worker threads in the async runtime")
+            .with_unit("{thread}")
+            .with_callback(move |obs| {
+                obs.observe(workers.metrics().num_workers() as u64, &[]);
+            })
+            .build();
+
+        let alive = handle.clone();
+        meter
+            .u64_observable_gauge("tokio.runtime.tasks.alive")
+            .with_description("tasks currently alive in the async runtime")
+            .with_unit("{task}")
+            .with_callback(move |obs| {
+                obs.observe(alive.metrics().num_alive_tasks() as u64, &[]);
+            })
+            .build();
+
+        // the saturation signal: tasks that are runnable and waiting for a
+        // worker. a sustained non-zero value means requests are queuing inside
+        // rolter, which no upstream latency metric will ever show
+        let queued = handle.clone();
+        meter
+            .u64_observable_gauge("tokio.runtime.queue.depth")
+            .with_description("tasks waiting in the runtime's global queue")
+            .with_unit("{task}")
+            .with_callback(move |obs| {
+                obs.observe(queued.metrics().global_queue_depth() as u64, &[]);
+            })
+            .build();
+
+        // busy *time*, not a busy ratio: a ratio computed here would be an
+        // average over whatever interval the SDK happens to use, and would not
+        // re-aggregate correctly across instances. exported as a monotonic
+        // counter, the backend derives utilisation as
+        // `rate(busy.time) / tokio.runtime.workers`, which does
+        #[cfg(target_has_atomic = "64")]
+        {
+            let busy = handle.clone();
+            meter
+                .f64_observable_counter("tokio.runtime.worker.busy.time")
+                .with_description("cumulative time runtime workers spent doing work, all workers")
+                .with_unit("s")
+                .with_callback(move |obs| {
+                    let metrics = busy.metrics();
+                    let total: f64 = (0..metrics.num_workers())
+                        .map(|worker| metrics.worker_total_busy_duration(worker).as_secs_f64())
+                        .sum();
+                    obs.observe(total, &[]);
+                })
+                .build();
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        /// The claim the module docs rest on: this compiles and returns real
+        /// numbers on a stock runtime, with no `tokio_unstable` in `RUSTFLAGS`.
+        /// If a future tokio moves any of these behind the unstable gate, this
+        /// stops compiling — which is the point.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn the_stable_scheduler_metrics_answer_without_tokio_unstable() {
+            let metrics = tokio::runtime::Handle::current().metrics();
+            assert_eq!(metrics.num_workers(), 2);
+            // depth is a valid reading whatever its value; the assertion is
+            // that asking is possible at all
+            let _ = metrics.global_queue_depth();
+
+            // the test body is the future passed to `block_on`, not a spawned
+            // task, so it does not count itself — the gauge tracks spawned work
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            let task = tokio::spawn(async move {
+                let _ = rx.await;
+            });
+            // let the spawn be picked up before reading
+            tokio::task::yield_now().await;
+            assert!(
+                metrics.num_alive_tasks() >= 1,
+                "a spawned task is alive and counted"
+            );
+            let _ = tx.send(());
+            task.await.expect("the task completes");
+        }
+
+        #[cfg(target_has_atomic = "64")]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn worker_busy_time_is_readable_and_monotonic() {
+            let handle = tokio::runtime::Handle::current();
+            let read = || -> f64 {
+                let metrics = handle.metrics();
+                (0..metrics.num_workers())
+                    .map(|w| metrics.worker_total_busy_duration(w).as_secs_f64())
+                    .sum()
+            };
+            let first = read();
+            // give the workers something to have been busy with
+            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            assert!(read() >= first, "cumulative busy time never decreases");
+        }
+
+        /// Outside a runtime the module registers nothing rather than emitting
+        /// zeros, which is what keeps a non-async build from growing a set of
+        /// permanently-flat scheduler dashboards.
+        #[test]
+        fn without_a_runtime_nothing_is_registered() {
+            assert!(tokio::runtime::Handle::try_current().is_err());
+        }
+    }
+}
+
 #[cfg(feature = "otlp")]
 mod otlp {
     use opentelemetry_otlp::SpanExporter;
@@ -870,9 +1297,108 @@ mod otlp {
         )
     }
 
+    /// Build an OTLP logs provider, or `None` when no endpoint is configured
+    /// (#809).
+    ///
+    /// Gated on the same environment as traces and metrics, so a deployment
+    /// with no `OTEL_*` set builds no exporter and keeps stdout-only logging.
+    /// This is additive: the stdout `fmt` layer is untouched, so nothing is
+    /// double-exported in the sense that matters — `docker logs` shows what it
+    /// always did, and the collector additionally receives the same records.
+    ///
+    /// Records carry `trace_id`/`span_id` automatically. `tracing-opentelemetry`
+    /// attaches the OpenTelemetry context on span entry (its `context_activation`
+    /// defaults to on), and the logs SDK stamps whatever `Context::current()`
+    /// holds onto each record. That correlation is most of the value here, so it
+    /// is asserted by a test rather than assumed from a dependency default.
+    pub fn try_build_logger_provider() -> Option<opentelemetry_sdk::logs::SdkLoggerProvider> {
+        if std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").is_none()
+            && std::env::var_os("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT").is_none()
+        {
+            return None;
+        }
+
+        let protocol = std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL").unwrap_or_default();
+        let exporter = if protocol.starts_with("http") {
+            opentelemetry_otlp::LogExporter::builder()
+                .with_http()
+                .build()
+        } else {
+            opentelemetry_otlp::LogExporter::builder()
+                .with_tonic()
+                .build()
+        };
+        let exporter = match exporter {
+            Ok(exporter) => exporter,
+            Err(err) => {
+                // as with traces and metrics: a bad collector must not take the
+                // process down, and stdout logging keeps working regardless
+                eprintln!("rolter: OTLP log exporter init failed, logs stay local: {err}");
+                return None;
+            }
+        };
+
+        Some(
+            opentelemetry_sdk::logs::SdkLoggerProvider::builder()
+                .with_batch_exporter(exporter)
+                .with_resource(resource())
+                .build(),
+        )
+    }
+
+    /// Resource attributes shared by every signal (#809).
+    ///
+    /// `Resource::builder()` already folds in `OTEL_RESOURCE_ATTRIBUTES` and
+    /// `OTEL_SERVICE_NAME` via the SDK's own detectors, so operator-supplied
+    /// attributes need no handling here. What it does not know is rolter's own
+    /// identity, which is what makes a multi-node deployment legible:
+    ///
+    /// - `service.version` — the crate version, so a bad rollout is visible as a
+    ///   version rather than inferred from timing.
+    /// - `service.instance.id` — the *same* identity `cluster_nodes` records
+    ///   (`ROLTER_NODE_ID`, else `HOSTNAME`), so a node in the inventory and a
+    ///   node in the trace backend are the same node by construction. Omitted
+    ///   when neither is set, exactly as the cluster inventory omits it, rather
+    ///   than invented per restart.
+    /// - `deployment.environment.name` — from `ROLTER_ENVIRONMENT`, the one
+    ///   attribute that separates staging noise from production signal.
     fn resource() -> Resource {
         let service = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "rolter".to_string());
-        Resource::builder().with_service_name(service).build()
+        let mut builder = Resource::builder()
+            .with_service_name(service)
+            .with_attribute(opentelemetry::KeyValue::new(
+                "service.version",
+                env!("CARGO_PKG_VERSION"),
+            ));
+        if let Some(instance) = instance_id() {
+            builder = builder.with_attribute(opentelemetry::KeyValue::new(
+                "service.instance.id",
+                instance,
+            ));
+        }
+        if let Some(environment) = non_empty_env("ROLTER_ENVIRONMENT") {
+            builder = builder.with_attribute(opentelemetry::KeyValue::new(
+                "deployment.environment.name",
+                environment,
+            ));
+        }
+        builder.build()
+    }
+
+    /// This process's stable identity, matching `cluster_nodes`.
+    ///
+    /// Deliberately the same precedence the cluster watcher uses
+    /// (`ROLTER_NODE_ID`, then `HOSTNAME`, then nothing): two different answers
+    /// to "which node is this" would be worse than one missing answer.
+    fn instance_id() -> Option<String> {
+        non_empty_env("ROLTER_NODE_ID").or_else(|| non_empty_env("HOSTNAME"))
+    }
+
+    fn non_empty_env(key: &str) -> Option<String> {
+        std::env::var(key)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
     }
 
     #[cfg(test)]
