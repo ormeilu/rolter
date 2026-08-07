@@ -16,6 +16,7 @@ mod cache_telemetry;
 mod cooldowns;
 mod error;
 mod fake_llm;
+mod genai;
 mod guardrail_webhook;
 mod guardrails;
 mod handlers;

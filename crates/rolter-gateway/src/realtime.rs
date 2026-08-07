@@ -397,7 +397,16 @@ async fn relay(socket: WebSocket, session: SelectedSession) {
     state.metrics.observe_target(&provider, &target, ok);
     state
         .metrics
-        .observe_request(&model, started.elapsed().as_millis() as u32, 0);
+        // a realtime session has no request/response shape and reports no
+        // token usage, so it contributes duration only — see the deviations in
+        // `crate::genai` (#808)
+        .observe_request(
+            &provider,
+            &model,
+            started.elapsed().as_millis() as u32,
+            0,
+            0,
+        );
     drop(_load);
     drop(_session);
 }

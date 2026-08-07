@@ -218,7 +218,14 @@ pub struct Scalar {
 impl Metrics {
     /// Record one completed request's total latency and time-to-first-token
     /// against the `model` label. Called once per request from the log sink.
-    pub fn observe_request(&self, model: &str, latency_ms: u32, ttft_ms: u32) {
+    pub fn observe_request(
+        &self,
+        provider: &str,
+        model: &str,
+        latency_ms: u32,
+        ttft_ms: u32,
+        output_tokens: u32,
+    ) {
         let hist = self
             .by_model
             .entry(model.to_string())
@@ -230,7 +237,7 @@ impl Metrics {
         // is the only metric that costs the request path anything, and only
         // where the operator asked for it
         if let Some(otlp) = self.otlp_histograms.get() {
-            otlp.record(model, latency_ms, ttft_ms);
+            otlp.record(provider, model, latency_ms, ttft_ms, output_tokens);
         }
     }
 
@@ -956,12 +963,12 @@ mod tests {
     fn request_observation_works_without_an_otlp_recorder() {
         let m = Metrics::default();
         // the OnceLock is empty here, which is the default deployment
-        m.observe_request("gpt-4o", 42, 7);
+        m.observe_request("openai", "gpt-4o", 42, 7, 0);
         assert!(m.render().contains("rolter_request_latency_ms"));
 
         // and an inert recorder is safe to install and record into
         m.set_otlp_histograms(rolter_core::telemetry::RequestHistograms::default());
-        m.observe_request("gpt-4o", 9, 3);
+        m.observe_request("openai", "gpt-4o", 9, 3, 0);
         assert!(!rolter_core::telemetry::RequestHistograms::default().is_active());
     }
 
@@ -971,9 +978,9 @@ mod tests {
     fn histogram_observe_and_render() {
         let m = Metrics::default();
         // three requests on one model: 3ms, 40ms, 8000ms (last > 5000 bucket)
-        m.observe_request("gpt-4o", 3, 2);
-        m.observe_request("gpt-4o", 40, 10);
-        m.observe_request("gpt-4o", 8000, 200);
+        m.observe_request("openai", "gpt-4o", 3, 2, 0);
+        m.observe_request("openai", "gpt-4o", 40, 10, 0);
+        m.observe_request("openai", "gpt-4o", 8000, 200, 0);
         let out = m.render();
 
         // type header emitted once

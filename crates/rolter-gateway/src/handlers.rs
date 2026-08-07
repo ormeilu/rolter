@@ -1314,6 +1314,9 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
     // the client, so a partial response is never duplicated. a route with
     // variants routes through the weighted-variant fallback chain instead of the
     // classic single-pool balancer.
+    // the successful attempt's span, held past the retry block so token usage
+    // can be recorded on it once the response body has been consumed (#808)
+    let mut genai_span: Option<tracing::Span> = None;
     let (
         outcome,
         last_provider,
@@ -1411,18 +1414,45 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
             last_key_fingerprint = api_key.map(provider_key_fingerprint);
             let upstream_model = target.model.as_deref();
 
-            // one span per attempt, following the OTel GenAI conventions so
-            // SigNoz's built-in views work. the trace context handed to the
-            // provider is injected from *inside* this span, which is what makes
-            // the provider call a child of the gateway rather than a sibling
-            // parented to the caller (#805)
+            // one span per attempt, following the OTel GenAI conventions so a
+            // conformant backend's built-in GenAI views work. the trace context
+            // handed to the provider is injected from *inside* this span, which
+            // is what makes the provider call a child of the gateway rather
+            // than a sibling parented to the caller (#805).
+            //
+            // `otel.name` carries the `{operation} {model}` name the spec asks
+            // for: `tracing` span names are compile-time constants, so the
+            // exported name has to be set as a field (#808). `otel.kind=client`
+            // marks this as the outbound leg
+            let genai_model = upstream_model.unwrap_or(model.as_str());
             let upstream_stage = crate::trace::stage_span!(
                 "upstream.request",
                 attempt = attempt,
+                otel.name = tracing::field::Empty,
+                otel.kind = "client",
+                gen_ai.operation.name = tracing::field::Empty,
+                gen_ai.provider.name = %target.provider,
                 gen_ai.system = %target.provider,
-                gen_ai.request.model = %upstream_model.unwrap_or(model.as_str()),
+                gen_ai.request.model = %genai_model,
+                gen_ai.output.type = tracing::field::Empty,
+                gen_ai.response.model = tracing::field::Empty,
+                gen_ai.response.finish_reasons = tracing::field::Empty,
+                gen_ai.usage.input_tokens = tracing::field::Empty,
+                gen_ai.usage.output_tokens = tracing::field::Empty,
+                error.type = tracing::field::Empty,
                 http.response.status_code = tracing::field::Empty
             );
+            genai_span = Some(upstream_stage.clone());
+            if let Some(operation) = crate::genai::operation_for_path(path) {
+                upstream_stage.record(crate::genai::OPERATION_NAME, operation.name);
+                upstream_stage.record(
+                    "otel.name",
+                    crate::genai::span_name(&operation, genai_model).as_str(),
+                );
+                if let Some(output_type) = operation.output_type {
+                    upstream_stage.record(crate::genai::OUTPUT_TYPE, output_type);
+                }
+            }
             let injected_ctx;
             let injected_refs;
             let attempt_headers: &[(&str, &str)] = if rolter_core::telemetry::is_active() {
@@ -1454,6 +1484,15 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                 Ok(response) => {
                     let status = response.status().as_u16();
                     upstream_stage.record("http.response.status_code", status);
+                    // error.type is conditionally required on failure, and must
+                    // stay low-cardinality — the status class, never the
+                    // provider's free-text message (#808)
+                    if status >= 400 {
+                        upstream_stage.record(
+                            crate::genai::ERROR_TYPE,
+                            crate::genai::error_type_for_status(status),
+                        );
+                    }
                     // a 429/401 on a multi-key provider is a key-level
                     // failure: park the key, keep the target in rotation
                     // and retry — a sibling key usually succeeds
@@ -1718,6 +1757,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                                 token_recorder,
                                 inflight_guard,
                                 response_observer,
+                                genai_span.clone(),
                             );
                         }
                         Err(err) => {
@@ -1740,6 +1780,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                 inflight_guard,
                 response_observer,
                 output_guard.as_ref(),
+                genai_span.clone(),
             )
             .await
         }
@@ -2136,6 +2177,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
                 recorder,
                 token_recorder,
                 inflight_guard,
+                None,
                 None,
                 None,
             )
@@ -2545,6 +2587,7 @@ async fn stream_response(
     inflight_guard: Option<crate::load::LoadGuard>,
     completion_observer: Option<crate::logging::CompletionObserver>,
     output: Option<&crate::guardrails::OutputGuard<'_>>,
+    genai_span: Option<tracing::Span>,
 ) -> Response {
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -2590,6 +2633,7 @@ async fn stream_response(
                     token_recorder,
                     inflight_guard,
                     completion_observer,
+                    genai_span,
                 )
             }
             Err(err) => error_json(StatusCode::BAD_GATEWAY, &err.to_string()),
@@ -2616,7 +2660,8 @@ async fn stream_response(
         Some(token_recorder),
         inflight_guard,
     )
-    .with_completion_observer(completion_observer);
+    .with_completion_observer(completion_observer)
+    .with_genai_span(genai_span);
     let mut builder = Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, content_type);
@@ -2649,6 +2694,7 @@ fn buffered_response(
     token_recorder: TokenRecorder,
     inflight_guard: Option<crate::load::LoadGuard>,
     completion_observer: Option<crate::logging::CompletionObserver>,
+    genai_span: Option<tracing::Span>,
 ) -> Response {
     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
     let decision = DecisionHeaders::from_log(&log);
@@ -2664,7 +2710,8 @@ fn buffered_response(
         Some(token_recorder),
         inflight_guard,
     )
-    .with_completion_observer(completion_observer);
+    .with_completion_observer(completion_observer)
+    .with_genai_span(genai_span);
     let mut builder = Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, content_type);
