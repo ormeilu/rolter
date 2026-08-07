@@ -289,6 +289,71 @@ watcher — `ROLTER_NODE_ID`, then `HOSTNAME`, then nothing — so a node in
 construction. When neither is set it is omitted rather than invented per restart,
 which would churn the identity on every deploy.
 
+### Wrapping audit (#815)
+
+OpenTelemetry's [*Don't wrap OpenTelemetry*](https://opentelemetry.io/blog/2026/dont-wrap-opentelemetry/)
+argues that a house abstraction over the instrumentation API costs performance,
+maintainability and developer education. Three anti-patterns are named: wrappers
+that force callers to allocate an attribute collection, wrappers that look an
+instrument up by name per measurement, and general API abstraction that teaches a
+proprietary interface instead of the standard.
+
+rolter has four things sitting between its code and the OTel API. Each was
+audited against that post; the verdict is **keep** for all four, for the reasons
+below. The post is guidance rather than a mandate, and it asks for a refactor
+only where there is a measured cost or a real maintenance burden.
+
+Note up front that rolter instruments through `tracing` + `tracing-opentelemetry`.
+That is the ecosystem bridge, not a bespoke house wrapper, and it is not what the
+post argues against. This audit is not a proposal to remove `tracing`.
+
+| Item | Verdict | Why |
+|---|---|---|
+| `stage_span!` (`rolter-core/src/telemetry.rs`) | keep | code generation, not a runtime wrapper |
+| The scalar-metrics list (`Metrics::scalars()`) | keep | the by-name lookup is on the export path, not the request path |
+| `RequestHistograms::record` | keep | one unavoidable allocation; the alternative is the anti-pattern |
+| `GatewayMakeSpan` (`rolter-gateway/src/trace.rs`) | keep | SDK/layer configuration, explicitly out of scope |
+
+**`stage_span!`** expands to a direct `tracing::info_span!` call guarded by an
+`is_active()` check, so it is closer to the code generation the post recommends
+than to a runtime wrapper. It takes `tracing`'s own compile-time field syntax and
+never asks a caller to build a `Vec` or a slice of attributes, so the
+force-allocation anti-pattern does not apply. The guard is the point of the
+macro: with no pipeline installed it yields `Span::none()`, which allocates
+nothing.
+
+**The scalar-metrics list** is the shape most at risk, since `install_metrics`
+registers one observable instrument per scalar and each instrument's callback
+calls `collect()` and finds its own entry by name. That is a by-name lookup, but
+it is not on a hot path: the instruments are *observable*, so the SDK invokes
+those callbacks on its own export interval (`OTEL_METRIC_EXPORT_INTERVAL`,
+default 60s). The request path only ever does `fetch_add` on a named `AtomicU64`
+field — there is no map, no lookup and no lock between a request and its counter.
+The post's performance argument therefore does not bite here even though the
+gateway hot path is where it would bite hardest.
+
+What the export path does cost is one `Vec<ScalarMetric>` allocation per
+instrument per cycle and a linear scan of it, so the work is quadratic in the
+number of scalars. At the current eight scalars, once a minute, that is
+immaterial. It is left as-is deliberately: the OTel Rust 0.32 API offers only
+per-instrument `with_callback`, so collecting once per cycle for all instruments
+is not expressible, and matching by name rather than by index keeps the callbacks
+independent of the order `scalars()` happens to return.
+
+**`RequestHistograms::record`** is the one place a wrapper does force an
+allocation on the request path — `model.to_string()`, to build the single
+`KeyValue` both histograms take. It is unavoidable rather than incidental: OTel's
+`Value::String` holds an owned or `'static` string and model names are neither.
+The obvious way to avoid it is to cache a prebuilt attribute set per model, which
+would put a sharded-lock map lookup on the request path — precisely the
+lookup-based anti-pattern the post names, and something AGENTS.md forbids on the
+data-plane hot path. One small allocation is the cheaper of the two, and it is
+paid only when an OTLP endpoint is configured.
+
+**`GatewayMakeSpan`** is a `tower_http::trace::MakeSpan` implementation: layer
+configuration, which the post explicitly separates from instrumentation and calls
+*not* wrapping. Recorded here only so the audit is complete.
+
 ### Cost when tracing is off
 
 With no `OTEL_EXPORTER_OTLP_ENDPOINT` (the default) behaviour and hot-path cost

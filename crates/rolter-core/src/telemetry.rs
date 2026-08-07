@@ -293,7 +293,11 @@ impl RequestHistograms {
         if let Some(inner) = &self.inner {
             // one attribute set for both instruments — `model` is the same
             // bounded label the Prometheus histogram already uses, so this adds
-            // no cardinality the deployment was not already carrying
+            // no cardinality the deployment was not already carrying.
+            // the `to_string` is the one hot-path allocation telemetry costs:
+            // OTel's string value is owned or `'static` and a model name is
+            // neither. caching a prebuilt attribute set per model would trade it
+            // for a locked map lookup on the request path, which is worse (#815)
             let attrs = [opentelemetry::KeyValue::new("model", model.to_string())];
             inner.latency.record(u64::from(latency_ms), &attrs);
             inner.ttft.record(u64::from(ttft_ms), &attrs);
@@ -396,7 +400,11 @@ where
         };
 
         // the instrument set is fixed at install time from one snapshot; each
-        // instrument then re-reads its own value by name on every collection
+        // instrument then re-reads its own value by name on every collection.
+        // that by-name match is off the request path — these are observable
+        // instruments, so the SDK drives them on its export interval while the
+        // hot path only does `fetch_add` on a named atomic. audited against
+        // OTel's don't-wrap guidance in #815; see docs/architecture/observability.md
         for (kind, name, help, _) in collect() {
             let pick = collect.clone();
             let observe = move |value: &dyn Fn(u64)| {
