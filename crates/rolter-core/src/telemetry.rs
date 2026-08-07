@@ -197,6 +197,15 @@ pub fn init() -> TelemetryGuard {
     TelemetryGuard::default()
 }
 
+/// Bucket boundaries for `gen_ai.server.time_per_output_token`, in seconds.
+///
+/// Per-token times are two to three orders of magnitude smaller than request
+/// durations, so the request-latency boundaries would put every observation in
+/// the first bucket and answer nothing.
+#[cfg(feature = "otlp")]
+const TOKEN_SECONDS_BUCKETS: [f64; 10] =
+    [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1.0];
+
 /// One scalar metric to export: Prometheus type, name, help text, value.
 ///
 /// Mirrors what the gateway's `Metrics::scalars()` produces, expressed in plain
@@ -256,13 +265,30 @@ pub struct RequestHistograms {
 struct HistogramSet {
     latency: opentelemetry::metrics::Histogram<u64>,
     ttft: opentelemetry::metrics::Histogram<u64>,
+    /// the OTel GenAI *server* metric family (#808).
+    ///
+    /// The spec splits client and server metrics, and the server family is the
+    /// one almost no SDK instrumentation emits, because almost nothing else
+    /// sits where a gateway sits. These are the same measurements the
+    /// `rolter_*` histograms carry, in the units and under the names the spec
+    /// names, so a conformant backend's built-in GenAI views work.
+    server_duration: opentelemetry::metrics::Histogram<f64>,
+    server_ttft: opentelemetry::metrics::Histogram<f64>,
+    server_tpot: opentelemetry::metrics::Histogram<f64>,
 }
 
 impl RequestHistograms {
     /// Record one completed request against the `model` attribute.
     ///
     /// Does nothing, and allocates nothing, when metrics export is off.
-    pub fn record(&self, model: &str, latency_ms: u32, ttft_ms: u32) {
+    pub fn record(
+        &self,
+        provider: &str,
+        model: &str,
+        latency_ms: u32,
+        ttft_ms: u32,
+        output_tokens: u32,
+    ) {
         #[cfg(feature = "otlp")]
         if let Some(inner) = &self.inner {
             // one attribute set for both instruments — `model` is the same
@@ -271,9 +297,32 @@ impl RequestHistograms {
             let attrs = [opentelemetry::KeyValue::new("model", model.to_string())];
             inner.latency.record(u64::from(latency_ms), &attrs);
             inner.ttft.record(u64::from(ttft_ms), &attrs);
+
+            // the spec names these attributes, and its unit is seconds
+            let genai = [
+                opentelemetry::KeyValue::new("gen_ai.provider.name", provider.to_string()),
+                opentelemetry::KeyValue::new("gen_ai.request.model", model.to_string()),
+            ];
+            inner
+                .server_duration
+                .record(f64::from(latency_ms) / 1000.0, &genai);
+            inner
+                .server_ttft
+                .record(f64::from(ttft_ms) / 1000.0, &genai);
+            // time *per output token* is only meaningful once there is more
+            // than one: the first token's cost is time-to-first-token, already
+            // its own metric, and dividing by zero or one would report the
+            // whole generation as per-token cost
+            if output_tokens > 1 {
+                let generation_ms = latency_ms.saturating_sub(ttft_ms);
+                inner.server_tpot.record(
+                    f64::from(generation_ms) / 1000.0 / f64::from(output_tokens - 1),
+                    &genai,
+                );
+            }
             return;
         }
-        let _ = (model, latency_ms, ttft_ms);
+        let _ = (provider, model, latency_ms, ttft_ms, output_tokens);
     }
 
     /// Whether anything is actually being recorded.
@@ -410,6 +459,11 @@ where
         // domain counters cannot distinguish (#834)
         runtime::install(&meter);
 
+        // the GenAI server family is specified in seconds, so the shared
+        // millisecond boundaries are converted rather than redefined — two
+        // views of one measurement must not disagree about where a bucket falls
+        let seconds_buckets: Vec<f64> = latency_buckets_ms.iter().map(|ms| ms / 1000.0).collect();
+
         // histograms are the one instrument that cannot be observable: OTel
         // builds them from individual measurements, so the gateway's
         // pre-bucketed counters cannot be handed over after the fact
@@ -426,6 +480,24 @@ where
                     .with_description("time to first token in milliseconds")
                     .with_unit("ms")
                     .with_boundaries(latency_buckets_ms)
+                    .build(),
+                server_duration: meter
+                    .f64_histogram("gen_ai.server.request.duration")
+                    .with_description("generative ai server request duration")
+                    .with_unit("s")
+                    .with_boundaries(seconds_buckets.clone())
+                    .build(),
+                server_ttft: meter
+                    .f64_histogram("gen_ai.server.time_to_first_token")
+                    .with_description("time to generate the first token")
+                    .with_unit("s")
+                    .with_boundaries(seconds_buckets.clone())
+                    .build(),
+                server_tpot: meter
+                    .f64_histogram("gen_ai.server.time_per_output_token")
+                    .with_description("time per output token after the first")
+                    .with_unit("s")
+                    .with_boundaries(TOKEN_SECONDS_BUCKETS.to_vec())
                     .build(),
             })),
         };
