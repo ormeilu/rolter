@@ -375,6 +375,25 @@
       "colModel": "Model",
       "colStatus": "Status",
       "colMs": "ms"
+    },
+    "providers": {
+      "search": "Search providers",
+      "add": "+ Add provider",
+      "loading": "Loading…",
+      "loadFailed": "Failed to load providers.",
+      "scopeBlocked": "Add/edit/delete is unavailable: {{error}}. Read-only view still works.",
+      "noOrg": "No org configured yet — pick or create one to manage providers.",
+      "colName": "Name",
+      "colType": "Type",
+      "colApiBase": "API base",
+      "colSlug": "Slug",
+      "colKeyEnv": "Key env",
+      "copyPrefix": "Copy address prefix",
+      "edit": "Edit",
+      "deleteTitle": "Delete provider",
+      "deleteOne": "Delete provider {{name}}",
+      "noMatch": "No providers match.",
+      "deleteHint": "<0>{{name}}</0> will stop being usable as a route target. This cannot be undone."
     }
   }
 }
