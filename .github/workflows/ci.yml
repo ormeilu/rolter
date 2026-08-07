@@ -23,7 +23,8 @@ permissions:
 
 jobs:
   # full quality/security gate (fmt, clippy, nextest, doc tests, feature matrix,
-  # cargo doc, cargo-deny, gitleaks, actionlint, ui, smoke, + informational
+  # cargo doc, cargo-deny, gitleaks, actionlint, ui, storybook, smoke, +
+  # informational
   # checks). shared with the release paths via workflow_call so publish and CI
   # enforce the exact same checks on a commit.
   quality:

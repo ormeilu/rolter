@@ -130,6 +130,11 @@ services:
       - OTEL_RESOURCE_ATTRIBUTES=host.name=signoz-host,os.type=linux
     volumes:
       - ./signoz/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+      # the hostmetrics receiver reads the machine's /proc, not the container's
+      # (#809). without this bind it silently reports the collector container's
+      # own resource view, which is exactly the wrong answer to "is the laptop
+      # saturated". read-only, and local-overlay only
+      - /:/hostfs:ro
     command: ["--config=/etc/otel-collector-config.yaml"]
 
   # SigNoz's MCP server, so an agent can query traces, run ClickHouse queries and

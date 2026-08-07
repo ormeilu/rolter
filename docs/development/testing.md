@@ -150,7 +150,8 @@ docker run --rm -v "$PWD:/repo" -w /repo \
 
 The `storybook` job builds the static Storybook, serves it, and runs the
 interaction (play) tests with `@storybook/test-runner` against a headless
-chromium. Locally:
+chromium. It is a **merge gate** (#753): a failing play test fails `quality`,
+which fails `ci-ok`. Locally:
 
 ```bash
 cd ui
