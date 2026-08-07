@@ -91,12 +91,23 @@ impl<B> MakeSpan<B> for GatewayMakeSpan {
         }
 
         // `otel.name` is what a backend shows as the span name; method + route
-        // reads better in a waterfall than the bare path
+        // reads better in a waterfall than the bare path. `otel.kind=server`
+        // marks this as the inbound leg: rolter is a server in the GenAI
+        // conventions' sense, and the kind was previously never set at all —
+        // `otel.kind` appeared nowhere in the gateway (#808).
+        //
+        // the tenant fields start empty and are filled in by `record_tenant`
+        // once the virtual key resolves: this span is built by the tower layer,
+        // which runs before auth, so the identity is not known yet (#836)
         let span = tracing::info_span!(
             "gateway.request",
             otel.name = %format!("{} {}", req.method(), req.uri().path()),
+            otel.kind = "server",
             http.request.method = %req.method(),
             url.path = %req.uri().path(),
+            rolter.org.id = tracing::field::Empty,
+            rolter.team.id = tracing::field::Empty,
+            rolter.project.id = tracing::field::Empty,
         );
 
         let mut carrier = rolter_core::telemetry::TraceCarrier::new();
@@ -107,6 +118,43 @@ impl<B> MakeSpan<B> for GatewayMakeSpan {
         }
         rolter_core::telemetry::adopt_inbound(&span, &carrier.finish());
         span
+    }
+}
+
+/// Attribute names carrying tenant identity on exported spans (#836).
+///
+/// Spelled out as literals at the span macro too, since `tracing` will not take
+/// a constant as a field name; a test pins the two together.
+pub const ORG_ID: &str = "rolter.org.id";
+pub const TEAM_ID: &str = "rolter.team.id";
+pub const PROJECT_ID: &str = "rolter.project.id";
+
+/// Stamp the resolved tenant onto the request span.
+///
+/// ADR-0026 decided that per-tenant telemetry destinations are routed by an
+/// OpenTelemetry Collector rather than fanned out by rolter, and that "rolter's
+/// job is to *stamp* the attribute". This is that stamp, and without it the
+/// decision is unimplementable: the collector's routing has nothing to key on,
+/// because until now no exported span carried tenant identity at all. The
+/// request logs in ClickHouse have always had it; the traces never did.
+///
+/// The names are rolter-local rather than `enduser.*` or a `tenant.id` guess.
+/// The GenAI and HTTP conventions define nothing for this, and inventing a
+/// convention-shaped name that a future spec might redefine is worse than an
+/// obviously-local one.
+///
+/// Empty values are skipped rather than recorded as `""`. A config-defined key
+/// has no org, and an attribute present-but-empty on some spans and absent on
+/// others is harder to write a routing rule against than one that is simply
+/// absent.
+pub fn record_tenant(org: &str, team: &str, project: &str) {
+    // cheap and correct when untraced: with no pipeline the span is disabled,
+    // so `record` on it is a no-op that touches no exporter
+    let span = Span::current();
+    for (name, value) in [(ORG_ID, org), (TEAM_ID, team), (PROJECT_ID, project)] {
+        if !value.is_empty() {
+            span.record(name, value);
+        }
     }
 }
 
@@ -306,6 +354,128 @@ mod tests {
             h.insert(*k, HeaderValue::from_str(v).unwrap());
         }
         h
+    }
+
+    /// Collects every field recorded onto a span after creation, so the tenant
+    /// attributes can be asserted as *recorded* rather than merely as called.
+    #[derive(Clone, Default)]
+    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>);
+
+    impl Recorded {
+        fn get(&self, key: &str) -> Option<String> {
+            let seen = self.0.lock().unwrap();
+            seen.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+        }
+
+        fn keys(&self) -> Vec<String> {
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(k, _)| k.clone())
+                .collect()
+        }
+    }
+
+    impl tracing::field::Visit for Recorded {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+    }
+
+    impl<S> tracing_subscriber::Layer<S> for Recorded
+    where
+        S: tracing::Subscriber,
+    {
+        fn on_record(
+            &self,
+            _span: &tracing::span::Id,
+            values: &tracing::span::Record<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            values.record(&mut self.clone());
+        }
+    }
+
+    /// The stamp ADR-0026 assigns to rolter: without it a collector routing
+    /// tenant telemetry has nothing to key on, since no exported span carried
+    /// tenant identity before #836.
+    #[test]
+    fn the_resolved_tenant_lands_on_the_request_span() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let recorded = Recorded::default();
+        let subscriber = tracing_subscriber::registry().with(recorded.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(
+                "gateway.request",
+                rolter.org.id = tracing::field::Empty,
+                rolter.team.id = tracing::field::Empty,
+                rolter.project.id = tracing::field::Empty,
+            );
+            let _entered = span.enter();
+            record_tenant("org-1", "team-2", "project-3");
+        });
+
+        assert_eq!(recorded.get(ORG_ID).as_deref(), Some("org-1"));
+        assert_eq!(recorded.get(TEAM_ID).as_deref(), Some("team-2"));
+        assert_eq!(recorded.get(PROJECT_ID).as_deref(), Some("project-3"));
+    }
+
+    /// A config-defined key has no org. An attribute that is present-but-empty
+    /// on some spans and absent on others is harder to route on than one that
+    /// is simply absent, so empties are skipped.
+    #[test]
+    fn an_unattributed_request_records_no_tenant_attributes() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let recorded = Recorded::default();
+        let subscriber = tracing_subscriber::registry().with(recorded.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(
+                "gateway.request",
+                rolter.org.id = tracing::field::Empty,
+                rolter.team.id = tracing::field::Empty,
+                rolter.project.id = tracing::field::Empty,
+            );
+            let _entered = span.enter();
+            record_tenant("", "", "");
+        });
+
+        assert!(
+            recorded.keys().is_empty(),
+            "nothing recorded, got {:?}",
+            recorded.keys()
+        );
+    }
+
+    /// `tracing` will not accept a constant as a span field name, so the names
+    /// exist twice: here and at the macro call site in `make_span`. This pins
+    /// them together — a rename that misses one fails here rather than
+    /// silently producing a span the collector cannot route.
+    #[test]
+    fn the_tenant_attribute_names_match_the_span_declaration() {
+        assert_eq!(ORG_ID, "rolter.org.id");
+        assert_eq!(TEAM_ID, "rolter.team.id");
+        assert_eq!(PROJECT_ID, "rolter.project.id");
+
+        let declared = include_str!("trace.rs");
+        for name in [ORG_ID, TEAM_ID, PROJECT_ID] {
+            assert!(
+                declared.contains(&format!("{name} = tracing::field::Empty")),
+                "{name} must be declared on the gateway.request span"
+            );
+        }
     }
 
     #[test]

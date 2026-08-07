@@ -21,6 +21,7 @@ import Cluster from "@/pages/Cluster";
 import ComplexityRouter from "@/pages/ComplexityRouter";
 import Compatibility from "@/pages/Compatibility";
 import Config from "@/pages/Config";
+import AccessProfiles from "@/pages/AccessProfiles";
 import Connectors from "@/pages/Connectors";
 import { BusinessUnits, Customers } from "@/pages/CostAttribution";
 import Dashboard from "@/pages/Dashboard";
@@ -64,6 +65,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   dashboard: <Dashboard />,
   logs: <Logs />,
   "mcp-logs": <McpLogs />,
+  "access-profiles": <AccessProfiles />,
   connectors: <Connectors />,
   "model-catalog": <Models />,
   "model-settings": <ModelSettings />,

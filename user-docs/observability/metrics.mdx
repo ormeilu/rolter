@@ -52,7 +52,56 @@ metrics_path = "/internal/metrics"
 
     Total authentication failures — requests that were rejected because the presented virtual key was missing, invalid, disabled, or expired.
   </Accordion>
+
+  <Accordion title="rolter_upstream_connections_total">
+    **Type:** Counter
+
+    Connections established to upstream providers. Every increment is the connection pool failing to find a connection it could reuse.
+
+    Watch the ratio, not the raw number: `rate(rolter_upstream_connections_total[5m]) / rate(rolter_requests_total[5m])`. Near zero means the pool is doing its job. Approaching one means every request is paying a fresh TCP and TLS handshake, which on a cross-region provider is most of your latency — check `pool_idle_timeout` and whether the provider is closing connections between requests.
+  </Accordion>
+
+  <Accordion title="rolter_upstream_connect_errors_total">
+    **Type:** Counter
+
+    Attempts that failed before a connection existed — DNS, TCP, TLS, or a rejection by the egress policy.
+
+    Distinct from `rolter_upstream_errors_total`, which counts providers that answered with an error. A provider you cannot reach and a provider returning 500 need different fixes.
+  </Accordion>
 </AccordionGroup>
+
+### Runtime saturation
+
+<AccordionGroup>
+  <Accordion title="tokio.runtime.queue.depth">
+    **Type:** Gauge (OTLP only)
+
+    Tasks that are runnable and waiting for a worker thread. A sustained non-zero value means requests are queuing inside rolter itself, before any provider is called — which no upstream latency metric will ever show you.
+
+    This is the metric that separates "the provider is slow" from "we are saturated". They look identical in end-to-end latency and have opposite fixes.
+  </Accordion>
+
+  <Accordion title="tokio.runtime.worker.busy.time">
+    **Type:** Counter, seconds (OTLP only)
+
+    Cumulative time runtime workers spent doing work, summed across workers.
+
+    Exported as time rather than a ratio so it re-aggregates correctly: derive utilisation with `rate(tokio.runtime.worker.busy.time) / tokio.runtime.workers`.
+  </Accordion>
+
+  <Accordion title="tokio.runtime.workers / tokio.runtime.tasks.alive">
+    **Type:** Gauge (OTLP only)
+
+    Worker threads in the runtime, and tasks currently alive. `workers` is the denominator for the utilisation calculation above; a steadily climbing `tasks.alive` with flat throughput points at tasks that are never completing.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  The blocking-thread-pool metrics are deliberately absent. They are the part of
+  tokio's metrics surface still gated behind `--cfg tokio_unstable`, which would
+  mean opting every build into an API that can change on a patch release. The
+  metrics above need no such flag.
+</Note>
 
 ### Latency histograms
 
@@ -142,6 +191,7 @@ the default.
 | Kind | Metrics | How |
 |---|---|---|
 | Counters and gauges | every `rolter_*_total`, `rolter_config_version` | observable |
+| Process and runtime | `process.*`, `tokio.runtime.*` | observable, OTLP only |
 | Labelled counters | `rolter_target_requests_total`, `rolter_variant_requests_total`, `rolter_complexity_route_requests_total` | observable |
 | Histograms | `rolter_request_latency_ms`, `rolter_request_ttft_ms` | recorded per request |
 

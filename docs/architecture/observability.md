@@ -17,6 +17,7 @@
 - **Inbound**: accept W3C `traceparent`/`tracestate` (and `b3`) from clients and continue the trace; honor `x-request-id` / `x-correlation-id`.
 - **Outbound to engines**: inject the active trace context into upstream requests so vLLM/SGLang/TGI spans join the **same** distributed trace. vLLM and SGLang support OpenTelemetry tracing (e.g. vLLM `--otlp-traces-endpoint`); point them at the same OTLP collector so engine prefill/decode spans line up with rolter's request span.
 - A per-request `request_id` is echoed in a response header and stamped on logs, metric exemplars and spans for correlation.
+- **Events**: rolter calls no span-event API directly, but `tracing-opentelemetry` turns every `tracing` event fired inside an active span into an OTel span event. That API is deprecated upstream in favour of log-based events; the target model, and the sequencing it forces, are recorded in [ADR-0025](../adr/2026-08-06-events-as-logs.md).
 
 ### How the context actually moves
 
@@ -74,6 +75,31 @@ where they fit, so a backend's built-in GenAI views work.
 Spans never carry prompt or completion content, API keys, virtual-key plaintext,
 or injected header values — those are credential material, and redaction stays
 owned by the existing `logging_settings` machinery rather than a second policy.
+
+### Tenant attributes
+
+The `gateway.request` span carries `rolter.org.id`, `rolter.team.id` and
+`rolter.project.id`, recorded once the virtual key resolves. The span itself is
+built by the tower layer, which runs before auth, so the fields start empty and
+are filled in rather than passed at construction.
+
+These exist so per-tenant telemetry destinations are routable. ADR-0026 decided
+that fan-out to tenant-owned backends belongs in an OpenTelemetry Collector
+rather than in-process exporters — one egress path in the gateway no matter how
+many tenants, and no data-plane process POSTing to operator-supplied URLs — and
+that rolter's job in that design is to *stamp the attribute the collector routes
+on*. Until this landed there was nothing to stamp: the request logs in
+ClickHouse always carried tenant identity, but no exported span ever did, which
+made the routing half unimplementable.
+
+An unattributed request — a config-defined key, which has no org — records
+nothing rather than an empty string. An attribute that is present-but-blank on
+some spans and absent on others is harder to write a routing rule against than
+one that is consistently absent.
+
+The names are deliberately rolter-local. The GenAI and HTTP conventions define
+nothing for tenancy, and a convention-shaped guess like `tenant.id` would be
+worse than an obviously-local name if the spec later defines it differently.
 
 ### Running it locally
 
@@ -171,6 +197,181 @@ provider, exporter or callback is built at all.
 
 Per-model histograms and label-bearing counters stay Prometheus-only for now;
 the scalar set is what OTLP carries.
+
+### Logs over OTLP
+
+Logs export alongside traces and metrics, gated on the same environment
+(`OTEL_EXPORTER_OTLP_ENDPOINT`, or the logs-specific
+`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`). With neither set no exporter is built and
+logging is stdout-only, exactly as before.
+
+It is **additive, not a replacement**: the stdout `fmt` layer is untouched, so
+`docker logs` shows what it always did and the collector additionally receives
+the same records.
+
+Records carry `trace_id` and `span_id`, which is most of the value — a log joins
+the trace it came from instead of being a separate pile of text.
+`tracing-opentelemetry` publishes the OpenTelemetry context when a span is
+entered, and the logs SDK stamps it onto each record. That correlation is
+asserted by a unit test rather than assumed from a dependency default, since it
+would fail silently if the default ever changed.
+
+Redaction is unaffected: this exports the same `tracing` events the stdout layer
+renders, so anything already kept out of logs stays out of them.
+
+### Process metrics
+
+Alongside the domain counters, the process reports its own vitals: resident and
+virtual memory, CPU time, open file descriptors, thread count and uptime. These
+are the numbers an operator reaches for first when a node degrades, and the
+gateway previously answered none of them.
+
+They are observable instruments read from `/proc`, so nothing touches the request
+path. On a platform where `/proc` is unavailable the instruments are **not
+registered at all**, rather than registered and always zero — a metric that reads
+zero forever is worse than an absent one, because a dashboard cannot tell it from
+a healthy process. Names follow the OTel `process.*` conventions.
+
+### Runtime metrics
+
+The process metrics describe the machine; these describe the scheduler.
+`tokio.runtime.queue.depth` is the one that matters: when latency rises, no
+other signal separates "the provider is slow" from "the request sat in our own
+run queue before we ever called the provider", and the two have opposite fixes.
+It pairs directly with the `queue.wait` span. Alongside it are
+`tokio.runtime.workers`, `tokio.runtime.tasks.alive` and
+`tokio.runtime.worker.busy.time`.
+
+Busy *time* is exported, not a busy ratio: a ratio computed in-process would
+average over whatever interval the SDK happens to use and would not re-aggregate
+across instances. As a monotonic counter the backend derives utilisation with
+`rate(tokio.runtime.worker.busy.time) / tokio.runtime.workers`, which does.
+
+None of this requires `--cfg tokio_unstable`. #834 assumed it did, and that is
+true only of part of tokio's surface: `num_workers`, `num_alive_tasks` and
+`global_queue_depth` are stable, and `worker_total_busy_duration` sits behind
+`cfg_64bit_metrics!`, which is `#[cfg(target_has_atomic = "64")]` — a property
+of the target, not an instability gate. What remains genuinely gated is the
+blocking pool and the per-worker steal/poll counters, which are therefore not
+exported; the workspace-wide flag decision stays unmade rather than being
+smuggled in with a telemetry change.
+
+Outside an async runtime the instruments are not registered, for the same reason
+the process metrics are absent without `/proc`.
+
+### Connection-pool metrics
+
+`rolter_upstream_connections_total` and `rolter_upstream_connect_errors_total`
+count connections established to providers, and attempts that never got that
+far.
+
+Pool exhaustion presents as latency with healthy providers — the failure mode
+the other metrics cannot explain. `reqwest` and `hyper` expose no pool
+introspection at all, so this is instrumented rather than read: a tower layer
+over the connector (`ClientBuilder::connector_layer`) sees every connection
+hyper builds because it had none to reuse. The signal is the ratio
+`rate(rolter_upstream_connections_total) / rate(rolter_requests_total)` — near
+zero when the pool is working, approaching one when every request is paying a
+fresh TCP and TLS handshake.
+
+Idle-versus-active counts stay unavailable: that needs the connection object's
+drop, and the connector layer's response type is opaque outside `reqwest`.
+
+### Resource attributes
+
+Every signal carries `service.name`, `service.version` (the crate version), and
+where configured `service.instance.id` and `deployment.environment.name`.
+`OTEL_RESOURCE_ATTRIBUTES` is honoured by the SDK for anything else.
+
+`service.instance.id` deliberately uses the same precedence as the cluster
+watcher — `ROLTER_NODE_ID`, then `HOSTNAME`, then nothing — so a node in
+`cluster_nodes` and a node in the trace backend are the same node by
+construction. When neither is set it is omitted rather than invented per restart,
+which would churn the identity on every deploy.
+
+### Wrapping audit (#815)
+
+OpenTelemetry's [*Don't wrap OpenTelemetry*](https://opentelemetry.io/blog/2026/dont-wrap-opentelemetry/)
+argues that a house abstraction over the instrumentation API costs performance,
+maintainability and developer education. Three anti-patterns are named: wrappers
+that force callers to allocate an attribute collection, wrappers that look an
+instrument up by name per measurement, and general API abstraction that teaches a
+proprietary interface instead of the standard.
+
+rolter has four things sitting between its code and the OTel API. Each was
+audited against that post; the verdict is **keep** for all four, for the reasons
+below. The post is guidance rather than a mandate, and it asks for a refactor
+only where there is a measured cost or a real maintenance burden.
+
+Note up front that rolter instruments through `tracing` + `tracing-opentelemetry`.
+That is the ecosystem bridge, not a bespoke house wrapper, and it is not what the
+post argues against. This audit is not a proposal to remove `tracing`.
+
+| Item | Verdict | Why |
+|---|---|---|
+| `stage_span!` (`rolter-core/src/telemetry.rs`) | keep | code generation, not a runtime wrapper |
+| The scalar-metrics list (`Metrics::scalars()`) | keep | the by-name lookup is on the export path, not the request path |
+| `RequestHistograms::record` | keep | one unavoidable allocation; the alternative is the anti-pattern |
+| `GatewayMakeSpan` (`rolter-gateway/src/trace.rs`) | keep | SDK/layer configuration, explicitly out of scope |
+
+**`stage_span!`** expands to a direct `tracing::info_span!` call guarded by an
+`is_active()` check, so it is closer to the code generation the post recommends
+than to a runtime wrapper. It takes `tracing`'s own compile-time field syntax and
+never asks a caller to build a `Vec` or a slice of attributes, so the
+force-allocation anti-pattern does not apply. The guard is the point of the
+macro: with no pipeline installed it yields `Span::none()`, which allocates
+nothing.
+
+**The scalar-metrics list** is the shape most at risk, since `install_metrics`
+registers one observable instrument per scalar and each instrument's callback
+calls `collect()` and finds its own entry by name. That is a by-name lookup, but
+it is not on a hot path: the instruments are *observable*, so the SDK invokes
+those callbacks on its own export interval (`OTEL_METRIC_EXPORT_INTERVAL`,
+default 60s). The request path only ever does `fetch_add` on a named `AtomicU64`
+field — there is no map, no lookup and no lock between a request and its counter.
+The post's performance argument therefore does not bite here even though the
+gateway hot path is where it would bite hardest.
+
+What the export path does cost is one `Vec<ScalarMetric>` allocation per
+instrument per cycle and a linear scan of it, so the work is quadratic in the
+number of scalars. At the current eight scalars, once a minute, that is
+immaterial. It is left as-is deliberately: the OTel Rust 0.32 API offers only
+per-instrument `with_callback`, so collecting once per cycle for all instruments
+is not expressible, and matching by name rather than by index keeps the callbacks
+independent of the order `scalars()` happens to return.
+
+**`RequestHistograms::record`** is the one place a wrapper does force an
+allocation on the request path — `model.to_string()`, to build the single
+`KeyValue` both histograms take. It is unavoidable rather than incidental: OTel's
+`Value::String` holds an owned or `'static` string and model names are neither.
+The obvious way to avoid it is to cache a prebuilt attribute set per model, which
+would put a sharded-lock map lookup on the request path — precisely the
+lookup-based anti-pattern the post names, and something AGENTS.md forbids on the
+data-plane hot path. One small allocation is the cheaper of the two, and it is
+paid only when an OTLP endpoint is configured.
+
+**`GatewayMakeSpan`** is a `tower_http::trace::MakeSpan` implementation: layer
+configuration, which the post explicitly separates from instrumentation and calls
+*not* wrapping. Recorded here only so the audit is complete.
+
+### Turning telemetry off explicitly
+
+`ROLTER_TELEMETRY_ENABLED=false` hard-disables every export — traces, metrics and
+the dashboard's browser tracing — regardless of which `OTEL_*` endpoints are set
+(#812). Unset means enabled, which changes nothing for an existing deployment:
+with no endpoint configured nothing is exported anyway.
+
+The switch can only *subtract*. It never turns export on by itself, and an
+unrecognized value leaves export on rather than silently blinding a deployment;
+only `0`, `false`, `no` and `off` disable it.
+
+It exists because "off" was previously implicit — achieved by leaving an endpoint
+unset — which does not survive somebody setting the endpoint for one signal and
+gives an operator nothing to point at in a security review. It is deliberately
+environment-only and has no config-file equivalent; see
+[ADR-0026](../adr/2026-08-06-tenant-telemetry-destinations.md), which also
+records why per-tenant telemetry destinations belong in the collector rather than
+in rolter.
 
 ### Cost when tracing is off
 

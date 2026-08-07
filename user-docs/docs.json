@@ -93,7 +93,8 @@
               "observability/logs-and-cost",
               "observability/tracing",
               "observability/what-to-look-at",
-              "observability/log-settings"
+              "observability/log-settings",
+              "observability/connectors"
             ]
           },
           {

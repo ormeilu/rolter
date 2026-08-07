@@ -28,6 +28,9 @@ mod cluster;
 #[cfg(feature = "postgres")]
 mod compatibility_policy;
 #[cfg(feature = "postgres")]
+mod connectors;
+mod cors;
+#[cfg(feature = "postgres")]
 mod crud;
 #[cfg(feature = "postgres")]
 mod feature_flags;
@@ -233,6 +236,10 @@ struct ControlState {
     /// needs direct repository access beyond what `ConfigStore` exposes
     #[cfg(feature = "postgres")]
     pool: Option<sqlx::PgPool>,
+    /// live cross-origin policy from `security_settings` (#813), swapped on
+    /// every settings write so an edit applies without a restart. Empty by
+    /// default, which is the same-origin deployment and adds no headers
+    cors: Arc<arc_swap::ArcSwap<cors::CorsPolicy>>,
 }
 
 /// Run the control plane to completion. The caller owns argument parsing and
@@ -324,6 +331,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         internal_token,
         http,
         gateway_url,
+        cors: Arc::default(),
         pool: pool.clone(),
     };
     #[cfg(not(feature = "postgres"))]
@@ -338,6 +346,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         internal_token,
         http,
         gateway_url,
+        cors: Arc::default(),
     };
 
     // converge the clickhouse ttl with the stored retention policy. spawned
@@ -349,6 +358,13 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         tokio::spawn(async move { logging_settings::reconcile_retention(&state).await });
     }
 
+    // load the cross-origin policy before the listener opens rather than in a
+    // task: a split-origin dashboard hitting a control plane that has not read
+    // its own settings yet would be refused, which looks exactly like the
+    // misconfiguration this feature exists to fix (#813)
+    #[cfg(feature = "postgres")]
+    cors::refresh(&state).await;
+
     // when the operator gave /internal/* its own socket, it is not mounted on
     // the public router at all — the plaintext-credential channel is absent
     // from that surface rather than merely gated on it
@@ -356,8 +372,20 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     // the dashboard is built ahead of time, so per-deployment values are
     // injected into its html on the way out rather than baked in at build
     // time. rendered once: none of it can change without a restart
+    // one kill switch covers every signal, the dashboard's browser tracing
+    // included (#812): a deployment that turned telemetry off must not have the
+    // SPA quietly shipping spans to a collector from the user's machine
+    let telemetry_enabled = rolter_core::telemetry::export_enabled();
+    if !telemetry_enabled {
+        tracing::info!(
+            "{} is off; no telemetry is exported",
+            rolter_core::telemetry::TELEMETRY_ENABLED_ENV
+        );
+    }
     let ui_runtime = ui_config::UiRuntimeConfig {
-        otel_endpoint: args.ui_otel_endpoint.clone(),
+        otel_endpoint: telemetry_enabled
+            .then(|| args.ui_otel_endpoint.clone())
+            .flatten(),
         otel_service_name: args.ui_otel_service_name.clone(),
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
     };
@@ -496,13 +524,22 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(scim_groups::router())
             .merge(sso::router())
             .merge(cluster::router())
+            .merge(connectors::router())
             .merge(security::router());
     }
 
     if mount_internal {
         api = api.merge(internal_routes(&state));
     }
-    api.with_state(state)
+    // the cross-origin policy wraps everything, including the internal routes
+    // and the SPA fallback, because a browser that is denied the API must be
+    // denied it uniformly. it is inert until an operator configures an origin
+    // (#813)
+    api.layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        cors::apply_cors,
+    ))
+    .with_state(state)
 }
 
 /// The control↔data-plane routes. They carry decrypted provider credentials,
@@ -592,6 +629,7 @@ pub async fn test_app_with_admin_token(
         internal_token: None,
         http: reqwest::Client::new(),
         gateway_url: Arc::new("http://localhost:4000".to_string()),
+        cors: Arc::default(),
         pool: Some(pool),
     };
     Ok(build_app_with(state, true))
@@ -982,6 +1020,10 @@ async fn get_snapshot(
     headers: axum::http::HeaderMap,
     Query(query): Query<SnapshotQuery>,
 ) -> Response {
+    // snapshot generation is fleet-wide propagation delay: every gateway waits
+    // on it for its config, and until #809 it was invisible. the stage span
+    // costs nothing when no OTLP pipeline is installed
+    let _span = rolter_core::stage_span!("snapshot.build");
     // a node that identifies itself is recorded in the cluster inventory; the
     // poll it already makes is the heartbeat, so there is no second channel
     #[cfg(feature = "postgres")]
@@ -1007,6 +1049,7 @@ async fn get_snapshot(
             // prune rows that are only unservable by themselves (a route whose
             // targets aren't set up yet) so one half-built entry can't 500 the
             // snapshot and freeze config propagation for every other tenant
+            let _load = rolter_core::stage_span!("snapshot.sanitize");
             let omitted = config.sanitize_for_snapshot();
             if !omitted.is_empty() {
                 tracing::warn!(
@@ -1169,6 +1212,7 @@ mod tests {
             internal_token: internal.map(|t| Arc::new(t.to_string())),
             http: reqwest::Client::new(),
             gateway_url: Arc::new("http://localhost:4000".to_string()),
+            cors: Arc::default(),
             #[cfg(feature = "postgres")]
             pool: None,
         }
@@ -1304,6 +1348,7 @@ mod tests {
 
         let state = ControlState {
             gateway_url: Arc::new(format!("http://{up_addr}")),
+            cors: Arc::default(),
             ..state_with_token(None)
         };
         let addr = serve(build_app_with(state, true)).await;
@@ -1377,5 +1422,105 @@ mod tests {
             !body.contains("sk-super-secret") && !body.contains("sk-also-secret"),
             "config endpoint must not leak provider keys: {body}"
         );
+    }
+
+    /// The #813 regression: an operator saves an origin and it must actually
+    /// take effect, end to end through the real router.
+    #[tokio::test]
+    async fn a_configured_origin_gets_cors_headers_and_others_do_not() {
+        let state = state_with_token(None);
+        state.cors.store(Arc::new(cors::CorsPolicy::new(
+            &["https://dash.example.com".to_string()],
+            &["x-tenant".to_string()],
+        )));
+        let addr = serve(build_app_with(state, false)).await;
+        let client = reqwest::Client::new();
+        let url = format!("http://{addr}/api/v1/ping");
+
+        let allowed = client
+            .get(&url)
+            .header("origin", "https://dash.example.com")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            allowed
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("https://dash.example.com")
+        );
+        // Vary must be set so a shared cache cannot serve one origin's answer
+        // to another
+        assert!(allowed
+            .headers()
+            .get("vary")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.to_ascii_lowercase().contains("origin")));
+
+        let denied = client
+            .get(&url)
+            .header("origin", "https://evil.example.com")
+            .send()
+            .await
+            .unwrap();
+        assert!(denied
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+        // still served, just not readable cross-origin — the browser enforces it
+        assert_eq!(denied.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn a_preflight_is_answered_with_the_configured_and_trace_headers() {
+        let state = state_with_token(None);
+        state.cors.store(Arc::new(cors::CorsPolicy::new(
+            &["https://dash.example.com".to_string()],
+            &["x-tenant".to_string()],
+        )));
+        let addr = serve(build_app_with(state, false)).await;
+
+        let response = reqwest::Client::new()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("http://{addr}/api/v1/ping"),
+            )
+            .header("origin", "https://dash.example.com")
+            .header("access-control-request-method", "GET")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 204);
+        let allow = response
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        // #805: without these the dashboard's spans cannot join the gateway's
+        assert!(allow.contains("traceparent"), "got: {allow}");
+        assert!(allow.contains("tracestate"), "got: {allow}");
+        assert!(allow.contains("x-tenant"), "got: {allow}");
+    }
+
+    #[tokio::test]
+    async fn the_default_deployment_is_untouched_by_cors() {
+        // no origins configured is the same-origin deployment everyone runs; it
+        // must behave exactly as it did before the middleware existed
+        let addr = serve(build_app_with(state_with_token(None), false)).await;
+        let response = reqwest::Client::new()
+            .get(format!("http://{addr}/api/v1/ping"))
+            .header("origin", "https://dash.example.com")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert!(response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+        assert!(response.headers().get("vary").is_none());
     }
 }
