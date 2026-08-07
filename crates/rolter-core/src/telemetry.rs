@@ -116,6 +116,40 @@ fn is_hex(s: &str) -> bool {
     s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// Environment variable that hard-disables every telemetry export.
+pub const TELEMETRY_ENABLED_ENV: &str = "ROLTER_TELEMETRY_ENABLED";
+
+/// Whether telemetry export is permitted at all (#812).
+///
+/// Returns `false` only when [`TELEMETRY_ENABLED_ENV`] is set to an explicit
+/// falsy value. Unset means enabled, so an existing deployment is unaffected —
+/// "off" remains the default in practice because nothing is exported until an
+/// OTLP endpoint is configured.
+///
+/// This is a *kill switch*, not a second way to turn telemetry on: it can only
+/// subtract. When false, no exporter is built regardless of which `OTEL_*`
+/// endpoints are set, which is the point — "off" was previously implicit
+/// (achieved by leaving an endpoint unset), so it did not survive somebody
+/// setting the endpoint for one signal and there was nothing to point at in a
+/// security review.
+///
+/// Deliberately environment-only rather than a config-file key. `init` installs
+/// the subscriber in `main` before any config file is read, so a config-file
+/// switch could not gate trace export at all, and honouring it only for the
+/// signals initialized later would mean the same key meant different things
+/// depending on which signal you asked about. The `OTEL_*` contract this
+/// composes with is environment-based for the same reason.
+#[must_use]
+pub fn export_enabled() -> bool {
+    match std::env::var(TELEMETRY_ENABLED_ENV) {
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
+}
+
 /// Guard returned by [`init`]; holds the OTLP tracer provider (when configured)
 /// so spans are flushed to the collector on process exit.
 ///
@@ -644,6 +678,68 @@ struct HeaderSink(Vec<(String, String)>);
 impl opentelemetry::propagation::Injector for HeaderSink {
     fn set(&mut self, key: &str, value: String) {
         self.0.push((key.to_string(), value));
+    }
+}
+
+#[cfg(test)]
+mod kill_switch_tests {
+    use super::*;
+
+    /// `export_enabled` reads process-global env, so the cases that set it must
+    /// not interleave with each other or with the pipeline tests.
+    fn with_env(value: Option<&str>, f: impl FnOnce()) {
+        let _guard = super::pipeline_test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        match value {
+            Some(v) => std::env::set_var(TELEMETRY_ENABLED_ENV, v),
+            None => std::env::remove_var(TELEMETRY_ENABLED_ENV),
+        }
+        f();
+        std::env::remove_var(TELEMETRY_ENABLED_ENV);
+    }
+
+    #[test]
+    fn unset_means_enabled_so_an_existing_deployment_is_unaffected() {
+        with_env(None, || assert!(export_enabled()));
+    }
+
+    #[test]
+    fn every_falsy_spelling_disables_export() {
+        for value in ["0", "false", "FALSE", "no", "off", " Off "] {
+            with_env(Some(value), || {
+                assert!(!export_enabled(), "{value} should disable export");
+            });
+        }
+    }
+
+    #[test]
+    fn truthy_and_unrecognized_values_leave_export_on() {
+        // the switch can only subtract: it is not a second way to turn export
+        // on, and an unparsable value must not silently blind a deployment
+        for value in ["1", "true", "yes", "on", "maybe", ""] {
+            with_env(Some(value), || {
+                assert!(export_enabled(), "{value} should leave export on");
+            });
+        }
+    }
+
+    #[cfg(feature = "otlp")]
+    #[test]
+    fn the_switch_beats_a_configured_endpoint() {
+        // the whole point of #812: "off" must not depend on remembering to
+        // leave every per-signal endpoint unset
+        let _guard = super::pipeline_test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4317");
+        std::env::set_var(TELEMETRY_ENABLED_ENV, "false");
+
+        assert!(super::otlp::try_build_provider().is_none());
+        assert!(super::otlp::try_build_meter_provider().is_none());
+
+        std::env::remove_var(TELEMETRY_ENABLED_ENV);
+        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
     }
 }
 
@@ -1307,6 +1403,10 @@ mod otlp {
     /// HTTP/protobuf, `OTEL_EXPORTER_OTLP_HEADERS` carries backend auth, and
     /// `OTEL_SERVICE_NAME` names the service (default `rolter`).
     pub fn try_build_provider() -> Option<SdkTracerProvider> {
+        // the kill switch wins over every endpoint setting (#812)
+        if !super::export_enabled() {
+            return None;
+        }
         // only wire the exporter when an endpoint is set; keeps the default path
         // (no env) allocation- and network-free
         if std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").is_none()
@@ -1344,6 +1444,10 @@ mod otlp {
     /// Build an OTLP meter provider from the same `OTEL_*` environment the
     /// tracer uses, or `None` when no endpoint is configured.
     pub fn try_build_meter_provider() -> Option<opentelemetry_sdk::metrics::SdkMeterProvider> {
+        // one switch covers every signal, so metrics go quiet with traces (#812)
+        if !super::export_enabled() {
+            return None;
+        }
         if std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").is_none()
             && std::env::var_os("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT").is_none()
         {

@@ -372,8 +372,20 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     // the dashboard is built ahead of time, so per-deployment values are
     // injected into its html on the way out rather than baked in at build
     // time. rendered once: none of it can change without a restart
+    // one kill switch covers every signal, the dashboard's browser tracing
+    // included (#812): a deployment that turned telemetry off must not have the
+    // SPA quietly shipping spans to a collector from the user's machine
+    let telemetry_enabled = rolter_core::telemetry::export_enabled();
+    if !telemetry_enabled {
+        tracing::info!(
+            "{} is off; no telemetry is exported",
+            rolter_core::telemetry::TELEMETRY_ENABLED_ENV
+        );
+    }
     let ui_runtime = ui_config::UiRuntimeConfig {
-        otel_endpoint: args.ui_otel_endpoint.clone(),
+        otel_endpoint: telemetry_enabled
+            .then(|| args.ui_otel_endpoint.clone())
+            .flatten(),
         otel_service_name: args.ui_otel_service_name.clone(),
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
     };
