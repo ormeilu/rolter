@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Check, ShieldCheck } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchConfig } from "@/lib/api";
