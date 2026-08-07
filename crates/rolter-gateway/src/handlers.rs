@@ -1137,6 +1137,9 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         scope.team.clone(),
         scope.project.clone(),
     );
+    // the trace backend needs the same tenant identity the request log carries,
+    // so a collector can route this org's spans to this org's destination (#836)
+    crate::trace::record_tenant(&org_id, &team_id, &project_id);
     // governance dimensions the key's spend rolls up to (#539)
     let (business_unit_id, customer_id) = key_attribution(vk.as_ref());
     // records this request's tokens against its rate limits once usage is known
@@ -1953,6 +1956,9 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
         scope.team.clone(),
         scope.project.clone(),
     );
+    // the trace backend needs the same tenant identity the request log carries,
+    // so a collector can route this org's spans to this org's destination (#836)
+    crate::trace::record_tenant(&org_id, &team_id, &project_id);
     let (business_unit_id, customer_id) = key_attribution(vk.as_ref());
     let token_recorder = TokenRecorder::new(
         state.rate_limiter.clone(),

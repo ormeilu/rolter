@@ -313,6 +313,22 @@ impl Metrics {
                 help: "upstream request failures",
                 value: self.upstream_errors_total.load(Relaxed),
             },
+            // read from process-global counters in rolter-proxy rather than
+            // fields here: the connector that increments them lives inside the
+            // pooled reqwest client, which has no handle to this struct. one
+            // gateway owns one forwarder, so a global is the same scope (#834)
+            Scalar {
+                kind: "counter",
+                name: "rolter_upstream_connections_total",
+                help: "connections established to upstream providers",
+                value: rolter_proxy::pool::connections_total(),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_upstream_connect_errors_total",
+                help: "failed attempts to connect to an upstream provider",
+                value: rolter_proxy::pool::connect_errors_total(),
+            },
             Scalar {
                 kind: "counter",
                 name: "rolter_auth_failures_total",

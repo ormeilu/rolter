@@ -18,6 +18,20 @@ receivers:
         endpoint: 0.0.0.0:4317
       http:
         endpoint: 0.0.0.0:4318
+  # host-level metrics, so a local investigation can tell "rolter is slow" from
+  # "the laptop is saturated" (#809). the collector runs in a container, so the
+  # host's /proc is bind-mounted read-only and root_path points at it; without
+  # that it would report the container's own resource view, not the machine's
+  hostmetrics:
+    collection_interval: 30s
+    root_path: /hostfs
+    scrapers:
+      cpu:
+      load:
+      memory:
+      disk:
+      filesystem:
+      network:
   prometheus:
     config:
       global:
@@ -108,6 +122,10 @@ service:
       exporters: [clickhousetraces, metadataexporter, signozmeter]
     metrics:
       receivers: [otlp]
+      processors: [batch]
+      exporters: [signozclickhousemetrics, metadataexporter, signozmeter]
+    metrics/hostmetrics:
+      receivers: [hostmetrics]
       processors: [batch]
       exporters: [signozclickhousemetrics, metadataexporter, signozmeter]
     metrics/prometheus:
