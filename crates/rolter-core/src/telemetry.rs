@@ -608,7 +608,7 @@ mod kill_switch_tests {
     #[test]
     fn truthy_and_unrecognized_values_leave_export_on() {
         // the switch can only subtract: it is not a second way to turn export
-        // on, and an unparseable value must not silently blind a deployment
+        // on, and an unparsable value must not silently blind a deployment
         for value in ["1", "true", "yes", "on", "maybe", ""] {
             with_env(Some(value), || {
                 assert!(export_enabled(), "{value} should leave export on");
