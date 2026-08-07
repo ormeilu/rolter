@@ -16,6 +16,9 @@ dashmap.workspace = true
 futures-util.workspace = true
 arc-swap.workspace = true
 tracing.workspace = true
+# a connector-level tower layer is the only place hyper's connection pool is
+# observable from outside; see `pool` in lib.rs (#834)
+tower.workspace = true
 
 [dev-dependencies]
 tokio-rustls = { version = "0.26", default-features = false, features = [

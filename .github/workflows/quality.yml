@@ -272,12 +272,13 @@ jobs:
 
   # ── storybook: build + play/interaction tests (headless chromium) ───────────
   # builds the static Storybook and runs the interaction (play) tests via the
-  # test-runner against it. informational until its baseline is trusted (ROL-124
-  # promotion path); the heavy step is the one-off chromium download.
+  # test-runner against it. a merge gate since #753 — every screen ships stories
+  # for loaded/loading/empty/error plus play tests, so a regression here is a
+  # real one. the heavy step is the one-off chromium download; the tests
+  # themselves are seconds.
   storybook:
-    name: storybook build + play tests (informational)
+    name: storybook build + play tests
     runs-on: ubuntu-latest
-    continue-on-error: true
     defaults:
       run:
         working-directory: ui

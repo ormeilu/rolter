@@ -457,6 +457,107 @@ export interface CustomerRow {
   created_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// access profiles (#534 / #830): reusable permission bundles handed to users or
+// whole teams. the merged model/route policy they carry is enforced on the
+// gateway, not just reported — see ADR-0023
+
+export interface AccessProfileRow {
+  id: string;
+  org_id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AccessProfilePolicy {
+  profile_id: string;
+  allowed_models: string[];
+  denied_models: string[];
+  allowed_routes: string[];
+  denied_routes: string[];
+  updated_at: string;
+}
+
+export interface AccessProfileAssignmentRow {
+  id: string;
+  profile_id: string;
+  user_id: string | null;
+  team_id: string | null;
+  created_at: string;
+}
+
+export function fetchAccessProfiles(orgId: string): Promise<AccessProfileRow[]> {
+  return getJson<AccessProfileRow[]>(`/api/v1/orgs/${orgId}/access-profiles`);
+}
+
+export function createAccessProfile(
+  orgId: string,
+  input: { name: string; slug?: string; description?: string | null },
+): Promise<AccessProfileRow> {
+  return sendJson<AccessProfileRow>(
+    "POST",
+    `/api/v1/orgs/${orgId}/access-profiles`,
+    input,
+  );
+}
+
+export function updateAccessProfile(
+  id: string,
+  input: { name?: string; description?: string | null },
+): Promise<AccessProfileRow> {
+  return sendJson<AccessProfileRow>("PUT", `/api/v1/access-profiles/${id}`, input);
+}
+
+export function deleteAccessProfile(id: string): Promise<void> {
+  return sendJson<void>("DELETE", `/api/v1/access-profiles/${id}`);
+}
+
+export function fetchAccessProfileAssignments(
+  id: string,
+): Promise<AccessProfileAssignmentRow[]> {
+  return getJson<AccessProfileAssignmentRow[]>(
+    `/api/v1/access-profiles/${id}/assignments`,
+  );
+}
+
+// exactly one of user_id / team_id is set; a team assignment reaches every
+// member, which is the point of a profile over a direct grant
+export function createAccessProfileAssignment(
+  id: string,
+  input: { user_id?: string; team_id?: string },
+): Promise<AccessProfileAssignmentRow> {
+  return sendJson<AccessProfileAssignmentRow>(
+    "POST",
+    `/api/v1/access-profiles/${id}/assignments`,
+    input,
+  );
+}
+
+export function deleteAccessProfileAssignment(id: string): Promise<void> {
+  return sendJson<void>("DELETE", `/api/v1/access-profile-assignments/${id}`);
+}
+
+// an empty allow-list means "no restriction"; deny beats allow. entries are
+// exact names or a trailing-* prefix glob
+export function setAccessProfilePolicy(
+  id: string,
+  policy: {
+    allowed_models: string[];
+    denied_models: string[];
+    allowed_routes: string[];
+    denied_routes: string[];
+  },
+): Promise<AccessProfilePolicy> {
+  return sendJson<AccessProfilePolicy>(
+    "PUT",
+    `/api/v1/access-profiles/${id}/policy`,
+    policy,
+  );
+}
+
 export function fetchBusinessUnits(orgId: string): Promise<BusinessUnitRow[]> {
   return getJson<BusinessUnitRow[]>(`/api/v1/orgs/${orgId}/business-units`);
 }
