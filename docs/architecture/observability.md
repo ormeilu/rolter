@@ -17,6 +17,7 @@
 - **Inbound**: accept W3C `traceparent`/`tracestate` (and `b3`) from clients and continue the trace; honor `x-request-id` / `x-correlation-id`.
 - **Outbound to engines**: inject the active trace context into upstream requests so vLLM/SGLang/TGI spans join the **same** distributed trace. vLLM and SGLang support OpenTelemetry tracing (e.g. vLLM `--otlp-traces-endpoint`); point them at the same OTLP collector so engine prefill/decode spans line up with rolter's request span.
 - A per-request `request_id` is echoed in a response header and stamped on logs, metric exemplars and spans for correlation.
+- **Events**: rolter calls no span-event API directly, but `tracing-opentelemetry` turns every `tracing` event fired inside an active span into an OTel span event. That API is deprecated upstream in favour of log-based events; the target model, and the sequencing it forces, are recorded in [ADR-0025](../adr/2026-08-06-events-as-logs.md).
 
 ### How the context actually moves
 
