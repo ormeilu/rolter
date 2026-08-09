@@ -33,3 +33,7 @@ To solve this, we can pre-collect all the keys required into a `Vec<String>`, pe
 ## 2026-08-04 - Avoiding intermediate string buffers and joining
 **Learning:** During JSON-to-JSON request translation (like in `openai_to_interactions`), pushing concatenated string output into a `Vec<String>` and calling `.join("\\n")` later incurs unnecessary string allocations and an intermediate collection.
 **Action:** Accumulate string output directly into a single `String::new()` via `.push_str()` inside the translation loop, managing separators manually.
+
+## 2024-05-18 - Avoid Intermediate Vec Allocations in String Joins
+**Learning:** In Rust, building strings from iterators using `.collect::<Vec<_>>().join(sep)` allocates an intermediate `Vec`, which incurs unnecessary heap allocations and double iteration over the elements. This is especially impactful in tight loops or string heavy operations (like formatting metric payloads or SQL lists).
+**Action:** Replace this anti-pattern with `iter().fold(String::new(), ...)` or by manually pre-allocating a `String` buffer (using `String::with_capacity`) and `.push_str()` iteratively. This iterates over the items only once and avoids the intermediate array allocation.

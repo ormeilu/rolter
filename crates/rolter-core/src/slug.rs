@@ -37,8 +37,13 @@ pub fn slugify(name: &str) -> String {
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
+        .fold(String::new(), |mut acc, s| {
+            if !acc.is_empty() {
+                acc.push('-');
+            }
+            acc.push_str(s);
+            acc
+        });
     collapsed.chars().take(SLUG_MAX_LEN).collect()
 }
 

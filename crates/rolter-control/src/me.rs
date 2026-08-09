@@ -177,11 +177,14 @@ async fn my_usage(
         return Json(serde_json::json!({ "data": [] })).into_response();
     }
 
-    let in_list = keys
-        .iter()
-        .map(|k| format!("'{}'", k.id))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let in_list = keys.iter().fold(String::new(), |mut acc, k| {
+        if !acc.is_empty() {
+            acc.push_str(", ");
+        }
+        use std::fmt::Write;
+        let _ = write!(acc, "\'{}\'", k.id);
+        acc
+    });
     let sql = format!(
         "select toString(virtual_key_id) as virtual_key_id, \
                 count() as requests, \

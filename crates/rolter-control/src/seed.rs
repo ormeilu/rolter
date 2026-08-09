@@ -108,8 +108,13 @@ fn slugify(name: &str) -> String {
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
+        .fold(String::new(), |mut acc, s| {
+            if !acc.is_empty() {
+                acc.push('-');
+            }
+            acc.push_str(s);
+            acc
+        })
 }
 
 /// Create a superadmin user; returns `true` when a new row was inserted and
