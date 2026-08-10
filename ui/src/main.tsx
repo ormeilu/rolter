@@ -1,12 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter } from "react-router";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 
 import App from "@/App";
 import { AuthProvider } from "@/lib/auth";
+// initialises i18next as a side effect: the detected locale is applied before
+// the first render, so nothing flashes english on the way to another language
+import "@/lib/i18n";
 import { initTelemetry } from "@/lib/telemetry";
 import "@/index.css";
 
