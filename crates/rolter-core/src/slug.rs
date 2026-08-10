@@ -30,21 +30,31 @@ pub fn is_valid_slug(s: &str) -> bool {
 /// contains at least one ascii alphanumeric; otherwise it returns an empty
 /// string and the caller must supply an explicit slug.
 pub fn slugify(name: &str) -> String {
-    let collapsed = name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .fold(String::new(), |mut acc, s| {
-            if !acc.is_empty() {
-                acc.push('-');
+    let mut out = String::with_capacity(name.len().min(SLUG_MAX_LEN));
+    let mut last_was_dash = true;
+
+    for c in name.chars() {
+        for lower_c in c.to_lowercase() {
+            if lower_c.is_ascii_alphanumeric() {
+                if out.len() >= SLUG_MAX_LEN {
+                    return out;
+                }
+                out.push(lower_c);
+                last_was_dash = false;
+            } else if !last_was_dash {
+                if out.len() >= SLUG_MAX_LEN {
+                    return out;
+                }
+                out.push('-');
+                last_was_dash = true;
             }
-            acc.push_str(s);
-            acc
-        });
-    collapsed.chars().take(SLUG_MAX_LEN).collect()
+        }
+    }
+
+    if out.ends_with('-') {
+        out.pop();
+    }
+    out
 }
 
 #[cfg(test)]
@@ -78,6 +88,7 @@ mod tests {
         assert_eq!(slugify("  multi  space "), "multi-space");
         assert_eq!(slugify("trailing-"), "trailing");
         assert_eq!(slugify("非ascii"), "ascii");
+        assert_eq!(slugify("Kelvin"), "kelvin");
     }
 
     #[test]
