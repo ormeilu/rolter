@@ -263,7 +263,7 @@ export default function ClientSettings() {
               <button
                 type="button"
                 aria-label={`Remove injected header ${i + 1}`}
-                className="flex h-8 w-8 flex-none items-center justify-center rounded-md text-[color:var(--text-subtle)] transition-colors hover:text-[color:var(--status-danger)]"
+                className="flex h-8 w-8 flex-none items-center justify-center rounded-md text-[color:var(--text-subtle)] transition-colors hover:text-[color:var(--status-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 onClick={() =>
                   set({ injected: form.injected.filter((r) => r.id !== row.id) })
                 }
@@ -335,7 +335,7 @@ function Snippet({ base }: { base: string }) {
       <button
         type="button"
         aria-label="Copy example request"
-        className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-md text-[color:var(--text-subtle)] transition-colors hover:text-foreground"
+        className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-md text-[color:var(--text-subtle)] transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         onClick={() => {
           // clipboard access is denied in some embedded contexts; the snippet
           // is selectable either way, so a failure needs no error surface
