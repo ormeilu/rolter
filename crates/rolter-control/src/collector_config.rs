@@ -28,6 +28,7 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{http::header, http::StatusCode, Router};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use rolter_core::Error;
@@ -149,6 +150,35 @@ fn slugify(name: &str) -> String {
         .collect()
 }
 
+/// Assign each connector a slug unique within the document. `name` is unique
+/// in the table but [`slugify`] is lossy — "My Sink" and "my/sink" both reduce
+/// to `my-sink` — and two identical slugs would emit duplicate YAML keys, so
+/// the collector would silently keep only the last and drop a tenant's export
+/// entirely. Collisions get a numeric suffix instead.
+fn unique_slugs(connectors: &[ConnectorRow]) -> Vec<String> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut slugs = Vec::with_capacity(connectors.len());
+    for row in connectors {
+        let base = slugify(&row.name);
+        let count = seen.entry(base.clone()).or_insert(0);
+        *count += 1;
+        slugs.push(if *count == 1 {
+            base
+        } else {
+            format!("{base}-{count}")
+        });
+    }
+    slugs
+}
+
+/// Escape a string for a double-quoted YAML scalar. Endpoints and managed
+/// secrets are operator-supplied, so a stray quote or backslash would
+/// otherwise emit a document the collector cannot parse.
+fn yaml_quote(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
 fn resolve_auth(row: &ConnectorRow, kek: Option<&Kek>) -> Auth {
     if let (Some(ct), Some(nonce)) = (&row.auth_ciphertext, &row.auth_nonce) {
         if let Some(kek) = kek {
@@ -175,6 +205,7 @@ fn resolve_auth(row: &ConnectorRow, kek: Option<&Kek>) -> Auth {
 /// can be asserted without a live pool or a running server.
 fn render_yaml(connectors: &[ConnectorRow], kek: Option<&Kek>) -> String {
     let mut out = String::new();
+    let slugs = unique_slugs(connectors);
     let _ = writeln!(
         out,
         "# rendered by rolter (GET /api/v1/connectors/collector-config); do not edit by hand"
@@ -193,9 +224,8 @@ fn render_yaml(connectors: &[ConnectorRow], kek: Option<&Kek>) -> String {
     let _ = writeln!(out, "    check_interval: 1s");
     let _ = writeln!(out, "    limit_mib: 256");
     let _ = writeln!(out, "  batch:");
-    for row in connectors {
+    for (row, slug) in connectors.iter().zip(&slugs) {
         if row.sampling_rate < 1.0 {
-            let slug = slugify(&row.name);
             let _ = writeln!(out, "  probabilistic_sampler/{slug}:");
             let _ = writeln!(
                 out,
@@ -207,8 +237,7 @@ fn render_yaml(connectors: &[ConnectorRow], kek: Option<&Kek>) -> String {
     let _ = writeln!(out);
 
     let _ = writeln!(out, "exporters:");
-    for row in connectors {
-        let slug = slugify(&row.name);
+    for (row, slug) in connectors.iter().zip(&slugs) {
         // kind is a check-constrained column; a value this build does not know
         // how to export is left undeployed rather than rendered as a broken
         // exporter block a collector would refuse to start on
@@ -216,11 +245,15 @@ fn render_yaml(connectors: &[ConnectorRow], kek: Option<&Kek>) -> String {
             continue;
         }
         let _ = writeln!(out, "  otlphttp/{slug}:");
-        let _ = writeln!(out, "    endpoint: {}", row.endpoint);
+        let _ = writeln!(out, "    endpoint: {}", yaml_quote(&row.endpoint));
         match resolve_auth(row, kek) {
             Auth::Bearer(token) => {
                 let _ = writeln!(out, "    headers:");
-                let _ = writeln!(out, "      Authorization: \"Bearer {token}\"");
+                let _ = writeln!(
+                    out,
+                    "      Authorization: {}",
+                    yaml_quote(&format!("Bearer {token}"))
+                );
             }
             Auth::EnvPlaceholder(env_name) => {
                 let _ = writeln!(out, "    headers:");
@@ -237,11 +270,10 @@ fn render_yaml(connectors: &[ConnectorRow], kek: Option<&Kek>) -> String {
     let _ = writeln!(out, "service:");
     let _ = writeln!(out, "  pipelines:");
     for signal in ["traces", "metrics", "logs"] {
-        for row in connectors {
+        for (row, slug) in connectors.iter().zip(&slugs) {
             if row.kind != "otlp_http" {
                 continue;
             }
-            let slug = slugify(&row.name);
             let _ = writeln!(out, "    {signal}/{slug}:");
             let _ = writeln!(out, "      receivers: [otlp]");
             if row.sampling_rate < 1.0 {
@@ -292,6 +324,33 @@ mod tests {
         assert!(yaml.contains("traces/datadog-staging"));
         assert!(yaml.contains("metrics/datadog-staging"));
         assert!(yaml.contains("logs/datadog-staging"));
+    }
+
+    #[test]
+    fn names_that_slugify_alike_still_get_distinct_pipelines() {
+        // `name` is unique in the table but slugify is lossy, so without
+        // de-duplication both rows would emit the same YAML keys and the
+        // collector would silently drop one connector's export entirely
+        let yaml = render_yaml(&[row("My Sink", 1.0), row("my/sink", 1.0)], None);
+        assert!(yaml.contains("otlphttp/my-sink:"));
+        assert!(yaml.contains("otlphttp/my-sink-2:"));
+        assert_eq!(yaml.matches("exporters: [otlphttp/my-sink]").count(), 3);
+        assert_eq!(yaml.matches("exporters: [otlphttp/my-sink-2]").count(), 3);
+    }
+
+    #[test]
+    fn an_endpoint_containing_yaml_metacharacters_stays_quoted() {
+        let mut r = row("edge", 1.0);
+        // a '#' would start a comment and swallow the rest of an unquoted scalar
+        r.endpoint = "https://collector.example.com/v1/logs?q=a#frag".to_string();
+        let yaml = render_yaml(&[r], None);
+        assert!(yaml.contains("endpoint: \"https://collector.example.com/v1/logs?q=a#frag\""));
+    }
+
+    #[test]
+    fn a_secret_containing_a_quote_is_escaped_rather_than_breaking_the_document() {
+        assert_eq!(yaml_quote(r#"tok"en"#), r#""tok\"en""#);
+        assert_eq!(yaml_quote(r"tok\en"), r#""tok\\en""#);
     }
 
     #[test]
