@@ -30,16 +30,38 @@ pub fn is_valid_slug(s: &str) -> bool {
 /// contains at least one ascii alphanumeric; otherwise it returns an empty
 /// string and the caller must supply an explicit slug.
 pub fn slugify(name: &str) -> String {
-    let collapsed = name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-    collapsed.chars().take(SLUG_MAX_LEN).collect()
+    let mut result = String::with_capacity(name.len().min(SLUG_MAX_LEN + 1));
+    let mut last_was_hyphen = true;
+
+    for c in name.chars() {
+        let c = if c.is_ascii_alphanumeric() {
+            c.to_ascii_lowercase()
+        } else {
+            '-'
+        };
+
+        if c == '-' {
+            if last_was_hyphen {
+                continue;
+            }
+            last_was_hyphen = true;
+        } else {
+            last_was_hyphen = false;
+        }
+
+        result.push(c);
+
+        if result.len() > SLUG_MAX_LEN {
+            break;
+        }
+    }
+
+    if result.ends_with('-') {
+        result.pop();
+    }
+
+    result.truncate(SLUG_MAX_LEN);
+    result
 }
 
 #[cfg(test)]
