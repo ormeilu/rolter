@@ -2672,9 +2672,12 @@ dependencies = [
 name = "rolter-auth"
 version = "0.0.10"
 dependencies = [
+ "async-trait",
  "serde",
  "sha2 0.11.0",
  "subtle",
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]
@@ -2697,6 +2700,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "argon2",
+ "async-trait",
  "axum",
  "base64 0.23.1",
  "chrono",

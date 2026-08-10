@@ -33,7 +33,7 @@ Override either default with `server.require_auth`:
 
 ## 2. Control plane (dashboard) — users + roles
 
-Human users authenticate to the control plane. v1 ships **local accounts** (argon2id password hashes). RBAC roles:
+Human users authenticate to the control plane. Two providers ship today: **local accounts** (argon2id password hashes, `rolter_control::auth`) and **OAuth2/OIDC SSO** (`rolter_control::sso`, authorization-code flow with PKCE, JWKS-verified id tokens, IdP group → role mapping). RBAC roles:
 
 - **admin** — full control within scope (manage providers, routes, keys, members, budgets)
 - **member** — create/edit routes and keys within scope
@@ -123,10 +123,32 @@ Endpoints:
 - `GET`/`POST /api/v1/access-profiles/{id}/assignments`, `DELETE /api/v1/access-profile-assignments/{id}`
 - `PUT /api/v1/access-profiles/{id}/policy`
 
+### Identity providers (ROL-35)
+
+Local login and SSO both end at the same place: a verified identity that gets
+turned into a session and reconciled memberships. That shared shape is
+`rolter_auth::IdentityProvider` — an async trait with one method,
+`resolve(Credential) -> Result<Identity, IdentityError>` — so a new provider
+only has to prove who someone is; everything downstream (session issuance,
+group → role reconciliation, audit logging) is unchanged.
+
+- `rolter_control::auth::LocalIdentityProvider` verifies a
+  `Credential::Password`, preserving the original handler's timing-safety
+  property: every rejection path (unknown account, deactivated, sso-only,
+  password login disabled by org policy, wrong password) still runs exactly
+  one argon2 verification, so response time reveals nothing about which case
+  applied.
+- `rolter_control::sso::OidcIdentityProvider` verifies a
+  `Credential::AuthorizationCode`, wrapping the existing code-exchange and
+  JWKS id-token verification.
+- Concrete providers live in `rolter-control` (next to the `sqlx`/`reqwest`
+  they need), not in `rolter-auth`, which only defines the trait and stays
+  free of those dependencies.
+
 ## Roadmap
 
-- **OAuth2 / OIDC SSO** — pluggable `IdentityProvider`; map IdP groups → roles.
-- **LDAP** — bind + group mapping for enterprise directories.
+- **LDAP** — bind + group mapping for enterprise directories (#241), the next
+  provider to implement `IdentityProvider`.
 - **JWT** service auth and short-lived tokens.
 - **Audit log** surfaced in the UI.
 - Optional **constant-time map** / pepper for virtual-key lookup hardening.
