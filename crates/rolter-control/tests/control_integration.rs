@@ -6152,7 +6152,7 @@ async fn collector_config_renders_enabled_connectors_and_hides_disabled_ones() {
     // the enabled connector gets its own exporter, sampler and pipelines
     assert!(body.contains("otlphttp/signoz:"), "{body}");
     assert!(
-        body.contains("endpoint: https://collector.example.com/v1/logs"),
+        body.contains("endpoint: \"https://collector.example.com/v1/logs\""),
         "{body}"
     );
     assert!(body.contains("probabilistic_sampler/signoz:"), "{body}");
