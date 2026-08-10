@@ -622,6 +622,17 @@ fn error_json(status: StatusCode, message: &str) -> Response {
     crate::error::ApiError::new(status, message).into_response()
 }
 
+/// Tenant identity forwarded to a guardrail webhook or plugin as metadata.
+/// Shared by both call sites so the envelope always carries the same shape.
+fn plugin_tenant(scope: &ScopeIds) -> rolter_core::WebhookTenant {
+    rolter_core::WebhookTenant {
+        org: (!scope.org.is_empty()).then(|| scope.org.clone()),
+        team: (!scope.team.is_empty()).then(|| scope.team.clone()),
+        project: (!scope.project.is_empty()).then(|| scope.project.clone()),
+        key: (!scope.key.is_empty()).then(|| scope.key.clone()),
+    }
+}
+
 /// Preserve a queue-admission failure as a client-actionable overload response
 /// instead of flattening it into a generic upstream 502 after failover is
 /// exhausted. Other forwarding failures keep their existing gateway-error form.
@@ -777,6 +788,48 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         )
         .with_code("insufficient_quota")
         .into_response();
+    }
+
+    // pre_route plugins: consult before the route is resolved, while only the
+    // key's scope and raw request are known. Block rejects; transform rewrites
+    // `parsed` in place. Org/project-scoped, ordered by position (#509)
+    let trace_id = headers
+        .get(crate::trace::REQUEST_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let pre_route_plugins = snap.plugins.for_stage(
+        rolter_core::PluginStage::PreRoute,
+        &scope.org,
+        (!scope.project.is_empty()).then_some(scope.project.as_str()),
+    );
+    let mut pre_route_transformed = false;
+    if !pre_route_plugins.is_empty() {
+        let tenant = plugin_tenant(&scope);
+        match crate::plugin_dispatch::dispatch(
+            &pre_route_plugins,
+            rolter_core::PluginStage::PreRoute,
+            &state.metrics,
+            &model,
+            "", // no route resolved yet at this stage
+            trace_id,
+            &tenant,
+            &parsed,
+        )
+        .await
+        {
+            crate::plugin_dispatch::DispatchOutcome::Allow(content) => {
+                pre_route_transformed = content != parsed;
+                parsed = content;
+            }
+            crate::plugin_dispatch::DispatchOutcome::Block(reason) => {
+                return crate::error::ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    reason.unwrap_or_else(|| "request blocked by plugin".to_string()),
+                )
+                .with_code("plugin_blocked")
+                .into_response();
+            }
+        }
     }
 
     // throughput cap: reject before forwarding when a matching request/token
@@ -1018,22 +1071,13 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
     // the assembled envelope is sent; prompt content is never logged here (ROL-257).
     let mut webhook_transformed = false;
     if snap.guardrail_webhook.enabled {
-        let tenant = rolter_core::WebhookTenant {
-            org: (!scope.org.is_empty()).then(|| scope.org.clone()),
-            team: (!scope.team.is_empty()).then(|| scope.team.clone()),
-            project: (!scope.project.is_empty()).then(|| scope.project.clone()),
-            key: (!scope.key.is_empty()).then(|| scope.key.clone()),
-        };
-        let webhook_trace = headers
-            .get(crate::trace::REQUEST_ID_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
+        let tenant = plugin_tenant(&scope);
         match crate::guardrail_webhook::consult_pre_call(
             &snap.guardrail_webhook,
             &state.metrics,
             &model,
             &entry.route.model,
-            webhook_trace,
+            trace_id,
             tenant,
             &parsed,
         )
@@ -1054,7 +1098,49 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
             }
         }
     }
-    guardrails_pre_stage.record("redacted", guardrail_redacted || webhook_transformed);
+
+    // pre_upstream plugins: consult after the route is resolved, before
+    // forwarding. Same block/transform/fail-open-or-closed contract as
+    // pre_route, run in the same stage as the guardrail webhook above so a
+    // slow plugin shows up here rather than inside the upstream leg (#509)
+    let mut plugin_transformed = false;
+    let pre_upstream_plugins = snap.plugins.for_stage(
+        rolter_core::PluginStage::PreUpstream,
+        &scope.org,
+        (!scope.project.is_empty()).then_some(scope.project.as_str()),
+    );
+    if !pre_upstream_plugins.is_empty() {
+        let tenant = plugin_tenant(&scope);
+        match crate::plugin_dispatch::dispatch(
+            &pre_upstream_plugins,
+            rolter_core::PluginStage::PreUpstream,
+            &state.metrics,
+            &model,
+            &entry.route.model,
+            trace_id,
+            &tenant,
+            &parsed,
+        )
+        .await
+        {
+            crate::plugin_dispatch::DispatchOutcome::Allow(content) => {
+                plugin_transformed = content != parsed;
+                parsed = content;
+            }
+            crate::plugin_dispatch::DispatchOutcome::Block(reason) => {
+                return crate::error::ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    reason.unwrap_or_else(|| "request blocked by plugin".to_string()),
+                )
+                .with_code("plugin_blocked")
+                .into_response();
+            }
+        }
+    }
+    guardrails_pre_stage.record(
+        "redacted",
+        guardrail_redacted || webhook_transformed || plugin_transformed || pre_route_transformed,
+    );
     drop(guardrails_pre_stage);
 
     // inject the admin's per-model param defaults (temperature, max_tokens, ...)
@@ -1067,6 +1153,8 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         && !rewrite_model
         && !guardrail_redacted
         && !webhook_transformed
+        && !plugin_transformed
+        && !pre_route_transformed
         && !template_applied
     {
         body.clone()
@@ -1130,6 +1218,24 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         .to_string();
     // adopt the caller's distributed trace when one was propagated inbound
     let trace_id = crate::trace::request_trace_id(&headers);
+
+    // post_response plugins: same buffering constraint as output guardrails
+    // above, so they follow the identical streamed-response opt-out (#509)
+    let post_response_plugin_list = snap.plugins.for_stage(
+        rolter_core::PluginStage::PostResponse,
+        &scope.org,
+        (!scope.project.is_empty()).then_some(scope.project.as_str()),
+    );
+    let post_response_plugins = (!stream && !post_response_plugin_list.is_empty()).then(|| {
+        crate::plugin_dispatch::PostResponsePlugins {
+            plugins: post_response_plugin_list,
+            metrics: &state.metrics,
+            model: model.clone(),
+            route: entry.route.model.clone(),
+            trace_id: trace_id.clone(),
+            tenant: plugin_tenant(&scope),
+        }
+    });
     // scope identity for log attribution (empty for config-defined keys)
     let (vk_id, org_id, team_id, project_id) = (
         scope.key.clone(),
@@ -1781,6 +1887,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                 response_observer,
                 output_guard.as_ref(),
                 genai_span.clone(),
+                post_response_plugins.clone(),
             )
             .await
         }
@@ -2177,6 +2284,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
                 recorder,
                 token_recorder,
                 inflight_guard,
+                None,
                 None,
                 None,
                 None,
@@ -2588,6 +2696,7 @@ async fn stream_response(
     completion_observer: Option<crate::logging::CompletionObserver>,
     output: Option<&crate::guardrails::OutputGuard<'_>>,
     genai_span: Option<tracing::Span>,
+    post_response_plugins: Option<crate::plugin_dispatch::PostResponsePlugins<'_>>,
 ) -> Response {
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -2606,7 +2715,9 @@ async fn stream_response(
     // response translation, or output guardrails (#591). the guard only exists
     // when a post-call rule applies to this route, so an unguarded route keeps
     // streaming straight through
-    if !is_sse && (translation.is_translation() || output.is_some()) {
+    if !is_sse
+        && (translation.is_translation() || output.is_some() || post_response_plugins.is_some())
+    {
         return match response.bytes().await {
             Ok(bytes) => {
                 let bytes = translation.translate_response(bytes, false);
@@ -2616,6 +2727,24 @@ async fn stream_response(
                         crate::guardrails::OutputDecision::Masked(masked) => masked,
                         crate::guardrails::OutputDecision::Blocked(rule) => {
                             return guardrail_output_blocked(&rule)
+                        }
+                    },
+                    None => bytes,
+                };
+                let bytes = match post_response_plugins.filter(|_| status.is_success()) {
+                    Some(ctx) => match crate::plugin_dispatch::apply_post_response(&ctx, &bytes)
+                        .await
+                    {
+                        crate::plugin_dispatch::PostResponseOutcome::Bytes(bytes) => {
+                            Bytes::from(bytes)
+                        }
+                        crate::plugin_dispatch::PostResponseOutcome::Block(reason) => {
+                            return crate::error::ApiError::new(
+                                StatusCode::FORBIDDEN,
+                                reason.unwrap_or_else(|| "response withheld by plugin".to_string()),
+                            )
+                            .with_code("plugin_blocked")
+                            .into_response();
                         }
                     },
                     None => bytes,

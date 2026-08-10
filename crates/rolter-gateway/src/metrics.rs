@@ -139,6 +139,12 @@ pub struct Metrics {
     pub guardrail_webhook_transforms_total: AtomicU64,
     /// custom-guardrail-webhook calls that failed transport (timeout/connect/non-2xx)
     pub guardrail_webhook_errors_total: AtomicU64,
+    /// requests rejected by a webhook plugin instance (#509)
+    pub plugin_blocks_total: AtomicU64,
+    /// request/response bodies transformed by a webhook plugin instance
+    pub plugin_transforms_total: AtomicU64,
+    /// webhook plugin calls that failed transport (timeout/connect/non-2xx)
+    pub plugin_errors_total: AtomicU64,
     /// requests rejected because their selected provider's queue was full
     pub provider_queue_rejections_total: AtomicU64,
     /// requests that timed out waiting for a provider queue slot
@@ -448,6 +454,24 @@ impl Metrics {
                 name: "rolter_guardrail_webhook_errors_total",
                 help: "custom-guardrail-webhook calls that failed transport",
                 value: self.guardrail_webhook_errors_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_plugin_blocks_total",
+                help: "requests rejected by a webhook plugin instance",
+                value: self.plugin_blocks_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_plugin_transforms_total",
+                help: "request/response bodies transformed by a webhook plugin instance",
+                value: self.plugin_transforms_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_plugin_errors_total",
+                help: "webhook plugin calls that failed transport",
+                value: self.plugin_errors_total.load(Relaxed),
             },
             Scalar {
                 kind: "counter",

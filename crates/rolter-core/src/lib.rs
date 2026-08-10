@@ -9,6 +9,7 @@ pub mod currency;
 pub mod error;
 pub mod guardrail_webhook;
 pub mod guardrails;
+pub mod plugin_dispatch;
 pub mod prompt_templates;
 pub mod slug;
 pub mod telemetry;
@@ -36,6 +37,7 @@ pub use guardrails::{
     BuiltinRule, CompiledGuardrails, GuardAction, GuardStage, GuardrailReport, GuardrailRule,
     GuardrailsConfig, ScanOutcome, StreamingPostCall,
 };
+pub use plugin_dispatch::{PluginInstanceConfig, PluginRequest, PluginStage, PluginsConfig};
 pub use prompt_templates::{
     CompiledTemplates, Decorator, DecoratorPosition, DecoratorRole, PromptTemplate,
     PromptTemplateActivationScope, PromptTemplateRequestScope, PromptTemplatesConfig, RenderError,

@@ -132,6 +132,11 @@ pub struct GatewayConfig {
     /// default (ROL-256)
     #[serde(default)]
     pub prompt_templates: crate::prompt_templates::PromptTemplatesConfig,
+    /// enabled webhook plugin instances (control-plane registry: #567), for
+    /// the gateway's pre_route/pre_upstream/post_response dispatch runtime
+    /// (#509). Empty by default
+    #[serde(default)]
+    pub plugins: crate::plugin_dispatch::PluginsConfig,
 }
 
 /// Deployment-wide gates for runtime subsystems.
@@ -2937,6 +2942,9 @@ impl GatewayConfig {
 
         // validate the custom guardrail webhook (url/timeout/auth) at load time
         problems.append(&mut self.guardrail_webhook.validate());
+
+        // validate every enabled plugin instance's endpoint at load time
+        problems.append(&mut self.plugins.validate());
 
         // validate prompt templates: unique versions, well-formed variables, and
         // decorator placeholders that reference only declared variables
