@@ -33,11 +33,7 @@ To solve this, we can pre-collect all the keys required into a `Vec<String>`, pe
 ## 2026-08-04 - Avoiding intermediate string buffers and joining
 **Learning:** During JSON-to-JSON request translation (like in `openai_to_interactions`), pushing concatenated string output into a `Vec<String>` and calling `.join("\\n")` later incurs unnecessary string allocations and an intermediate collection.
 **Action:** Accumulate string output directly into a single `String::new()` via `.push_str()` inside the translation loop, managing separators manually.
-<<<<<<< HEAD
 
 ## 2024-05-18 - [Rust Vec Search Inefficiency in RBAC]
 **Learning:** Found an O(n^2) inefficiency in `held_roles` within `crates/rolter-control/src/rbac_matrix.rs`. It was using a `Vec::new()` for tracking `seen` pairs of `(Uuid, Uuid)` and doing `seen.contains()` during a loop over grants, which scales poorly if the user is a member of many groups/roles.
 **Action:** Replaced linear `Vec` searches with `std::collections::HashSet` to ensure O(1) deduplication lookups. Also ensured `views` is pre-allocated via `Vec::with_capacity(grants.len())`.
-=======
-## 2026-08-07 - Single-pass iterators for string generation\n**Learning:** String chains like `.collect::<String>().split().collect::<Vec<_>>().join()` cause multiple severe allocation penalties for tight loops or frequent operations.\n**Action:** Iterate lazily using `String::with_capacity()` and a state machine to combine these operations into a single allocation pass.
->>>>>>> 587ec54 (temp stash)
