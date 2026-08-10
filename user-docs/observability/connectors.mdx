@@ -25,9 +25,32 @@ Connectors live under **Observability → Connectors** in the dashboard, and on
 
 OTLP is first deliberately. Every other sink here can be reached *through* an
 OpenTelemetry Collector, so shipping OTLP makes the rest a collector
-configuration change rather than more code in Rolter. If you already run a
-collector, point a connector at it and fan out there — that is also where
+configuration change rather than more code in Rolter — that is also where
 per-tenant routing belongs (see ADR-0026).
+
+## How delivery actually works
+
+A connector's `endpoint` is never called by Rolter directly. Rolter renders it,
+along with every other enabled connector, into an OpenTelemetry Collector
+config document at `GET /api/v1/connectors/collector-config` — one exporter and
+one set of pipelines per connector. Point a collector at that URL (the OTel
+Collector's confmap HTTP provider accepts `--config=http://...` sources,
+bearer-authenticated the same as any other Rolter API call) and Rolter's own
+`OTEL_EXPORTER_OTLP_*` export, which already targets that collector, fans out
+from there.
+
+This is why `sampling_rate` is a per-connector knob rather than a single global
+one: each connector gets its own `probabilistic_sampler` processor in the
+rendered document, so two connectors on the same deployment can sample
+independently.
+
+`managed_auth_secret` is decrypted and rendered as a literal bearer header.
+`auth_secret_ref` instead renders as an `${env:...}` placeholder — the value
+has to come from the collector's own environment, since Rolter never holds it.
+
+The `ROLTER_TELEMETRY_ENABLED` kill switch wins over every connector: with it
+off, the rendered document has no exporters at all, regardless of what is
+enabled here.
 
 ## Fields
 

@@ -1113,6 +1113,7 @@ mod tests {
         ("auth_policy.rs", include_str!("auth_policy.rs")),
         ("cluster.rs", include_str!("cluster.rs")),
         ("client_settings.rs", include_str!("client_settings.rs")),
+        ("collector_config.rs", include_str!("collector_config.rs")),
         (
             "compatibility_policy.rs",
             include_str!("compatibility_policy.rs"),

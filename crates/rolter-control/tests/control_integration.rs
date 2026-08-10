@@ -6087,3 +6087,124 @@ async fn global_catalogs_take_authentication_but_no_membership() {
     assert_eq!(read["authenticated_only"], true, "{matrix}");
     assert!(read["minimum_role"].is_null(), "{matrix}");
 }
+
+#[tokio::test]
+async fn collector_config_renders_enabled_connectors_and_hides_disabled_ones() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // unauthenticated callers get nothing back
+    let denied = client
+        .get(format!("{base}/api/v1/connectors/collector-config"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    let enabled = client
+        .post(format!("{base}/api/v1/connectors"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "name": "SigNoz",
+            "kind": "otlp_http",
+            "endpoint": "https://collector.example.com/v1/logs",
+            "enabled": true,
+            "sampling_rate": 0.5,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(enabled.status(), 200);
+
+    client
+        .post(format!("{base}/api/v1/connectors"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "name": "Disabled Sink",
+            "kind": "otlp_http",
+            "endpoint": "https://disabled.example.com/v1/logs",
+            "enabled": false,
+            "sampling_rate": 1.0,
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let config = client
+        .get(format!("{base}/api/v1/connectors/collector-config"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(config.status(), 200);
+    assert_eq!(
+        config.headers().get("content-type").unwrap(),
+        "application/yaml"
+    );
+    let body = config.text().await.unwrap();
+
+    // the enabled connector gets its own exporter, sampler and pipelines
+    assert!(body.contains("otlphttp/signoz:"), "{body}");
+    assert!(
+        body.contains("endpoint: \"https://collector.example.com/v1/logs\""),
+        "{body}"
+    );
+    assert!(body.contains("probabilistic_sampler/signoz:"), "{body}");
+    assert!(body.contains("sampling_percentage: 50.0000"), "{body}");
+    assert!(body.contains("traces/signoz:"), "{body}");
+    assert!(body.contains("metrics/signoz:"), "{body}");
+    assert!(body.contains("logs/signoz:"), "{body}");
+
+    // the disabled connector never reaches the rendered document
+    assert!(!body.contains("disabled-sink"), "{body}");
+    assert!(!body.contains("disabled.example.com"), "{body}");
+}
+
+#[tokio::test]
+async fn collector_config_renders_a_managed_secret_as_a_bearer_header() {
+    skip_without_db!();
+    std::env::set_var("ROLTER_KEK", "collector-config-test-kek");
+
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    client
+        .post(format!("{base}/api/v1/connectors"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "name": "Honeycomb",
+            "kind": "otlp_http",
+            "endpoint": "https://api.honeycomb.io/v1/logs",
+            "enabled": true,
+            "sampling_rate": 1.0,
+            "managed_auth_secret": "super-secret-token",
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let body = client
+        .get(format!("{base}/api/v1/connectors/collector-config"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        body.contains("Authorization: \"Bearer super-secret-token\""),
+        "{body}"
+    );
+}
