@@ -89,6 +89,7 @@ mod tests {
         assert_eq!(slugify("trailing-"), "trailing");
         assert_eq!(slugify("非ascii"), "ascii");
         assert_eq!(slugify("Kelvin"), "kelvin");
+        assert_eq!(slugify("İProvider"), "i-provider");
     }
 
     #[test]
