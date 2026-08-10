@@ -1,27 +1,27 @@
-# Трансляция OpenAI Responses API
+# OpenAI Responses API translation
 
-## Общее
+## Metadata
 
-| Поле | Значение |
-|------|----------|
-| **Продукт** | rolter |
-| **Автор** | Ilya Lubenets |
-| **Дата создания** | 13 Jul 2026 |
-| **Статус** | DEVELOPMENT |
-| **Участники** | @<укажите> |
-| **ЛПР** | @<укажите> |
-| **Принято** | — |
-| **Устарело** | — |
+| Field | Value |
+|-------|-------|
+| **Product** | rolter |
+| **Author** | Ilya Lubenets |
+| **Date** | 13 Jul 2026 |
+| **Status** | DEVELOPMENT |
+| **Participants** | — (unassigned) |
+| **Decision maker** | — (unassigned) |
+| **Decided** | — |
+| **Superseded** | — |
 
-## Контекст
+## Context
 
-ROL-252 добавляет публичный `POST /v1/responses`. В gateway уже есть маршрутизация по `model`, а в `rolter-proxy` — изолированный реестр преобразований OpenAI Chat Completions и Anthropic Messages с инкрементальной обработкой SSE. Responses несёт текст, мультимодальный ввод, tools, tool results и отдельную модель потоковых событий. Операции жизненного цикла используют идентификатор ответа без `model`, поэтому они не могут безопасно выбирать маршрут без хранения связи tenant/key → upstream response.
+ROL-252 adds the public `POST /v1/responses`. The gateway already routes on `model`, and `rolter-proxy` already holds an isolated registry of OpenAI Chat Completions and Anthropic Messages translations with incremental SSE handling. Responses carries text, multimodal input, tools, tool results and its own streaming event model. Lifecycle operations use a response identifier without a `model`, so they cannot safely select a route without storing the tenant/key → upstream response association.
 
-## Рассмотренные варианты
+## Options considered
 
-### Вариант 1. Только нативный passthrough
+### Option 1 — Native passthrough only
 
-Передавать `/v1/responses` без преобразования всем провайдерам.
+Forward `/v1/responses` to every provider without translation.
 
 ```mermaid
 flowchart LR
@@ -29,9 +29,9 @@ flowchart LR
     G --> P[upstream /v1/responses]
 ```
 
-### Вариант 2. Реестр протоколов с Responses
+### Option 2 — Protocol registry with Responses
 
-Добавить Responses как протокол: нативный OpenAI получает passthrough, а Chat Completions и Anthropic Messages получают адаптированные запросы и возвращают Responses-объекты или SSE-события.
+Add Responses as a protocol: native OpenAI gets passthrough, while Chat Completions and Anthropic Messages get adapted requests and return Responses objects or SSE events.
 
 ```mermaid
 flowchart LR
@@ -44,45 +44,45 @@ flowchart LR
     AM --> G
 ```
 
-## Сравнение вариантов
+## Comparison
 
-| Вариант | Плюсы | Минусы |
-|---------|-------|--------|
-| **1. Только нативный passthrough** | Нет преобразований и потерь для Responses-native upstream | Маршруты Chat и Anthropic не поддерживают новую поверхность |
-| **2. Реестр протоколов с Responses** | Один публичный контракт для OpenAI, Chat и Anthropic; транспорт, метрики и учёт остаются общими | Не все Responses-возможности имеют эквивалент; нужно поддерживать SSE-конвертер |
+| Option | Pros | Cons |
+|--------|------|------|
+| **1. Native passthrough only** | No translation and no loss for a Responses-native upstream | Chat and Anthropic routes do not support the new surface |
+| **2. Protocol registry with Responses** | One public contract for OpenAI, Chat and Anthropic; transport, metrics and accounting stay shared | Not every Responses capability has an equivalent; an SSE converter has to be maintained |
 
-## Решение
+## Decision
 
-Выбран вариант 2. `Protocol::OpenAiResponses` добавляется в реестр `rolter-proxy`. Для `ProviderKind::Openai` используется нативный `/v1/responses`; для Chat-compatible провайдеров — `/v1/chat/completions`; для Anthropic — `/v1/messages`. Общие поля преобразуются, а ответы и потоковые события возвращаются в Responses-представлении.
+Option 2 was chosen. `Protocol::OpenAiResponses` is added to the `rolter-proxy` registry. `ProviderKind::Openai` uses the native `/v1/responses`; Chat-compatible providers use `/v1/chat/completions`; Anthropic uses `/v1/messages`. Common fields are translated, and responses and streaming events are returned in the Responses representation.
 
-## Обоснование
+## Rationale
 
-Это сохраняет существующую архитектурную границу: gateway отвечает за аутентификацию, tenant scope, выбор target, tracing, метрики и accounting, а `rolter-proxy` — только за wire-протокол. Нативный Responses не теряет провайдерские поля, при этом существующие Chat и Anthropic маршруты остаются доступными для клиентов нового OpenAI SDK.
+This preserves the existing architectural boundary: the gateway owns authentication, tenant scope, target selection, tracing, metrics and accounting, while `rolter-proxy` owns only the wire protocol. Native Responses loses no provider-specific fields, and the existing Chat and Anthropic routes stay reachable for clients on the new OpenAI SDK.
 
-## Последствия
+## Consequences
 
-**Преимущества:**
+**Benefits:**
 
-- общий Responses endpoint работает с тремя семействами upstream API;
-- SSE переводится инкрементально, без буферизации живого потока;
-- `input_tokens`/`output_tokens` учитываются существующим cost и rate-limit accounting.
+- one shared Responses endpoint works across three families of upstream APIs;
+- SSE is translated incrementally, without buffering the live stream;
+- `input_tokens`/`output_tokens` are counted by the existing cost and rate-limit accounting.
 
-**Недостатки и риски:**
+**Drawbacks and risks:**
 
-- `background`, `store`, `previous_response_id` и provider-specific reasoning не имеют безопасного эквивалента Chat/Anthropic и не передаются туда;
-- lifecycle для native OpenAI реализован отдельным tenant-scoped registry в ADR-0016; переведённые Chat/Anthropic ресурсы по-прежнему возвращают `501 response_lifecycle_unsupported`;
-- поддержка новых Responses event types требует расширения конвертера и тестов.
+- `background`, `store`, `previous_response_id` and provider-specific reasoning have no safe Chat/Anthropic equivalent and are not forwarded there;
+- lifecycle for native OpenAI is implemented by a separate tenant-scoped registry in ADR-0016; translated Chat/Anthropic resources still return `501 response_lifecycle_unsupported`;
+- supporting new Responses event types requires extending the converter and its tests.
 
-**Влияние на систему:**
+**System impact:**
 
-Изменяются `rolter-gateway`, `rolter-proxy`, OpenAPI и API-документация; storage schema не меняется.
+`rolter-gateway`, `rolter-proxy`, the OpenAPI spec and the API documentation change; the storage schema does not.
 
-## Связанные записи
+## Related records
 
 - ADR-0014 — Extensible API protocol translation
 - ROL-252 — OpenAI Responses API passthrough and streaming
 
-## Открытые вопросы
+## Open questions
 
-- Рассмотреть распределённый backend registry для multi-replica deployment без sticky routing.
-- Расширить потоковую трансляцию function-call и reasoning event types по мере подтверждения поддерживаемых upstream контрактов.
+- Consider a distributed backend registry for multi-replica deployments without sticky routing.
+- Extend streaming translation of function-call and reasoning event types as supported upstream contracts are confirmed.
