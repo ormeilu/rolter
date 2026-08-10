@@ -2351,11 +2351,16 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
+        let team_id: Uuid =
+            sqlx::query_scalar("insert into teams (org_id, name) values ($1, 'core') returning id")
+                .bind(org_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let project_id: Uuid = sqlx::query_scalar(
-            "insert into projects (org_id, name, slug) values ($1, 'default', 'default') \
-             returning id",
+            "insert into projects (team_id, name) values ($1, 'default') returning id",
         )
-        .bind(org_id)
+        .bind(team_id)
         .fetch_one(&pool)
         .await
         .unwrap();

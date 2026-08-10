@@ -8,7 +8,8 @@
 //!
 //! This module owns only the config model carried in the snapshot. The wire
 //! contract (`allow`/`block`/`transform`/`annotate`) and the HTTP call itself
-//! are shared with the custom guardrail webhook (#257) — [`WebhookDecision`],
+//! are shared with the custom guardrail webhook (#257) —
+//! [`WebhookDecision`](crate::guardrail_webhook::WebhookDecision),
 //! [`WebhookAuth`] and [`FailureMode`] are the same types, since a plugin and a
 //! guardrail webhook make the same kind of decision about the same kind of
 //! content. Only the stage vocabulary differs (three gateway hook points here,
