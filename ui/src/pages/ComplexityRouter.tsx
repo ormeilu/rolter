@@ -232,6 +232,7 @@ function PolicyDialog({
             <button
               type="button"
               title="Remove tier"
+              aria-label={`Remove tier ${i + 1}`}
               onClick={() => setTiers((ts) => ts?.filter((_, j) => j !== i) ?? null)}
               className="flex h-8 flex-none items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >

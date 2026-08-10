@@ -302,6 +302,7 @@ function BudgetCard({
         <button
           type="button"
           title="Delete budget"
+          aria-label="Delete budget"
           disabled={deleting}
           onClick={onDelete}
           className="ml-auto flex rounded-[6px] border border-[color:var(--border-subtle)] px-1.5 py-1 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -337,6 +338,7 @@ function RateLimitCard({
         <button
           type="button"
           title="Delete rate limit"
+          aria-label="Delete rate limit"
           disabled={deleting}
           onClick={onDelete}
           className="ml-auto flex rounded-[6px] border border-[color:var(--border-subtle)] px-1.5 py-1 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
