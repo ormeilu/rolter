@@ -28,6 +28,7 @@ mod mcp_proxy;
 mod metrics;
 mod multipart;
 mod openapi;
+mod plugin_dispatch;
 mod prompt_templates;
 mod queue;
 mod rate_limits;

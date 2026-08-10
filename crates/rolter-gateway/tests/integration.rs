@@ -2495,6 +2495,179 @@ async fn output_guardrail_masks_a_non_streaming_completion() {
     assert_eq!(body["choices"][0]["finish_reason"], "stop");
 }
 
+/// A config with one enabled webhook plugin instance at `stage`, scoped to
+/// the keyless test tenant (`org_id: ""`, matching a request with no virtual
+/// key).
+fn config_with_plugin(
+    upstream: SocketAddr,
+    plugin_endpoint: String,
+    stage: rolter_core::PluginStage,
+    failure_mode: rolter_core::FailureMode,
+) -> GatewayConfig {
+    let mut config = config_for("test-model", vec![("up", upstream)]);
+    config.plugins = rolter_core::PluginsConfig {
+        instances: vec![rolter_core::PluginInstanceConfig {
+            slug: "audit".to_string(),
+            org_id: String::new(),
+            project_id: None,
+            stage,
+            position: 0,
+            failure_mode,
+            endpoint: plugin_endpoint,
+            auth: None,
+        }],
+    };
+    config
+}
+
+async fn plugin_transform_server(action_content: Value) -> SocketAddr {
+    serve(Router::new().route(
+        "/hook",
+        post(move || {
+            let content = action_content.clone();
+            async move { Json(json!({"action": "transform", "content": content})) }
+        }),
+    ))
+    .await
+}
+
+async fn plugin_block_server() -> SocketAddr {
+    serve(Router::new().route(
+        "/hook",
+        post(|| async { Json(json!({"action": "block", "reason": "denied by plugin"})) }),
+    ))
+    .await
+}
+
+#[tokio::test]
+async fn pre_upstream_plugin_transforms_the_request_body() {
+    // the mock upstream echoes the request body back, so a transform applied
+    // pre_upstream is directly observable in the response
+    async fn echo(Json(body): Json<Value>) -> axum::response::Response {
+        Json(json!({
+            "id": "chatcmpl-echo",
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": body["messages"][0]["content"]}, "finish_reason": "stop"}],
+            "usage": {"total_tokens": 1}
+        }))
+        .into_response()
+    }
+    let upstream = serve(Router::new().route("/v1/chat/completions", post(echo))).await;
+    let plugin = plugin_transform_server(json!({
+        "messages": [{"role": "user", "content": "rewritten by plugin"}]
+    }))
+    .await;
+    let gw = serve_gateway(&config_with_plugin(
+        upstream,
+        format!("http://{plugin}/hook"),
+        rolter_core::PluginStage::PreUpstream,
+        rolter_core::FailureMode::FailOpen,
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(
+            &json!({"model": "test-model", "messages": [{"role": "user", "content": "original"}]}),
+        )
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "rewritten by plugin"
+    );
+}
+
+#[tokio::test]
+async fn pre_route_plugin_block_rejects_before_the_route_is_resolved() {
+    let upstream =
+        serve(Router::new().route("/v1/chat/completions", post(mock_leaky_openai))).await;
+    let plugin = plugin_block_server().await;
+    let gw = serve_gateway(&config_with_plugin(
+        upstream,
+        format!("http://{plugin}/hook"),
+        rolter_core::PluginStage::PreRoute,
+        rolter_core::FailureMode::FailOpen,
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        // an unroutable model still gets blocked at pre_route, before route
+        // resolution would have 404'd it — proof the plugin ran first
+        .json(&json!({"model": "no-such-model", "messages": []}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "plugin_blocked");
+    assert_eq!(body["error"]["message"], "denied by plugin");
+}
+
+#[tokio::test]
+async fn post_response_plugin_masks_a_non_streaming_completion() {
+    let upstream =
+        serve(Router::new().route("/v1/chat/completions", post(mock_leaky_openai))).await;
+    let plugin = plugin_transform_server(json!({
+        "id": "chatcmpl-mock",
+        "object": "chat.completion",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "[redacted by plugin]"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    }))
+    .await;
+    let gw = serve_gateway(&config_with_plugin(
+        upstream,
+        format!("http://{plugin}/hook"),
+        rolter_core::PluginStage::PostResponse,
+        rolter_core::FailureMode::FailOpen,
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({"model": "test-model", "messages": [{"role": "user", "content": "ping"}]}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "[redacted by plugin]"
+    );
+}
+
+#[tokio::test]
+async fn unreachable_plugin_fails_open_and_forwards_the_original_request() {
+    let upstream =
+        serve(Router::new().route("/v1/chat/completions", post(mock_leaky_openai))).await;
+    let gw = serve_gateway(&config_with_plugin(
+        upstream,
+        // reserved TEST-NET-1 address: connection refused/timed out fast
+        "http://192.0.2.1:1/hook".to_string(),
+        rolter_core::PluginStage::PreUpstream,
+        rolter_core::FailureMode::FailOpen,
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({"model": "test-model", "messages": [{"role": "user", "content": "ping"}]}))
+        .send()
+        .await
+        .unwrap();
+
+    // the plugin was unreachable but fail_open forwards unchanged
+    assert_eq!(resp.status(), 200);
+}
+
 #[tokio::test]
 async fn a_blocking_output_rule_withholds_the_completion() {
     let upstream =

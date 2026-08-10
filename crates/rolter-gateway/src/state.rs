@@ -167,6 +167,9 @@ pub struct Snapshot {
     /// deployment-wide adaptive-routing policy, read when a route's balancer is
     /// built; inert unless enabled (#544)
     pub adaptive_routing: rolter_core::AdaptiveRoutingConfig,
+    /// enabled webhook plugin instances, swapped atomically with the snapshot;
+    /// empty by default and inert on the request path (#509)
+    pub plugins: Arc<rolter_core::PluginsConfig>,
 }
 
 /// Live per-target latency handle for the `fastest` strategy, backed by the
@@ -427,6 +430,7 @@ impl Snapshot {
                 &config.prompt_templates,
             )),
             adaptive_routing: config.adaptive_routing.clone(),
+            plugins: Arc::new(config.plugins.clone()),
         }
     }
 
