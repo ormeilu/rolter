@@ -259,7 +259,7 @@ function DetailDrawer({ eventId, onClose }: { eventId: string; onClose: () => vo
         <button
           type="button"
           onClick={onClose}
-          className="ml-auto text-muted-foreground transition-colors hover:text-foreground"
+          className="ml-auto text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <X className="h-4 w-4" />
         </button>

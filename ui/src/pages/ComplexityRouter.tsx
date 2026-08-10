@@ -120,7 +120,7 @@ export default function ComplexityRouter() {
                 key={route.id}
                 type="button"
                 onClick={() => setEditing(route)}
-                className="flex items-center gap-2 rounded-[8px] border border-[color:var(--border-subtle)] px-3 py-2 font-mono text-xs text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--border-default)] hover:text-foreground"
+                className="flex items-center gap-2 rounded-[8px] border border-[color:var(--border-subtle)] px-3 py-2 font-mono text-xs text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--border-default)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 {route.model}
                 <Plus className="h-3 w-3" />
@@ -233,7 +233,7 @@ function PolicyDialog({
               type="button"
               title="Remove tier"
               onClick={() => setTiers((ts) => ts?.filter((_, j) => j !== i) ?? null)}
-              className="flex h-8 flex-none items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)]"
+              className="flex h-8 flex-none items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>
