@@ -26,6 +26,8 @@ mod client_settings;
 #[cfg(feature = "postgres")]
 mod cluster;
 #[cfg(feature = "postgres")]
+mod collector_config;
+#[cfg(feature = "postgres")]
 mod compatibility_policy;
 #[cfg(feature = "postgres")]
 mod connectors;
@@ -525,6 +527,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(sso::router())
             .merge(cluster::router())
             .merge(connectors::router())
+            .merge(collector_config::router())
             .merge(security::router());
     }
 
