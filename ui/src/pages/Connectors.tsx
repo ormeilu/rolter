@@ -134,10 +134,14 @@ export default function Connectors() {
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={test.isPending}
+                  disabled={test.isPending && test.variables === c.id}
                   onClick={() => test.mutate(c.id)}
                 >
-                  <FlaskConical className="h-3.5 w-3.5" />
+                  {test.isPending && test.variables === c.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <FlaskConical className="h-3.5 w-3.5" />
+                  )}
                   Test delivery
                 </Button>
                 {c.health_checked_at && (
@@ -149,10 +153,15 @@ export default function Connectors() {
                   type="button"
                   title="Delete connector"
                   aria-label={`Delete connector ${c.name}`}
+                  disabled={remove.isPending && remove.variables === c.id}
                   onClick={() => remove.mutate(c.id)}
-                  className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  {remove.isPending && remove.variables === c.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
                 </button>
               </div>
             </div>
