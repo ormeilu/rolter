@@ -30,10 +30,8 @@ pub fn is_valid_slug(s: &str) -> bool {
 /// contains at least one ascii alphanumeric; otherwise it returns an empty
 /// string and the caller must supply an explicit slug.
 pub fn slugify(name: &str) -> String {
-    // Optimization: Build the slug in a single pass to avoid multiple allocations
-    // from intermediate String and Vec creations.
     let mut out = String::with_capacity(name.len().min(SLUG_MAX_LEN));
-    let mut last_was_dash = true; // true so leading dashes are skipped
+    let mut last_was_dash = true;
 
     for c in name.chars() {
         for lower_c in c.to_lowercase() {
@@ -90,6 +88,7 @@ mod tests {
         assert_eq!(slugify("  multi  space "), "multi-space");
         assert_eq!(slugify("trailing-"), "trailing");
         assert_eq!(slugify("非ascii"), "ascii");
+        assert_eq!(slugify("Kelvin"), "kelvin");
     }
 
     #[test]
