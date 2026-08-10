@@ -11,7 +11,7 @@
 ## Clone & build
 
 ```bash
-git clone https://github.com/ormeilu/rolter.git
+git clone https://github.com/rolter-ai/rolter.git
 cd rolter
 cargo build --workspace
 cargo nextest run --workspace   # or `cargo test --workspace`; install: cargo install cargo-nextest

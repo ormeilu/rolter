@@ -16,7 +16,7 @@ members = [
 version = "0.0.10"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/ormeilu/rolter"
+repository = "https://github.com/rolter-ai/rolter"
 authors = ["Ilya Lubenets <lii291001@gmail.com>"]
 rust-version = "1.82"
 

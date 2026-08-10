@@ -2,7 +2,7 @@
 
 High-performance OpenAI/Anthropic-compatible LLM gateway and load balancer.
 
-`rolter` is the unified command-line launcher for the [rolter](https://github.com/ormeilu/rolter)
+`rolter` is the unified command-line launcher for the [rolter](https://github.com/rolter-ai/rolter)
 system. A single binary dispatches to both planes:
 
 ```console
@@ -25,7 +25,7 @@ or as a Python-managed CLI (maturin wheel):
 uv tool install rolter
 ```
 
-See the [project README](https://github.com/ormeilu/rolter#readme) for architecture,
+See the [project README](https://github.com/rolter-ai/rolter#readme) for architecture,
 configuration and deployment docs.
 
 ## License

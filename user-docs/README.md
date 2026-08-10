@@ -23,6 +23,6 @@ mint dev
 
 Mintlify builds and serves this directory to its own domain. Connect the
 [Mintlify GitHub app](https://mintlify.com/docs/settings/github) to
-`ormeilu/rolter` with the content directory set to `user-docs/`; pushes to the
+`rolter-ai/rolter` with the content directory set to `user-docs/`; pushes to the
 default branch then trigger a redeploy. The build is independent of the mdBook
 GitHub Pages workflow.
