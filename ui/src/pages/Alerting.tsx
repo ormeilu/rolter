@@ -111,8 +111,9 @@ export function AlertChannels() {
               <button
                 type="button"
                 title="Delete channel"
+                aria-label="Delete channel"
                 onClick={() => remove.mutate(c.id)}
-                className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)]"
+                className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -307,8 +308,9 @@ export function AlertRules() {
                 <button
                   type="button"
                   title="Delete rule"
+                  aria-label="Delete rule"
                   onClick={() => remove.mutate(r.id)}
-                  className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)]"
+                  className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>

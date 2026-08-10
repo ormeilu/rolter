@@ -180,7 +180,7 @@ export default function AuditLog() {
         v ? (
           <button
             type="button"
-            className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            className="rounded-sm text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             onClick={() => setExpanded(expanded === row.id ? null : row.id)}
           >
             {expanded === row.id ? "hide" : "show"}
@@ -244,7 +244,7 @@ export default function AuditLog() {
                   key={r.label}
                   type="button"
                   onClick={() => setRangeIdx(i)}
-                  className={`rounded-md border px-2.5 py-1 text-xs ${
+                  className={`rounded-md border px-2.5 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
                     i === rangeIdx
                       ? "border-brand-folk bg-accent text-foreground"
                       : "border-border text-muted-foreground hover:text-foreground"
@@ -279,7 +279,7 @@ export default function AuditLog() {
                   type="button"
                   disabled={cursors.length === 0}
                   onClick={() => setCursors((c) => c.slice(0, -1))}
-                  className="rounded-md border border-border px-2.5 py-1 hover:text-foreground disabled:opacity-40"
+                  className="rounded-md border border-border px-2.5 py-1 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-40"
                 >
                   Prev
                 </button>
@@ -290,7 +290,7 @@ export default function AuditLog() {
                     page.data?.next_cursor &&
                     setCursors((c) => [...c, page.data.next_cursor as string])
                   }
-                  className="rounded-md border border-border px-2.5 py-1 hover:text-foreground disabled:opacity-40"
+                  className="rounded-md border border-border px-2.5 py-1 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-40"
                 >
                   Next
                 </button>

@@ -131,7 +131,7 @@ export default function Users() {
               type="button"
               onClick={() => setStatusTab(t)}
               className={
-                "border-b-2 px-3 py-[7px] text-sm capitalize transition-colors " +
+                "border-b-2 px-3 py-[7px] text-sm capitalize transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring " +
                 (statusTab === t
                   ? "border-[color:var(--red-folk)] text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground")
