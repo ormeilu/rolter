@@ -864,11 +864,14 @@ mod tests {
         let text = m.render();
         for (family, attrs, value) in m.labelled_for_export() {
             // rebuild the Prometheus series this OTLP series corresponds to
-            let labels = attrs
-                .iter()
-                .map(|(k, v)| format!("{k}=\"{v}\""))
-                .collect::<Vec<_>>()
-                .join(",");
+            let labels = attrs.iter().fold(String::new(), |mut acc, (k, v)| {
+                if !acc.is_empty() {
+                    acc.push(',');
+                }
+                use std::fmt::Write;
+                let _ = write!(acc, "{k}=\"{v}\"");
+                acc
+            });
             let line = format!("{family}{{{labels}}} {value}");
             assert!(
                 text.contains(&line),
