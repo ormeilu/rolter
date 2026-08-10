@@ -1,12 +1,16 @@
 //! Authentication and authorization primitives for rolter.
 //!
 //! The MVP covers virtual-key verification and the role model used by the
-//! control plane. OAuth2/OIDC and LDAP providers implement a pluggable
-//! `IdentityProvider` trait added in a later phase (see ROADMAP).
+//! control plane. Local password login and OAuth2/OIDC SSO both implement the
+//! pluggable [`IdentityProvider`] trait below (ROL-35); LDAP (#241) is the
+//! next provider to plug into the same seam.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+
+mod identity;
+pub use identity::{Credential, Identity, IdentityError, IdentityProvider};
 
 /// RBAC role, scoped to an org/team/project by the control plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
