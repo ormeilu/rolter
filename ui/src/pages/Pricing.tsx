@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -214,15 +215,26 @@ function UpsertPriceDialog({
     },
   });
 
+  const dirty =
+    model.trim() !== (existing?.model ?? "") ||
+    inputPerMtok !== (existing?.input_per_mtok ?? "0") ||
+    outputPerMtok !== (existing?.output_per_mtok ?? "0") ||
+    cachedInputPerMtok !== (existing?.cached_input_per_mtok ?? "") ||
+    currency !== (existing?.currency ?? "USD");
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>{existing ? `Edit ${existing.model}` : "Add price"}</DialogTitle>
-        <DialogDescription>
-          Prices are per million tokens (Mtok). Saving upserts by model name — an
-          existing entry for this model is overwritten.
-        </DialogDescription>
-      </DialogHeader>
+    <EditorSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title={existing ? `Edit ${existing.model}` : "Add price"}
+      subtitle="Prices are per million tokens (Mtok); saving upserts by model name."
+      dirty={dirty}
+      errorMessage={submit.isError ? (submit.error as Error).message : undefined}
+      saveLabel="Save"
+      canSave={!!model.trim() && !!inputPerMtok.trim() && !!outputPerMtok.trim()}
+      saving={submit.isPending}
+      onSave={() => submit.mutate()}
+    >
       <div className="space-y-3">
         <Field label="Model name">
           <Input
@@ -267,26 +279,7 @@ function UpsertPriceDialog({
         >
           <Input value={currency} onChange={(e) => setCurrency(e.target.value)} />
         </Field>
-        {submit.isError && (
-          <p className="text-xs text-destructive">{(submit.error as Error).message}</p>
-        )}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button
-          disabled={
-            !model.trim() ||
-            !inputPerMtok.trim() ||
-            !outputPerMtok.trim() ||
-            submit.isPending
-          }
-          onClick={() => submit.mutate()}
-        >
-          Save
-        </Button>
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }
