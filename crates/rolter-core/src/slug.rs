@@ -33,26 +33,28 @@ pub fn slugify(name: &str) -> String {
     let mut result = String::with_capacity(name.len().min(SLUG_MAX_LEN + 1));
     let mut last_was_hyphen = true;
 
-    for c in name.chars() {
-        let c = if c.is_ascii_alphanumeric() {
-            c.to_ascii_lowercase()
-        } else {
-            '-'
-        };
+    'chars: for c in name.chars() {
+        for lower_c in c.to_lowercase() {
+            let normalized = if lower_c.is_ascii_alphanumeric() {
+                lower_c
+            } else {
+                '-'
+            };
 
-        if c == '-' {
-            if last_was_hyphen {
-                continue;
+            if normalized == '-' {
+                if last_was_hyphen {
+                    continue;
+                }
+                last_was_hyphen = true;
+            } else {
+                last_was_hyphen = false;
             }
-            last_was_hyphen = true;
-        } else {
-            last_was_hyphen = false;
-        }
 
-        result.push(c);
+            result.push(normalized);
 
-        if result.len() > SLUG_MAX_LEN {
-            break;
+            if result.len() > SLUG_MAX_LEN {
+                break 'chars;
+            }
         }
     }
 
@@ -95,6 +97,7 @@ mod tests {
         assert_eq!(slugify("  multi  space "), "multi-space");
         assert_eq!(slugify("trailing-"), "trailing");
         assert_eq!(slugify("非ascii"), "ascii");
+        assert_eq!(slugify("İProvider"), "i-provider");
     }
 
     #[test]
