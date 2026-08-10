@@ -2,15 +2,9 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { Trash2 } from "lucide-react";
 import * as React from "react";
 
+import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody, StatusDot } from "@/components/screen";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -237,14 +231,21 @@ function AddRouteDialog({
     },
   });
 
+  const dirty = !!(model.trim() || strategy !== STRATEGIES[0] || weight !== "100");
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>Add route</DialogTitle>
-        <DialogDescription>
-          Public model name resolved to upstream targets by the chosen strategy.
-        </DialogDescription>
-      </DialogHeader>
+    <EditorSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add route"
+      subtitle="Public model name resolved to upstream targets by the chosen strategy."
+      dirty={dirty}
+      errorMessage={create.isError ? (create.error as Error).message : undefined}
+      saveLabel="Create"
+      canSave={!!model.trim()}
+      saving={create.isPending}
+      onSave={() => create.mutate()}
+    >
       <div className="space-y-3">
         <Field label="Model name">
           <Input
@@ -283,18 +284,7 @@ function AddRouteDialog({
             />
           </Field>
         )}
-        {create.isError && (
-          <p className="text-xs text-destructive">{(create.error as Error).message}</p>
-        )}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button disabled={!model.trim() || create.isPending} onClick={() => create.mutate()}>
-          Create
-        </Button>
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }

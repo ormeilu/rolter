@@ -2,15 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cable, FlaskConical, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 
+import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody, Pill, StatusDot } from "@/components/screen";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -218,14 +212,21 @@ function AddConnectorDialog({
     },
   });
 
+  const dirty = !!(name.trim() || endpoint.trim() || secret.trim() || sampling !== "100");
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>Add connector</DialogTitle>
-        <DialogDescription>
-          OTLP/HTTP collector endpoint request logs are exported to.
-        </DialogDescription>
-      </DialogHeader>
+    <EditorSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add connector"
+      subtitle="OTLP/HTTP collector endpoint request logs are exported to."
+      dirty={dirty}
+      errorMessage={create.isError ? (create.error as Error).message : undefined}
+      saveLabel="Create"
+      canSave={!!name.trim() && !!endpoint.trim()}
+      saving={create.isPending}
+      onSave={() => create.mutate()}
+    >
       <div className="space-y-3">
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="datadog" />
@@ -257,22 +258,7 @@ function AddConnectorDialog({
             />
           </Field>
         </div>
-        {create.isError && (
-          <p className="text-xs text-destructive">{(create.error as Error).message}</p>
-        )}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button
-          disabled={!name.trim() || !endpoint.trim() || create.isPending}
-          onClick={() => create.mutate()}
-        >
-          {create.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Create
-        </Button>
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }
