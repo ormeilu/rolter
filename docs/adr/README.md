@@ -44,10 +44,10 @@ Accepted. Export traces/metrics via OTLP to any compatible backend (SigNoz, Data
 ## ADR-0014 — Extensible API protocol translation
 Accepted. Resolve translation by client/upstream protocol pair in `rolter-proxy`, including incremental SSE, while the gateway retains transport, caching and accounting ownership. Consequence: new provider dialects extend one translation boundary; non-equivalent modalities remain explicit and are never silently dropped.
 
-## ADR-0015 — [Трансляция OpenAI Responses API](2026-07-13-responses-api-protocol-translation.md)
+## ADR-0015 — [OpenAI Responses API translation](2026-07-13-responses-api-protocol-translation.md)
 Development. Add OpenAI Responses as a protocol pair for native OpenAI, Chat Completions and Anthropic Messages, while model-less lifecycle operations remain uniformly unsupported until tenant-scoped storage exists.
 
-## ADR-0016 — [Маршрутизация ресурсов OpenAI Responses по tenant-scoped registry](2026-07-13-responses-lifecycle-routing-registry.md)
+## ADR-0016 — [Routing OpenAI Responses resources through a tenant-scoped registry](2026-07-13-responses-lifecycle-routing-registry.md)
 Development. Pin Responses lifecycle operations to a bounded tenant-scoped process-local record, preserving the original provider credential while making unknown and cross-tenant IDs indistinguishable.
 
 ## ADR-0017 — [Provider/model addressing to disambiguate identical model names](2026-07-14-provider-model-addressing.md)
@@ -79,3 +79,6 @@ Accepted. OpenTelemetry is deprecating the Span Events API, so log-based events 
 
 ## ADR-0026 — [Client control over telemetry: a kill switch now, collector-routed tenant destinations later](2026-08-06-tenant-telemetry-destinations.md)
 Accepted. Splits #812 in two. `ROLTER_TELEMETRY_ENABLED` ships now as one explicit off for every signal — traces, metrics, the dashboard's browser tracing, and logs once #809 lands — that can only subtract, defaults to enabled so no existing deployment changes, and leaves export on for an unrecognized value so a typo cannot silently blind a deployment. It is environment-only despite the issue asking for a config key: `telemetry::init` installs the subscriber before any config file is read, so a config-file switch could not gate trace export at all. Per-tenant destinations are deferred and, when built, belong in the OpenTelemetry Collector's routing processor keyed on an org resource attribute rather than in-process exporters — that keeps one egress path in the gateway and keeps tenant-supplied URLs, an SSRF surface, out of the data plane entirely. Consequence: operators get a reviewable "no telemetry leaves here" today; per-tenant routing later requires running a collector, which is already the recommended topology.
+
+## ADR-0027 — [End-to-end test harness: Python/uv project driving a black-box stack](2026-07-21-e2e-test-harness.md)
+Accepted. The e2e suite is a Python driver on the latest CPython managed by `uv`, exercising the real HTTP APIs of a docker-compose stack (postgres, redis, clickhouse, control, gateway, and N `llm-d-inference-sim` fake-vLLM engines) with no in-process shortcuts, so the tests see exactly what an operator or tenant sees. Numbered after ADR-0026 despite its earlier date because ADR numbers are append-only and never reused. Consequence: the suite needs a container runtime rather than `cargo test` alone; in exchange it covers the wiring between the two binaries and the three datastores that unit tests cannot reach.
