@@ -1836,7 +1836,7 @@ impl SseConverter {
         let Ok(v) = serde_json::from_str::<Value>(data) else {
             return Vec::new();
         };
-        let mut chunks = Vec::new();
+        let mut chunks = Vec::with_capacity(1);
         match event.or_else(|| v.get("type").and_then(Value::as_str)) {
             Some("message_start") => {
                 self.state.id = v.pointer("/message/id").and_then(Value::as_str).unwrap_or("chatcmpl-rolter").to_string();

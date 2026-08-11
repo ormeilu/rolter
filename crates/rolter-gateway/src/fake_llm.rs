@@ -209,7 +209,7 @@ pub fn chat_completions(body: &Value) -> Response {
 
     let id = next_id("chatcmpl-fake");
     let created = unix_now();
-    let mut chunks = Vec::new();
+    let mut chunks = Vec::with_capacity(LOREM.len() + 3);
 
     let role_chunk = json!({
         "id": id, "object": "chat.completion.chunk", "created": created, "model": MODEL_NAME,
@@ -256,7 +256,7 @@ pub fn messages(body: &Value) -> Response {
     }
 
     let id = next_id("msg-fake");
-    let mut chunks = Vec::new();
+    let mut chunks = Vec::with_capacity(LOREM.len() + 5);
 
     let message_start = json!({
         "type": "message_start",
