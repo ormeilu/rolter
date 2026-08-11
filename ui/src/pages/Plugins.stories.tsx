@@ -91,7 +91,7 @@ export const InstallsWebhookConfiguration: Story = {
     await userEvent.click(await canvas.findByRole("button", { name: /install plugin/i }));
     const dialog = within(document.body).getByRole("dialog");
     await userEvent.type(within(dialog).getByLabelText("Name"), "Policy webhook");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Install configuration" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Install plugin" }));
     await waitFor(() => expect(within(document.body).queryByRole("dialog")).not.toBeInTheDocument());
   },
 };
@@ -106,7 +106,7 @@ export const RejectsInvalidConfiguration: Story = {
     await userEvent.clear(within(dialog).getByLabelText("Plugin configuration"));
     await userEvent.click(within(dialog).getByLabelText("Plugin configuration"));
     await userEvent.paste("[]");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Install configuration" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Install plugin" }));
     await expect(within(dialog).getByRole("alert")).toHaveTextContent("Configuration must be a JSON object.");
   },
 };

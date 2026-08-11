@@ -394,6 +394,75 @@
       "deleteOne": "Delete provider {{name}}",
       "noMatch": "No providers match.",
       "deleteHint": "<0>{{name}}</0> will stop being usable as a route target. This cannot be undone."
+    },
+    "plugins": {
+      "eyebrow": "Pipeline workbench",
+      "heading": "Installed plugins",
+      "intro": "Request and response middleware the gateway consults on live traffic. Enabled plugins run at their stage, in position order.",
+      "install": "Install plugin",
+      "installFirst": "Install first plugin",
+      "noOrg": "Choose an organization to manage plugins.",
+      "loadFailed": "Plugin registry unavailable",
+      "retry": "Try again",
+      "emptyTitle": "No plugins installed",
+      "emptyDescription": "Install a webhook plugin and choose its pipeline stage. It only affects traffic once you enable it.",
+      "stageEmpty": "No plugin configured at this stage",
+      "stages": {
+        "pre_route": {
+          "label": "Pre-route",
+          "description": "Inspect or enrich the request before rolter selects a route."
+        },
+        "pre_upstream": {
+          "label": "Pre-upstream",
+          "description": "Transform the routed request immediately before provider delivery."
+        },
+        "post_response": {
+          "label": "Post-response",
+          "description": "Inspect or transform the provider response before client delivery."
+        }
+      },
+      "stateEnabled": "enabled",
+      "statePaused": "paused",
+      "toggleAria": "Enable {{name}}",
+      "noDescription": "No description",
+      "scopeProject": "project",
+      "scopeOrg": "organization",
+      "scopeOrgWide": "Organization-wide",
+      "failOpen": "fail-open",
+      "failClosed": "fail-closed",
+      "failOpenOption": "Fail open",
+      "failClosedOption": "Fail closed",
+      "secretRef": "secret ref",
+      "delete": "Delete",
+      "configure": "Configure",
+      "deleteConfirm": "Delete {{name}}? The gateway stops consulting it immediately.",
+      "dialogTitleEdit": "Configure plugin",
+      "dialogTitleNew": "Install webhook plugin",
+      "dialogDescription": "Set the pipeline position and failure behavior. Secret values stay in gateway environment variables.",
+      "fieldName": "Name",
+      "fieldSlug": "Slug",
+      "fieldDescription": "Description",
+      "fieldScope": "Scope",
+      "fieldStage": "Pipeline stage",
+      "fieldEndpoint": "Webhook endpoint",
+      "fieldPosition": "Position",
+      "fieldFailure": "Failure policy",
+      "fieldSecret": "Secret environment variable",
+      "fieldConfig": "Plugin configuration",
+      "hintSlugLocked": "Immutable after install.",
+      "hintSlugDerived": "Derived from name when blank.",
+      "hintPosition": "Lower values run first.",
+      "hintSecret": "Store the variable name, never the secret value.",
+      "hintConfig": "A JSON object sent to the plugin on every dispatch.",
+      "enabledTitle": "Enabled",
+      "enabledHint": "An enabled plugin is consulted on live traffic at its stage. Paused plugins keep their configuration but are skipped.",
+      "errorConfigJson": "Configuration must be valid JSON.",
+      "errorConfigObject": "Configuration must be a JSON object.",
+      "errorNameEndpoint": "Name and an HTTP(S) endpoint are required.",
+      "cancel": "Cancel",
+      "saving": "Saving…",
+      "save": "Save configuration",
+      "installConfirm": "Install plugin"
     }
   }
 }
