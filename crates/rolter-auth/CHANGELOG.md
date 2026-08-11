@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.0.11](https://github.com/rolter-ai/rolter/compare/rolter-auth-v0.0.10...rolter-auth-v0.0.11) - 2026-08-11
+
+### Features
+- *(auth)* add pluggable IdentityProvider trait [#239] ([#865](https://github.com/rolter-ai/rolter/pull/865)) by [@ormeilu](https://github.com/ormeilu)
 ## [0.0.6](https://github.com/ormeilu/rolter/compare/rolter-auth-v0.0.5...rolter-auth-v0.0.6) - 2026-07-12
 
 ### Miscellaneous
