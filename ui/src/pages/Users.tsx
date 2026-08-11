@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, Pencil, Plus, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import { EditorSheet } from "@/components/EditorSheet";
 import {
   ListHeader,
   ListRow,
@@ -336,27 +337,56 @@ function InviteUserDialog({
     },
   });
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>Invite user</DialogTitle>
-        <DialogDescription>
-          Send a one-time link and let them set their own password, or create
-          the account outright with a password you choose.
-        </DialogDescription>
-      </DialogHeader>
-      {link ? (
+  // the one-time link keeps its own center Dialog rather than the editor sheet:
+  // it is a reveal-once secret with a copy/done footer, not a form — the same
+  // split Keys and Account already use for a freshly minted key
+  if (link) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogHeader>
+          <DialogTitle>Invitation link</DialogTitle>
+          <DialogDescription>
+            Shown once and not recoverable after you close this dialog.
+          </DialogDescription>
+        </DialogHeader>
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Send this link to <strong>{email.trim()}</strong>. It works once,
-            expires in seven days, and is not recoverable after you close this
-            dialog.
+            Send this link to <strong>{email.trim()}</strong>. It works once and
+            expires in seven days.
           </p>
           <code className="block break-all rounded-md border bg-muted/40 p-2 text-xs">
             {link}
           </code>
         </div>
-      ) : (
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => {
+              void navigator.clipboard?.writeText(link);
+              setCopied(true);
+            }}
+          >
+            {copied ? "Copied" : "Copy link"}
+          </Button>
+          <Button onClick={() => onOpenChange(false)}>Done</Button>
+        </DialogFooter>
+      </Dialog>
+    );
+  }
+
+  return (
+    <EditorSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Invite user"
+      subtitle="Send a one-time link, or create the account with a password you choose"
+      dirty={Boolean(email || password) || role !== "member" || method !== "link"}
+      errorMessage={create.isError ? (create.error as Error).message : undefined}
+      saveLabel="Invite"
+      canSave={Boolean(email.trim())}
+      saving={create.isPending}
+      onSave={() => create.mutate()}
+    >
         <div className="space-y-3">
           <Field label="Email">
             <Input
@@ -399,42 +429,8 @@ function InviteUserDialog({
               ))}
             </Select>
           </Field>
-          {create.isError && (
-            <p className="text-xs text-destructive">
-              {(create.error as Error).message}
-            </p>
-          )}
         </div>
-      )}
-      <DialogFooter>
-        {link ? (
-          <>
-            <Button
-              variant="outline"
-              onClick={() => {
-                void navigator.clipboard?.writeText(link);
-                setCopied(true);
-              }}
-            >
-              {copied ? "Copied" : "Copy link"}
-            </Button>
-            <Button onClick={() => onOpenChange(false)}>Done</Button>
-          </>
-        ) : (
-          <>
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!email.trim() || create.isPending}
-              onClick={() => create.mutate()}
-            >
-              Invite
-            </Button>
-          </>
-        )}
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }
 
@@ -475,14 +471,22 @@ function EditUserDialog({
   });
 
   return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>Edit user</DialogTitle>
-        <DialogDescription>
-          Update account details. Editing email/password or the superadmin flag
-          requires superadmin privileges.
-        </DialogDescription>
-      </DialogHeader>
+    <EditorSheet
+      open
+      onOpenChange={onOpenChange}
+      title="Edit user"
+      subtitle="Email, password and the superadmin flag require superadmin privileges"
+      dirty={
+        email.trim() !== user.email ||
+        password !== "" ||
+        isSuperadmin !== user.is_superadmin
+      }
+      errorMessage={save.isError ? (save.error as Error).message : undefined}
+      saveLabel="Save"
+      canSave
+      saving={save.isPending}
+      onSave={() => save.mutate()}
+    >
       <div className="space-y-3">
         <Field label="Email">
           <Input
@@ -503,11 +507,6 @@ function EditUserDialog({
           <Switch checked={isSuperadmin} onCheckedChange={setIsSuperadmin} />
           Superadmin (full cross-org access)
         </label>
-        {save.isError && (
-          <p className="text-xs text-destructive">
-            {(save.error as Error).message}
-          </p>
-        )}
 
         <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3">
           {!confirmDelete ? (
@@ -556,15 +555,7 @@ function EditUserDialog({
           )}
         </div>
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button disabled={save.isPending} onClick={() => save.mutate()}>
-          Save
-        </Button>
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }
 
@@ -609,14 +600,23 @@ function AddRoleDialog({
   });
 
   return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>Grant role</DialogTitle>
-        <DialogDescription>
-          Grant <span className="font-mono">{user.email}</span> a role at a
-          scope within this org.
-        </DialogDescription>
-      </DialogHeader>
+    <EditorSheet
+      open
+      onOpenChange={onOpenChange}
+      title="Grant role"
+      subtitle={`Grant ${user.email} a role at a scope within this org`}
+      dirty={
+        scopeType !== "org" ||
+        teamId !== (teams[0]?.id ?? "") ||
+        projectId !== (defaultProjectId ?? "") ||
+        role !== "member"
+      }
+      errorMessage={create.isError ? (create.error as Error).message : undefined}
+      saveLabel="Grant"
+      canSave={Boolean(scopeId.trim())}
+      saving={create.isPending}
+      onSave={() => create.mutate()}
+    >
       <div className="space-y-3">
         <Field label="Scope">
           <Select
@@ -668,23 +668,7 @@ function AddRoleDialog({
             ))}
           </Select>
         </Field>
-        {create.isError && (
-          <p className="text-xs text-destructive">
-            {(create.error as Error).message}
-          </p>
-        )}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button
-          disabled={!scopeId.trim() || create.isPending}
-          onClick={() => create.mutate()}
-        >
-          Grant
-        </Button>
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }
