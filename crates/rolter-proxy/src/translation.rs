@@ -47,7 +47,11 @@ enum StreamTranslation {
 struct TranslationPair {
     source: Protocol,
     target: Protocol,
-    request: fn(Value) -> Value,
+    /// Fallible because a dialect with no equivalent for a content part must
+    /// fail closed rather than drop it: a translator that silently shortens the
+    /// body sends the provider a request the caller never made, and both ends
+    /// return a normal 200 (#882, ADR-0014)
+    request: fn(Value) -> Result<Value>,
     response: fn(Value) -> Value,
     stream: StreamTranslation,
 }
@@ -56,28 +60,28 @@ static TRANSLATION_PAIRS: &[TranslationPair] = &[
     TranslationPair {
         source: Protocol::OpenAiChat,
         target: Protocol::AnthropicMessages,
-        request: openai_request,
+        request: |v| Ok(openai_request(v)),
         response: anthropic_response,
         stream: StreamTranslation::AnthropicToOpenAi,
     },
     TranslationPair {
         source: Protocol::OpenAiResponses,
         target: Protocol::OpenAiChat,
-        request: responses_request,
+        request: |v| Ok(responses_request(v)),
         response: responses_from_openai,
         stream: StreamTranslation::OpenAiToResponses,
     },
     TranslationPair {
         source: Protocol::OpenAiResponses,
         target: Protocol::AnthropicMessages,
-        request: responses_to_anthropic_request,
+        request: |v| Ok(responses_to_anthropic_request(v)),
         response: responses_from_anthropic,
         stream: StreamTranslation::AnthropicToResponses,
     },
     TranslationPair {
         source: Protocol::AnthropicMessages,
         target: Protocol::OpenAiChat,
-        request: anthropic_request,
+        request: |v| Ok(anthropic_request(v)),
         response: openai_response,
         stream: StreamTranslation::OpenAiToAnthropic,
     },
@@ -319,7 +323,7 @@ impl TranslationPlan {
         let Some(pair) = registered_pair(self.client, self.upstream) else {
             return Ok(body);
         };
-        value = (pair.request)(value);
+        value = (pair.request)(value)?;
         apply_max_tokens_default(&mut value, self.upstream, compat.default_max_tokens);
         normalize_openai_roles(&mut value, self.upstream, self.role_profile);
         serde_json::to_vec(&value).map(Bytes::from).map_err(|err| {
@@ -356,7 +360,7 @@ impl TranslationPlan {
             out.extend(converter.finish());
             return Bytes::from(out.concat());
         }
-        translate_json(body, self.client, self.upstream, false)
+        translate_json(body, self.client, self.upstream)
     }
 }
 
@@ -656,18 +660,14 @@ fn responses_from_anthropic(v: Value) -> Value {
     responses_from_openai(anthropic_response(v))
 }
 
-fn translate_json(body: Bytes, from: Protocol, to: Protocol, request: bool) -> Bytes {
+fn translate_json(body: Bytes, from: Protocol, to: Protocol) -> Bytes {
     let Ok(value) = serde_json::from_slice::<Value>(&body) else {
         return body;
     };
     let Some(pair) = registered_pair(from, to) else {
         return body;
     };
-    let translated = if request {
-        (pair.request)(value)
-    } else {
-        (pair.response)(value)
-    };
+    let translated = (pair.response)(value);
     serde_json::to_vec(&translated)
         .map(Bytes::from)
         .unwrap_or(body)
@@ -1095,9 +1095,9 @@ fn remove_keys(obj: &mut Map<String, Value>, keys: &[&str]) {
 /// `functionResponse` parts; OpenAI functions become `tools.functionDeclarations`;
 /// sampling params become `generationConfig`. The `model` and `stream` fields are
 /// dropped here — the forwarder carries the model and streaming method in the URL.
-fn openai_to_gemini(mut v: Value) -> Value {
+fn openai_to_gemini(mut v: Value) -> Result<Value> {
     let Some(obj) = v.as_object_mut() else {
-        return v;
+        return Ok(v);
     };
     let messages = obj
         .remove("messages")
@@ -1115,7 +1115,7 @@ fn openai_to_gemini(mut v: Value) -> Value {
             .unwrap_or("user");
         match role {
             "system" | "developer" => {
-                system_parts.extend(gemini_parts_from_content(message.get("content")));
+                system_parts.extend(gemini_parts_from_content(message.get("content"))?);
             }
             "tool" => {
                 contents.push(json!({
@@ -1129,7 +1129,7 @@ fn openai_to_gemini(mut v: Value) -> Value {
                 }));
             }
             _ => {
-                let mut parts = gemini_parts_from_content(message.get("content"));
+                let mut parts = gemini_parts_from_content(message.get("content"))?;
                 if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
                     for call in calls {
                         let function = call.get("function").unwrap_or(&Value::Null);
@@ -1232,27 +1232,30 @@ fn openai_to_gemini(mut v: Value) -> Value {
         }
     }
 
-    Value::Object(out)
+    Ok(Value::Object(out))
 }
 
-fn anthropic_to_gemini(v: Value) -> Value {
+fn anthropic_to_gemini(v: Value) -> Result<Value> {
     openai_to_gemini(anthropic_request(v))
 }
 
-fn responses_to_gemini(v: Value) -> Value {
+fn responses_to_gemini(v: Value) -> Result<Value> {
     openai_to_gemini(responses_request(v))
 }
 
 /// Build Gemini `parts` from an OpenAI message `content` value (string, or an
 /// array of typed parts). Data URLs become `inlineData`; other URLs become
 /// `fileData`.
-fn gemini_parts_from_content(content: Option<&Value>) -> Vec<Value> {
+///
+/// Fails closed on an unrecognized part type for the same reason as
+/// [`interaction_parts_from_content`] (#882).
+fn gemini_parts_from_content(content: Option<&Value>) -> Result<Vec<Value>> {
     match content {
-        Some(Value::String(text)) => vec![json!({"text": text})],
+        Some(Value::String(text)) => Ok(vec![json!({"text": text})]),
         Some(Value::Array(parts)) => parts
             .iter()
-            .filter_map(|part| match part.get("type").and_then(Value::as_str) {
-                Some("text") | Some("input_text") => Some(json!({
+            .map(|part| match part.get("type").and_then(Value::as_str) {
+                Some("text") | Some("input_text") => Ok(json!({
                     "text": part.get("text").cloned().unwrap_or(Value::String(String::new()))
                 })),
                 Some("image_url") | Some("input_image") => {
@@ -1261,13 +1264,13 @@ fn gemini_parts_from_content(content: Option<&Value>) -> Vec<Value> {
                         .or_else(|| part.get("image_url"))
                         .and_then(Value::as_str)
                         .unwrap_or_default();
-                    Some(gemini_media_part(url))
+                    Ok(gemini_media_part(url))
                 }
-                _ => None,
+                other => Err(unsupported_content_part("gemini generateContent", other)),
             })
             .collect(),
-        Some(other) => vec![json!({"text": other.to_string()})],
-        None => Vec::new(),
+        Some(Value::Null) | None => Ok(Vec::new()),
+        Some(other) => Ok(vec![json!({"text": other.to_string()})]),
     }
 }
 
@@ -1371,9 +1374,9 @@ fn gemini_finish(v: Option<&Value>) -> Value {
 /// explicit `previous_interaction_id` is forwarded as
 /// `previous_interaction_id`, and the interaction id is echoed back as the
 /// response `id`, so a thread is resumed without rolter keeping its own store.
-fn openai_to_interactions(mut v: Value) -> Value {
+fn openai_to_interactions(mut v: Value) -> Result<Value> {
     let Some(obj) = v.as_object_mut() else {
-        return v;
+        return Ok(v);
     };
     let messages = obj
         .remove("messages")
@@ -1414,7 +1417,7 @@ fn openai_to_interactions(mut v: Value) -> Value {
                 input.push(item);
             }
             "assistant" => {
-                let content = interaction_parts_from_content(message.get("content"));
+                let content = interaction_parts_from_content(message.get("content"))?;
                 if !content.is_empty() {
                     input.push(json!({"role": "model", "content": content}));
                 }
@@ -1435,7 +1438,7 @@ fn openai_to_interactions(mut v: Value) -> Value {
             }
             _ => input.push(json!({
                 "role": "user",
-                "content": interaction_parts_from_content(message.get("content"))
+                "content": interaction_parts_from_content(message.get("content"))?
             })),
         }
     }
@@ -1526,23 +1529,23 @@ fn openai_to_interactions(mut v: Value) -> Value {
         }
     }
 
-    Value::Object(out)
+    Ok(Value::Object(out))
 }
 
-fn anthropic_to_interactions(v: Value) -> Value {
+fn anthropic_to_interactions(v: Value) -> Result<Value> {
     openai_to_interactions(anthropic_request(v))
 }
 
 /// Lower a Responses request onto interactions. `responses_request` drops the
 /// stateful fields on its way to Chat, so they are captured first and restored
 /// as their interactions equivalents.
-fn responses_to_interactions(v: Value) -> Value {
+fn responses_to_interactions(v: Value) -> Result<Value> {
     let previous = v
         .get("previous_response_id")
         .cloned()
         .filter(|v| !v.is_null());
     let store = v.get("store").cloned().filter(|v| !v.is_null());
-    let mut out = openai_to_interactions(responses_request(v));
+    let mut out = openai_to_interactions(responses_request(v))?;
     if let Some(obj) = out.as_object_mut() {
         if let Some(previous) = previous {
             obj.insert("previous_interaction_id".into(), previous);
@@ -1551,18 +1554,22 @@ fn responses_to_interactions(v: Value) -> Value {
             obj.insert("store".into(), store);
         }
     }
-    out
+    Ok(out)
 }
 
 /// Build interactions `content` parts from an OpenAI message `content` value.
 /// Data URLs become inline image bytes; other URLs are referenced by uri.
-fn interaction_parts_from_content(content: Option<&Value>) -> Vec<Value> {
+///
+/// A part type interactions has no equivalent for is an error, not a no-op:
+/// dropping it would forward a request missing content the caller sent and
+/// still return 200 from both rolter and the provider (#882).
+fn interaction_parts_from_content(content: Option<&Value>) -> Result<Vec<Value>> {
     match content {
-        Some(Value::String(text)) => vec![json!({"type": "text", "text": text})],
+        Some(Value::String(text)) => Ok(vec![json!({"type": "text", "text": text})]),
         Some(Value::Array(parts)) => parts
             .iter()
-            .filter_map(|part| match part.get("type").and_then(Value::as_str) {
-                Some("text") | Some("input_text") => Some(json!({
+            .map(|part| match part.get("type").and_then(Value::as_str) {
+                Some("text") | Some("input_text") => Ok(json!({
                     "type": "text",
                     "text": part.get("text").cloned().unwrap_or(Value::String(String::new()))
                 })),
@@ -1572,14 +1579,30 @@ fn interaction_parts_from_content(content: Option<&Value>) -> Vec<Value> {
                         .or_else(|| part.get("image_url"))
                         .and_then(Value::as_str)
                         .unwrap_or_default();
-                    Some(interaction_image_part(url))
+                    Ok(interaction_image_part(url))
                 }
-                _ => None,
+                other => Err(unsupported_content_part("interactions", other)),
             })
             .collect(),
-        Some(Value::Null) | None => Vec::new(),
-        Some(other) => vec![json!({"type": "text", "text": other.to_string()})],
+        Some(Value::Null) | None => Ok(Vec::new()),
+        Some(other) => Ok(vec![json!({"type": "text", "text": other.to_string()})]),
     }
+}
+
+/// The fail-closed error for a content part a target dialect cannot carry.
+///
+/// Named `unsupported_content_part` so the gateway can map it to a 400 the same
+/// way it maps `role_capability`; the part type is quoted verbatim so the
+/// caller can see exactly which part it has to remove.
+fn unsupported_content_part(dialect: &str, part_type: Option<&str>) -> Error {
+    let named = match part_type {
+        Some(part_type) => format!("content part type '{part_type}'"),
+        None => "a content part with no 'type' field".to_string(),
+    };
+    Error::Config(format!(
+        "unsupported_content_part: the {dialect} upstream has no equivalent for {named}; \
+         remove it or route this model to a provider that accepts it"
+    ))
 }
 
 fn interaction_image_part(url: &str) -> Value {
@@ -2387,7 +2410,8 @@ mod tests {
         let out = openai_to_interactions(json!({
             "model": "m",
             "messages": [{"role": "system"}, {"role": "user", "content": "hi"}]
-        }));
+        }))
+        .unwrap();
         assert_eq!(out.get("system_instruction"), Some(&json!("")));
 
         let out = openai_to_interactions(json!({
@@ -2397,14 +2421,16 @@ mod tests {
                 {"role": "system", "content": "abc"},
                 {"role": "user", "content": "hi"}
             ]
-        }));
+        }))
+        .unwrap();
         assert_eq!(out.get("system_instruction"), Some(&json!("\nabc")));
 
         // and no system turn at all still omits the field entirely
         let out = openai_to_interactions(json!({
             "model": "m",
             "messages": [{"role": "user", "content": "hi"}]
-        }));
+        }))
+        .unwrap();
         assert!(out.get("system_instruction").is_none());
     }
     use super::*;
@@ -2751,6 +2777,132 @@ mod tests {
         assert!(error
             .to_string()
             .contains("gemini_interactions_unsupported"));
+    }
+
+    /// A body carrying one unknown content part, in the message shape each
+    /// client dialect uses.
+    fn body_with_unknown_part(client: Protocol, part: Value) -> Bytes {
+        let value = match client {
+            Protocol::OpenAiResponses => json!({
+                "model": "gemini-3.6-flash",
+                "input": [{"role": "user", "content": [part]}]
+            }),
+            _ => json!({
+                "model": "gemini-3.6-flash",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": [part]}]
+            }),
+        };
+        Bytes::from(serde_json::to_vec(&value).unwrap())
+    }
+
+    /// #882: an unrecognized part must abort the translation, not vanish from
+    /// the body. Covers every client dialect against both Gemini upstreams,
+    /// because the two translators carry independent part tables.
+    #[test]
+    fn unknown_content_parts_fail_closed_on_every_gemini_pair() {
+        let clients = [
+            Protocol::OpenAiChat,
+            Protocol::AnthropicMessages,
+            Protocol::OpenAiResponses,
+        ];
+        let upstreams = [
+            (Protocol::GeminiInteractions, "interactions"),
+            (Protocol::GeminiGenerate, "gemini generateContent"),
+        ];
+        let parts = [
+            json!({"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}),
+            json!({"type": "file", "file": {"file_id": "file_1"}}),
+            json!({"type": "some_future_part", "payload": {}}),
+        ];
+        for client in clients {
+            for (upstream, dialect) in upstreams {
+                for part in &parts {
+                    let error = plan(client, upstream)
+                        .translate_request(body_with_unknown_part(client, part.clone()))
+                        .unwrap_err()
+                        .to_string();
+                    assert!(
+                        error.contains("unsupported_content_part"),
+                        "{client:?}->{upstream:?} did not fail closed: {error}"
+                    );
+                    let part_type = part["type"].as_str().unwrap();
+                    assert!(
+                        error.contains(part_type) && error.contains(dialect),
+                        "{client:?}->{upstream:?} error names neither the part nor the dialect: {error}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A part object with no `type` at all takes the same path — it is still
+    /// content the caller sent that the upstream would never see.
+    #[test]
+    fn a_typeless_content_part_also_fails_closed() {
+        let error = plan(Protocol::OpenAiChat, Protocol::GeminiInteractions)
+            .translate_request(body_with_unknown_part(
+                Protocol::OpenAiChat,
+                json!({"text": "no type field"}),
+            ))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unsupported_content_part"), "{error}");
+        assert!(error.contains("no 'type' field"), "{error}");
+    }
+
+    /// The fail-closed check must not cost the supported parts their pass:
+    /// text and images still translate, and a plain string body is untouched.
+    #[test]
+    fn supported_content_parts_still_translate_after_the_fail_closed_check() {
+        let body = Bytes::from(
+            serde_json::to_vec(&json!({"model":"gemini-3.6-flash","messages":[{
+                "role":"user",
+                "content":[
+                    {"type":"text","text":"describe"},
+                    {"type":"image_url","image_url":{"url":"data:image/png;base64,QUJD"}},
+                    {"type":"image_url","image_url":{"url":"https://example.test/a.png"}}
+                ]
+            }]}))
+            .unwrap(),
+        );
+        let out = plan(Protocol::OpenAiChat, Protocol::GeminiInteractions)
+            .translate_request(body.clone())
+            .unwrap();
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["input"][0]["content"][0]["text"], "describe");
+        assert_eq!(v["input"][0]["content"][1]["mime_type"], "image/png");
+        assert_eq!(v["input"][0]["content"][1]["data"], "QUJD");
+        assert_eq!(
+            v["input"][0]["content"][2]["file_uri"],
+            "https://example.test/a.png"
+        );
+
+        let out = plan(Protocol::OpenAiChat, Protocol::GeminiGenerate)
+            .translate_request(body)
+            .unwrap();
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["contents"][0]["parts"][0]["text"], "describe");
+        assert_eq!(
+            v["contents"][0]["parts"][1]["inlineData"]["mimeType"],
+            "image/png"
+        );
+        assert_eq!(
+            v["contents"][0]["parts"][2]["fileData"]["fileUri"],
+            "https://example.test/a.png"
+        );
+    }
+
+    /// Dialects that pass unknown parts through rather than dropping them keep
+    /// doing so — failing closed is only correct where there is no carrier.
+    #[test]
+    fn openai_anthropic_translation_still_passes_unknown_parts_through() {
+        let part = json!({"type": "some_future_part", "payload": {"k": 1}});
+        let out = plan(Protocol::OpenAiChat, Protocol::AnthropicMessages)
+            .translate_request(body_with_unknown_part(Protocol::OpenAiChat, part.clone()))
+            .unwrap();
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["messages"][0]["content"][0], part);
     }
 
     #[test]

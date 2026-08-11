@@ -2919,6 +2919,7 @@ version = "0.0.10"
 dependencies = [
  "arc-swap",
  "bytes",
+ "criterion",
  "dashmap",
  "futures-util",
  "reqwest 0.12.28",
