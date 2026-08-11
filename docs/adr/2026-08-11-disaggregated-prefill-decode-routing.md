@@ -27,8 +27,9 @@ then streaming generated tokens from the decode worker.
 ADR-0014 fixed the boundary: `rolter-gateway` owns authentication, tenancy,
 target selection, tracing, metrics and accounting; `rolter-proxy` owns the wire
 protocol. rolter forwards one client HTTP request to one upstream and streams
-the response back. Everything it routes on is visible in the OpenAI/Anthropic
-HTTP surface or in signals an engine publishes over HTTP.
+the response back. Its routing inputs come from gateway-owned configuration,
+the client request, and bounded telemetry adapters; it does not participate in
+an engine's multi-stage request lifecycle.
 
 ## Options considered
 
@@ -52,9 +53,9 @@ engine's own sidechannel rather than through rolter.
 
 | Option | Pros | Cons |
 |--------|------|------|
-| **1. Implement in rolter** | Full control over phase placement; phase-aware scoring composes with existing scorers | Requires speaking an engine-specific KV transport (NIXL/UCX), none of which is part of any HTTP API; the data plane would hold per-request state across a handoff; couples rolter to one engine's internals and version cadence; duplicates work vLLM and llm-d already do |
+| **1. Implement in rolter** | Full control over phase placement; phase-aware scoring composes with existing scorers | Requires carrying KV tensors over an engine-specific connector and transport such as NIXL/UCX; the data plane would hold per-request state across a handoff; couples rolter to one engine's internals and version cadence; duplicates work vLLM and llm-d already do |
 | **2. One upstream** | Preserves the ADR-0014 boundary; works today with no code; every engine's own disaggregation implementation is usable, including future ones | rolter cannot influence phase placement, so it cannot improve on the engine's own decisions |
-| **3. Hybrid** | Avoids moving KV through rolter | Still needs rolter to know which workers can hand off to which, to speak the connector's handshake, and to keep the request alive across two upstream calls — most of option 1's coupling for part of its benefit; a mid-request failure has no clean recovery |
+| **3. Hybrid** | Avoids moving KV through rolter; an engine-specific HTTP extension can coordinate a connector-managed transfer | Still needs rolter to know which workers are connector-compatible, emit version-specific control fields and metadata, issue two upstream calls, and keep per-request state across them; a mid-request failure has no clean recovery |
 
 ## Decision
 
@@ -64,13 +65,18 @@ view, and its own coordinator owns phase selection and the KV handoff.
 
 ## Rationale
 
-The KV handoff is the whole feature, and it is not expressible over HTTP. It
-moves gigabytes of tensor data between accelerators over RDMA-class transports
-(NIXL, UCX) chosen by the engine. For rolter to place phases it would have to
-speak that transport, or at minimum its connector handshake — putting an
-engine-specific, version-coupled binary protocol inside a data plane whose
-entire design premise is that it only speaks the two dominant HTTP dialects.
-That is precisely the coupling ADR-0014 was written to prevent.
+The KV handoff is the central mechanism. The tensors do not travel in an
+OpenAI or Anthropic response; engines move them through connector-selected
+transports such as NIXL/UCX. A gateway that carried the tensors itself would
+therefore have to join that engine-specific data path.
+
+Coordination can still be initiated over HTTP. For example, vLLM's experimental
+disaggregated-prefill API accepts `kv_transfer_params` on separate prefill and
+decode requests while its connector moves the KV data out of band. That makes
+option 3 technically possible, but does not create a stable, engine-independent
+contract: rolter would still own engine-specific fields, compatible-worker
+topology, two-call orchestration and state across the handoff. That is precisely
+the version coupling and lifecycle ownership ADR-0014 was written to prevent.
 
 It would also be redundant. vLLM ships disaggregated serving with a connector
 API, and llm-d's router is co-designed with its engine and scheduler — it can
@@ -80,18 +86,21 @@ sits in front of *many* engines and hosted APIs; a feature that only works for
 one engine, at one version, with one transport configured, is not a good trade
 against that.
 
-The distinguishing question is: **does the signal reach rolter over HTTP?** For
-prefix-cache affinity, queue depth, KV-event residency and LMCache occupancy the
-answer is yes, which is why ADR-0007 and ADR-0021 exist and why LoRA-adapter
-affinity (#853 part 1) was straightforward. For a KV cache transfer between two
-accelerators the answer is no, and the boundary holds.
+The distinguishing question is: **can rolter consume the input through a stable,
+engine-independent contract without joining the engine's request lifecycle?**
+The answer is yes for prefix-cache affinity, queue depth, KV-event residency,
+LMCache occupancy and LoRA-adapter affinity, which fit the bounded scorer and
+telemetry interfaces behind ADR-0007 and ADR-0021. P/D placement does not: the
+placement decision and transfer metadata are part of one engine-specific,
+multi-call lifecycle.
 
 ## Consequences
 
 **Benefits:**
 
-- the ADR-0014 boundary is preserved: no engine-specific binary transport in the
-  data plane, and no per-request state held across an upstream handoff;
+- the ADR-0014 boundary is preserved: no engine-specific KV connector or
+  phase-control extension in the data plane, and no per-request state held
+  across an upstream handoff;
 - disaggregated fleets are usable with rolter today, with no code, for any
   engine that implements disaggregation — including engines that do not exist
   yet;
@@ -102,9 +111,9 @@ accelerators the answer is no, and the boundary holds.
 
 - rolter cannot improve on the engine's phase placement, and cannot report on
   it beyond whatever the fleet exposes over its metrics endpoint;
-- if an engine ever exposes phase-aware placement *over HTTP* — for example a
-  documented header or a prefill-affinity hint on the OpenAI surface — this
-  decision should be revisited, because the reason for it would no longer hold.
+- if a stable, engine-independent phase-placement contract emerges on the
+  OpenAI or Anthropic surface, this decision should be revisited, because the
+  portability and lifecycle objections would no longer hold.
 
 **System impact:**
 
