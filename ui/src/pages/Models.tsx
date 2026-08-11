@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Lock, Trash2 } from "lucide-react";
+import { Lock, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 
 import { ModelSheet, type ModelSheetMode } from "@/components/ModelSheet";
@@ -330,10 +330,11 @@ export default function Models() {
                   type="button"
                   title="Delete model"
                   aria-label={`Delete model ${r.name}`}
+                  disabled={removeModel.isPending && deleteTarget?.model === r.entry.model}
                   onClick={() => setDeleteTarget(r.entry)}
-                  className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  {removeModel.isPending && deleteTarget?.model === r.entry.model ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                 </button>
               )}
             </div>

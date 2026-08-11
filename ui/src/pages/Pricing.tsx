@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 
 import { EditorSheet } from "@/components/EditorSheet";
@@ -117,10 +117,11 @@ export default function Pricing() {
                 type="button"
                 title="Delete price"
                 aria-label={`Delete price for ${price.model}`}
+                disabled={removePrice.isPending && deleteTarget?.model === price.model}
                 onClick={() => setDeleteTarget(price)}
-                className="flex items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                {removePrice.isPending && deleteTarget?.model === price.model ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
               </button>
             </div>
           </div>
