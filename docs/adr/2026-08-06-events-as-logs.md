@@ -1,14 +1,7 @@
 # Events as logs, not span events
 
-## Metadata
-
-| Field | Value |
-| --- | --- |
-| Product | rolter |
-| Date | 6 Aug 2026 |
-| Status | ACCEPTED |
-| Issues | [#814](https://github.com/rolter-ai/rolter/issues/814), [#808](https://github.com/rolter-ai/rolter/issues/808), [#809](https://github.com/rolter-ai/rolter/issues/809), [#805](https://github.com/rolter-ai/rolter/issues/805) |
-| Relates | ADR-0024 (dashboard UX telemetry) |
+**Status:** Accepted · **Date:** 6 Aug 2026 · **Issues:** [#814](https://github.com/rolter-ai/rolter/issues/814), [#808](https://github.com/rolter-ai/rolter/issues/808), [#809](https://github.com/rolter-ai/rolter/issues/809), [#805](https://github.com/rolter-ai/rolter/issues/805)
+**Relates:** ADR-0024 (dashboard UX telemetry)
 
 ## Context
 

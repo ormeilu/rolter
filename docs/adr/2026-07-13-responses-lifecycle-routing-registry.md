@@ -1,17 +1,6 @@
 # Routing OpenAI Responses resources through a tenant-scoped registry
 
-## Metadata
-
-| Field | Value |
-|-------|-------|
-| **Product** | rolter |
-| **Author** | Ilya Lubenets |
-| **Date** | 13 Jul 2026 |
-| **Status** | DEVELOPMENT |
-| **Participants** | — (unassigned) |
-| **Decision maker** | — (unassigned) |
-| **Decided** | — |
-| **Superseded** | — |
+**Status:** Development · **Date:** 13 Jul 2026
 
 ## Context
 

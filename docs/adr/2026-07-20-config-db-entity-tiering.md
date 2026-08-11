@@ -1,14 +1,7 @@
 # Uniform config-vs-DB tiering for models, providers, and provider groups
 
-## Metadata
-
-| Field | Value |
-| --- | --- |
-| Product | rolter |
-| Date | 20 Jul 2026 |
-| Status | ACCEPTED |
-| Issues | [#306](https://github.com/rolter-ai/rolter/issues/306) |
-| Relates | ADR-0017 (provider/model addressing), ADR-0018 (granular CRUD) |
+**Status:** Accepted · **Date:** 20 Jul 2026 · **Issues:** [#306](https://github.com/rolter-ai/rolter/issues/306)
+**Relates:** ADR-0017 (provider/model addressing), ADR-0018 (granular CRUD)
 
 ## Context
 

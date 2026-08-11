@@ -2,6 +2,24 @@
 
 Lightweight decision log. Each entry: **Status** · **Context** · **Decision** · **Consequences**. Supersede rather than rewrite.
 
+A standalone record opens with its title and a single metadata line — no table:
+
+```markdown
+# Title of the decision
+
+**Status:** Accepted · **Date:** 6 Aug 2026 · **Issues:** [#812](https://github.com/rolter-ai/rolter/issues/812)
+**Supersedes:** ADR-0007 for exact vLLM modes
+**Relates:** ADR-0022 (config-vs-DB tiering)
+
+## Context
+```
+
+`Status`, `Date` and `Issues` are the line; `Supersedes` and `Relates` get their
+own line and are omitted when there is nothing to say. Nothing else belongs
+there — authorship and dates are what git is for, and a field whose value is
+either constant across every record or a `— (unassigned)` placeholder is noise
+that makes the actual decision harder to find. Records are English only.
+
 ## ADR-0001 — Rust + Axum/Hyper/Tower for the data plane
 Accepted. Need maximum proxy throughput with rich API semantics and SSE streaming. Chose Axum/Hyper/Tower on Tokio over Pingora/Actix for ecosystem fit and ergonomics. Consequence: idiomatic async stack; revisit Pingora only if profiling demands it.
 

@@ -1,14 +1,7 @@
 # Dashboard UX telemetry as a structural-only event stream
 
-## Metadata
-
-| Field | Value |
-| --- | --- |
-| Product | rolter |
-| Date | 6 Aug 2026 |
-| Status | ACCEPTED |
-| Issues | [#805](https://github.com/rolter-ai/rolter/issues/805) |
-| Relates | ADR-0023 (access-policy propagation) |
+**Status:** Accepted · **Date:** 6 Aug 2026 · **Issues:** [#805](https://github.com/rolter-ai/rolter/issues/805)
+**Relates:** ADR-0023 (access-policy propagation)
 
 ## Context
 

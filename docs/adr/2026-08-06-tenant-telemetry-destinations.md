@@ -1,14 +1,7 @@
 # Client control over telemetry: a kill switch now, collector-routed tenant destinations later
 
-## Metadata
-
-| Field | Value |
-| --- | --- |
-| Product | rolter |
-| Date | 6 Aug 2026 |
-| Status | ACCEPTED |
-| Issues | [#812](https://github.com/rolter-ai/rolter/issues/812), [#805](https://github.com/rolter-ai/rolter/issues/805), [#809](https://github.com/rolter-ai/rolter/issues/809) |
-| Relates | ADR-0019 (egress proxy pools), ADR-0025 (events as logs) |
+**Status:** Accepted · **Date:** 6 Aug 2026 · **Issues:** [#812](https://github.com/rolter-ai/rolter/issues/812), [#805](https://github.com/rolter-ai/rolter/issues/805), [#809](https://github.com/rolter-ai/rolter/issues/809)
+**Relates:** ADR-0019 (egress proxy pools), ADR-0025 (events as logs)
 
 ## Context
 

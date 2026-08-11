@@ -1,14 +1,7 @@
 # External cache telemetry for routing
 
-## Metadata
-
-| Field | Value |
-| --- | --- |
-| Product | rolter |
-| Date | 18 Jul 2026 |
-| Status | ACCEPTED |
-| Issues | [#258](https://github.com/rolter-ai/rolter/issues/258), [#259](https://github.com/rolter-ai/rolter/issues/259) |
-| Supersedes | ADR-0007 for exact vLLM and LMCache-aware modes |
+**Status:** Accepted · **Date:** 18 Jul 2026 · **Issues:** [#258](https://github.com/rolter-ai/rolter/issues/258), [#259](https://github.com/rolter-ai/rolter/issues/259)
+**Supersedes:** ADR-0007 for exact vLLM and LMCache-aware modes
 
 ## Context
 
