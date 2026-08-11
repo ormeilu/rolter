@@ -40,6 +40,43 @@ response body in their failure message — with an inferred field name, the
 provider's complaint *is* the finding, and a bare status-code assertion would
 throw it away.
 
+### Configuring the Gemini smoke
+
+`gemini-interactions-smoke.yml` needs one secret before it can verify anything:
+
+1. Create a `live-providers` repository environment (Settings → Environments).
+   Keeping the key there rather than at repository scope means a run against a
+   billed provider is reviewable, not something any workflow can reach for.
+2. Add `GEMINI_API_KEY` to that environment.
+3. Dispatch the workflow (`gh workflow run gemini-interactions-smoke.yml`),
+   optionally with `-f model=<id>`.
+
+Until the secret exists the workflow **fails** rather than skipping. A green
+tick from a run that made no request reads as "the wire format is still
+confirmed" when nothing was checked — worse than no sweep at all. Pass
+`-f allow_unconfigured=true` for a deliberate dry run of the workflow itself.
+
+Each run records the wire shapes it observed into the job summary and uploads
+the full log as an artifact. A billable run should leave evidence behind: the
+next question about a field name is then answered by reading the last run
+rather than by spending another call.
+
+What the suite covers, and why each probe exists:
+
+| Probe | Confirms |
+|---|---|
+| text turn | turn mapping, `system_instruction`, `generation_config`, usage — all documented |
+| inline image part | the inferred `mime_type`/`data` inline part shape |
+| remote image part | the inferred `file_uri` shape — the *other* branch, which the inline probe never reaches |
+| tool call round trip | `function_call` out, `function_result` back, and `call_id` correlation |
+| interaction threading | the id rolter surfaces as the response `id` is the one Google accepts back |
+| every client dialect | Chat Completions, Messages and Responses have separate response translators |
+| every client dialect, streaming | the inferred `step.delta` variants, through all three separate SSE emitters |
+
+A content part the dialect cannot carry is rejected at the gateway with
+`400 unsupported_content_part` rather than being dropped (#882), so an
+unconfirmed part shape fails loudly instead of producing a shortened body.
+
 Test grouping is configured in [`.config/nextest.toml`](../../.config/nextest.toml):
 the Postgres-backed `rolter-store`/`rolter-control` suites share one database and
 reset the schema per test, so they run in a single-threaded group to avoid
