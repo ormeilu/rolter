@@ -18,11 +18,95 @@ Goal: beat the reference Python proxy (LiteLLM cites ~8ms P95 added latency at 1
 - Per-request JSON parse for `model` is small but measurable; consider a fast path / partial parse for very high RPS.
 - Prefer `bytes::Bytes` (ref-counted) over `Vec<u8>` copies when rewriting the model field.
 
-## Benchmarking (roadmap)
+## Benchmarking
 
-- Add a `criterion` micro-bench for balancer `pick`.
-- Add an end-to-end load test (e.g. `oha`/`k6`) against a mock upstream to measure added latency and max RPS per core.
-- Track TTFT and total-latency histograms in Prometheus and watch them in CI perf runs.
+Two layers, neither on the per-PR gate:
+
+- **Micro-benches** (`just bench`) — criterion, covering balancer `pick` across
+  every strategy and the prefix trie. Compiled on every PR via clippy so they
+  cannot bit-rot, but not run (timings are noisy on shared runners).
+- **End-to-end load** (`just bench-sim` / `bench-vllm` / `bench-sglang`) —
+  `integration/engines/bench.py` against a real engine, measuring rolter's added
+  latency directly and its behaviour under sustained concurrency.
+
+### Tool decision (#847, closing #455)
+
+The load harness **extends `bench.py`** rather than adopting
+[GuideLLM](https://github.com/vllm-project/guidellm) or driving load with
+`oha`/`k6`. Recorded here because #847 required settling it before writing code.
+
+- **Air-gapped operation is a hard requirement for rolter.** `bench.py` is
+  stdlib-only — no install step, no wheels or binaries to vendor. GuideLLM
+  brings a substantial Python dependency tree; `oha`/`k6` are external binaries.
+  A benchmark you cannot run on the disconnected machine you are tuning is not
+  much of a benchmark.
+- **The direct-vs-rolter delta is the entire point of this harness**, and no
+  general-purpose load generator produces it. They measure one endpoint;
+  `added_latency_p50_ms` needs both driven identically in the same run under the
+  same conditions. Adopting one of them means keeping `bench.py` anyway for the
+  delta — two harnesses instead of one.
+- **ITL needs SSE token boundaries.** `oha` and `k6` measure bytes and requests,
+  not tokens, so they cannot produce inter-token latency at all. GuideLLM does
+  understand tokens, but the two points above still stand.
+- **Reproducible without credentials** — the default `sim` engine
+  (`llm-d-inference-sim`) needs no API key, so anyone can reproduce a number.
+
+The cost is carrying ~250 lines of stdlib Python for concurrency and knee
+detection. That was judged cheaper than a dependency tree plus a second harness.
+Revisit if the harness starts needing tokenizer-aware workload shaping, which is
+where GuideLLM genuinely earns its footprint.
+
+### What it measures
+
+`bench.py` drives the engine directly and through rolter in the same run:
+
+| Metric | Notes |
+|---|---|
+| `ttft_p50/p95_ms` | time to first byte |
+| `itl_p50/p95_ms` | inter-token latency, streaming only, needs `--max-tokens > 1` |
+| `latency_p50/p95/p99_ms` | end to end |
+| `requests_per_second` | achieved, not offered |
+| `error_rate` | non-2xx and transport failures, which is what saturation looks like |
+| `added_latency_p50_ms` | rolter minus direct — the headline overhead number |
+
+Profiles: `--concurrency` holds closed-loop steady state after a warmup, and
+`--sweep 1,2,4,8,16` walks concurrency upward — a ramp/burst profile — reporting
+**max sustainable RPS**: the highest achieved throughput whose p99 stayed inside
+`--knee-factor` (default 2×) of the lowest-concurrency baseline *and* which was
+not erroring.
+
+That bound matters. Throughput usually keeps climbing well past the point where
+latency collapses, so a peak RPS with no latency condition attached describes a
+system nobody would actually run. The report also names the concurrency level
+where the knee was crossed, so a reader can see where it went rather than only
+that it did.
+
+```bash
+just bench-sim     # sequential: per-request added latency (fast, unchanged)
+just load-sim      # concurrency sweep: max sustainable RPS, ITL, error rate
+just test-bench    # harness unit tests — stdlib only, no engine or network
+```
+
+`load-*` is deliberately a separate recipe: a sweep across five concurrency
+levels takes minutes, and silently making the added-latency run that much slower
+would be a bad trade. Tune with `LOAD_LEVELS`, `LOAD_REQUESTS`, `LOAD_WARMUP`
+and `LOAD_MAX_TOKENS`.
+
+Two measurement rules worth knowing when reading the JSON:
+
+- **Failed requests are counted, never timed.** A connection refused in 0.1 ms
+  is not a fast request; letting it into the percentiles would make a saturated
+  system look quicker than a healthy one. They appear in `error_rate` instead.
+- **ITL keys are absent, not zero, when nothing streamed.** A reported ITL of 0
+  would read as "instant tokens" rather than "not measured".
+
+### Baseline
+
+No baseline snapshot is recorded yet. It needs a run on fixed, documented
+hardware, and a number taken on a laptop under thermal throttling would be worse
+than none — an unreproducible baseline invites false regressions. Record
+hardware, engine version and rolter version alongside the numbers when one is
+taken.
 
 ## Inference engines
 
