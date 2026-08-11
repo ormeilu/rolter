@@ -40,6 +40,7 @@
 
 - [Zero-config quickstart](deployment/zero-config-quickstart.md)
 - [Configuration reference](deployment/configuration.md)
+- [Pre-boot validation (`rolter check`)](deployment/preflight-validation.md)
 - [Custom CA bundles](deployment/custom-ca-bundles.md)
 - [Self-hosted Ollama](deployment/ollama.md)
 - [OpenRouter](deployment/openrouter.md)

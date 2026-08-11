@@ -8,6 +8,7 @@
 //! rolter gateway --config rolter.toml
 //! rolter control --database-url postgres://...
 //! rolter easy-up            # gateway + control + UI in one supervised process
+//! rolter check              # pre-boot validation for a production deployment
 //! ```
 //!
 //! The `gateway`/`control` subcommands reuse the exact argument set of the
@@ -15,6 +16,7 @@
 //! `easy-up` composes both for a zero-config one-command bring-up.
 
 mod easy_up;
+mod preflight;
 
 use clap::{Parser, Subcommand};
 
@@ -38,6 +40,9 @@ enum Command {
     /// bring up gateway + control + UI in one supervised process (zero-config
     /// with the built-in fake-llm model, or database-backed with --database-url)
     EasyUp(easy_up::EasyUpArgs),
+    /// validate a production deployment before starting it, so a
+    /// misconfiguration fails loudly instead of starting degraded
+    Check(preflight::CheckArgs),
 }
 
 #[tokio::main]
@@ -47,5 +52,6 @@ async fn main() -> anyhow::Result<()> {
         Command::Gateway(args) => rolter_gateway::run(args).await,
         Command::Control(args) => rolter_control::run(args).await,
         Command::EasyUp(args) => easy_up::run(args).await,
+        Command::Check(args) => preflight::run(args).await,
     }
 }

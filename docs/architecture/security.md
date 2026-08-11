@@ -2,7 +2,7 @@
 
 ## Secret handling
 
-- **Upstream provider keys** are never stored in plaintext in the database. They are **envelope-encrypted** with AES-256-GCM: a per-record data key/nonce, wrapped by a master key (KEK) supplied via `ROLTER_MASTER_KEY` (env/file). Pluggable backends (HashiCorp Vault, cloud KMS) are a roadmap item.
+- **Upstream provider keys** are never stored in plaintext in the database. They are **envelope-encrypted** with AES-256-GCM: a per-record data key/nonce, wrapped by a master key (KEK) supplied via `ROLTER_KEK` (env/file). Pluggable backends (HashiCorp Vault, cloud KMS) are a roadmap item.
 - In the **bootstrap file**, prefer `api_key_env` over inline `api_key` so secrets stay in the environment, not on disk.
 - **Virtual keys** are stored as hashes with a short display prefix; the raw key is shown once at creation.
 - Secrets are never logged. The gateway redacts auth headers from traces.
@@ -164,6 +164,6 @@ most deployments. Revisit both if the planes ever cross an untrusted network.
 
 ## Operational guidance
 
-- Always set a strong `ROLTER_MASTER_KEY` (e.g. `openssl rand -hex 32`) and rotate provider keys periodically.
+- Always set a strong `ROLTER_KEK` (e.g. `openssl rand -hex 32`) and rotate provider keys periodically.
 - Run the control plane on a private network; expose only the gateway publicly.
 - Back up Postgres; treat the master key as the most sensitive secret.
