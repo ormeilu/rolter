@@ -21,6 +21,7 @@
 # Decisions
 
 - [ADRs / decision log](adr/README.md)
+  - [ADR-0028 — Disaggregated prefill/decode routing](adr/2026-08-11-disaggregated-prefill-decode-routing.md)
 
 # API
 
