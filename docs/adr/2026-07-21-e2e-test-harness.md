@@ -1,13 +1,6 @@
 # End-to-end test harness: Python/uv project driving a black-box stack
 
-## Metadata
-
-| Field | Value |
-| --- | --- |
-| Product | rolter |
-| Date | 21 Jul 2026 |
-| Status | ACCEPTED |
-| Issues | [#613](https://github.com/rolter-ai/rolter/issues/613), [#614](https://github.com/rolter-ai/rolter/issues/614) |
+**Status:** Accepted · **Date:** 21 Jul 2026 · **Issues:** [#613](https://github.com/rolter-ai/rolter/issues/613), [#614](https://github.com/rolter-ai/rolter/issues/614)
 
 ## Context
 

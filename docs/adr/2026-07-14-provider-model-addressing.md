@@ -1,16 +1,6 @@
 # Provider/model addressing to disambiguate identical model names
 
-## Metadata
-
-| Field | Value |
-|-------|-------|
-| **Product** | rolter |
-| **Author** | Ilya Lubenets |
-| **Date** | 14 Jul 2026 |
-| **Status** | ACCEPTED |
-| **Issue** | [ROL-266](https://linear.app/rolter/issue/ROL-266) |
-| **Decision maker** | @Ilya |
-| **Decided** | 14 Jul 2026 |
+**Status:** Accepted · **Date:** 14 Jul 2026 · **Issues:** [ROL-266](https://linear.app/rolter/issue/ROL-266)
 
 ## Context
 

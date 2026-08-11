@@ -1,13 +1,6 @@
 # Per-provider egress proxy pools
 
-## Metadata
-
-| Field | Value |
-| --- | --- |
-| Product | rolter |
-| Date | 18 Jul 2026 |
-| Status | ACCEPTED |
-| Issues | [#305](https://github.com/rolter-ai/rolter/issues/305) |
+**Status:** Accepted · **Date:** 18 Jul 2026 · **Issues:** [#305](https://github.com/rolter-ai/rolter/issues/305)
 
 ## Context
 
