@@ -2,6 +2,24 @@
 
 Lightweight decision log. Each entry: **Status** · **Context** · **Decision** · **Consequences**. Supersede rather than rewrite.
 
+A standalone record opens with its title and a single metadata line — no table:
+
+```markdown
+# Title of the decision
+
+**Status:** Accepted · **Date:** 6 Aug 2026 · **Issues:** [#812](https://github.com/rolter-ai/rolter/issues/812)
+**Supersedes:** ADR-0007 for exact vLLM modes
+**Relates:** ADR-0022 (config-vs-DB tiering)
+
+## Context
+```
+
+`Status`, `Date` and `Issues` are the line; `Supersedes` and `Relates` get their
+own line and are omitted when there is nothing to say. Nothing else belongs
+there — authorship and dates are what git is for, and a field whose value is
+either constant across every record or a `— (unassigned)` placeholder is noise
+that makes the actual decision harder to find. Records are English only.
+
 ## ADR-0001 — Rust + Axum/Hyper/Tower for the data plane
 Accepted. Need maximum proxy throughput with rich API semantics and SSE streaming. Chose Axum/Hyper/Tower on Tokio over Pingora/Actix for ecosystem fit and ergonomics. Consequence: idiomatic async stack; revisit Pingora only if profiling demands it.
 
@@ -44,10 +62,10 @@ Accepted. Export traces/metrics via OTLP to any compatible backend (SigNoz, Data
 ## ADR-0014 — Extensible API protocol translation
 Accepted. Resolve translation by client/upstream protocol pair in `rolter-proxy`, including incremental SSE, while the gateway retains transport, caching and accounting ownership. Consequence: new provider dialects extend one translation boundary; non-equivalent modalities remain explicit and are never silently dropped.
 
-## ADR-0015 — [Трансляция OpenAI Responses API](2026-07-13-responses-api-protocol-translation.md)
+## ADR-0015 — [OpenAI Responses API translation](2026-07-13-responses-api-protocol-translation.md)
 Development. Add OpenAI Responses as a protocol pair for native OpenAI, Chat Completions and Anthropic Messages, while model-less lifecycle operations remain uniformly unsupported until tenant-scoped storage exists.
 
-## ADR-0016 — [Маршрутизация ресурсов OpenAI Responses по tenant-scoped registry](2026-07-13-responses-lifecycle-routing-registry.md)
+## ADR-0016 — [Routing OpenAI Responses resources through a tenant-scoped registry](2026-07-13-responses-lifecycle-routing-registry.md)
 Development. Pin Responses lifecycle operations to a bounded tenant-scoped process-local record, preserving the original provider credential while making unknown and cross-tenant IDs indistinguishable.
 
 ## ADR-0017 — [Provider/model addressing to disambiguate identical model names](2026-07-14-provider-model-addressing.md)
@@ -79,6 +97,9 @@ Accepted. OpenTelemetry is deprecating the Span Events API, so log-based events 
 
 ## ADR-0026 — [Client control over telemetry: a kill switch now, collector-routed tenant destinations later](2026-08-06-tenant-telemetry-destinations.md)
 Accepted. Splits #812 in two. `ROLTER_TELEMETRY_ENABLED` ships now as one explicit off for every signal — traces, metrics, the dashboard's browser tracing, and logs once #809 lands — that can only subtract, defaults to enabled so no existing deployment changes, and leaves export on for an unrecognized value so a typo cannot silently blind a deployment. It is environment-only despite the issue asking for a config key: `telemetry::init` installs the subscriber before any config file is read, so a config-file switch could not gate trace export at all. Per-tenant destinations are deferred and, when built, belong in the OpenTelemetry Collector's routing processor keyed on an org resource attribute rather than in-process exporters — that keeps one egress path in the gateway and keeps tenant-supplied URLs, an SSRF surface, out of the data plane entirely. Consequence: operators get a reviewable "no telemetry leaves here" today; per-tenant routing later requires running a collector, which is already the recommended topology.
+
+## ADR-0027 — [End-to-end test harness: Python/uv project driving a black-box stack](2026-07-21-e2e-test-harness.md)
+Accepted. The e2e suite is a Python driver on the latest CPython managed by `uv`, exercising the real HTTP APIs of a docker-compose stack (postgres, redis, clickhouse, control, gateway, and N `llm-d-inference-sim` fake-vLLM engines) with no in-process shortcuts, so the tests see exactly what an operator or tenant sees. Numbered after ADR-0026 despite its earlier date because ADR numbers are append-only and never reused. Consequence: the suite needs a container runtime rather than `cargo test` alone; in exchange it covers the wiring between the two binaries and the three datastores that unit tests cannot reach.
 
 ## ADR-0028 — [Disaggregated prefill/decode routing belongs to the engine, not the gateway](2026-08-11-disaggregated-prefill-decode-routing.md)
 Accepted. rolter will not implement P/D disaggregation; a disaggregated fleet is one upstream and its own coordinator owns phase selection and the KV handoff. Engines move KV tensors through connector-selected transports such as NIXL/UCX. Some can coordinate that transfer through engine-specific HTTP fields, but rolter would still have to own compatible-worker topology, version-specific metadata, two upstream calls and per-request handoff state — exactly the lifecycle coupling ADR-0014 prevents. The distinguishing test is whether rolter can consume an input through a stable, engine-independent contract without joining the engine's request lifecycle. Consequence: disaggregated fleets work with rolter today for any engine, with no code and no mid-request-handoff failure modes; revisit if a stable phase-placement contract emerges on the OpenAI or Anthropic surface.

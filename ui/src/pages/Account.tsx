@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Plus, RotateCw, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -306,17 +307,18 @@ function MintKeyDialog({
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>New key</DialogTitle>
-        <DialogDescription>
-          Mint a personal key in{" "}
-          <span className="font-mono">
-            {projectLabel ?? "the current project"}
-          </span>
-          . The plaintext key is shown once, right after creation.
-        </DialogDescription>
-      </DialogHeader>
+    <EditorSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="New key"
+      subtitle={`Personal key in ${projectLabel ?? "the current project"} — shown once, right after creation`}
+      dirty={Boolean(name || modelsText)}
+      errorMessage={mint.isError ? (mint.error as Error).message : undefined}
+      saveLabel="Mint"
+      canSave
+      saving={mint.isPending}
+      onSave={() => mint.mutate()}
+    >
       <div className="space-y-3">
         <Field label="Name (optional)">
           <Input
@@ -335,21 +337,8 @@ function MintKeyDialog({
             placeholder="gpt-4o, claude-sonnet"
           />
         </Field>
-        {mint.isError && (
-          <p className="text-xs text-destructive">
-            {(mint.error as Error).message}
-          </p>
-        )}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button disabled={mint.isPending} onClick={() => mint.mutate()}>
-          Mint
-        </Button>
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }
 

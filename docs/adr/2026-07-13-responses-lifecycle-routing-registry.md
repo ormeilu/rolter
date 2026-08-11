@@ -1,29 +1,18 @@
-# Маршрутизация ресурсов OpenAI Responses по tenant-scoped registry
+# Routing OpenAI Responses resources through a tenant-scoped registry
 
-## Общее
+**Status:** Development · **Date:** 13 Jul 2026 · **Issues:** [ROL-252](https://linear.app/rolter/issue/ROL-252), [ROL-264](https://linear.app/rolter/issue/ROL-264)
 
-| Поле | Значение |
-|------|----------|
-| **Продукт** | rolter |
-| **Автор** | Ilya Lubenets |
-| **Дата создания** | 13 Jul 2026 |
-| **Статус** | DEVELOPMENT |
-| **Участники** | @<укажите> |
-| **ЛПР** | @<укажите> |
-| **Принято** | — |
-| **Устарело** | — |
+## Context
 
-## Контекст
+ROL-252 added OpenAI Responses creation, routed on the `model` field. ROL-264 adds `GET` and `DELETE /v1/responses/{id}`, `POST /v1/responses/{id}/cancel` and `GET /v1/responses/{id}/input_items`. These requests carry no model, tenant or provider, and the upstream identifier cannot safely be used to re-balance: the request could go to a different provider, target or provider key and expose another tenant's resource.
 
-ROL-252 добавил создание OpenAI Responses, маршрутизируемое по полю `model`. ROL-264 добавляет `GET` и `DELETE /v1/responses/{id}`, `POST /v1/responses/{id}/cancel` и `GET /v1/responses/{id}/input_items`. Эти запросы не содержат модель, tenant или provider, а идентификатор upstream нельзя безопасно использовать для повторного балансирования: запрос может уйти другому provider, target или provider key и раскрыть ресурс другого tenant.
+The gateway already authenticates the virtual key, atomically refreshes the routing snapshot and selects a concrete provider credential. A safe lifecycle requires remembering that decision after a successful `POST /v1/responses`, streaming responses included. Translated Chat Completions and Anthropic Messages do not create a persistent upstream Responses resource.
 
-Gateway уже аутентифицирует virtual key, атомарно обновляет routing snapshot и выбирает конкретный provider credential. Для безопасного lifecycle необходимо запомнить это решение после успешного `POST /v1/responses`, включая streaming-ответы. Переведённые Chat Completions и Anthropic Messages не создают сохраняемый upstream Responses resource.
+## Options considered
 
-## Рассмотренные варианты
+### Option 1 — Re-select the route from the response ID
 
-### Вариант 1. Повторно выбирать маршрут по response ID
-
-Хешировать `response_id` и использовать текущий balancer или перебор providers.
+Hash `response_id` and use the current balancer or iterate over providers.
 
 ```mermaid
 flowchart LR
@@ -33,9 +22,9 @@ flowchart LR
     B --> P2[Provider B]
 ```
 
-### Вариант 2. Ограниченный process-local tenant registry
+### Option 2 — Bounded process-local tenant registry
 
-После успешного создания сохранить composite key `virtual-key digest + response_id` и pin на provider, target, model и fingerprint provider credential. Запись имеет TTL и удаляется после успешного DELETE.
+After a successful creation, store the composite key `virtual-key digest + response_id` and pin it to the provider, target, model and provider-credential fingerprint. The entry has a TTL and is removed after a successful DELETE.
 
 ```mermaid
 sequenceDiagram
@@ -53,9 +42,9 @@ sequenceDiagram
     G->>P: lifecycle request with same credential
 ```
 
-### Вариант 3. Распределённый registry в Redis
+### Option 3 — Distributed registry in Redis
 
-Хранить те же записи в общем Redis с TTL, чтобы lifecycle запрос мог обслужить любой gateway replica.
+Store the same entries in shared Redis with a TTL, so that any gateway replica can serve a lifecycle request.
 
 ```mermaid
 flowchart LR
@@ -67,55 +56,55 @@ flowchart LR
     G2 --> P
 ```
 
-## Сравнение вариантов
+## Comparison
 
-| Вариант | Плюсы | Минусы |
-|---------|-------|--------|
-| **1. Повторный выбор** | Нет нового состояния | Нельзя гарантировать tenant isolation, provider и credential; небезопасно |
-| **2. Process-local registry** | Не добавляет сетевой hop и обязательную инфраструктуру в data-plane; синхронная запись доступна сразу после завершения ответа | Нужна sticky routing между replicas; записи теряются при restart |
-| **3. Redis registry** | Работает между replicas и переживает restart gateway | Redis становится обязательным для lifecycle; добавляет latency, failure mode и гонку записи после завершения SSE |
+| Option | Pros | Cons |
+|--------|------|------|
+| **1. Re-selection** | No new state | Tenant isolation, provider and credential cannot be guaranteed; unsafe |
+| **2. Process-local registry** | Adds no network hop and no mandatory infrastructure to the data plane; the synchronous write is available as soon as the response completes | Requires sticky routing between replicas; entries are lost on restart |
+| **3. Redis registry** | Works across replicas and survives a gateway restart | Redis becomes mandatory for lifecycle; adds latency, a failure mode and a write race after SSE completion |
 
-## Решение
+## Decision
 
-Выбран вариант 2. `rolter-gateway` хранит ограниченный process-local registry. Ключ состоит из peppered digest виртуального ключа и публичного `response_id`; plaintext key не сохраняется. Значение фиксирует provider, target, public model, provider-native ID, fingerprint выбранного provider credential и capability flags.
+Option 2 was chosen. `rolter-gateway` keeps a bounded process-local registry. The key is composed of a peppered digest of the virtual key and the public `response_id`; the plaintext key is not stored. The value records the provider, target, public model, provider-native ID, the fingerprint of the selected provider credential and capability flags.
 
-По умолчанию запись живёт 24 часа, один процесс хранит не более 100 000 записей. Параметры задаются через `[responses] registry_ttl_secs` и `registry_max_entries`; нулевое значение отключает регистрацию. Истечение и переполнение очищаются лениво на lookup/insert. Успешный DELETE удаляет запись немедленно.
+By default an entry lives for 24 hours and a single process holds at most 100,000 entries. Both are configured through `[responses] registry_ttl_secs` and `registry_max_entries`; a zero value disables registration. Expiry and overflow are cleaned up lazily on lookup/insert. A successful DELETE removes the entry immediately.
 
-## Обоснование
+## Rationale
 
-Process-local registry закрывает основной security invariant без обязательного Redis на пути inference. Composite key делает unknown, expired и cross-tenant lookup неразличимыми. Pin на provider credential предотвращает обращение к ресурсу через другой upstream account. Fingerprint позволяет найти тот же credential после перестановки key pool, не сохраняя секрет второй раз.
+A process-local registry closes the main security invariant without requiring Redis on the inference path. The composite key makes unknown, expired and cross-tenant lookups indistinguishable. Pinning to the provider credential prevents reaching the resource through a different upstream account. The fingerprint makes it possible to find the same credential after the key pool is reordered, without storing the secret a second time.
 
-Translated Chat Completions и Anthropic Messages получают запись с пустыми lifecycle capabilities. Это позволяет вернуть владельцу точный `501 response_lifecycle_unsupported`, сохраняя для другого tenant единый `404 response_not_found`.
+Translated Chat Completions and Anthropic Messages get an entry with empty lifecycle capabilities. That allows returning a precise `501 response_lifecycle_unsupported` to the owner while keeping a uniform `404 response_not_found` for any other tenant.
 
-## Последствия
+## Consequences
 
-**Преимущества:**
+**Benefits:**
 
-- lifecycle запрос не проходит повторную балансировку и всегда использует исходный provider account;
-- unknown, expired, deleted, cross-tenant и недоступные после config change ресурсы возвращают одинаковый `404` без route metadata;
-- native upstream status и body передаются без преобразования;
-- non-streaming JSON и завершённый SSE регистрируются одной completion-observer точкой.
+- a lifecycle request is never re-balanced and always uses the original provider account;
+- unknown, expired, deleted, cross-tenant and post-config-change unreachable resources all return the same `404` with no route metadata;
+- the native upstream status and body are forwarded without translation;
+- non-streaming JSON and completed SSE are registered from a single completion-observer point.
 
-**Недостатки и риски:**
+**Drawbacks and risks:**
 
-- multi-replica deployment требует sticky routing по клиенту или response ID;
-- restart gateway удаляет registry раньше upstream retention;
-- полный ответ временно буферизуется существующим accounting stream; registry использует уже имеющийся buffer, но размер памяти не уменьшается;
-- удаление provider, смена его kind или ротация исходного credential делает запись недоступной и возвращает `404`.
+- multi-replica deployments require sticky routing by client or response ID;
+- a gateway restart drops the registry earlier than upstream retention;
+- the full response is temporarily buffered by the existing accounting stream; the registry reuses that buffer, but the memory footprint is not reduced;
+- deleting a provider, changing its kind or rotating the original credential makes the entry unreachable and returns `404`.
 
-**Влияние на систему:**
+**System impact:**
 
-Изменяются `rolter-core` (конфигурация retention), `rolter-gateway` (registry, lifecycle handlers и response observer), `rolter-proxy` (model-less forwarding), OpenAPI, API-документация и engine smoke. Схемы Postgres/Redis не меняются.
+`rolter-core` (retention configuration), `rolter-gateway` (registry, lifecycle handlers and response observer), `rolter-proxy` (model-less forwarding), the OpenAPI spec, the API documentation and the engine smoke suite change. The Postgres/Redis schemas do not.
 
-## Связанные записи
+## Related records
 
 - ADR-0005 — Org → Team → Project → Virtual Key tenancy
 - ADR-0014 — Extensible API protocol translation
-- ADR-0015 — Трансляция OpenAI Responses API
+- ADR-0015 — OpenAI Responses API translation
 - ROL-252 — OpenAI Responses API passthrough and streaming
 - ROL-264 — Responses API lifecycle resources
 
-## Открытые вопросы
+## Open questions
 
-- Добавить опциональный Redis backend registry, если lifecycle должен работать без sticky routing между replicas.
-- Расширить capability discovery, когда OpenAI-compatible providers начнут надёжно реализовывать native Responses lifecycle.
+- Add an optional Redis registry backend if lifecycle must work without sticky routing across replicas.
+- Extend capability discovery once OpenAI-compatible providers reliably implement the native Responses lifecycle.

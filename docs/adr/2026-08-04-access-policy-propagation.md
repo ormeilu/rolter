@@ -1,14 +1,7 @@
 # Propagating access-profile model policy to the data plane
 
-## Metadata
-
-| Field | Value |
-| --- | --- |
-| Product | rolter |
-| Date | 4 Aug 2026 |
-| Status | ACCEPTED |
-| Issues | [#791](https://github.com/rolter-ai/rolter/issues/791), [#534](https://github.com/rolter-ai/rolter/issues/534) |
-| Relates | ADR-0022 (config-vs-DB tiering) |
+**Status:** Accepted · **Date:** 4 Aug 2026 · **Issues:** [#791](https://github.com/rolter-ai/rolter/issues/791), [#534](https://github.com/rolter-ai/rolter/issues/534)
+**Relates:** ADR-0022 (config-vs-DB tiering)
 
 ## Context
 

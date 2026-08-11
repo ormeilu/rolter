@@ -23,6 +23,23 @@ OLLAMA_API_KEY=... ROLTER_OLLAMA_LIVE_MODEL=gpt-oss:20b \
   cargo test -p rolter-gateway --test ollama_cloud live_smoke -- --ignored
 ```
 
+The Gemini Interactions smoke is gated the same way. It exists because Google
+publishes no full JSON schema for the interactions wire format, so parts of the
+adapter — the multimodal part field names and some `step.delta` variants —
+were inferred from prose docs and only a real request confirms them (#764):
+
+```bash
+GEMINI_API_KEY=... ROLTER_GEMINI_LIVE_MODEL=gemini-3.6-flash \
+  cargo test -p rolter-gateway --test gemini_interactions_live -- --ignored
+```
+
+Both run in CI only from dispatch-gated workflows, never the per-PR gate:
+`quality.yml` takes no secrets by design (#734) so dependabot and fork PRs pass
+exactly the same checks. Assertions in the live suites carry the upstream
+response body in their failure message — with an inferred field name, the
+provider's complaint *is* the finding, and a bare status-code assertion would
+throw it away.
+
 Test grouping is configured in [`.config/nextest.toml`](../../.config/nextest.toml):
 the Postgres-backed `rolter-store`/`rolter-control` suites share one database and
 reset the schema per test, so they run in a single-threaded group to avoid
