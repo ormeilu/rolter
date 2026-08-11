@@ -41,6 +41,7 @@ mod guardrails;
 mod health;
 #[cfg(feature = "postgres")]
 mod invitations;
+pub mod ldap;
 #[cfg(feature = "postgres")]
 mod logging_settings;
 #[cfg(feature = "postgres")]
