@@ -76,6 +76,30 @@ Spans never carry prompt or completion content, API keys, virtual-key plaintext,
 or injected header values — those are credential material, and redaction stays
 owned by the existing `logging_settings` machinery rather than a second policy.
 
+### Control-plane spans
+
+The control plane runs the same pipelines as the gateway (`telemetry::init()`),
+but until #845 emitted no spans of its own — everything it did was invisible
+beyond what the HTTP layer produced by default.
+
+| Span | Attributes |
+|---|---|
+| `control.request` | `http.route`, `http.request.method`, `http.response.status_code` |
+| `snapshot.build` | `config_version`, `payload_bytes`, `outcome` |
+| `snapshot.sanitize` | — |
+| `snapshot.encode` | — |
+
+`http.route` is the *matched* template (`/api/v1/providers/{id}`), never the
+concrete path. `control.request` comes from one middleware rather than an
+attribute on each of ~90 handlers, so a route added tomorrow is instrumented the
+moment it is mounted.
+
+`snapshot.build` is the one to watch. Snapshot latency is fleet-wide
+config-propagation delay: every gateway waits on it, so when an operator changes
+a route and the fleet serves stale config, this span is what says whether the
+delay is in generation or downstream of it. `config_version` on the span answers
+"which config was this" without putting an unbounded value on a metric.
+
 ### Tenant attributes
 
 The `gateway.request` span carries `rolter.org.id`, `rolter.team.id` and
@@ -197,6 +221,46 @@ provider, exporter or callback is built at all.
 
 Per-model histograms and label-bearing counters stay Prometheus-only for now;
 the scalar set is what OTLP carries.
+
+### Control-plane metrics
+
+The control plane has no Prometheus registry to mirror, so these are the one
+place it measures itself (#845). They are real histograms — measurements taken
+as they happen — not observable instruments, because a duration cannot be
+reconstructed from a counter after the fact.
+
+| Metric | Unit | Attributes |
+|---|---|---|
+| `rolter_snapshot_build_ms` | ms | `outcome` (`ok` / `not_modified` / `error`) |
+| `rolter_snapshot_payload_bytes` | By | `outcome` |
+| `rolter_control_request_ms` | ms | `http.route`, `http.request.method`, `http.response.status_class` |
+
+Boundaries are deliberately not the gateway's. A gateway request is dominated by
+an upstream model call and is interesting out to tens of seconds; a snapshot
+build and a CRUD write are database work where "is this 2 ms or 40 ms" is the
+whole question, so reusing the gateway's boundaries would put nearly every
+observation in the first bucket.
+
+**Cardinality is bounded by construction.** `http.route` is the matched
+template, so a thousand providers are one series. Status is recorded as a
+*class*, not a code: twelve statuses across ninety routes would be over a
+thousand series to answer a question five buckets answer. `config_version` is
+unbounded — a new value on every config write — so it lives on the
+`snapshot.build` span and never on a metric.
+
+`rolter_snapshot_payload_bytes` skips the `304` case rather than recording a
+zero: a not-modified poll transfers no body, and folding zeroes in would drag
+the size distribution down and misreport what the fleet actually moves.
+
+Payload size matters on its own. It is what every gateway transfers on every
+poll, and it is the first thing to look at when propagation gets slower without
+generation getting slower. The `snapshot` bench in `rolter-core` shows why the
+encode is the stage to watch: at 1000 routes it costs ~2.8 ms against ~150 µs
+for sanitize and ~120 µs for validate.
+
+The control plane also registers the same process and runtime metrics as the
+gateway — it degrades for the same reasons and previously answered none of those
+questions either.
 
 ### Logs over OTLP
 

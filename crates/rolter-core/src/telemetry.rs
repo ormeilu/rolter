@@ -240,6 +240,38 @@ pub fn init() -> TelemetryGuard {
 const TOKEN_SECONDS_BUCKETS: [f64; 10] =
     [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1.0];
 
+/// Bucket boundaries for control-plane operation latency, in milliseconds.
+///
+/// Deliberately different from the gateway's request boundaries. A gateway
+/// request is dominated by an upstream model call and is interesting out to
+/// tens of seconds; a snapshot build and a CRUD write are database work and are
+/// interesting from a millisecond up, where "is this 2ms or 40ms" is the whole
+/// question. Reusing the gateway's boundaries would put nearly every
+/// observation in the first bucket.
+#[cfg(feature = "otlp")]
+const CONTROL_LATENCY_BUCKETS_MS: [f64; 12] = [
+    1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+];
+
+/// Bucket boundaries for snapshot payload size, in bytes.
+///
+/// A snapshot grows with the tenant's config, and its size is what every
+/// gateway in the fleet transfers on every poll. Spanning 1 KiB to 32 MiB
+/// covers a single-route dev deployment through a large multi-tenant one.
+#[cfg(feature = "otlp")]
+const SNAPSHOT_BYTES_BUCKETS: [f64; 10] = [
+    1024.0,
+    4096.0,
+    16_384.0,
+    65_536.0,
+    262_144.0,
+    1_048_576.0,
+    4_194_304.0,
+    8_388_608.0,
+    16_777_216.0,
+    33_554_432.0,
+];
+
 /// One scalar metric to export: Prometheus type, name, help text, value.
 ///
 /// Mirrors what the gateway's `Metrics::scalars()` produces, expressed in plain
@@ -376,6 +408,151 @@ impl RequestHistograms {
     }
 }
 
+/// Records control-plane operation latency as OTLP histograms (#845).
+///
+/// The control plane's two jobs are worth measuring for different reasons.
+/// Snapshot generation is *fleet-wide config-propagation delay*: every gateway
+/// waits on it, so when an operator changes a route and the fleet serves stale
+/// config, this is what says whether the delay is in generation or downstream
+/// of it. CRUD latency is what makes a slow dashboard write attributable.
+///
+/// A default-constructed value records nothing, which is what every deployment
+/// without OTLP holds. Cloning is cheap; the instruments are shared.
+#[derive(Clone, Default)]
+pub struct ControlHistograms {
+    #[cfg(feature = "otlp")]
+    inner: Option<std::sync::Arc<ControlHistogramSet>>,
+}
+
+#[cfg(feature = "otlp")]
+struct ControlHistogramSet {
+    snapshot_duration: opentelemetry::metrics::Histogram<u64>,
+    snapshot_bytes: opentelemetry::metrics::Histogram<u64>,
+    crud_duration: opentelemetry::metrics::Histogram<u64>,
+}
+
+impl ControlHistograms {
+    /// Record one completed snapshot build.
+    ///
+    /// `bytes` is the serialized payload every polling gateway transfers, and
+    /// `outcome` is a bounded label (`ok`, `not_modified`, `error`) — never the
+    /// `config_version`, which is unbounded and would make a new time series on
+    /// every config write.
+    pub fn record_snapshot(&self, outcome: &'static str, duration_ms: u64, bytes: u64) {
+        #[cfg(feature = "otlp")]
+        if let Some(inner) = &self.inner {
+            let attrs = [opentelemetry::KeyValue::new("outcome", outcome)];
+            inner.snapshot_duration.record(duration_ms, &attrs);
+            // a 304 transfers no payload; recording a 0 would drag the size
+            // distribution toward zero and misreport what the fleet moves
+            if bytes > 0 {
+                inner.snapshot_bytes.record(bytes, &attrs);
+            }
+            return;
+        }
+        let _ = (outcome, duration_ms, bytes);
+    }
+
+    /// Record one completed control-plane API call.
+    ///
+    /// `route` must be the *matched* path template (`/api/v1/providers/{id}`),
+    /// never the concrete path: a per-entity-id label would give this metric
+    /// unbounded cardinality, which is exactly what #845 rules out.
+    pub fn record_crud(&self, route: &str, method: &str, status: u16, duration_ms: u64) {
+        #[cfg(feature = "otlp")]
+        if let Some(inner) = &self.inner {
+            let attrs = [
+                opentelemetry::KeyValue::new("http.route", route.to_string()),
+                opentelemetry::KeyValue::new("http.request.method", method.to_string()),
+                // the class, not the code: 12 statuses across 80 routes is 960
+                // series for a question ("are writes failing") that 5 answers
+                opentelemetry::KeyValue::new("http.response.status_class", status_class(status)),
+            ];
+            inner.crud_duration.record(duration_ms, &attrs);
+            return;
+        }
+        let _ = (route, method, status, duration_ms);
+    }
+
+    /// Whether anything is actually being recorded.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        #[cfg(feature = "otlp")]
+        let active = self.inner.is_some();
+        #[cfg(not(feature = "otlp"))]
+        let active = false;
+        active
+    }
+}
+
+/// Collapse an HTTP status into its class, as a `'static` label.
+fn status_class(status: u16) -> &'static str {
+    match status / 100 {
+        1 => "1xx",
+        2 => "2xx",
+        3 => "3xx",
+        4 => "4xx",
+        5 => "5xx",
+        _ => "other",
+    }
+}
+
+/// Install the control plane's histograms (#845).
+///
+/// The control plane has no Prometheus registry to mirror, so unlike
+/// [`install_metrics`] there is nothing to export observably — these are
+/// measurements taken as they happen. Returns `None`, and costs nothing, when
+/// no OTLP endpoint is configured.
+#[must_use]
+pub fn install_control_metrics() -> Option<MetricsGuard> {
+    #[cfg(feature = "otlp")]
+    {
+        let provider = otlp::try_build_meter_provider()?;
+        let meter = {
+            use opentelemetry::metrics::MeterProvider as _;
+            provider.meter("rolter")
+        };
+
+        // the control plane degrades for the same reasons the gateway does, and
+        // answered none of those questions either
+        process::install(&meter);
+        runtime::install(&meter);
+
+        let control = ControlHistograms {
+            inner: Some(std::sync::Arc::new(ControlHistogramSet {
+                snapshot_duration: meter
+                    .u64_histogram("rolter_snapshot_build_ms")
+                    .with_description("time to generate one config snapshot, in milliseconds")
+                    .with_unit("ms")
+                    .with_boundaries(CONTROL_LATENCY_BUCKETS_MS.to_vec())
+                    .build(),
+                snapshot_bytes: meter
+                    .u64_histogram("rolter_snapshot_payload_bytes")
+                    .with_description("serialized size of one config snapshot, in bytes")
+                    .with_unit("By")
+                    .with_boundaries(SNAPSHOT_BYTES_BUCKETS.to_vec())
+                    .build(),
+                crud_duration: meter
+                    .u64_histogram("rolter_control_request_ms")
+                    .with_description("control-plane API request latency, in milliseconds")
+                    .with_unit("ms")
+                    .with_boundaries(CONTROL_LATENCY_BUCKETS_MS.to_vec())
+                    .build(),
+            })),
+        };
+
+        Some(MetricsGuard {
+            provider: Some(provider),
+            histograms: RequestHistograms::default(),
+            control,
+        })
+    }
+    #[cfg(not(feature = "otlp"))]
+    {
+        None
+    }
+}
+
 /// Guard holding the OTLP meter provider, flushing metrics on drop.
 #[must_use = "bind the guard to a named local so metrics flush on exit"]
 #[derive(Default)]
@@ -383,12 +560,20 @@ pub struct MetricsGuard {
     #[cfg(feature = "otlp")]
     provider: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
     histograms: RequestHistograms,
+    control: ControlHistograms,
 }
 
 impl MetricsGuard {
     /// The histogram recorder to hand the request path. Inert when export is off.
     pub fn histograms(&self) -> RequestHistograms {
         self.histograms.clone()
+    }
+
+    /// The control plane's histogram recorder. Inert when export is off, and
+    /// on a guard built by [`install_metrics`] rather than
+    /// [`install_control_metrics`].
+    pub fn control_histograms(&self) -> ControlHistograms {
+        self.control.clone()
     }
 }
 
@@ -547,6 +732,7 @@ where
         Some(MetricsGuard {
             provider: Some(provider),
             histograms,
+            control: ControlHistograms::default(),
         })
     }
     #[cfg(not(feature = "otlp"))]
