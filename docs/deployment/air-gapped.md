@@ -51,8 +51,8 @@ Or transfer a fully offline image with `docker save` / `docker load`:
 
 ```bash
 # on a connected host
-docker pull ghcr.io/ormeilu/rolter:latest
-docker save ghcr.io/ormeilu/rolter:latest -o rolter.tar
+docker pull ghcr.io/rolter-ai/rolter:latest
+docker save ghcr.io/rolter-ai/rolter:latest -o rolter.tar
 
 # copy rolter.tar into the enclave, then
 docker load -i rolter.tar

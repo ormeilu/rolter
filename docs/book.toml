@@ -9,8 +9,8 @@ language = "en"
 # static site by mdbook; the polished user-facing docs live separately under
 # user-docs/ (mintlify). build output goes to docs/book/ (gitignored).
 [output.html]
-git-repository-url = "https://github.com/ormeilu/rolter"
-edit-url-template = "https://github.com/ormeilu/rolter/edit/master/docs/{path}"
+git-repository-url = "https://github.com/rolter-ai/rolter"
+edit-url-template = "https://github.com/rolter-ai/rolter/edit/master/docs/{path}"
 default-theme = "rust"
 # mermaid runtime + theme bootstrap, vendored under docs/ rather than pulled
 # from a cdn: the book has to build and render fully air-gapped. `mdbook-mermaid

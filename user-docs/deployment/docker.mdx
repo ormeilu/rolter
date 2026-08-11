@@ -82,7 +82,7 @@ If you want to run only the gateway — without the control plane or any backing
 docker run --rm -p 4000:4000 \
   -e OPENAI_API_KEY=$OPENAI_API_KEY \
   -v "$PWD/rolter.toml:/app/rolter.toml" \
-  ghcr.io/ormeilu/rolter:latest
+  ghcr.io/rolter-ai/rolter:latest
 ```
 
 Mount your local `rolter.toml` into the container at `/app/rolter.toml`. The gateway reads provider credentials from the environment variables you inject, keeping secrets out of the config file.
@@ -91,7 +91,7 @@ To run the control plane instead of the gateway, override the entrypoint:
 
 ```bash
 docker run --rm -p 4001:4001 \
-  ghcr.io/ormeilu/rolter:latest rolter-control
+  ghcr.io/rolter-ai/rolter:latest rolter-control
 ```
 
 ## Build the image locally
