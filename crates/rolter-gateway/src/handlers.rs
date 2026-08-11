@@ -44,6 +44,8 @@ pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
 /// Prometheus metrics endpoint.
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     let mut body = state.metrics.render();
+    // scraped upstream engine series (#850), one label set per provider
+    state.upstream_metrics.render(&mut body);
     body.push_str("# HELP rolter_egress_proxy_requests_total upstream requests by proxy pool member and outcome\n");
     body.push_str("# TYPE rolter_egress_proxy_requests_total counter\n");
     body.push_str("# HELP rolter_egress_proxy_quarantined whether a proxy pool member is temporarily quarantined\n");
