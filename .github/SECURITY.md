@@ -40,10 +40,10 @@ privileged local access already granted by the operator.
 ## Hardening & operational guidance
 
 See [`docs/architecture/security.md`](docs/architecture/security.md) for the
-threat model, secret handling (envelope encryption, `ROLTER_MASTER_KEY`),
+threat model, secret handling (envelope encryption, `ROLTER_KEK`),
 transport, and tenant isolation. Key reminders:
 
-- Set a strong `ROLTER_MASTER_KEY` (`openssl rand -hex 32`) and rotate provider
+- Set a strong `ROLTER_KEK` (`openssl rand -hex 32`) and rotate provider
   keys periodically.
 - Prefer `api_key_env` over inline `api_key` in the bootstrap config.
 - Run the control plane on a private network; expose only the gateway publicly.
