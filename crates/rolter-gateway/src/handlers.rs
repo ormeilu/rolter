@@ -1265,6 +1265,13 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         session_key,
         prompt,
         token_ids: token_ids.as_deref(),
+        // adapter identity only exists when the request addresses something
+        // other than the route's own model — i.e. a passthrough provider-group
+        // route, which is how vLLM addresses LoRA adapters over shared base
+        // weights. On a single-model route the two are equal and this stays
+        // None, which keeps adapter scoring inert: treating one model as an
+        // adapter would pin the whole route to whichever target served first
+        adapter: (model != effective_model).then_some(model.as_str()),
     };
     // trace context plus any client headers the operator allowlisted (#564).
     //
@@ -2081,6 +2088,9 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
         session_key: headers.get("x-session-id").and_then(|v| v.to_str().ok()),
         prompt: None,
         token_ids: token_ids.as_deref(),
+        // see the chat path: an adapter only exists when the request addresses
+        // something other than the route's own model
+        adapter: (model != entry.route.model).then_some(model.as_str()),
     };
     // trace context plus any client headers the operator allowlisted (#564)
     let trace_ctx =

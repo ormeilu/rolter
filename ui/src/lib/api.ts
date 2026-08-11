@@ -376,6 +376,7 @@ export const STRATEGIES = [
   "cache_aware",
   "weighted",
   "pipeline",
+  "lora_aware",
 ] as const;
 
 export interface OrgRow {

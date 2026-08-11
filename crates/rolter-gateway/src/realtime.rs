@@ -113,6 +113,8 @@ pub async fn realtime(
         session_key,
         prompt: None,
         token_ids: None,
+        // realtime sessions are not adapter-addressed
+        adapter: None,
     };
     let selected = match connect_selected(
         &state,
