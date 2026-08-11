@@ -11,16 +11,29 @@ Open **Plugins** to arrange desired request and response middleware across three
 
 Each webhook configuration has a stable slug, an organization or project scope, an order, a failure policy, an HTTP endpoint, an optional secret environment-variable reference, and a JSON object with plugin-specific settings.
 
-<Warning>
-  The current Plugins screen is a configuration registry. Saving or enabling a row does not execute middleware in the gateway yet. The screen labels enabled values as desired state; gateway dispatch will consume the registry when the plugin runtime ships.
-</Warning>
+An **enabled** row is live: the gateway consults it on every matching request at its configured stage, in `position` order alongside every other enabled plugin at that stage for the same organization/project.
+
+## Scope
+
+An instance with no `project_id` applies to every project in its organization. A project-scoped instance applies only to that project. If both an org-level and a project-level instance are enabled at the same stage, both run, interleaved by `position` — the org tier does not always run first or last.
+
+## Dispatch
+
+At each stage the gateway sends the request or response body under inspection to the plugin's `endpoint` as JSON, and the plugin replies with a decision:
+
+- `allow` — forward unchanged
+- `transform` — replace the content with the plugin's response before continuing to the next plugin (or upstream/the client)
+- `block` — reject the request with an OpenAI-compatible error, ending the chain
+- `annotate` — forward unchanged, annotations are recorded but not applied
+
+`post_response` only inspects non-streaming responses; a streamed response is delivered without running the `post_response` chain, since masking it would require buffering the whole stream (the same constraint the built-in output guardrails have).
 
 ## Failure policy
 
-Choose the desired behavior for the future dispatcher:
+- **Fail open** favors availability: an unreachable, timed-out, or erroring plugin is treated as `allow`.
+- **Fail closed** favors enforcement: the same failure blocks the request with an OpenAI-compatible error.
 
-- **Fail open** favors availability by continuing when the plugin cannot decide.
-- **Fail closed** favors enforcement by stopping the request when the plugin cannot decide.
+A `block` from any plugin in the chain stops it immediately — later plugins in the same stage never run.
 
 ## Secrets
 

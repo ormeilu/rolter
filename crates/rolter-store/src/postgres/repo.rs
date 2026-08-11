@@ -775,6 +775,20 @@ impl PluginRepo<'_> {
         .map_err(store_err)
     }
 
+    /// Every enabled instance across every org, for the gateway snapshot
+    /// (#509). `kind = 'webhook'` is the only kind the registry accepts today,
+    /// but the filter is explicit so a future non-webhook kind does not
+    /// silently reach a dispatcher that only knows how to call a URL.
+    pub async fn list_all_enabled(&self) -> Result<Vec<PluginInstance>> {
+        sqlx::query_as(&format!(
+            "select {PLUGIN_COLUMNS} from plugin_instances \
+             where enabled and kind = 'webhook' order by org_id, position, name"
+        ))
+        .fetch_all(self.0)
+        .await
+        .map_err(store_err)
+    }
+
     pub async fn get(&self, id: Uuid) -> Result<PluginInstance> {
         sqlx::query_as(&format!(
             "select {PLUGIN_COLUMNS} from plugin_instances where id=$1"

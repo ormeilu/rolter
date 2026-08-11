@@ -2,15 +2,9 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { ArrowLeftRight, Plus, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody, Pill } from "@/components/screen";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import {
@@ -186,17 +180,21 @@ function PolicyDialog({
   const set = (i: number, patch: Partial<ComplexityTier>) =>
     setTiers((ts) => ts?.map((t, j) => (j === i ? { ...t, ...patch } : t)) ?? null);
 
+  const dirty = JSON.stringify(tiers) !== JSON.stringify(existing.data?.tiers ?? null);
+
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogHeader>
-        <DialogTitle>
-          Complexity policy — <span className="font-mono">{route.model}</span>
-        </DialogTitle>
-        <DialogDescription>
-          Tiers are checked in order by input size; the last tier should have no ceiling to
-          catch everything else.
-        </DialogDescription>
-      </DialogHeader>
+    <EditorSheet
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title="Complexity policy"
+      subtitle={`${route.model} · tiers checked in order by input size`}
+      dirty={dirty}
+      errorMessage={save.isError ? (save.error as Error).message : undefined}
+      saveLabel="Save"
+      canSave={!!tiers && tiers.length > 0}
+      saving={save.isPending}
+      onSave={() => tiers && save.mutate(tiers)}
+    >
       <div className="space-y-2.5">
         {(tiers ?? []).map((t, i) => (
           <div key={i} className="flex items-center gap-2">
@@ -253,21 +251,7 @@ function PolicyDialog({
           <Plus className="h-3.5 w-3.5" />
           Add tier
         </Button>
-        {save.isError && (
-          <p className="text-xs text-destructive">{(save.error as Error).message}</p>
-        )}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button
-          disabled={!tiers || tiers.length === 0 || save.isPending}
-          onClick={() => tiers && save.mutate(tiers)}
-        >
-          Save
-        </Button>
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }

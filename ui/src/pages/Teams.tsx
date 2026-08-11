@@ -2,15 +2,9 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { Building } from "lucide-react";
 import * as React from "react";
 
+import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { createTeam, fetchBudgets, fetchMemberships, fetchTeams } from "@/lib/api";
@@ -128,26 +122,25 @@ export default function Teams() {
         })}
       </div>
 
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogHeader>
-          <DialogTitle>New team</DialogTitle>
-          <DialogDescription>Group users, share budgets and access.</DialogDescription>
-        </DialogHeader>
+      <EditorSheet
+        open={addOpen}
+        onOpenChange={(open) => {
+          setAddOpen(open);
+          if (!open) setName("");
+        }}
+        title="New team"
+        subtitle="Group users, share budgets and access."
+        dirty={name.trim() !== ""}
+        errorMessage={create.isError ? (create.error as Error).message : undefined}
+        saveLabel="Create"
+        canSave={!!name.trim()}
+        saving={create.isPending}
+        onSave={() => create.mutate()}
+      >
         <Field label="Team name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="platform" />
         </Field>
-        {create.isError && (
-          <p className="mt-2 text-xs text-destructive">{(create.error as Error).message}</p>
-        )}
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setAddOpen(false)}>
-            Cancel
-          </Button>
-          <Button disabled={!name.trim() || create.isPending} onClick={() => create.mutate()}>
-            Create
-          </Button>
-        </DialogFooter>
-      </Dialog>
+      </EditorSheet>
     </PageBody>
   );
 }

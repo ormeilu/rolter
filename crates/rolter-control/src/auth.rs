@@ -29,6 +29,7 @@
 
 use argon2::password_hash::{PasswordHash, PasswordVerifier};
 use argon2::Argon2;
+use async_trait::async_trait;
 use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -37,8 +38,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{Duration, Utc};
 use rand::Rng;
+use rolter_auth::{Credential, Identity, IdentityError, IdentityProvider};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use rolter_store::postgres::models::{Membership, Session, User};
 use rolter_store::postgres::repo::{
@@ -46,6 +49,107 @@ use rolter_store::postgres::repo::{
 };
 
 use crate::ControlState;
+
+/// [`IdentityProvider`] for rolter's own local accounts (email + argon2id
+/// password hash). Implements ROL-35: local login is now one of potentially
+/// several pluggable providers, alongside [`crate::sso::OidcIdentityProvider`]
+/// and, eventually, LDAP (#241).
+pub(crate) struct LocalIdentityProvider {
+    pool: PgPool,
+}
+
+impl LocalIdentityProvider {
+    pub(crate) fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl IdentityProvider for LocalIdentityProvider {
+    fn kind(&self) -> &'static str {
+        "local"
+    }
+
+    /// Verify an email + password pair against the stored argon2id hash.
+    ///
+    /// Every rejection path still runs exactly one argon2 verification, so
+    /// the response time does not reveal whether the email is registered,
+    /// deactivated, or sso-only. This is the same timing-safety property the
+    /// pre-ROL-35 inline handler had; refactoring into a provider must not
+    /// weaken it, so the "always verify once, decide the error afterward"
+    /// structure is preserved exactly.
+    async fn resolve(&self, credential: Credential) -> Result<Identity, IdentityError> {
+        let Credential::Password { email, password } = credential else {
+            return Err(IdentityError::UnsupportedCredential { provider: "local" });
+        };
+        let email = email.trim();
+
+        // constant hash so an unknown/deactivated/sso-only account still costs
+        // one argon2 verification, same as a real one
+        const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$csPSM0eDz1Mw8vSYmpUZtA$B00EO0lHN1rK85A5RyDcvLIhc+7tTs0vVoBL4I0MOe0";
+
+        let user_opt = UserRepo(&self.pool)
+            .find_by_email(email)
+            .await
+            .map_err(|e| IdentityError::Provider(e.to_string()))?;
+
+        let mut denied: Option<IdentityError> = None;
+        let mut hash_to_check = DUMMY_HASH;
+        if let Some(user) = &user_opt {
+            if user.deactivated_at.is_some() {
+                denied = Some(IdentityError::NotVerified);
+            } else if let Some(hash) = &user.password_hash {
+                hash_to_check = hash;
+                // an org may require its members to come through the IdP; superadmins
+                // are exempt on purpose, as the break-glass path back in when the IdP
+                // is misconfigured or down
+                let blocked = OrgAuthPolicyRepo(&self.pool)
+                    .password_login_blocked_for_user(user.id)
+                    .await
+                    .map_err(|e| IdentityError::Provider(e.to_string()))?;
+                if !user.is_superadmin && blocked {
+                    denied = Some(IdentityError::PolicyDenied(
+                        "password login is disabled for this organization; sign in with sso"
+                            .to_string(),
+                    ));
+                }
+            } else {
+                // sso-only account (no local password set); reject like a wrong
+                // password rather than leaking which accounts exist
+                denied = Some(IdentityError::NotVerified);
+            }
+        }
+
+        let parsed =
+            PasswordHash::new(hash_to_check).map_err(|e| IdentityError::Provider(e.to_string()))?;
+        let password_verified = Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok();
+
+        // a policy/status rejection recorded above wins: it ran before the
+        // password check in the original sequential form and must keep its
+        // more specific status
+        if !password_verified {
+            denied = denied.or(Some(IdentityError::NotVerified));
+        }
+
+        if let Some(err) = denied {
+            return Err(err);
+        }
+
+        // unreachable with no user: the branch above always records a denial then
+        let Some(user) = user_opt else {
+            return Err(IdentityError::NotVerified);
+        };
+
+        Ok(Identity {
+            subject: user.id.to_string(),
+            email: user.email.clone(),
+            display_name: None,
+            groups: Vec::new(),
+        })
+    }
+}
 
 /// how long an issued session stays valid before the client must log in again
 const SESSION_TTL_HOURS: i64 = 24 * 7;
@@ -130,63 +234,29 @@ async fn login(
     State(state): State<ControlState>,
     Json(body): Json<LoginRequest>,
 ) -> AuthResult<Json<LoginResponse>> {
-    let email = body.email.trim();
+    let email = body.email.trim().to_string();
     let pool = pool(&state);
 
-    // every rejection path still runs one argon2 verification against this
-    // hash, so the response time does not reveal whether the email is
-    // registered, deactivated or sso-only
-    const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$csPSM0eDz1Mw8vSYmpUZtA$B00EO0lHN1rK85A5RyDcvLIhc+7tTs0vVoBL4I0MOe0";
-
-    let user_opt = UserRepo(pool).find_by_email(email).await?;
-
-    let mut auth_error: Option<AuthError> = None;
-    let mut hash_to_check = DUMMY_HASH;
-    if let Some(user) = &user_opt {
-        if user.deactivated_at.is_some() {
-            // deactivated accounts keep their row but cannot authenticate; reject
-            // like a bad credential rather than revealing the account is disabled
-            auth_error = Some(AuthError::InvalidCredentials);
-        } else if let Some(hash) = &user.password_hash {
-            hash_to_check = hash;
-            // an org may require its members to come through the IdP. superadmins are
-            // exempt on purpose: that is the break-glass path back in when the IdP is
-            // misconfigured or down, and without it turning the flag on would be an
-            // irreversible mistake
-            if !user.is_superadmin
-                && OrgAuthPolicyRepo(pool)
-                    .password_login_blocked_for_user(user.id)
-                    .await?
-            {
-                auth_error = Some(AuthError::PasswordLoginDisabled);
+    let provider = LocalIdentityProvider::new(pool.clone());
+    let identity = provider
+        .resolve(Credential::Password {
+            email,
+            password: body.password,
+        })
+        .await
+        .map_err(|err| match err {
+            IdentityError::PolicyDenied(_) => AuthError::PasswordLoginDisabled,
+            IdentityError::Provider(msg) => AuthError::Internal(msg),
+            IdentityError::NotVerified | IdentityError::UnsupportedCredential { .. } => {
+                AuthError::InvalidCredentials
             }
-        } else {
-            // sso-only account (no local password set); reject like a wrong
-            // password rather than leaking which accounts exist
-            auth_error = Some(AuthError::InvalidCredentials);
-        }
-    }
+        })?;
 
-    let parsed =
-        PasswordHash::new(hash_to_check).map_err(|e| AuthError::Internal(e.to_string()))?;
-    let password_verified = Argon2::default()
-        .verify_password(body.password.as_bytes(), &parsed)
-        .is_ok();
-
-    // an error recorded above wins: those checks ran before the password check
-    // in the original sequential form and must keep their more specific status
-    if !password_verified {
-        auth_error = auth_error.or(Some(AuthError::InvalidCredentials));
-    }
-
-    if let Some(err) = auth_error {
-        return Err(err);
-    }
-
-    // unreachable with no user: the branch above always records an error then
-    let Some(user) = user_opt else {
-        return Err(AuthError::InvalidCredentials);
-    };
+    let user_id: Uuid = identity
+        .subject
+        .parse()
+        .map_err(|_| AuthError::Internal("resolved identity carried an invalid subject".into()))?;
+    let user = UserRepo(pool).get(user_id).await?;
 
     let (token, token_hash) = generate_session_token(&session_pepper());
     let expires_at = Utc::now() + Duration::hours(SESSION_TTL_HOURS);

@@ -10,10 +10,10 @@ use rolter_core::{
     BackpressurePolicy, BalancingStrategy, BudgetConfig, BudgetPeriod, BudgetScope, BuiltinRule,
     Decorator, Error, FailureMode, FeatureFlagsConfig, GatewayConfig, GroupMember, GuardAction,
     GuardStage, GuardrailRule, GuardrailWebhookConfig, GuardrailsConfig, McpOAuthSessionConfig,
-    McpServerConfig, ModelPolicy, ModelPriceConfig, ModelRoute, PromptTemplate,
-    PromptTemplateActivationScope, PromptTemplatesConfig, ProviderConfig, ProviderGroupConfig,
-    ProviderKind, RateLimitConfig, Result, Target, TemplateVariable, VirtualKeyRecord, WebhookAuth,
-    WebhookStage,
+    McpServerConfig, ModelPolicy, ModelPriceConfig, ModelRoute, PluginInstanceConfig, PluginStage,
+    PluginsConfig, PromptTemplate, PromptTemplateActivationScope, PromptTemplatesConfig,
+    ProviderConfig, ProviderGroupConfig, ProviderKind, RateLimitConfig, Result, Target,
+    TemplateVariable, VirtualKeyRecord, WebhookAuth, WebhookStage,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool};
@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::postgres::models::{
     AdaptiveRoutingPolicy, Budget, ClientSettings, CompatibilityPolicy, FeatureFlags,
     GuardrailProvider, GuardrailRule as GuardrailRuleRow, LoggingSettings, ModelDefaults,
-    ModelPrice, RateLimit, RuntimePolicy,
+    ModelPrice, PluginInstance, RateLimit, RuntimePolicy,
 };
 use crate::ConfigStore;
 
@@ -538,6 +538,41 @@ impl PostgresConfigStore {
             max_body_bytes: row.max_body_bytes.max(1) as usize,
             auth,
         })
+    }
+
+    /// Every enabled webhook plugin instance across every org, for the
+    /// gateway's dispatch runtime (#509). Ordered so a stable snapshot needs
+    /// no further sorting; [`PluginsConfig::for_stage`] re-sorts by position
+    /// within the matched (org, project, stage) group regardless.
+    async fn load_plugins(&self) -> Result<PluginsConfig> {
+        let rows: Vec<PluginInstance> = sqlx::query_as(
+            "select id, org_id, project_id, name, slug, description, kind, stage, enabled, \
+                    position, failure_mode, endpoint, secret_env, config, created_at, updated_at \
+             from plugin_instances where enabled and kind = 'webhook' order by org_id, position, name",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        let instances = rows
+            .into_iter()
+            .map(|row| PluginInstanceConfig {
+                slug: row.slug,
+                org_id: row.org_id.to_string(),
+                project_id: row.project_id.map(|id| id.to_string()),
+                stage: PluginStage::from_db_str(&row.stage),
+                position: row.position,
+                failure_mode: if row.failure_mode == "fail_closed" {
+                    FailureMode::FailClosed
+                } else {
+                    FailureMode::FailOpen
+                },
+                endpoint: row.endpoint,
+                auth: row
+                    .secret_env
+                    .map(|token_env| WebhookAuth::Bearer { token_env }),
+            })
+            .collect();
+        Ok(PluginsConfig { instances })
     }
 
     async fn load_logging_settings(&self) -> Result<LoggingSettings> {
@@ -1126,6 +1161,7 @@ impl ConfigStore for PostgresConfigStore {
         let budgets = self.load_budgets().await?;
         let rate_limits = self.load_rate_limits().await?;
         let prompt_templates = self.load_prompt_templates().await?;
+        let plugins = self.load_plugins().await?;
         let mut config = GatewayConfig {
             providers,
             routes,
@@ -1139,6 +1175,7 @@ impl ConfigStore for PostgresConfigStore {
             prompt_templates,
             guardrails,
             guardrail_webhook,
+            plugins,
             feature_flags: FeatureFlagsConfig {
                 response_cache: flags.response_cache,
                 cache_aware_routing: flags.cache_aware_routing,
@@ -2297,6 +2334,145 @@ mod tests {
             config.guardrail_webhook.auth,
             Some(WebhookAuth::Bearer { ref token_env }) if token_env == "ROLTER_GUARDRAIL_TOKEN"
         ));
+    }
+
+    // #567 shipped the registry without gateway consumption; #509 wires the
+    // dispatch runtime, so an enabled instance must now reach the snapshot
+    #[tokio::test]
+    async fn plugin_registry_projects_enabled_instances_into_snapshot() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        let org_id: Uuid = sqlx::query_scalar(
+            "insert into orgs (name, slug) values ('acme', 'acme') returning id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let team_id: Uuid =
+            sqlx::query_scalar("insert into teams (org_id, name) values ($1, 'core') returning id")
+                .bind(org_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let project_id: Uuid = sqlx::query_scalar(
+            "insert into projects (team_id, name) values ($1, 'default') returning id",
+        )
+        .bind(team_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "insert into plugin_instances \
+             (org_id, name, slug, kind, stage, enabled, position, failure_mode, endpoint, \
+              secret_env) \
+             values ($1, 'audit', 'audit', 'webhook', 'pre_upstream', true, 10, 'fail_closed', \
+                     'https://plugins.internal/audit', 'ROLTER_PLUGIN_TOKEN')",
+        )
+        .bind(org_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // disabled rows never reach the snapshot
+        sqlx::query(
+            "insert into plugin_instances \
+             (org_id, name, slug, kind, stage, enabled, position, failure_mode, endpoint) \
+             values ($1, 'disabled', 'disabled', 'webhook', 'pre_route', false, 0, 'fail_open', \
+                     'https://plugins.internal/disabled')",
+        )
+        .bind(org_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // project-scoped rows carry their project id through
+        sqlx::query(
+            "insert into plugin_instances \
+             (org_id, project_id, name, slug, kind, stage, enabled, position, failure_mode, \
+              endpoint) \
+             values ($1, $2, 'project-audit', 'project-audit', 'webhook', 'post_response', \
+                     true, 5, 'fail_open', 'https://plugins.internal/project-audit')",
+        )
+        .bind(org_id)
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let config = PostgresConfigStore::new(pool).load().await.unwrap();
+        assert_eq!(config.plugins.instances.len(), 2);
+
+        let audit = config
+            .plugins
+            .instances
+            .iter()
+            .find(|p| p.slug == "audit")
+            .unwrap();
+        assert_eq!(audit.org_id, org_id.to_string());
+        assert!(audit.project_id.is_none());
+        assert_eq!(audit.stage, rolter_core::PluginStage::PreUpstream);
+        assert!(matches!(audit.failure_mode, FailureMode::FailClosed));
+        assert_eq!(audit.endpoint, "https://plugins.internal/audit");
+        assert!(matches!(
+            audit.auth,
+            Some(WebhookAuth::Bearer { ref token_env }) if token_env == "ROLTER_PLUGIN_TOKEN"
+        ));
+
+        let project_audit = config
+            .plugins
+            .instances
+            .iter()
+            .find(|p| p.slug == "project-audit")
+            .unwrap();
+        assert_eq!(
+            project_audit.project_id.as_deref(),
+            Some(project_id.to_string().as_str())
+        );
+        assert_eq!(project_audit.stage, rolter_core::PluginStage::PostResponse);
+    }
+
+    #[tokio::test]
+    async fn plugin_instances_writes_bump_config_version() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        let org_id: Uuid = sqlx::query_scalar(
+            "insert into orgs (name, slug) values ('acme', 'acme') returning id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let v0 = current_version(&pool).await.unwrap();
+
+        let plugin_id: Uuid = sqlx::query_scalar(
+            "insert into plugin_instances \
+             (org_id, name, slug, kind, stage, enabled, position, failure_mode, endpoint) \
+             values ($1, 'audit', 'audit', 'webhook', 'pre_upstream', true, 0, 'fail_open', \
+                     'https://plugins.internal/audit') returning id",
+        )
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(current_version(&pool).await.unwrap(), v0 + 1);
+
+        sqlx::query("update plugin_instances set enabled = false where id = $1")
+            .bind(plugin_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(current_version(&pool).await.unwrap(), v0 + 2);
+
+        sqlx::query("delete from plugin_instances where id = $1")
+            .bind(plugin_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(current_version(&pool).await.unwrap(), v0 + 3);
     }
 
     // compiled-in translation constants are control-plane owned now, so the

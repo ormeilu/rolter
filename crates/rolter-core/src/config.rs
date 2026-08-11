@@ -132,6 +132,11 @@ pub struct GatewayConfig {
     /// default (ROL-256)
     #[serde(default)]
     pub prompt_templates: crate::prompt_templates::PromptTemplatesConfig,
+    /// enabled webhook plugin instances (control-plane registry: #567), for
+    /// the gateway's pre_route/pre_upstream/post_response dispatch runtime
+    /// (#509). Empty by default
+    #[serde(default)]
+    pub plugins: crate::plugin_dispatch::PluginsConfig,
 }
 
 /// Deployment-wide gates for runtime subsystems.
@@ -852,6 +857,9 @@ pub enum BalancingStrategy {
     /// governed by [`AdaptiveRoutingConfig`]; falls back to the `pipeline`
     /// stack whenever it is disabled or the evidence is too thin
     Adaptive,
+    /// LoRA-adapter affinity: prefer a target that already holds the requested
+    /// adapter resident, with prefix affinity and in-flight load behind it
+    LoraAware,
 }
 
 /// A named set of providers addressable as `group-slug/model` (ADR-0017
@@ -2937,6 +2945,9 @@ impl GatewayConfig {
 
         // validate the custom guardrail webhook (url/timeout/auth) at load time
         problems.append(&mut self.guardrail_webhook.validate());
+
+        // validate every enabled plugin instance's endpoint at load time
+        problems.append(&mut self.plugins.validate());
 
         // validate prompt templates: unique versions, well-formed variables, and
         // decorator placeholders that reference only declared variables

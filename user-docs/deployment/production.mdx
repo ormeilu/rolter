@@ -20,14 +20,14 @@ Work through these steps before sending production traffic to your gateway:
 
     Keep the control plane (port 4001) off public-facing load balancers entirely. Route admin traffic through a VPN or SSH tunnel instead.
   </Step>
-  <Step title="Generate and store a strong ROLTER_MASTER_KEY">
+  <Step title="Generate and store a strong ROLTER_KEK">
     The master key is the AES-256-GCM key-encryption key (KEK) used to protect all provider API secrets at rest. Generate a cryptographically random 32-byte value and store it in your secrets manager:
 
     ```bash
     openssl rand -hex 32
     ```
 
-    Inject it into both the gateway and control plane containers as the `ROLTER_MASTER_KEY` environment variable. Back it up securely — losing this key means losing access to all stored provider credentials.
+    Inject it into both the gateway and control plane containers as the `ROLTER_KEK` environment variable. Back it up securely — losing this key means losing access to all stored provider credentials.
   </Step>
   <Step title="Supply all credentials via environment variables">
     Never write API keys or passwords inline in `rolter.toml` or into container images. Instead:
@@ -120,7 +120,7 @@ Here is a consolidated view of every secret and credential the stack requires:
 
 | Variable | Used by | Notes |
 | --- | --- | --- |
-| `ROLTER_MASTER_KEY` | gateway, control | 32-byte hex; AES-256-GCM KEK — never rotate without a migration plan |
+| `ROLTER_KEK` | gateway, control | 32-byte hex; AES-256-GCM KEK — never rotate without a migration plan |
 | `DATABASE_URL` | control | Postgres connection string, e.g. `postgres://user:pass@host:5432/rolter` |
 | `REDIS_URL` | gateway, control | e.g. `redis://host:6379` |
 | `CLICKHOUSE_URL` | gateway, control | e.g. `http://host:8123` |

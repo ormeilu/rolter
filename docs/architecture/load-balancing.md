@@ -24,6 +24,7 @@ pub trait LoadBalancer: Send + Sync {
 - **precise_cache_aware** — consumes each target's vLLM ZMQ KV-event stream and scores the exact leading fraction of caller-supplied token blocks resident on that target. Missing token ids and stale, malformed, disconnected, or sequence-gapped streams stay neutral; least-load routing remains the fallback.
 - **lmcache_aware** — polls each target's configured LMCache controller signal and prefers available caches with free capacity (`1 - occupancy`). Empty, saturated, failed, and stale controllers stay neutral and fall back to least load.
 - **adaptive** — a weighted blend of observed latency, catalog cost and in-flight load, governed by the deployment-wide `[adaptive_routing]` policy. See below.
+- **lora_aware** — LoRA-adapter affinity for a fleet serving many adapters over shared base weights: prefer a target that already holds the requested adapter resident, with prefix affinity and in-flight load behind it. See below.
 
 ## Adaptive routing
 
@@ -55,6 +56,46 @@ The control plane keeps the newest sample per `(node, model)` in `adaptive_routi
 
 This is deliberately **current state, not history**: one row per node and route, overwritten on every report, so the table is the size of the fleet rather than of the traffic. A time series belongs in the request log, and would be a separate endpoint rather than a change to this one. Prometheus deployments get the same per-target scores without the dashboard from `rolter_adaptive_routing_target_score{model,target}`.
 
+## LoRA-aware routing
+
+For a fleet serving many LoRA adapters off shared base weights, routing a
+request to a node that already holds the adapter is the same class of win as
+prefix-cache affinity (#853, borrowed from llm-d). `lora_aware` composes with
+the existing scorers rather than replacing them:
+
+| Scorer | Weight |
+| --- | --- |
+| adapter residency | 1.0 |
+| prefix affinity | 0.5 |
+| in-flight load | 0.25 |
+
+Adapter residency outranks prefix affinity because the costs are not
+comparable: missing a warm prefix recomputes some tokens, while missing a
+resident adapter can force the engine to load adapter weights before it decodes
+anything at all. Load stays in the stack so a fleet where every target holds the
+adapter still balances instead of pinning.
+
+**Residency is learned from traffic, not declared.** rolter cannot see which
+adapters an engine currently holds, and a static declaration would go stale the
+moment the engine evicted one. Each target keeps a bounded LRU set of the
+adapters it has recently served, sized to mirror vLLM's `--max-loras`, so it
+tracks what the engine plausibly still holds rather than everything it has ever
+served. An unbounded "has ever served" set would be worse than no scoring at
+all, because it steers confidently to a target that went cold long ago.
+
+**Adapter identity is the requested model**, which is how vLLM addresses
+adapters over shared base weights. The gateway only sets it when the request
+addresses something other than the route's own model — that is, a passthrough
+provider-group route (ADR-0017). On a single-model route the two are equal, no
+adapter is set, and the scorer is inert. This matters: adapter affinity
+deliberately *pins* rather than spreads, so treating a route's one model as an
+adapter would pin the entire route to whichever target happened to serve first.
+
+When no candidate holds the adapter — a cold adapter, or a request with none —
+every candidate scores `0.0`. That is neutral rather than a penalty: an equal
+contribution cannot move the argmax, so the rest of the pipeline decides and
+this scorer stays silent instead of guessing.
+
 ## Choosing a strategy
 
 | Use case | Strategy |
@@ -69,5 +110,6 @@ This is deliberately **current state, not history**: one row per node and route,
 | Mixed-price providers, minimize spend | `cheapest` |
 | Heterogeneous pool, minimize latency | `fastest` |
 | Mixed price *and* latency, let the gateway tune | `adaptive` |
+| Many LoRA adapters over shared base weights | `lora_aware` |
 
 Both external strategies perform network I/O only in background tasks. The request hot path reads bounded in-process state and atomics.

@@ -31,11 +31,11 @@ These variables control the control-plane process (`rolter-control`), which mana
 | `ROLTER_CONTROL_HOST` | Listen host for the control-plane HTTP server. |
 | `ROLTER_CONTROL_PORT` | Listen port for the control-plane HTTP server. |
 | `ROLTER_UI_DIR` | Filesystem path to the built UI assets served by the control plane. |
-| `ROLTER_MASTER_KEY` | AES-256-GCM master key used to encrypt provider credentials at rest in PostgreSQL. |
+| `ROLTER_KEK` | AES-256-GCM master key used to encrypt provider credentials at rest in PostgreSQL. |
 | `DATABASE_URL` | PostgreSQL connection string, e.g. `postgres://user:pass@localhost:5432/rolter`. |
 
 <Warning>
-  `ROLTER_MASTER_KEY` is the most sensitive secret in your Rolter deployment. Any party who holds this key can decrypt every stored provider credential. Generate a strong value before first run and store it in a secrets manager:
+  `ROLTER_KEK` is the most sensitive secret in your Rolter deployment. Any party who holds this key can decrypt every stored provider credential. Generate a strong value before first run and store it in a secrets manager:
 
   ```bash
   openssl rand -hex 32

@@ -2,15 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Megaphone, Play, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import { EditorSheet } from "@/components/EditorSheet";
 import { ListHeader, ListRow, ListTable, PageBody, Pill, StatusDot } from "@/components/screen";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -163,11 +157,18 @@ function AddChannelDialog({
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>Add channel</DialogTitle>
-        <DialogDescription>Webhook endpoint alerts are POSTed to.</DialogDescription>
-      </DialogHeader>
+    <EditorSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add channel"
+      subtitle="Webhook endpoint alerts are POSTed to."
+      dirty={Boolean(name || endpoint || secret)}
+      errorMessage={create.isError ? (create.error as Error).message : undefined}
+      saveLabel="Create"
+      canSave={Boolean(name.trim() && endpoint.trim())}
+      saving={create.isPending}
+      onSave={() => create.mutate()}
+    >
       <div className="space-y-3">
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="ops-slack" />
@@ -188,22 +189,8 @@ function AddChannelDialog({
             placeholder="stored encrypted"
           />
         </Field>
-        {create.isError && (
-          <p className="text-xs text-destructive">{(create.error as Error).message}</p>
-        )}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button
-          disabled={!name.trim() || !endpoint.trim() || create.isPending}
-          onClick={() => create.mutate()}
-        >
-          Create
-        </Button>
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }
 
@@ -385,14 +372,28 @@ function AddRuleDialog({
     },
   });
 
+  // the draft is seeded with defaults rather than blanks, so "dirty" is a diff
+  // against the seed instead of a plain emptiness check
+  const dirty =
+    name !== "" ||
+    signal !== ALERT_SIGNALS[0] ||
+    threshold !== "0.05" ||
+    windowSecs !== "300" ||
+    channelId !== (channels[0]?.id ?? "");
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>Add rule</DialogTitle>
-        <DialogDescription>
-          Fires when the signal crosses the threshold within the window.
-        </DialogDescription>
-      </DialogHeader>
+    <EditorSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add rule"
+      subtitle="Fires when the signal crosses the threshold within the window."
+      dirty={dirty}
+      errorMessage={create.isError ? (create.error as Error).message : undefined}
+      saveLabel="Create"
+      canSave={Boolean(name.trim() && threshold.trim())}
+      saving={create.isPending}
+      onSave={() => create.mutate()}
+    >
       <div className="space-y-3">
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="high error rate" />
@@ -434,22 +435,8 @@ function AddRuleDialog({
             ))}
           </Select>
         </Field>
-        {create.isError && (
-          <p className="text-xs text-destructive">{(create.error as Error).message}</p>
-        )}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button
-          disabled={!name.trim() || !threshold.trim() || create.isPending}
-          onClick={() => create.mutate()}
-        >
-          Create
-        </Button>
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }
 

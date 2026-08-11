@@ -26,6 +26,8 @@ mod client_settings;
 #[cfg(feature = "postgres")]
 mod cluster;
 #[cfg(feature = "postgres")]
+mod collector_config;
+#[cfg(feature = "postgres")]
 mod compatibility_policy;
 #[cfg(feature = "postgres")]
 mod connectors;
@@ -39,6 +41,7 @@ mod guardrails;
 mod health;
 #[cfg(feature = "postgres")]
 mod invitations;
+pub mod ldap;
 #[cfg(feature = "postgres")]
 mod logging_settings;
 #[cfg(feature = "postgres")]
@@ -525,6 +528,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(sso::router())
             .merge(cluster::router())
             .merge(connectors::router())
+            .merge(collector_config::router())
             .merge(security::router());
     }
 
@@ -720,6 +724,7 @@ async fn seed_default_models(pool: &sqlx::PgPool, config: &GatewayConfig) -> any
             rolter_core::BalancingStrategy::PreciseCacheAware => "precise_cache_aware",
             rolter_core::BalancingStrategy::LmcacheAware => "lmcache_aware",
             rolter_core::BalancingStrategy::Adaptive => "adaptive",
+            rolter_core::BalancingStrategy::LoraAware => "lora_aware",
         };
         let created = routes.create(project_id, &route.model, strategy).await?;
         let params = serde_json::to_value(&route.params)?;
@@ -954,6 +959,7 @@ fn balancing_strategy_str(strategy: rolter_core::BalancingStrategy) -> &'static 
         PreciseCacheAware => "precise_cache_aware",
         LmcacheAware => "lmcache_aware",
         Adaptive => "adaptive",
+        LoraAware => "lora_aware",
     }
 }
 

@@ -1,6 +1,6 @@
 # OpenAI Responses API translation
 
-**Status:** Development · **Date:** 13 Jul 2026
+**Status:** Development · **Date:** 13 Jul 2026 · **Issues:** [ROL-252](https://linear.app/rolter/issue/ROL-252)
 
 ## Context
 

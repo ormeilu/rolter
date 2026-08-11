@@ -3,10 +3,10 @@
 # server) through the local rolter binary.
 set -euo pipefail
 
-engine=${1:?usage: integration/engines/run.sh <sim|vllm|sglang> [--bench]}
+engine=${1:?usage: integration/engines/run.sh <sim|vllm|sglang> [--bench|--load]}
 mode=${2:-smoke}
 case "$engine" in sim|vllm|sglang) ;; *) echo "unknown engine: $engine" >&2; exit 2 ;; esac
-case "$mode" in smoke|--bench) ;; *) echo "unknown mode: $mode" >&2; exit 2 ;; esac
+case "$mode" in smoke|--bench|--load) ;; *) echo "unknown mode: $mode" >&2; exit 2 ;; esac
 
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
@@ -46,6 +46,18 @@ if [[ "$mode" == "--bench" ]]; then
   python3 "$root/integration/engines/smoke.py" --engine-url "http://127.0.0.1:$engine_1_port" --engine-url "http://127.0.0.1:$engine_2_port" --gateway-url "http://127.0.0.1:$rolter_port"
   python3 "$root/integration/engines/bench.py" --engine-url "http://127.0.0.1:$engine_1_port" --gateway-url "http://127.0.0.1:$rolter_port" --output "$artifacts/non-streaming.json"
   python3 "$root/integration/engines/bench.py" --engine-url "http://127.0.0.1:$engine_1_port" --gateway-url "http://127.0.0.1:$rolter_port" --stream --output "$artifacts/streaming.json"
+elif [[ "$mode" == "--load" ]]; then
+  # kept separate from --bench (#847): a sweep across five concurrency levels
+  # takes minutes, and silently making the added-latency run that much slower
+  # would be a poor trade. --max-tokens 16 so inter-token latency exists at all.
+  python3 "$root/integration/engines/smoke.py" --engine-url "http://127.0.0.1:$engine_1_port" --engine-url "http://127.0.0.1:$engine_2_port" --gateway-url "http://127.0.0.1:$rolter_port"
+  python3 "$root/integration/engines/bench.py" --engine-url "http://127.0.0.1:$engine_1_port" --gateway-url "http://127.0.0.1:$rolter_port" \
+    --requests "${LOAD_REQUESTS:-200}" --sweep "${LOAD_LEVELS:-1,2,4,8,16}" --warmup "${LOAD_WARMUP:-10}" \
+    --output "$artifacts/load-non-streaming.json"
+  python3 "$root/integration/engines/bench.py" --engine-url "http://127.0.0.1:$engine_1_port" --gateway-url "http://127.0.0.1:$rolter_port" \
+    --requests "${LOAD_REQUESTS:-200}" --sweep "${LOAD_LEVELS:-1,2,4,8,16}" --warmup "${LOAD_WARMUP:-10}" \
+    --stream --max-tokens "${LOAD_MAX_TOKENS:-16}" \
+    --output "$artifacts/load-streaming.json"
 else
   python3 "$root/integration/engines/smoke.py" --engine-url "http://127.0.0.1:$engine_1_port" --engine-url "http://127.0.0.1:$engine_2_port" --gateway-url "http://127.0.0.1:$rolter_port"
 fi

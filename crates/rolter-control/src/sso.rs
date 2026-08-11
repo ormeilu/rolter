@@ -24,6 +24,7 @@
 
 use std::collections::HashSet;
 
+use async_trait::async_trait;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
@@ -31,6 +32,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
 use chrono::{Duration, Utc};
+use rolter_auth::{Credential, Identity, IdentityError, IdentityProvider};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -47,6 +49,80 @@ use crate::crud::{log_audit, pool, require_non_empty, ApiError, ApiResult, SafeJ
 use crate::rbac::{authorize, Principal, ScopeChain};
 use crate::rbac_matrix::cap;
 use crate::ControlState;
+
+/// [`IdentityProvider`] for one configured OIDC SSO provider (ROL-35).
+///
+/// Bound to a specific [`SsoProvider`] row and its [`Discovery`] document and
+/// decrypted client secret, since verifying an authorization code is
+/// meaningless without knowing which issuer/audience/JWKS to check it
+/// against. Constructed fresh per login in [`callback`].
+pub(crate) struct OidcIdentityProvider {
+    discovery: Discovery,
+    provider: SsoProvider,
+    secret: Option<String>,
+}
+
+impl OidcIdentityProvider {
+    pub(crate) fn new(discovery: Discovery, provider: SsoProvider, secret: Option<String>) -> Self {
+        Self {
+            discovery,
+            provider,
+            secret,
+        }
+    }
+}
+
+#[async_trait]
+impl IdentityProvider for OidcIdentityProvider {
+    fn kind(&self) -> &'static str {
+        "oidc"
+    }
+
+    async fn resolve(&self, credential: Credential) -> Result<Identity, IdentityError> {
+        let Credential::AuthorizationCode {
+            code,
+            verifier,
+            nonce,
+        } = credential
+        else {
+            return Err(IdentityError::UnsupportedCredential { provider: "oidc" });
+        };
+
+        let id_token = exchange_code(
+            &self.discovery,
+            &self.provider,
+            self.secret.as_deref(),
+            &code,
+            &verifier,
+        )
+        .await
+        .map_err(api_error_message)
+        .map_err(IdentityError::Provider)?;
+        let claims = verify_id_token(&self.discovery, &self.provider, &id_token, &nonce)
+            .await
+            .map_err(api_error_message)
+            .map_err(IdentityError::Provider)?;
+
+        let email = claims
+            .email
+            .clone()
+            .or_else(|| {
+                claims
+                    .preferred_username
+                    .clone()
+                    .filter(|u| u.contains('@'))
+            })
+            .ok_or(IdentityError::NotVerified)?;
+
+        let groups = groups_from_claims(&claims, &self.provider.group_claim);
+        Ok(Identity {
+            subject: claims.sub,
+            email,
+            display_name: claims.preferred_username,
+            groups: groups.into_iter().collect(),
+        })
+    }
+}
 
 /// How long an in-flight login may take. Long enough for a password + MFA
 /// prompt, short enough that a leaked state is worthless by the time it is
@@ -90,6 +166,18 @@ pub(crate) fn router() -> Router<ControlState> {
 
 fn invalid(message: impl Into<String>) -> ApiError {
     ApiError::Core(rolter_core::Error::Config(message.into()))
+}
+
+/// Human-readable message for an [`ApiError`], for wrapping into
+/// [`IdentityError::Provider`] rather than exposing `ApiError` outside this
+/// module's HTTP handlers.
+fn api_error_message(err: ApiError) -> String {
+    match err {
+        ApiError::Core(e) => e.to_string(),
+        ApiError::Conflict(msg) => msg,
+        ApiError::Unauthenticated => "unauthenticated".to_string(),
+        ApiError::Forbidden => "forbidden".to_string(),
+    }
 }
 
 /// Public base URL of this control plane, used to build the redirect URI the
@@ -347,28 +435,27 @@ async fn callback(
     let kek = Kek::from_env()
         .ok_or_else(|| invalid("ROLTER_KEK must be configured to use the sso client secret"))?;
     let secret = SsoRepo(pool(&state)).client_secret(&kek, &provider).await?;
-    let id_token = exchange_code(
-        &discovery,
-        &provider,
-        secret.as_deref(),
-        &code,
-        &login.code_verifier,
-    )
-    .await?;
-    let claims = verify_id_token(&discovery, &provider, &id_token, &login.nonce).await?;
 
-    let email = claims
-        .email
-        .clone()
-        .or_else(|| {
-            claims
-                .preferred_username
-                .clone()
-                .filter(|u| u.contains('@'))
+    let identity_provider = OidcIdentityProvider::new(discovery, provider.clone(), secret);
+    let identity = identity_provider
+        .resolve(Credential::AuthorizationCode {
+            code,
+            verifier: login.code_verifier.clone(),
+            nonce: login.nonce.clone(),
         })
-        .ok_or_else(|| invalid("the id token carries no email claim to key an account on"))?;
+        .await
+        .map_err(|e| match e {
+            IdentityError::NotVerified => {
+                invalid("the id token carries no email claim to key an account on")
+            }
+            IdentityError::UnsupportedCredential { .. } => {
+                invalid("oidc provider was given an unsupported credential")
+            }
+            IdentityError::PolicyDenied(msg) | IdentityError::Provider(msg) => invalid(msg),
+        })?;
+    let email = identity.email.clone();
 
-    let groups = groups_from_claims(&claims, &provider.group_claim);
+    let groups: HashSet<String> = identity.groups.iter().cloned().collect();
     let mappings = SsoRepo(pool(&state)).list_mappings(provider.id).await?;
     let matched: Vec<&SsoGroupMapping> = mappings
         .iter()
@@ -413,7 +500,7 @@ async fn callback(
             Some(user.id),
             Some(json!({
                 "provider": provider.slug,
-                "subject": claims.sub,
+                "subject": identity.subject,
                 "granted_roles": granted,
             })),
         )

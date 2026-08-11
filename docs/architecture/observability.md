@@ -397,6 +397,49 @@ and prints telemetry via the `debug` exporter. It intentionally has no external
 backend configured, keeping the default example safe for air-gapped use. Replace
 the `debug` exporter with an internal OTLP-compatible destination for production.
 
+### Connector delivery: rendered collector config (#836)
+
+The `observability_connectors` table (#511, `docs/architecture/data-model.md`)
+lists the sinks a deployment wants its telemetry shipped to in addition to
+ClickHouse, but the connector's `endpoint` is never called directly by rolter.
+Consistent with [ADR-0026](../adr/2026-08-06-tenant-telemetry-destinations.md)
+— fan-out belongs in the collector, not N in-process SDK exporters each
+carrying its own connection/queue/retry buffer, and terminating an
+operator-supplied URL in the collector keeps that SSRF surface out of the data
+plane — `GET /api/v1/connectors/collector-config` (superadmin-only) renders an
+OpenTelemetry Collector config document from the enabled rows instead: one
+`otlphttp` exporter and one `traces`/`metrics`/`logs` pipeline set per
+connector, receiving from the `otlp` receiver rolter's own
+`OTEL_EXPORTER_OTLP_*` export targets.
+
+Point a collector at it with the confmap HTTP provider
+(`otelcol --config=http://control:4001/api/v1/connectors/collector-config`,
+bearer-authenticated the same as any other control-plane endpoint), or fetch it
+on a schedule and reload. `sampling_rate` becomes a `probabilistic_sampler`
+processor scoped to that connector's own pipeline, since sampling is now the
+collector's decision, applied independently per destination rather than once
+for the whole deployment. A managed secret (`managed_auth_secret`) is decrypted
+server-side and rendered as a literal `Authorization: Bearer` header; an
+external reference (`auth_secret_ref`) instead renders as a `${env:...}`
+placeholder the collector's own environment must resolve, since rolter never
+holds that secret's value.
+
+[`ROLTER_TELEMETRY_ENABLED`](#turning-telemetry-off-explicitly) wins over every
+connector row: when it is off, the rendered document has no exporters and no
+pipelines regardless of what is enabled in the registry, the same way it
+already silences every in-process exporter.
+
+Backpressure to a slow or dead sink is the collector's problem now, not
+rolter's: it already queues and retries per exporter, which is the reason
+fan-out moved here in the first place rather than something this endpoint
+needs to build.
+
+The remaining sink kinds from #511 (Datadog, Prometheus remote-write,
+Langfuse) become an exporter-block case in this renderer, not a new in-process
+delivery adapter — widening `KINDS` in `connectors.rs` and the `kind` check
+constraint in migration `0062` is the only rolter-side change; everything else
+is collector configuration.
+
 ## Request & cost logs
 
 - Every proxied request is logged to **ClickHouse** (`request_logs`): identifiers, model, provider/target, status, token counts, `cost_usd`, latency, TTFT, cache flag, error.
