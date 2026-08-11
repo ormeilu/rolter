@@ -107,6 +107,23 @@ bench-vllm:
 bench-sglang:
     integration/engines/run.sh sglang --bench
 
+# Concurrency sweep: max sustainable RPS before the p99 knee, ITL and error rate
+# under load (#847). Separate from bench-* because a sweep across five
+# concurrency levels takes minutes. Tune with LOAD_LEVELS / LOAD_REQUESTS /
+# LOAD_MAX_TOKENS; artifacts land under artifacts/load-*.json.
+load-sim:
+    integration/engines/run.sh sim --load
+
+load-vllm:
+    integration/engines/run.sh vllm --load
+
+load-sglang:
+    integration/engines/run.sh sglang --load
+
+# harness unit tests (stdlib only, no engine or network needed)
+test-bench:
+    python3 -m unittest discover -s integration/engines -t integration/engines -v
+
 # full-stack black-box e2e suite (#613): boots the compose stack + fake-vLLM
 # fleet and drives the real HTTP APIs. heavy — not on the per-PR gate. needs
 # docker + uv (https://docs.astral.sh/uv/).
