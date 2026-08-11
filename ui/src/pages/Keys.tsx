@@ -3,6 +3,7 @@ import { Check, Copy, Plus, Trash2, Key, Loader2 } from "lucide-react";
 import * as React from "react";
 
 import { CopyButton } from "@/components/CopyButton";
+import { EditorSheet } from "@/components/EditorSheet";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ListHeader, ListRow, ListTable, PageBody, SearchInput } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
@@ -305,13 +306,23 @@ function AddKeyDialog({
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>Create virtual key</DialogTitle>
-        <DialogDescription>
-          The plaintext key is shown once, right after creation — copy it then.
-        </DialogDescription>
-      </DialogHeader>
+    <EditorSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Create virtual key"
+      subtitle="The plaintext key is shown once, right after creation — copy it then"
+      dirty={Boolean(name || modelsText) || cache !== "inherit"}
+      errorMessage={create.isError ? (create.error as Error).message : undefined}
+      // the sheet footer has no room for a spinner, so pending state reads
+      // from the label instead
+      saveLabel={create.isPending ? "Creating…" : "Create"}
+      canSave
+      saving={create.isPending}
+      onSave={() => {
+        ux.submitted();
+        create.mutate();
+      }}
+    >
       <div className="space-y-3">
         <Field label="Name (optional)">
           <Input
@@ -340,26 +351,8 @@ function AddKeyDialog({
             placeholder="gpt-4o, claude-sonnet"
           />
         </Field>
-        {create.isError && (
-          <p className="text-xs text-destructive">{(create.error as Error).message}</p>
-        )}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button
-          disabled={create.isPending}
-          onClick={() => {
-            ux.submitted();
-            create.mutate();
-          }}
-        >
-          {create.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Create
-        </Button>
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }
 

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,13 +13,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -394,14 +388,18 @@ function AddBudgetDialog({
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>Add budget</DialogTitle>
-        <DialogDescription>
-          Spend cap for <span className="font-mono">{scopeType}:{scopeId}</span>.
-          There's no update endpoint — delete and recreate to change it.
-        </DialogDescription>
-      </DialogHeader>
+    <EditorSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add budget"
+      subtitle={`Spend cap for ${scopeType}:${scopeId} — delete and recreate to change it`}
+      dirty={limitUsd !== "100" || period !== "30d"}
+      errorMessage={create.isError ? (create.error as Error).message : undefined}
+      saveLabel="Create"
+      canSave={Boolean(limitUsd.trim() && period.trim())}
+      saving={create.isPending}
+      onSave={() => create.mutate()}
+    >
       <div className="space-y-3">
         <Field label="Limit (USD)">
           <Input
@@ -415,22 +413,8 @@ function AddBudgetDialog({
         <Field label="Period" hint="e.g. 30d, 7d, 1d">
           <Input value={period} onChange={(e) => setPeriod(e.target.value)} />
         </Field>
-        {create.isError && (
-          <p className="text-xs text-destructive">{(create.error as Error).message}</p>
-        )}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button
-          disabled={!limitUsd.trim() || !period.trim() || create.isPending}
-          onClick={() => create.mutate()}
-        >
-          Create
-        </Button>
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }
 
@@ -472,14 +456,18 @@ function AddRateLimitDialog({
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogHeader>
-        <DialogTitle>Add rate limit</DialogTitle>
-        <DialogDescription>
-          Throughput caps for <span className="font-mono">{scopeType}:{scopeId}</span>.
-          Leave a field blank to leave it uncapped.
-        </DialogDescription>
-      </DialogHeader>
+    <EditorSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add rate limit"
+      subtitle={`Throughput caps for ${scopeType}:${scopeId} — blank leaves a field uncapped`}
+      dirty={Boolean(rpm || tpm)}
+      errorMessage={create.isError ? (create.error as Error).message : undefined}
+      saveLabel="Create"
+      canSave={Boolean(rpm.trim() || tpm.trim())}
+      saving={create.isPending}
+      onSave={() => create.mutate()}
+    >
       <div className="space-y-3">
         <Field label="Requests per minute (optional)">
           <Input
@@ -499,21 +487,7 @@ function AddRateLimitDialog({
             placeholder="unlimited"
           />
         </Field>
-        {create.isError && (
-          <p className="text-xs text-destructive">{(create.error as Error).message}</p>
-        )}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>
-          Cancel
-        </Button>
-        <Button
-          disabled={(!rpm.trim() && !tpm.trim()) || create.isPending}
-          onClick={() => create.mutate()}
-        >
-          Create
-        </Button>
-      </DialogFooter>
-    </Dialog>
+    </EditorSheet>
   );
 }
