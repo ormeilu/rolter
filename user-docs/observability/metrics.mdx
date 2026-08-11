@@ -103,6 +103,52 @@ metrics_path = "/internal/metrics"
   metrics above need no such flag.
 </Note>
 
+### Upstream engine metrics
+
+When metrics scraping is enabled, Rolter periodically pulls each provider's own Prometheus endpoint and re-exports what it finds through `/metrics`, labelled `{provider="..."}`. One scrape point then covers both Rolter and the engines behind it, and — because the label is the provider Rolter routes to — you can put engine saturation next to the routing decision that caused it.
+
+These series are scraped, not measured by Rolter. They appear only for providers that expose them: engines differ in what they publish, and a gauge an engine does not report is omitted rather than exported as zero, so `absent()` means "not reported", not "idle".
+
+<AccordionGroup>
+  <Accordion title="rolter_upstream_queue_depth">
+    **Type:** Gauge · Labels: `provider`
+
+    Requests waiting to be scheduled on the upstream engine. This is the same number that feeds load-aware balancing, so it explains why Rolter steered traffic away from a target.
+
+    Read from `vllm:num_requests_waiting`, `sglang:num_queue_reqs`, `num_requests_waiting` or `tgi_queue_size`, whichever appears first.
+  </Accordion>
+
+  <Accordion title="rolter_upstream_running_requests">
+    **Type:** Gauge · Labels: `provider`
+
+    Requests the engine is currently decoding. Paired with queue depth this separates "busy" from "backed up": high running with an empty queue is a fully-used engine, while a growing queue at flat running count is one that cannot keep up.
+  </Accordion>
+
+  <Accordion title="rolter_upstream_kv_cache_utilization">
+    **Type:** Gauge, 0–1 · Labels: `provider`
+
+    Fraction of the engine's KV cache in use. Normalised to a fraction regardless of whether the engine reports 0–1 or a 0–100 percentage. Sustained high utilisation is the usual precursor to preemption and throughput collapse.
+  </Accordion>
+
+  <Accordion title="rolter_upstream_generation_throughput_tokens_per_second">
+    **Type:** Gauge · Labels: `provider`
+
+    Generation throughput as reported by the engine itself. Useful as a sanity check against Rolter's own latency histograms — if engine throughput is steady while Rolter's p99 climbs, the added latency is not in the engine.
+  </Accordion>
+
+  <Accordion title="rolter_upstream_scrape_up">
+    **Type:** Gauge, 0 or 1 · Labels: `provider`
+
+    `1` when the most recent sweep reached the provider, `0` otherwise. Check this before trusting the gauges above: a failed scrape reports zeros for the counts, which without this flag is indistinguishable from a genuinely idle engine.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  A slow or unreachable engine cannot affect request handling. The sweep runs on
+  its own background task under a timeout, and a failed scrape simply records
+  the provider as down until the next sweep.
+</Note>
+
 ### Latency histograms
 
 Both histograms are labelled `{model="..."}` so you can track latency per model independently. Each histogram exposes the standard `_bucket`, `_sum`, and `_count` series.

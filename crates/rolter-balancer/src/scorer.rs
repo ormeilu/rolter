@@ -164,6 +164,22 @@ impl Pipeline {
             .with(Box::new(LeastLoadScorer::new(n)), 0.25)
     }
 
+    /// The LoRA-aware stack (#853): adapter residency dominates, prefix
+    /// affinity next, in-flight load last.
+    ///
+    /// Adapter residency outranks prefix affinity because the costs are not
+    /// comparable — missing a warm prefix re-computes some tokens, while
+    /// missing a resident adapter can force the engine to load adapter weights
+    /// before it decodes anything at all. Load stays in the stack so a fleet
+    /// where every target holds the adapter still balances rather than pinning.
+    pub fn lora_stack(n: usize) -> Self {
+        Self::new(n)
+            .named("lora_aware")
+            .with(Box::new(LoraScorer::new(n)), 1.0)
+            .with(Box::new(PrefixCacheScorer::new(n)), 0.5)
+            .with(Box::new(LeastLoadScorer::new(n)), 0.25)
+    }
+
     /// The latency-aware stack: observed per-target latency dominates, with
     /// in-flight load as a light tiebreaker (and the only signal until latency
     /// samples arrive — a cold route behaves like least-load).
@@ -572,6 +588,132 @@ impl Scorer for SessionAffinityScorer {
     }
 }
 
+/// Adapter slots a single target can hold resident at once.
+///
+/// Mirrors vLLM's `--max-loras`: an accelerator holds a bounded number of LoRA
+/// adapters, and serving one it does not hold costs a load. Modelling the bound
+/// is the point — an unbounded "has ever served" set would claim residency long
+/// after the adapter was evicted upstream, which is worse than not scoring at
+/// all because it steers confidently to a cold target.
+pub const DEFAULT_MAX_ADAPTERS_PER_TARGET: usize = 8;
+
+/// LRU set of the adapters one target currently holds.
+#[derive(Debug)]
+struct AdapterSlots {
+    capacity: usize,
+    /// least-recently-used first, so eviction pops the front
+    order: Vec<String>,
+}
+
+impl AdapterSlots {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            order: Vec::new(),
+        }
+    }
+
+    fn holds(&self, adapter: &str) -> bool {
+        self.order.iter().any(|a| a == adapter)
+    }
+
+    /// Record that this target just served `adapter`, evicting the least
+    /// recently used one when the slots are full.
+    fn touch(&mut self, adapter: &str) {
+        if let Some(at) = self.order.iter().position(|a| a == adapter) {
+            let existing = self.order.remove(at);
+            self.order.push(existing);
+            return;
+        }
+        if self.order.len() >= self.capacity {
+            self.order.remove(0);
+        }
+        self.order.push(adapter.to_string());
+    }
+}
+
+/// Prefer a target that already holds the requested LoRA adapter (#853).
+///
+/// llm-d routes model *variants* by which accelerator already has the adapter
+/// resident; for a fleet serving many adapters off shared base weights, that is
+/// the same class of win as prefix-cache affinity, and it composes with the
+/// existing scorers rather than replacing them.
+///
+/// Residency is *learned from traffic*, not declared: rolter cannot see which
+/// adapters an engine currently holds, and a static declaration would go stale
+/// the moment the engine evicted one. Each target's slot set is bounded and
+/// LRU, so it tracks what the engine plausibly still holds rather than
+/// everything it has ever served.
+///
+/// When no candidate holds the adapter — a cold adapter, or a request with none
+/// — every candidate scores `0.0`. That is deliberately *neutral* rather than a
+/// penalty: an equal contribution cannot move the argmax, so the rest of the
+/// pipeline decides and this scorer stays silent instead of guessing.
+pub struct LoraScorer {
+    resident: Vec<Mutex<AdapterSlots>>,
+}
+
+impl LoraScorer {
+    /// Scorer over `n` targets, each holding up to
+    /// [`DEFAULT_MAX_ADAPTERS_PER_TARGET`] adapters.
+    pub fn new(n: usize) -> Self {
+        Self::with_capacity(n, DEFAULT_MAX_ADAPTERS_PER_TARGET)
+    }
+
+    /// Scorer over `n` targets, each holding up to `capacity` adapters. Set
+    /// this to the engine's `--max-loras` so residency tracks the real bound.
+    pub fn with_capacity(n: usize, capacity: usize) -> Self {
+        Self {
+            resident: (0..n)
+                .map(|_| Mutex::new(AdapterSlots::new(capacity)))
+                .collect(),
+        }
+    }
+
+    /// Whether `target` currently holds `adapter`. Exposed for tests and
+    /// telemetry, not used on the pick path beyond `score`.
+    pub fn holds(&self, target: usize, adapter: &str) -> bool {
+        self.resident
+            .get(target)
+            .is_some_and(|slots| slots.lock().holds(adapter))
+    }
+}
+
+impl Scorer for LoraScorer {
+    fn name(&self) -> &'static str {
+        "lora"
+    }
+
+    fn score(&self, ctx: &RouteContext, candidates: &[usize], _loads: &[u64]) -> Vec<f32> {
+        let Some(adapter) = ctx.adapter else {
+            return vec![0.0; candidates.len()];
+        };
+        candidates
+            .iter()
+            .map(|&i| {
+                if self
+                    .resident
+                    .get(i)
+                    .is_some_and(|slots| slots.lock().holds(adapter))
+                {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+
+    fn observe(&self, target: usize, ctx: &RouteContext) {
+        let Some(adapter) = ctx.adapter else {
+            return;
+        };
+        if let Some(slots) = self.resident.get(target) {
+            slots.lock().touch(adapter);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -747,6 +889,7 @@ mod tests {
             session_key: None,
             prompt: Some("a long shared system prompt then a question"),
             token_ids: None,
+            adapter: None,
         };
         // cold: prefix scores 0 for both, load scorer absent -> tie, any target ok
         let first = p.select(&ctx, &[], |_| true).unwrap();
@@ -764,6 +907,7 @@ mod tests {
             session_key: Some("user-1"),
             prompt: None,
             token_ids: None,
+            adapter: None,
         };
         // cold: no affinity, all candidates tie -> record whichever wins as served
         p.observe(2, &ctx);
@@ -787,6 +931,7 @@ mod tests {
             session_key: Some("s"),
             prompt: None,
             token_ids: None,
+            adapter: None,
         };
         scorer.observe(1, &ctx);
         // zero ttl -> entry is immediately stale, so no boost
@@ -800,10 +945,174 @@ mod tests {
             session_key: Some("s"),
             prompt: None,
             token_ids: None,
+            adapter: None,
         };
         scorer.observe(2, &ctx);
         // target 2 not in the candidate set -> no boost applied
         assert_eq!(scorer.score(&ctx, &[0, 1], &[]), vec![0.0, 0.0]);
+    }
+
+    fn with_adapter(adapter: &str) -> RouteContext<'_> {
+        RouteContext {
+            adapter: Some(adapter),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_resident_adapter_outscores_a_cold_target() {
+        let scorer = LoraScorer::new(3);
+        scorer.observe(1, &with_adapter("summarizer"));
+        assert_eq!(
+            scorer.score(&with_adapter("summarizer"), &[0, 1, 2], &[]),
+            vec![0.0, 1.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn a_cold_adapter_scores_every_target_equally() {
+        // neutral, not a penalty: an equal contribution cannot move the argmax,
+        // so the rest of the pipeline decides instead of this scorer guessing
+        let scorer = LoraScorer::new(3);
+        scorer.observe(1, &with_adapter("summarizer"));
+        assert_eq!(
+            scorer.score(&with_adapter("translator"), &[0, 1, 2], &[]),
+            vec![0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn a_request_without_an_adapter_is_inert() {
+        let scorer = LoraScorer::new(2);
+        scorer.observe(0, &with_adapter("summarizer"));
+        assert_eq!(
+            scorer.score(&RouteContext::default(), &[0, 1], &[]),
+            vec![0.0, 0.0]
+        );
+        // and observing without an adapter records nothing
+        scorer.observe(1, &RouteContext::default());
+        assert!(!scorer.holds(1, "summarizer"));
+    }
+
+    #[test]
+    fn residency_is_bounded_and_evicts_least_recently_used() {
+        // the engine holds a bounded number of adapters (vLLM --max-loras);
+        // claiming residency past that bound would confidently steer to a
+        // target that has since evicted the adapter
+        let scorer = LoraScorer::with_capacity(1, 2);
+        for adapter in ["a", "b"] {
+            scorer.observe(0, &with_adapter(adapter));
+        }
+        assert!(scorer.holds(0, "a") && scorer.holds(0, "b"));
+
+        scorer.observe(0, &with_adapter("c"));
+        assert!(!scorer.holds(0, "a"), "the oldest adapter must be evicted");
+        assert!(scorer.holds(0, "b") && scorer.holds(0, "c"));
+    }
+
+    #[test]
+    fn reuse_refreshes_an_adapter_against_eviction() {
+        let scorer = LoraScorer::with_capacity(1, 2);
+        scorer.observe(0, &with_adapter("a"));
+        scorer.observe(0, &with_adapter("b"));
+        // touching "a" again makes "b" the least recently used
+        scorer.observe(0, &with_adapter("a"));
+        scorer.observe(0, &with_adapter("c"));
+        assert!(scorer.holds(0, "a"), "recently reused adapter was evicted");
+        assert!(!scorer.holds(0, "b"));
+    }
+
+    #[test]
+    fn repeated_adapter_use_does_not_consume_extra_slots() {
+        let scorer = LoraScorer::with_capacity(1, 2);
+        for _ in 0..10 {
+            scorer.observe(0, &with_adapter("a"));
+        }
+        scorer.observe(0, &with_adapter("b"));
+        // "a" served ten times must still occupy exactly one slot
+        assert!(scorer.holds(0, "a") && scorer.holds(0, "b"));
+    }
+
+    #[test]
+    fn the_lora_stack_pins_repeat_adapter_traffic_to_its_warm_target() {
+        let stack = Pipeline::lora_stack(3);
+        let ctx = with_adapter("summarizer");
+        let first = stack.select(&ctx, &[], |_| true).unwrap();
+        stack.observe(first, &ctx);
+        // the warm target keeps winning while it is not overloaded
+        for _ in 0..5 {
+            let next = stack.select(&ctx, &[], |_| true).unwrap();
+            assert_eq!(next, first, "adapter affinity did not hold");
+            stack.observe(next, &ctx);
+        }
+    }
+
+    #[test]
+    fn adapter_affinity_outranks_prefix_affinity() {
+        // the costs are not comparable: a cold prefix recomputes tokens, a cold
+        // adapter can block decoding on an adapter load
+        let stack = Pipeline::lora_stack(2);
+        let warm_prefix = RouteContext {
+            prompt: Some("a shared prompt prefix"),
+            adapter: Some("translator"),
+            ..Default::default()
+        };
+        // target 0 gets the prompt, target 1 gets the adapter
+        stack.observe(
+            0,
+            &RouteContext {
+                prompt: warm_prefix.prompt,
+                ..Default::default()
+            },
+        );
+        stack.observe(
+            1,
+            &RouteContext {
+                adapter: warm_prefix.adapter,
+                ..Default::default()
+            },
+        );
+        assert_eq!(stack.select(&warm_prefix, &[], |_| true), Some(1));
+    }
+
+    #[test]
+    fn adapter_affinity_pins_rather_than_spreading() {
+        // worth pinning down explicitly: affinity is the *point*, so repeat
+        // traffic for one adapter concentrates on one target instead of
+        // spreading. That is why the gateway only sets an adapter when the
+        // request addresses something other than the route's own model — on a
+        // single-model route this behaviour would pin the entire route
+        let stack = Pipeline::lora_stack(3);
+        let ctx = with_adapter("only-adapter");
+        let first = stack.select(&ctx, &[], |_| true).unwrap();
+        stack.observe(first, &ctx);
+        for _ in 0..4 {
+            let next = stack.select(&ctx, &[], |_| true).unwrap();
+            assert_eq!(next, first);
+            stack.observe(next, &ctx);
+        }
+    }
+
+    #[test]
+    fn load_still_breaks_ties_once_several_targets_hold_the_adapter() {
+        // a fleet where every target has the adapter must balance, not pin
+        let stack = Pipeline::lora_stack(2);
+        let ctx = with_adapter("shared");
+        stack.observe(0, &ctx);
+        stack.observe(1, &ctx);
+        assert_eq!(stack.select(&ctx, &[9, 0], |_| true), Some(1));
+        assert_eq!(stack.select(&ctx, &[0, 9], |_| true), Some(0));
+    }
+
+    #[test]
+    fn an_unknown_target_index_is_ignored_rather_than_panicking() {
+        let scorer = LoraScorer::new(2);
+        scorer.observe(99, &with_adapter("a"));
+        assert!(!scorer.holds(99, "a"));
+        assert_eq!(
+            scorer.score(&with_adapter("a"), &[0, 1], &[]),
+            vec![0.0, 0.0]
+        );
     }
 
     #[test]

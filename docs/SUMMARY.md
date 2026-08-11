@@ -15,12 +15,25 @@
 - [MCP OAuth](architecture/mcp-oauth.md)
 - [SCIM provisioning](architecture/scim-provisioning.md)
 - [Security](architecture/security.md)
+- [LDAP authentication](architecture/ldap.md)
 - [Observability](architecture/observability.md)
 - [Performance](architecture/performance.md)
 
 # Decisions
 
 - [ADRs / decision log](adr/README.md)
+  - [ADR-0015 — OpenAI Responses API translation](adr/2026-07-13-responses-api-protocol-translation.md)
+  - [ADR-0016 — Responses lifecycle routing registry](adr/2026-07-13-responses-lifecycle-routing-registry.md)
+  - [ADR-0017 — Provider/model addressing](adr/2026-07-14-provider-model-addressing.md)
+  - [ADR-0019 — Per-provider egress proxy pools](adr/2026-07-18-provider-egress-proxy-pools.md)
+  - [ADR-0020 — Bounded semantic response caching](adr/2026-07-18-semantic-response-cache.md)
+  - [ADR-0021 — External cache telemetry for routing](adr/2026-07-18-external-cache-telemetry-routing.md)
+  - [ADR-0022 — Config-vs-DB entity tiering](adr/2026-07-20-config-db-entity-tiering.md)
+  - [ADR-0023 — Access policy propagation](adr/2026-08-04-access-policy-propagation.md)
+  - [ADR-0024 — Dashboard UX telemetry](adr/2026-08-06-dashboard-ux-telemetry.md)
+  - [ADR-0025 — Events as logs](adr/2026-08-06-events-as-logs.md)
+  - [ADR-0026 — Tenant telemetry destinations](adr/2026-08-06-tenant-telemetry-destinations.md)
+  - [ADR-0027 — End-to-end test harness](adr/2026-07-21-e2e-test-harness.md)
 
 # API
 
@@ -40,6 +53,7 @@
 
 - [Zero-config quickstart](deployment/zero-config-quickstart.md)
 - [Configuration reference](deployment/configuration.md)
+- [Pre-boot validation (`rolter check`)](deployment/preflight-validation.md)
 - [Custom CA bundles](deployment/custom-ca-bundles.md)
 - [Self-hosted Ollama](deployment/ollama.md)
 - [OpenRouter](deployment/openrouter.md)

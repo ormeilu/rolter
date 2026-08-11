@@ -857,6 +857,9 @@ pub enum BalancingStrategy {
     /// governed by [`AdaptiveRoutingConfig`]; falls back to the `pipeline`
     /// stack whenever it is disabled or the evidence is too thin
     Adaptive,
+    /// LoRA-adapter affinity: prefer a target that already holds the requested
+    /// adapter resident, with prefix affinity and in-flight load behind it
+    LoraAware,
 }
 
 /// A named set of providers addressable as `group-slug/model` (ADR-0017

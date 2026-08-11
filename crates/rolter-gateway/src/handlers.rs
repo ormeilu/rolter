@@ -44,6 +44,8 @@ pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
 /// Prometheus metrics endpoint.
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     let mut body = state.metrics.render();
+    // scraped upstream engine series (#850), one label set per provider
+    state.upstream_metrics.render(&mut body);
     body.push_str("# HELP rolter_egress_proxy_requests_total upstream requests by proxy pool member and outcome\n");
     body.push_str("# TYPE rolter_egress_proxy_requests_total counter\n");
     body.push_str("# HELP rolter_egress_proxy_quarantined whether a proxy pool member is temporarily quarantined\n");
@@ -1265,6 +1267,13 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         session_key,
         prompt,
         token_ids: token_ids.as_deref(),
+        // adapter identity only exists when the request addresses something
+        // other than the route's own model — i.e. a passthrough provider-group
+        // route, which is how vLLM addresses LoRA adapters over shared base
+        // weights. On a single-model route the two are equal and this stays
+        // None, which keeps adapter scoring inert: treating one model as an
+        // adapter would pin the whole route to whichever target served first
+        adapter: (model != effective_model).then_some(model.as_str()),
     };
     // trace context plus any client headers the operator allowlisted (#564).
     //
@@ -2081,6 +2090,9 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
         session_key: headers.get("x-session-id").and_then(|v| v.to_str().ok()),
         prompt: None,
         token_ids: token_ids.as_deref(),
+        // see the chat path: an adapter only exists when the request addresses
+        // something other than the route's own model
+        adapter: (model != entry.route.model).then_some(model.as_str()),
     };
     // trace context plus any client headers the operator allowlisted (#564)
     let trace_ctx =

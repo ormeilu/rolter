@@ -28,6 +28,12 @@ pub struct RouteContext<'a> {
     pub prompt: Option<&'a str>,
     /// token ids used for exact vLLM block-prefix matching when supplied
     pub token_ids: Option<&'a [u32]>,
+    /// LoRA adapter this request needs, when the route serves adapters over a
+    /// shared base model (#853). Used to steer the request to a target that
+    /// already holds the adapter resident, the same class of win as prefix
+    /// affinity; `None` on a route with no adapters, which leaves adapter
+    /// scoring inert.
+    pub adapter: Option<&'a str>,
 }
 
 /// A strategy that selects one target index for a request.
@@ -181,6 +187,7 @@ pub fn build_with_stats(
         BalancingStrategy::CacheAware => Box::new(CacheAware::new(n, 0.5)),
         BalancingStrategy::Weighted => Box::new(WeightedRoundRobin::new(weights)),
         BalancingStrategy::Pipeline => Box::new(scorer::Pipeline::default_stack(weights)),
+        BalancingStrategy::LoraAware => Box::new(scorer::Pipeline::lora_stack(n)),
         BalancingStrategy::Cheapest => {
             // pad unknown costs so the scorer stays index-aligned with targets
             let mut costs = stats.cost_per_mtok.clone();
@@ -612,6 +619,7 @@ mod tests {
             session_key: Some("user-1"),
             prompt: None,
             token_ids: None,
+            adapter: None,
         };
         let a = lb.pick(&ctx, &[]).unwrap();
         let b = lb.pick(&ctx, &[]).unwrap();
@@ -640,6 +648,7 @@ mod tests {
             session_key: None,
             prompt: Some("a long shared system prompt followed by a question"),
             token_ids: None,
+            adapter: None,
         };
         let first = lb.pick(&ctx, &[]).unwrap();
         lb.observe(first, &ctx);
