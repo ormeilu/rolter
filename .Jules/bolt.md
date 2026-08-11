@@ -37,3 +37,6 @@ To solve this, we can pre-collect all the keys required into a `Vec<String>`, pe
 ## 2024-05-18 - [Rust Vec Search Inefficiency in RBAC]
 **Learning:** Found an O(n^2) inefficiency in `held_roles` within `crates/rolter-control/src/rbac_matrix.rs`. It was using a `Vec::new()` for tracking `seen` pairs of `(Uuid, Uuid)` and doing `seen.contains()` during a loop over grants, which scales poorly if the user is a member of many groups/roles.
 **Action:** Replaced linear `Vec` searches with `std::collections::HashSet` to ensure O(1) deduplication lookups. Also ensured `views` is pre-allocated via `Vec::with_capacity(grants.len())`.
+## 2026-08-04 - Vec pre-allocation in SSE translation streams
+**Learning:** During SSE translation, arrays and intermediate buffers (like `chunks`) are instantiated per event chunk to collect translated events before rendering them. Leaving them as `Vec::new()` causes a fast initial empty creation but incurs an immediate reallocation on the very first `.push()` when capacity grows.
+**Action:** In places where small, fixed numbers of objects are created (like 1 to 3 items per SSE frame), use `Vec::with_capacity(N)` instead of `Vec::new()` to avoid the first reallocation on hot stream pathways.
