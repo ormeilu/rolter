@@ -1,0 +1,240 @@
+# Dogfooding fleet (#924) — pairs with `integration/dogfood/fleet.ts`.
+#
+#   bun integration/dogfood/fleet.ts        # the 15 fake upstreams
+#   source integration/dogfood/keys.env     # the keys they expect
+#   cargo run -p rolter-store --features postgres --bin rolter-seed -- \
+#       --import integration/dogfood/dogfood.toml
+#
+# The point of this file is that every routing strategy has a route an operator
+# can actually exercise, against targets whose latencies differ enough that the
+# strategies visibly disagree. A fleet of identical targets makes every strategy
+# look the same and the routing screens untestable.
+
+[server]
+bind = "0.0.0.0:4000"
+
+# The gateway writes request logs here; the dashboard's analytics screens read
+# the same table through the control plane's CLICKHOUSE_URL.
+[logging]
+clickhouse_url = "http://127.0.0.1:8123"
+
+# ── the hosted-shaped half ───────────────────────────────────────────────────
+# named and keyed the way each vendor does it, so they can be added through the
+# dashboard as an OpenAI provider and an OpenRouter provider respectively
+
+[[providers]]
+name = "openai-edge"
+kind = "openai"
+api_base = "http://127.0.0.1:18001"
+api_key_env = "DOGFOOD_OPENAI_KEY"
+
+# Serves OpenRouter's `vendor/model` names, but declared `openai_compatible`
+# rather than `openrouter`: config validation pins an openrouter provider's
+# api_base to the literal `https://openrouter.ai/api/v1`, so the kind cannot be
+# pointed at a local endpoint at all. Tracked in #925 — until that is settled,
+# the OpenRouter *dialect* is not reachable from this fleet, only its naming.
+[[providers]]
+name = "openrouter-edge"
+kind = "openai_compatible"
+api_base = "http://127.0.0.1:18002"
+api_key_env = "DOGFOOD_OPENROUTER_KEY"
+
+# ── the self-hosted half ─────────────────────────────────────────────────────
+# one model per instance, like a real vllm deployment. roughly half sit behind
+# a key and half do not, which is what a mixed trusted/untrusted subnet gives
+
+[[providers]]
+name = "vllm-a100-01"
+kind = "openai_compatible"
+api_base = "http://127.0.0.1:18003"
+api_key_env = "DOGFOOD_VLLM_A100_01"
+
+[[providers]]
+name = "vllm-a100-02"
+kind = "openai_compatible"
+api_base = "http://127.0.0.1:18004"
+
+[[providers]]
+name = "vllm-a100-03"
+kind = "openai_compatible"
+api_base = "http://127.0.0.1:18005"
+
+[[providers]]
+name = "vllm-h100-01"
+kind = "openai_compatible"
+api_base = "http://127.0.0.1:18006"
+api_key_env = "DOGFOOD_VLLM_H100_01"
+
+[[providers]]
+name = "vllm-h100-02"
+kind = "openai_compatible"
+api_base = "http://127.0.0.1:18007"
+
+[[providers]]
+name = "vllm-h100-03"
+kind = "openai_compatible"
+api_base = "http://127.0.0.1:18008"
+api_key_env = "DOGFOOD_VLLM_H100_03"
+
+[[providers]]
+name = "vllm-l40s-01"
+kind = "openai_compatible"
+api_base = "http://127.0.0.1:18009"
+
+[[providers]]
+name = "vllm-l40s-02"
+kind = "openai_compatible"
+api_base = "http://127.0.0.1:18010"
+api_key_env = "DOGFOOD_VLLM_L40S_02"
+
+[[providers]]
+name = "vllm-l40s-03"
+kind = "openai_compatible"
+api_base = "http://127.0.0.1:18011"
+
+# 25% of this one's responses are 503s, so the health and breaker screens have
+# something other than green to show
+[[providers]]
+name = "vllm-spot-01"
+kind = "openai_compatible"
+api_base = "http://127.0.0.1:18012"
+
+# ~1.4s to first token against ~200ms for its pair — the latency-aware
+# strategies should visibly avoid it
+[[providers]]
+name = "vllm-spot-02"
+kind = "openai_compatible"
+api_base = "http://127.0.0.1:18013"
+api_key_env = "DOGFOOD_VLLM_SPOT_02"
+
+[[providers]]
+name = "tei-embed-01"
+kind = "tei"
+api_base = "http://127.0.0.1:18014"
+
+[[providers]]
+name = "tei-embed-02"
+kind = "tei"
+api_base = "http://127.0.0.1:18015"
+api_key_env = "DOGFOOD_TEI_EMBED_02"
+
+# ── routes ───────────────────────────────────────────────────────────────────
+# one per strategy worth looking at, on the pool that makes it legible
+
+[[routes]]
+model = "gpt-4o"
+strategy = "round_robin"
+[[routes.targets]]
+provider = "openai-edge"
+model = "gpt-4o"
+
+[[routes]]
+model = "gpt-4o-mini"
+strategy = "round_robin"
+[[routes.targets]]
+provider = "openai-edge"
+model = "gpt-4o-mini"
+
+[[routes]]
+model = "claude-sonnet-4"
+strategy = "round_robin"
+[[routes.targets]]
+provider = "openrouter-edge"
+model = "anthropic/claude-sonnet-4"
+
+[[routes]]
+model = "llama-3.1-8b"
+strategy = "round_robin"
+[[routes.targets]]
+provider = "vllm-a100-01"
+model = "meta-llama/Llama-3.1-8B-Instruct"
+[[routes.targets]]
+provider = "vllm-a100-02"
+model = "meta-llama/Llama-3.1-8B-Instruct"
+[[routes.targets]]
+provider = "vllm-a100-03"
+model = "meta-llama/Llama-3.1-8B-Instruct"
+
+# same pool, cache-aware: a repeated prefix should stick to one target
+[[routes]]
+model = "llama-3.1-8b-cached"
+strategy = "cache_aware"
+[[routes.targets]]
+provider = "vllm-a100-01"
+model = "meta-llama/Llama-3.1-8B-Instruct"
+[[routes.targets]]
+provider = "vllm-a100-02"
+model = "meta-llama/Llama-3.1-8B-Instruct"
+[[routes.targets]]
+provider = "vllm-a100-03"
+model = "meta-llama/Llama-3.1-8B-Instruct"
+
+# a100-03 is ~4x slower than its pair, so `fastest` should starve it
+[[routes]]
+model = "llama-3.1-8b-fastest"
+strategy = "fastest"
+[[routes.targets]]
+provider = "vllm-a100-01"
+model = "meta-llama/Llama-3.1-8B-Instruct"
+[[routes.targets]]
+provider = "vllm-a100-02"
+model = "meta-llama/Llama-3.1-8B-Instruct"
+[[routes.targets]]
+provider = "vllm-a100-03"
+model = "meta-llama/Llama-3.1-8B-Instruct"
+
+[[routes]]
+model = "qwen-32b"
+strategy = "power_of_two"
+[[routes.targets]]
+provider = "vllm-h100-01"
+model = "Qwen/Qwen2.5-32B-Instruct"
+[[routes.targets]]
+provider = "vllm-h100-02"
+model = "Qwen/Qwen2.5-32B-Instruct"
+
+# the strategy that shipped in #912 — ranks per request rather than per target
+[[routes]]
+model = "mistral-7b"
+strategy = "predicted_latency"
+[[routes.targets]]
+provider = "vllm-h100-03"
+model = "mistralai/Mistral-7B-Instruct-v0.3"
+[[routes.targets]]
+provider = "vllm-l40s-01"
+model = "mistralai/Mistral-7B-Instruct-v0.3"
+
+# 3:1 split, and the two targets are near-identical in speed, so the split is
+# attributable to the weights rather than to latency
+[[routes]]
+model = "gemma-27b"
+strategy = "weighted"
+[[routes.targets]]
+provider = "vllm-l40s-02"
+model = "google/gemma-2-27b-it"
+weight = 3
+[[routes.targets]]
+provider = "vllm-l40s-03"
+model = "google/gemma-2-27b-it"
+weight = 1
+
+# one flaky target and one slow one: the interesting failure case
+[[routes]]
+model = "deepseek-r1"
+strategy = "adaptive"
+[[routes.targets]]
+provider = "vllm-spot-01"
+model = "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
+[[routes.targets]]
+provider = "vllm-spot-02"
+model = "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
+
+[[routes]]
+model = "text-embedding"
+strategy = "round_robin"
+[[routes.targets]]
+provider = "tei-embed-01"
+model = "BAAI/bge-large-en-v1.5"
+[[routes.targets]]
+provider = "tei-embed-02"
+model = "intfloat/e5-mistral-7b-instruct"
