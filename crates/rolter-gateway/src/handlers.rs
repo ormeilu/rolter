@@ -639,9 +639,9 @@ fn plugin_tenant(scope: &ScopeIds) -> rolter_core::WebhookTenant {
 /// instead of flattening it into a generic upstream 502 after failover is
 /// exhausted. Other forwarding failures keep their existing gateway-error form.
 fn upstream_error_response(message: &str) -> Response {
-    if let Some(message) = message.strip_prefix("config error: role_capability: ") {
+    if let Some((code, message)) = translation_request_error(message) {
         return crate::error::ApiError::new(StatusCode::BAD_REQUEST, message)
-            .with_code("role_capability_unsupported")
+            .with_code(code)
             .with_param("messages")
             .into_response();
     }
@@ -658,6 +658,28 @@ fn upstream_error_response(message: &str) -> Response {
             .into_response();
     }
     error_json(StatusCode::BAD_GATEWAY, message)
+}
+
+/// Request-translation failures the caller can fix, paired with the OpenAI-style
+/// error `code` they render as. Every one of these is a property of the body the
+/// client sent, so it is a 400 — flattening them into the generic upstream 502
+/// tells an operator to look at the provider for a problem in their own request.
+const TRANSLATION_REQUEST_ERRORS: &[(&str, &str)] = &[
+    ("role_capability: ", "role_capability_unsupported"),
+    ("unsupported_content_part: ", "unsupported_content_part"),
+    (
+        "gemini_interactions_unsupported: ",
+        "gemini_interactions_unsupported",
+    ),
+];
+
+/// Match a forwarding failure against [`TRANSLATION_REQUEST_ERRORS`], returning
+/// its error code and the message with the `Error::Config` wrapping stripped.
+fn translation_request_error(message: &str) -> Option<(&'static str, &str)> {
+    let bare = message.strip_prefix("config error: ")?;
+    TRANSLATION_REQUEST_ERRORS
+        .iter()
+        .find_map(|(prefix, code)| bare.strip_prefix(prefix).map(|rest| (*code, rest)))
 }
 
 /// Recognize a queue-admission failure and hand back its bare message.
@@ -3157,6 +3179,58 @@ mod tests {
         assert!(!is_queue_admission_error(
             "upstream error: connection refused"
         ));
+    }
+
+    /// #882: a request-translation failure is the caller's to fix, so it must
+    /// carry a 400 and a machine-readable code rather than a generic 502 that
+    /// points the operator at the provider.
+    #[tokio::test]
+    async fn translation_request_errors_are_client_errors() {
+        let cases = [
+            (
+                "config error: role_capability: developer role unsupported",
+                "role_capability_unsupported",
+                "developer role unsupported",
+            ),
+            (
+                "config error: unsupported_content_part: the interactions upstream has no \
+                 equivalent for content part type 'input_audio'",
+                "unsupported_content_part",
+                "content part type 'input_audio'",
+            ),
+            (
+                "config error: gemini_interactions_unsupported: this endpoint has no \
+                 interactions equivalent",
+                "gemini_interactions_unsupported",
+                "no interactions equivalent",
+            ),
+        ];
+        for (message, code, fragment) in cases {
+            let response = upstream_error_response(message);
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{message} was not a client error"
+            );
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["error"]["code"], code);
+            let rendered = body["error"]["message"].as_str().unwrap();
+            assert!(rendered.contains(fragment), "{rendered}");
+            // the `Error::Config` wrapping never reaches the caller
+            assert!(!rendered.starts_with("config error: "), "{rendered}");
+        }
+    }
+
+    /// A config error that is not a translation failure keeps its 502 — this
+    /// classification is an allowlist, not a blanket downgrade.
+    #[test]
+    fn other_config_errors_are_still_gateway_errors() {
+        assert_eq!(
+            upstream_error_response("config error: no provider key configured").status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert!(translation_request_error("upstream error: role_capability: x").is_none());
     }
 
     #[test]
