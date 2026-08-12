@@ -10,6 +10,10 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KEK_FILE="${ROLTER_DOGFOOD_KEK_FILE:-$DIR/.kek}"
 
+# the one place credentials are defined (#956); the sheet only prints them
+# shellcheck source=integration/dogfood/creds.env
+set -a; . "$DIR/creds.env"; set +a
+
 bold() { printf '\033[1m%s\033[0m\n' "$1"; }
 dim() { printf '\033[2m%s\033[0m\n' "$1"; }
 rule() { printf '\033[2m%s\033[0m\n' "────────────────────────────────────────────────────────────────────────"; }
@@ -35,20 +39,25 @@ dim "  (portless aliases; the raw ports are 4001 / 4000 / 8080)"
 echo
 
 rule
-bold "Logins"
+bold "Logins · one credential everywhere"
 rule
-printf '  %-22s %-30s %s\n' "dashboard" "admin@rolter.local" "dogfood-admin-2026"
-printf '  %-22s %-30s %s\n' "signoz" "(sign up on first visit)" "kept local, no preset"
+printf '  %-22s %-30s %s\n' "SERVICE" "USER" "PASSWORD"
+printf '  %-22s %-30s %s\n' "rolter dashboard" "$DEV_EMAIL" "$DEV_PASSWORD"
+printf '  %-22s %-30s %s\n' "signoz" "$DEV_EMAIL" "$DEV_PASSWORD"
+dim "  set by 'just dogfood' / 'just dev-creds' from integration/dogfood/creds.env"
+dim "  signoz not accepting it? it predates this and kept its own account:"
+dim "  just signoz-reset   (drops signoz's users/dashboards; traces are safe)"
 echo
 
 rule
 bold "Backing services"
 rule
 printf '  %-12s %-42s %-14s %s\n' "SERVICE" "URL" "USER" "PASSWORD"
-printf '  %-12s %-42s %-14s %s\n' "postgres" "postgres://127.0.0.1:5432/rolter" "rolter" "rolter"
+printf '  %-12s %-42s %-14s %s\n' "postgres" "postgres://127.0.0.1:5432/rolter" "$DEV_PG_USER" "$DEV_PG_PASSWORD"
 printf '  %-12s %-42s %-14s %s\n' "redis" "redis://127.0.0.1:6379" "-" "(no auth)"
-printf '  %-12s %-42s %-14s %s\n' "clickhouse" "http://127.0.0.1:8123 (db: default)" "default" "(no password)"
+printf '  %-12s %-42s %-14s %s\n' "clickhouse" "http://127.0.0.1:8123 (db: default)" "$DEV_CLICKHOUSE_USER" "(no password)"
 printf '  %-12s %-42s %-14s %s\n' "otlp" "127.0.0.1:4317 grpc · 4318 http" "-" "(no auth)"
+dim "  redis, clickhouse and the collector run unauthenticated on loopback"
 echo
 
 rule

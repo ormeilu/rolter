@@ -98,3 +98,55 @@ portless alias signoz 8080 && portless alias otel 4318
 | `https://rolter.localhost` | dashboard |
 | `https://api.rolter.localhost` | gateway (`/v1/*`) |
 | `https://signoz.localhost` | traces, metrics, logs |
+
+## Credentials
+
+`creds.env` is the only place a local credential is defined (#956). The
+justfile, `provision-signoz.sh` and `sheet.sh` all read it, so changing it there
+changes it everywhere. The dashboard and SigNoz share one login:
+
+| Service | User | Password |
+|---|---|---|
+| rolter dashboard | `dev@rolter.local` | `rolter-dev-2026` |
+| SigNoz | `dev@rolter.local` | `rolter-dev-2026` |
+| postgres | `rolter` | `rolter` |
+| redis, ClickHouse, OTLP | — | unauthenticated on loopback |
+
+These are checked in and printed on every run. That is safe only because the
+stack binds to loopback, talks to fake providers and holds nothing real — do not
+carry them anywhere else, and leave `docker/docker-compose.yml` and the Helm
+chart on their own defaults.
+
+`just dev-creds` brings an already-running stack in line without a full restart.
+It also runs an `ALTER USER` on Postgres, which is necessary because
+`POSTGRES_PASSWORD` is only applied when the data directory is first
+initialised — an existing volume keeps whatever it was built with.
+
+### SigNoz
+
+`just dogfood` provisions SigNoz with that login and imports the dashboards in
+`signoz/dashboards/`. Re-running is a no-op.
+
+A SigNoz that already has a different account is left alone: rewriting the
+credential store of a running service behind its own back is not something this
+script does. It reports the mismatch and stops. To adopt the shared credential:
+
+```bash
+just signoz-reset   # drops SigNoz's users, dashboards and alerts, then provisions
+```
+
+Traces survive that — they live in ClickHouse, not in the database it removes.
+
+The dashboards can always be imported by hand instead: **Dashboards → Import
+JSON** in SigNoz, using the files in `signoz/dashboards/`.
+
+| Dashboard | What it shows |
+|---|---|
+| `rolter · overview` | request rate, p95 and errors across gateway, control plane and dashboard; slowest operations |
+| `rolter · dashboard UX` | the SPA's own browser tracing: which API calls fail, with which status, on which path |
+
+Both query `signoz_traces` with ClickHouse SQL rather than the query builder, so
+they survive SigNoz changing the builder's shape between releases. The UX board
+is the one that makes an auth fault obvious: a screen 401ing while every route
+beside it returns 200 shows up as a wall of one status code, which is exactly
+how #942 was found.
