@@ -232,6 +232,37 @@ launches the shell rather than the full build.
 The job is **informational** (`continue-on-error: true`) pending the ROL-124
 promotion path.
 
+#### The screen-story harness
+
+A screen story renders the real page component against a stubbed `fetch`, so it
+exercises the same query wiring, empty/error branches and editor sheets that
+ship. `ui/src/pages/story-harness.tsx` holds the shared pieces — it is not a
+`.stories.tsx` file, so Storybook never tries to render it as a screen:
+
+| Helper | What it is for |
+|---|---|
+| `Harness` | swaps `globalThis.fetch`, clears the persisted scope, renders under a fresh `QueryClient` with `retry: false` |
+| `scoped(handler)` | answers the org → team → project chain every scoped screen resolves first, then defers to `handler` |
+| `routes([...])` | fragment-matched routing table, matched in order so a longer path can precede the prefix it shares |
+| `pending` | a stub that never settles, for the loading state |
+| `clickWhenEnabled` | waits for a button to be *enabled*, not merely present |
+| `sheet()` / `expectSheetClosed()` | the editor sheet, which portals to `document.body` rather than into the canvas |
+| `withConfirm` / `expectClosesWithoutPrompting` | the discard guard from #868, asserted in both answers |
+
+Two traps this encodes. Scope endpoints are matched on the whole pathname: a
+screen's own endpoint often *contains* one of them (`/api/v1/projects/{id}/virtual-keys`),
+and a substring match would answer it with the project list. And most screens
+disable their primary action until the three-request scope chain resolves, so
+`findByRole` followed by a click races and throws `pointer-events: none` —
+`clickWhenEnabled` is the fix.
+
+Each screen should carry `Loaded`, `Loading`, `Empty` and an error/forbidden
+story, one interaction story that opens the primary editor and saves, and at
+least one story exercising the discard guard. Where a sheet opens pre-filled
+(budgets seed `100` / `30d`), assert the seed too: its dirty flag means "differs
+from the seed", not "is non-empty", and getting that backwards makes an
+untouched form prompt on every close.
+
 ### Full-stack compose smoke
 
 The `compose-smoke` job boots the production-shaped Docker Compose topology
