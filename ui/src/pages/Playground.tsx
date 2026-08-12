@@ -33,6 +33,7 @@ import { fetchModels } from "@/lib/api";
 import {
   chatCompletion,
   embed,
+  fetchGatewayModels,
   generateImages,
   getPlaygroundKey,
   realtimeUrl,
@@ -47,9 +48,32 @@ import {
 // default for every modality in local dev.
 const FAKE = "fake-llm";
 
+/**
+ * Every id the gateway will actually accept.
+ *
+ * The control plane's `/api/v1/models` lists configured *routes*. The gateway
+ * also serves `provider-slug/model` pins and `group-slug/model` provider-group
+ * addresses, so listing routes alone left a provider group impossible to select
+ * here — on the one screen whose job is to send it a request (#938).
+ *
+ * The gateway call needs a virtual key, so the control-plane list is the
+ * fallback until one is set. That keeps the picker populated for someone who
+ * has not filled in the key bar yet, and it degrades to exactly the old
+ * behaviour rather than to an empty dropdown.
+ */
 function useModelNames(): string[] {
-  const models = useQuery({ queryKey: ["models"], queryFn: fetchModels });
-  const names = (models.data ?? []).map((m) => m.model);
+  const key = getPlaygroundKey();
+  const routes = useQuery({ queryKey: ["models"], queryFn: fetchModels });
+  const gateway = useQuery({
+    queryKey: ["gateway-models", key],
+    queryFn: ({ signal }) => fetchGatewayModels(signal),
+    enabled: !!key,
+    retry: false,
+  });
+
+  const names = gateway.data
+    ? gateway.data.map((m) => m.id)
+    : (routes.data ?? []).map((m) => m.model);
   return names.includes(FAKE) ? names : [FAKE, ...names];
 }
 

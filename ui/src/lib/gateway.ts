@@ -47,6 +47,38 @@ async function gwError(res: Response): Promise<Error> {
   return new Error(`gateway request failed: ${res.status}`);
 }
 
+/** One addressable id from the gateway's own catalogue. */
+export interface GatewayModel {
+  id: string;
+  /** the route, provider or provider group this id belongs to */
+  owned_by?: string;
+}
+
+/**
+ * What the **gateway** will actually serve, which is not the same set as the
+ * control plane's route list.
+ *
+ * `GET /api/v1/models` on the control plane returns configured routes. The
+ * gateway additionally serves `provider-slug/model` pins and `group-slug/model`
+ * provider-group addresses (ADR-0017 addendum). Listing routes alone means a
+ * provider group can be configured, be live, and be impossible to select in the
+ * Playground — the one screen whose job is to send it a request.
+ *
+ * Needs a virtual key, because it is a gateway call like any other; callers
+ * fall back to the control-plane list when there is no key to use.
+ */
+export async function fetchGatewayModels(
+  signal?: AbortSignal,
+): Promise<GatewayModel[]> {
+  const res = await fetch(`${GW_BASE}/v1/models`, {
+    headers: authHeaders(false),
+    signal,
+  });
+  if (!res.ok) throw await gwError(res);
+  const body = (await res.json()) as { data?: GatewayModel[] };
+  return body.data ?? [];
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   // string, or OpenAI multimodal content parts (text + image_url)
