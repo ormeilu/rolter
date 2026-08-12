@@ -22,9 +22,11 @@ const BASELINE_PATH = join(ROOT, "src", "lib", "i18n", "literals-baseline.json")
 
 // stories and tests are not shipped copy: a story's job is to render a component
 // with concrete sample text, and routing that through the catalogs would make
-// the stories test the catalogs instead of the component
+// the stories test the catalogs instead of the component. `story-harness.tsx`
+// is the fixture those stories share — it sits under `pages/` without being a
+// screen, and it says so in its own header comment, so it skips too.
 const SCANNED = ["src/components/**/*.tsx", "src/pages/**/*.tsx"];
-const SKIP = /\.(stories|test)\.tsx$/;
+const SKIP = /\.(stories|test)\.tsx$|(^|\/)story-harness\.tsx$/;
 
 const found: Literal[] = [];
 for (const pattern of SCANNED) {

@@ -35,6 +35,17 @@ describe("findLiterals", () => {
     expect(texts("<p>No events in window.</p>")).toEqual(["No events in window."]);
   });
 
+  // the `>` of an arrow is not a closing tag. without this, every `.tsx` file
+  // returning a generic from an arrow function reports the type name as copy
+  test("ignores a generic return type on an arrow function", () => {
+    const source = `
+      export type FetchStub = (input: RequestInfo) => Promise<Response>;
+      export const pending: FetchStub = scoped(() => new Promise<Response>(() => {}));
+      const pick = <T,>(xs: T[]): Array<T> => xs;
+    `;
+    expect(texts(source)).toEqual([]);
+  });
+
   test("ignores props nobody reads", () => {
     const source = `
       <div className="grid gap-3 md:grid-cols-2" id="model-form" data-testid="sheet" />
