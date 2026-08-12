@@ -29,6 +29,10 @@ extend-ignore-re = [
   "QYMBaAFKpTnXjkmXVb",
   "QYMBaAFD7y986Rvr1e",
   "UVkOtC6gn12Y",
+  # the dogfooding fleet's fake keys (#924): random hex the dictionary reads as
+  # words (e.g. "ba" inside "3ba8d7"). they authenticate against a script on
+  # loopback and are checked in so the fleet is reproducible
+  "vllm-local-3ba8d7",
 ]
 
 [files]
