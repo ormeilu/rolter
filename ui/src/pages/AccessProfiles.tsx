@@ -85,7 +85,11 @@ function ProfileCard({
           disabled={deleting}
           onClick={() => onDelete(profile)}
         >
-          <Trash2 className="size-4" />
+          {deleting ? (
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          ) : (
+            <Trash2 className="size-4" />
+          )}
         </Button>
       </div>
     </div>
@@ -167,7 +171,7 @@ export default function AccessProfiles() {
           <ProfileCard
             key={profile.id}
             profile={profile}
-            deleting={remove.isPending}
+            deleting={remove.isPending && remove.variables === profile.id}
             onDelete={(p) => remove.mutate(p.id)}
           />
         ))}
