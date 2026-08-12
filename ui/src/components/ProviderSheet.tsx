@@ -2,6 +2,8 @@ import { useMutation } from "@tanstack/react-query";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { CheckCircle2, Loader2, XCircle } from "lucide-react";
+
 import { CopyButton } from "@/components/CopyButton";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -12,11 +14,57 @@ import { useFormTelemetry } from "@/lib/ux-react";
 import {
   createProvider,
   PROVIDER_KINDS,
+  testProvider,
   updateProvider,
   type ProviderRow,
+  type ProviderTestResult,
 } from "@/lib/api";
 
 export type ProviderSheetMode = "add" | "edit";
+
+/**
+ * The result of a connection probe.
+ *
+ * Always names the URL that was tried. "It failed" is not actionable when the
+ * operator cannot see how their `api_base` was turned into an endpoint — a
+ * doubled `/v1` is the single most common cause and is invisible otherwise.
+ */
+function TestOutcome({ result }: { result: ProviderTestResult }) {
+  const { t } = useTranslation();
+  const ok = result.reachable;
+  return (
+    <div
+      role="status"
+      className={`mx-[22px] mt-2.5 rounded-md border px-3 py-2 text-xs ${
+        ok
+          ? "border-[color:var(--status-success)]/40 bg-[color:var(--green-tint)]"
+          : "border-[color:var(--status-danger)]/40 bg-destructive/10"
+      }`}
+    >
+      <div className="flex items-center gap-1.5 font-medium">
+        {ok ? (
+          <CheckCircle2 className="size-3.5 text-[color:var(--status-success)]" />
+        ) : (
+          <XCircle className="size-3.5 text-[color:var(--status-danger)]" />
+        )}
+        <span>
+          {ok
+            ? t("providerSheet.testOk", {
+                count: result.models_found ?? 0,
+                ms: result.latency_ms,
+              })
+            : t("providerSheet.testFailed")}
+        </span>
+      </div>
+      {result.error && <p className="mt-1 text-muted-foreground">{result.error}</p>}
+      {result.probed_url && (
+        <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+          {result.probed_url}
+        </p>
+      )}
+    </div>
+  );
+}
 
 interface ProviderDraft {
   name: string;
@@ -102,6 +150,12 @@ export function ProviderSheet({
   // mode, never anything the operator typed into it — this sheet holds provider
   // credentials, so the distinction is not academic
   const ux = useFormTelemetry(mode === "add" ? "provider-create" : "provider-edit", open);
+
+  // probes the *stored* row, so it answers "does what I saved work", not "does
+  // what I have typed work". that is the honest question — the credential is
+  // sealed and never leaves the server, so the form could not test a draft key
+  // without shipping it somewhere first
+  const test = useMutation({ mutationFn: () => testProvider(provider!.id) });
 
   const save = useMutation({
     mutationFn: () => {
@@ -246,7 +300,32 @@ export function ProviderSheet({
             {(save.error as Error).message}
           </p>
         )}
+        {test.data && <TestOutcome result={test.data} />}
+        {test.isError && (
+          <p className="px-[22px] pt-2.5 text-xs text-destructive">
+            {(test.error as Error).message}
+          </p>
+        )}
         <div className="flex items-center justify-end gap-2.5 px-[22px] py-3.5">
+          {/* only for a saved provider: the probe reads the stored row, so it
+              cannot speak for edits still sitting in the form */}
+          {mode === "edit" && provider && (
+            <Button
+              variant="outline"
+              className="mr-auto"
+              disabled={test.isPending}
+              onClick={() => test.mutate()}
+            >
+              {test.isPending ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  {t("providerSheet.testing")}
+                </>
+              ) : (
+                t("providerSheet.testConnection")
+              )}
+            </Button>
+          )}
           <Button variant="ghost" onClick={() => guard() && onOpenChange(false)}>
             Cancel
           </Button>

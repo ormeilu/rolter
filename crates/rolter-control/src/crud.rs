@@ -9,7 +9,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::{header::HeaderName, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rand::Rng;
@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use rolter_core::slug::{is_valid_slug, slugify};
 use rolter_core::{AdvancedModelConfig, Error};
+use rolter_store::postgres::crypto::{Kek, KEK_ENV};
 use rolter_store::postgres::models::{
     AuditLogEntry, Budget, BusinessUnit, Customer, Membership, ModelPrice, Org, Project,
     PromptTemplate, PromptTemplateScope, PromptTemplateVersion, Provider, ProviderGroup,
@@ -117,6 +118,7 @@ pub fn router() -> Router<ControlState> {
             "/api/v1/providers/{id}",
             put(update_provider).delete(delete_provider),
         )
+        .route("/api/v1/providers/{id}/test", post(test_provider))
         .route(
             "/api/v1/orgs/{org_id}/provider-groups",
             get(list_provider_groups).post(create_provider_group),
@@ -1953,6 +1955,172 @@ async fn delete_project(
 }
 
 // --- providers ---
+
+/// What a "Test connection" attempt found.
+#[derive(Serialize)]
+struct ProviderTestResult {
+    reachable: bool,
+    /// the URL actually probed, so an operator can see what was tried rather
+    /// than guessing how `api_base` was turned into an endpoint
+    probed_url: String,
+    /// HTTP status the upstream returned; absent when the request never
+    /// completed (DNS, TLS, connection refused, timeout)
+    status: Option<u16>,
+    latency_ms: u64,
+    /// how the credential was resolved, so "401" and "no key configured" are
+    /// distinguishable without reading the provider row
+    credential: &'static str,
+    /// how many models the upstream listed, when it answered with a catalogue
+    models_found: Option<usize>,
+    error: Option<String>,
+}
+
+/// Probe a stored provider and report whether it actually answers.
+///
+/// Configuring a provider is otherwise a write with no feedback: the row saves,
+/// and the first sign that the base URL is wrong or the key is stale is a failed
+/// request through the gateway, attributed to whatever route happened to select
+/// it. This closes that loop at the moment the operator is looking at the form.
+///
+/// Probes the same free, non-inference endpoint the gateway's health sweep uses
+/// (`rolter_core::probe`), so a green test means the sweep will agree. Costs
+/// nothing to run: it is a model-list call, not a completion.
+async fn test_provider(
+    principal: Principal,
+    State(state): State<ControlState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<ProviderTestResult>> {
+    // reveals whether a credential works, so it is gated like a mutation even
+    // though it writes nothing
+    let row: (Uuid, String, String, String, Option<String>) = sqlx::query_as(
+        "select org_id, name, kind, api_base, api_key_env from providers where id=$1",
+    )
+    .bind(id)
+    .fetch_optional(pool(&state))
+    .await
+    .map_err(|e| Error::Store(e.to_string()))?
+    .ok_or_else(|| Error::NotFound(format!("provider {id}")))?;
+    let (org_id, name, kind, api_base, api_key_env) = row;
+
+    authorize(
+        &state,
+        &principal,
+        ScopeChain::org(org_id),
+        cap!("provider", Update),
+    )
+    .await?;
+
+    // the base was checked when it was stored, but the egress policy may have
+    // been tightened since; a stored row is not a standing permission to egress
+    require_allowed_egress(&state, &api_base, "api_base")?;
+
+    let parsed_kind: rolter_core::ProviderKind =
+        serde_json::from_value(serde_json::Value::String(kind.clone()))
+            .map_err(|_| Error::Store(format!("unknown provider kind '{kind}'")))?;
+
+    // same precedence the snapshot uses: a sealed key wins over the env var
+    let sealed: Option<(Vec<u8>, Vec<u8>)> =
+        sqlx::query_as("select ciphertext, nonce from provider_keys where provider_id=$1")
+            .bind(id)
+            .fetch_optional(pool(&state))
+            .await
+            .map_err(|e| Error::Store(e.to_string()))?;
+    let (secret, credential) = match sealed {
+        Some((ciphertext, nonce)) => match Kek::from_env() {
+            Some(kek) => match kek.decrypt(&ciphertext, &nonce) {
+                Ok(plaintext) => (Some(plaintext), "stored"),
+                // the operator needs to know this is a KEK problem, not a
+                // provider problem — the upstream is never even contacted
+                Err(_) => (None, "stored (undecryptable)"),
+            },
+            None => (None, "stored (KEK unset)"),
+        },
+        None => match api_key_env.as_deref().map(std::env::var) {
+            Some(Ok(value)) => (Some(value), "env"),
+            Some(Err(_)) => (None, "env (unset)"),
+            None => (None, "none"),
+        },
+    };
+
+    if credential == "stored (undecryptable)" || credential == "stored (KEK unset)" {
+        return Ok(Json(ProviderTestResult {
+            reachable: false,
+            probed_url: String::new(),
+            status: None,
+            latency_ms: 0,
+            credential,
+            models_found: None,
+            error: Some(format!(
+                "the stored credential for '{name}' could not be read: {KEK_ENV} is unset or \
+                 does not match the key it was sealed with. The upstream was not contacted."
+            )),
+        }));
+    }
+
+    let (url, headers) = rolter_core::probe_request(parsed_kind, &api_base, "/");
+    let mut req = state
+        .http
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(10));
+    for (k, v) in headers {
+        req = req.header(k, v);
+    }
+    if let Some(secret) = &secret {
+        req = req.bearer_auth(secret);
+    }
+
+    let started = std::time::Instant::now();
+    let outcome = req.send().await;
+    let latency_ms = started.elapsed().as_millis() as u64;
+
+    let result = match outcome {
+        Ok(resp) => {
+            let status = resp.status();
+            // count the catalogue when there is one; a provider that answers 200
+            // with zero models is reachable but not yet useful, and the operator
+            // should be able to see that difference
+            let models_found = resp
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|body| Some(body.get("data")?.as_array()?.len()));
+            ProviderTestResult {
+                reachable: status.is_success(),
+                probed_url: url.clone(),
+                status: Some(status.as_u16()),
+                latency_ms,
+                credential,
+                models_found: status.is_success().then_some(models_found).flatten(),
+                error: (!status.is_success()).then(|| match status.as_u16() {
+                    401 | 403 => format!(
+                        "{status}: the upstream rejected the credential (resolved from: {credential})"
+                    ),
+                    404 => format!("{status}: reached the host, but {url} is not served there"),
+                    other => format!("{other}: the upstream refused the probe"),
+                }),
+            }
+        }
+        // never surface the raw reqwest error: it can carry the full URL
+        // including a query-string credential for kinds that authenticate that way
+        Err(e) => ProviderTestResult {
+            reachable: false,
+            probed_url: url,
+            status: None,
+            latency_ms,
+            credential,
+            models_found: None,
+            error: Some(if e.is_timeout() {
+                "no response within 10s".to_string()
+            } else if e.is_connect() {
+                "could not connect — check the host, port and TLS".to_string()
+            } else {
+                "the request could not be completed".to_string()
+            }),
+        },
+    };
+
+    Ok(Json(result))
+}
 
 async fn list_providers(
     principal: Principal,

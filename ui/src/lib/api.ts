@@ -696,6 +696,31 @@ export function deleteProvider(id: string): Promise<void> {
   return sendJson<void>("DELETE", `/api/v1/providers/${id}`);
 }
 
+/** What a "Test connection" attempt found. */
+export interface ProviderTestResult {
+  reachable: boolean;
+  /** the URL actually probed, so the operator sees what was tried */
+  probed_url: string;
+  /** absent when the request never completed (DNS, TLS, refused, timeout) */
+  status?: number | null;
+  latency_ms: number;
+  /** how the credential was resolved: "stored", "env", "none", … */
+  credential: string;
+  models_found?: number | null;
+  error?: string | null;
+}
+
+/**
+ * Probe a stored provider and report whether it answers.
+ *
+ * Hits the same free model-list endpoint the gateway's health sweep uses, so a
+ * green result here means the sweep will agree. Costs nothing to run — it is a
+ * catalogue call, not a completion.
+ */
+export function testProvider(id: string): Promise<ProviderTestResult> {
+  return sendJson<ProviderTestResult>("POST", `/api/v1/providers/${id}/test`);
+}
+
 // --- provider groups (ADR-0022): unify a fleet of providers behind one
 // `group-slug/model` address, balanced by a chosen strategy. the CRUD API
 // returns default/DB groups (editable); config-owned readonly groups live only
