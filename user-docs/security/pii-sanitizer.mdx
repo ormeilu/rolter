@@ -1,0 +1,126 @@
+---
+title: "PII sanitizer"
+description: "Hand request content to an external de-identification service before it reaches a provider, and optionally reverse the substitution on the way back."
+---
+
+Rolter's built-in [guardrails](/security/guardrails) redact with regular expressions inside the gateway. That is fast and self-contained, but a regex cannot tell a person's name from any other capitalised word. When a deployment needs real named-entity recognition — and needs the original values back afterwards — point Rolter at an external sanitizer instead.
+
+The sanitizer is a service you host: [Microsoft Presidio](https://microsoft.github.io/presidio/) is the reference, but anything that speaks the JSON contract below will do. It is disabled by default.
+
+## What Rolter does and does not hold
+
+Rolter sends the content, receives the content back with each detected entity replaced by a deterministic placeholder (`<PERSON_1>`, `<EMAIL_ADDRESS_2>`), and receives an **opaque restoration token**.
+
+The mapping from placeholder to plaintext stays on the sanitizer. Rolter holds only the token. This is the point of the design: there is no gateway log line, metric label, span attribute, or cache entry that can leak the original values, because the gateway never has them after the substitution.
+
+The token itself is scoped to the org, team, project and route of the request that produced it, and is never written to a log or returned to the caller. A token minted for one project cannot be used to restore content in another.
+
+## Configuration
+
+```toml
+[pii_sanitizer]
+enabled = true
+url = "https://presidio.internal/sanitize"
+restore_url = "https://presidio.internal/restore"
+direction = "request"        # request | response | both
+restoration = "never"        # never | trusted_downstream | caller_authorized
+streaming = "reject"         # reject | passthrough
+timeout_ms = 5000
+max_retries = 0
+failure_mode = "fail_open"   # fail_open | fail_closed
+max_body_bytes = 262144
+entities = ["EMAIL_ADDRESS", "PERSON", "CREDIT_CARD"]
+auth = { bearer = { token_env = "PII_SANITIZER_TOKEN" } }
+```
+
+`entities` is passed through to the service. Leave it empty to use whatever recognizer set the service is configured for — Rolter does not second-guess your recognizers.
+
+### Direction
+
+`request` (the default) is the common case: keep personal data away from a third-party model. `response` scans what the model generated, which catches a model reproducing training data or echoing content from a tool call. `both` does each leg with a separate call.
+
+### Restoration
+
+<ParamField path="never" type="default">
+Placeholders reach the caller. Nothing is ever reversed, and Rolter tells the sanitizer not to bother storing a mapping.
+</ParamField>
+
+<ParamField path="trusted_downstream">
+Every response is restored. Use this when the caller is your own application on your own network and the substitution exists only to keep data away from the model provider.
+</ParamField>
+
+<ParamField path="caller_authorized">
+A response is restored only when the request carries `x-rolter-pii-restore: true`. The policy still decides — under `never`, that header changes nothing.
+</ParamField>
+
+Restoration only ever reverses placeholders the *request* leg introduced. Content the provider generated is never restored: reversing that would hand back the very data the response leg exists to remove.
+
+### Streaming
+
+Sanitizing or restoring a response needs the complete body — a placeholder can straddle any number of SSE frames, and reversing one per chunk would mean a network round trip per token.
+
+So when the response leg is active, a streamed request is refused with `pii_streaming_unsupported` (HTTP 400). Set `streaming = "passthrough"` to serve the stream with the response leg skipped instead. This mirrors how `guardrails.streaming_post_call` behaves.
+
+A request-only setup (`direction = "request"`, `restoration = "never"`) has no response leg, so it streams normally.
+
+### Failure mode
+
+`fail_open` forwards the **unsanitized** body when the sanitizer is unreachable — availability over enforcement. `fail_closed` refuses the request with HTTP 502 `pii_sanitizer_unavailable`.
+
+<Warning>
+If the sanitizer is a compliance control rather than a best-effort improvement, use `fail_closed`. Under `fail_open` an outage silently sends untouched personal data to the provider.
+</Warning>
+
+A failure on the *response* leg never fails the request, in either mode: the upstream call already happened and was already billed, so refusing to deliver would spend the caller's money and return nothing. The `rolter_pii_sanitizer_errors_total` counter records it.
+
+## The service contract
+
+`POST` to `url`:
+
+```json
+{
+  "direction": "request",
+  "model": "gpt-4o-mini",
+  "route": "gpt-4o-mini",
+  "trace_id": "0af7651916cd43dd8448eb211c80319c",
+  "tenant": {"org": "acme", "team": "platform", "project": "chat"},
+  "entities": ["EMAIL_ADDRESS", "PERSON"],
+  "reversible": true,
+  "content": {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "mail ops@corp.com"}]}
+}
+```
+
+`reversible` tells the service whether Rolter will ask for a restore later, so a service can skip storing a mapping nobody will request. `truncated: true` is added when the body exceeded `max_body_bytes` and was sent as a preview.
+
+The reply:
+
+```json
+{
+  "content": {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "mail <EMAIL_ADDRESS_1>"}]},
+  "findings": [{"entity_type": "EMAIL_ADDRESS", "count": 1, "placeholders": ["<EMAIL_ADDRESS_1>"]}],
+  "restoration_token": "opaque-handle"
+}
+```
+
+Omit `restoration_token` if the service cannot reverse this exchange. Rolter reads that as "do not restore", not as an error.
+
+`POST` to `restore_url` carries `trace_id`, `tenant`, the `restoration_token`, and the `content` to reverse; the reply is `{"content": ..., "restored": <count>}`.
+
+<Note>
+A malformed reply is a failure, not a pass. Defaulting to "allow" here would forward content the gateway believes is sanitized and is not.
+</Note>
+
+## What to watch
+
+All six counters are cardinality-bounded and carry no content:
+
+| Metric | Meaning |
+|---|---|
+| `rolter_pii_entities_redacted_total` | entities replaced across both legs |
+| `rolter_pii_sanitizer_errors_total` | calls that failed (timeout, transport, non-2xx, malformed reply) |
+| `rolter_pii_sanitizer_blocks_total` | requests refused under `fail_closed` |
+| `rolter_pii_restorations_total` | successful restores |
+| `rolter_pii_restore_errors_total` | failed restores — the caller kept placeholders |
+| `rolter_pii_stream_rejections_total` | streamed requests refused under `streaming = "reject"` |
+
+A rising `rolter_pii_sanitizer_errors_total` under `fail_open` is the alert that matters: it means unsanitized traffic is reaching providers.

@@ -9,6 +9,7 @@ pub mod currency;
 pub mod error;
 pub mod guardrail_webhook;
 pub mod guardrails;
+pub mod pii_sanitizer;
 pub mod plugin_dispatch;
 pub mod prompt_templates;
 pub mod slug;
@@ -36,6 +37,11 @@ pub use guardrail_webhook::{
 pub use guardrails::{
     BuiltinRule, CompiledGuardrails, GuardAction, GuardStage, GuardrailReport, GuardrailRule,
     GuardrailsConfig, ScanOutcome, StreamingPostCall,
+};
+pub use pii_sanitizer::{
+    Finding, PiiSanitizerConfig, RestorationPolicy, RestorationTicket, RestoreRequest,
+    RestoreResponse, SanitizeDirection, SanitizeRequest, SanitizeResponse, StreamingResponse,
+    TokenScope,
 };
 pub use plugin_dispatch::{PluginInstanceConfig, PluginRequest, PluginStage, PluginsConfig};
 pub use prompt_templates::{

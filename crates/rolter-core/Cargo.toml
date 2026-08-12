@@ -41,15 +41,19 @@ otlp = [
 ]
 
 [dev-dependencies]
+criterion.workspace = true
 # in-memory span and log exporters, so the #809 trace-correlation guarantee is
 # asserted rather than assumed from a dependency default
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 # `#[tokio::test]` for the scheduler-metrics assertions (#834)
 tokio = { workspace = true }
-criterion.workspace = true
 
 # criterion benches use their own harness; `cargo bench -p rolter-core`
 # runs them, `cargo bench --no-run` just compiles them (CI guards this)
 [[bench]]
 name = "snapshot"
+harness = false
+
+[[bench]]
+name = "pii_sanitizer"
 harness = false

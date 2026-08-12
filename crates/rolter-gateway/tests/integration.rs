@@ -2831,3 +2831,472 @@ async fn a_route_without_output_rules_is_untouched() {
         "write to ops@corp.com"
     );
 }
+
+// ---------------------------------------------------------------------------
+// external PII sanitizer (#848)
+// ---------------------------------------------------------------------------
+
+/// Recursively substitute every occurrence of `from` with `to` in every JSON
+/// string of `value`. The stub sanitizer's whole detection engine — enough to
+/// prove the gateway forwards, substitutes and restores the right bodies.
+fn replace_in_strings(value: &mut Value, from: &str, to: &str) -> usize {
+    match value {
+        Value::String(text) => {
+            let hits = text.matches(from).count();
+            if hits > 0 {
+                *text = text.replace(from, to);
+            }
+            hits
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .map(|item| replace_in_strings(item, from, to))
+            .sum(),
+        Value::Object(map) => map
+            .values_mut()
+            .map(|item| replace_in_strings(item, from, to))
+            .sum(),
+        _ => 0,
+    }
+}
+
+const LEAKED_EMAIL: &str = "ops@corp.com";
+const PLACEHOLDER: &str = "<EMAIL_ADDRESS_1>";
+
+/// A stub PII sanitizer service shaped like the reference Presidio adapter:
+/// `POST /sanitize` swaps the email for a deterministic placeholder and hands
+/// back an opaque token, `POST /restore` swaps it back.
+///
+/// `calls` counts sanitize requests so a test can assert the gateway called the
+/// service exactly as many times as the configured direction implies.
+fn stub_sanitizer(calls: Arc<AtomicU32>) -> Router {
+    let sanitize_calls = calls.clone();
+    Router::new()
+        .route(
+            "/sanitize",
+            post(move |Json(body): Json<Value>| {
+                let calls = sanitize_calls.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    let mut content = body.get("content").cloned().unwrap_or(Value::Null);
+                    let hits = replace_in_strings(&mut content, LEAKED_EMAIL, PLACEHOLDER);
+                    let reversible = body
+                        .get("reversible")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let mut out = json!({
+                        "content": content,
+                        "findings": [{
+                            "entity_type": "EMAIL_ADDRESS",
+                            "count": hits,
+                            "placeholders": [PLACEHOLDER],
+                        }],
+                    });
+                    if reversible && hits > 0 {
+                        out["restoration_token"] = json!("tok-abc123");
+                    }
+                    Json(out)
+                }
+            }),
+        )
+        .route(
+            "/restore",
+            post(|Json(body): Json<Value>| async move {
+                assert_eq!(
+                    body["restoration_token"], "tok-abc123",
+                    "gateway must echo the token it was handed"
+                );
+                let mut content = body.get("content").cloned().unwrap_or(Value::Null);
+                let restored = replace_in_strings(&mut content, PLACEHOLDER, LEAKED_EMAIL);
+                Json(json!({"content": content, "restored": restored}))
+            }),
+        )
+}
+
+/// An upstream that echoes back whatever content it was sent, so a test can see
+/// exactly what the provider received after the request leg ran. Streams the
+/// same text when asked.
+async fn mock_echo_openai(Json(body): Json<Value>) -> axum::response::Response {
+    let streaming = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let seen = body["messages"][0]["content"]
+        .as_str()
+        .or_else(|| body["messages"][0]["content"][0]["text"].as_str())
+        .unwrap_or("")
+        .to_string();
+    if streaming {
+        let sse = format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            json!({"choices": [{"delta": {"content": seen}}]})
+        );
+        (
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse,
+        )
+            .into_response()
+    } else {
+        Json(json!({
+            "id": "chatcmpl-mock",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": seen},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        }))
+        .into_response()
+    }
+}
+
+/// A config wiring the gateway to a sanitizer at `sanitizer` over `upstream`.
+fn config_with_sanitizer(
+    upstream: SocketAddr,
+    sanitizer: SocketAddr,
+    direction: rolter_core::SanitizeDirection,
+    restoration: rolter_core::RestorationPolicy,
+) -> GatewayConfig {
+    let mut config = config_for("test-model", vec![("up", upstream)]);
+    config.pii_sanitizer = rolter_core::PiiSanitizerConfig {
+        enabled: true,
+        url: format!("http://{sanitizer}/sanitize"),
+        restore_url: format!("http://{sanitizer}/restore"),
+        direction,
+        restoration,
+        ..Default::default()
+    };
+    config
+}
+
+#[tokio::test]
+async fn sanitizer_strips_pii_before_it_reaches_the_provider() {
+    let upstream = serve(Router::new().route("/v1/chat/completions", post(mock_echo_openai))).await;
+    let calls = Arc::new(AtomicU32::new(0));
+    let sanitizer = serve(stub_sanitizer(calls.clone())).await;
+    let gw = serve_gateway(&config_with_sanitizer(
+        upstream,
+        sanitizer,
+        rolter_core::SanitizeDirection::Request,
+        rolter_core::RestorationPolicy::Never,
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({
+            "model": "test-model",
+            "messages": [{"role": "user", "content": format!("mail {LEAKED_EMAIL} now")}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    // the upstream echoes what it received: the placeholder, never the address
+    let echoed = body["choices"][0]["message"]["content"].as_str().unwrap();
+    assert!(echoed.contains(PLACEHOLDER), "upstream saw {echoed}");
+    assert!(
+        !echoed.contains(LEAKED_EMAIL),
+        "the address must not reach the provider: {echoed}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "request leg only");
+}
+
+#[tokio::test]
+async fn sanitizer_restores_placeholders_for_a_trusted_downstream() {
+    let upstream = serve(Router::new().route("/v1/chat/completions", post(mock_echo_openai))).await;
+    let calls = Arc::new(AtomicU32::new(0));
+    let sanitizer = serve(stub_sanitizer(calls.clone())).await;
+    let gw = serve_gateway(&config_with_sanitizer(
+        upstream,
+        sanitizer,
+        rolter_core::SanitizeDirection::Request,
+        rolter_core::RestorationPolicy::TrustedDownstream,
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({
+            "model": "test-model",
+            "messages": [{"role": "user", "content": format!("mail {LEAKED_EMAIL} now")}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        format!("mail {LEAKED_EMAIL} now"),
+        "a trusted downstream gets the plaintext back"
+    );
+}
+
+#[tokio::test]
+async fn sanitizer_restores_only_when_the_caller_asks_under_caller_authorized() {
+    let upstream = serve(Router::new().route("/v1/chat/completions", post(mock_echo_openai))).await;
+    let calls = Arc::new(AtomicU32::new(0));
+    let sanitizer = serve(stub_sanitizer(calls.clone())).await;
+    let gw = serve_gateway(&config_with_sanitizer(
+        upstream,
+        sanitizer,
+        rolter_core::SanitizeDirection::Request,
+        rolter_core::RestorationPolicy::CallerAuthorized,
+    ))
+    .await;
+
+    let payload = json!({
+        "model": "test-model",
+        "messages": [{"role": "user", "content": format!("mail {LEAKED_EMAIL} now")}]
+    });
+
+    let without: Value = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&payload)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        without["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap()
+            .contains(PLACEHOLDER),
+        "no opt-in header: the caller keeps the placeholder"
+    );
+
+    let with: Value = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .header(rolter_core::pii_sanitizer::RESTORE_HEADER, "true")
+        .json(&payload)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        with["choices"][0]["message"]["content"],
+        format!("mail {LEAKED_EMAIL} now"),
+        "opt-in header restores"
+    );
+}
+
+#[tokio::test]
+async fn sanitizer_scrubs_an_anthropic_payload_too() {
+    async fn mock_echo_anthropic(Json(body): Json<Value>) -> Json<Value> {
+        let seen = body["messages"][0]["content"]
+            .as_str()
+            .or_else(|| body["messages"][0]["content"][0]["text"].as_str())
+            .unwrap_or("")
+            .to_string();
+        Json(json!({
+            "id": "msg_mock",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": seen}],
+            "model": "test-model",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        }))
+    }
+
+    let upstream = serve(Router::new().route("/v1/messages", post(mock_echo_anthropic))).await;
+    let calls = Arc::new(AtomicU32::new(0));
+    let sanitizer = serve(stub_sanitizer(calls.clone())).await;
+    let mut config = config_with_sanitizer(
+        upstream,
+        sanitizer,
+        rolter_core::SanitizeDirection::Request,
+        rolter_core::RestorationPolicy::Never,
+    );
+    config.providers[0].kind = ProviderKind::Anthropic;
+    let gw = serve_gateway(&config).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/messages"))
+        .json(&json!({
+            "model": "test-model",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": format!("mail {LEAKED_EMAIL} now")}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let echoed = body["content"][0]["text"].as_str().unwrap();
+    assert!(
+        echoed.contains(PLACEHOLDER),
+        "anthropic upstream saw {echoed}"
+    );
+    assert!(!echoed.contains(LEAKED_EMAIL));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_streamed_request_is_refused_when_the_response_leg_is_active() {
+    let upstream = serve(Router::new().route("/v1/chat/completions", post(mock_echo_openai))).await;
+    let calls = Arc::new(AtomicU32::new(0));
+    let sanitizer = serve(stub_sanitizer(calls.clone())).await;
+    let gw = serve_gateway(&config_with_sanitizer(
+        upstream,
+        sanitizer,
+        rolter_core::SanitizeDirection::Both,
+        rolter_core::RestorationPolicy::Never,
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({
+            "model": "test-model",
+            "stream": true,
+            "messages": [{"role": "user", "content": "ping"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "pii_streaming_unsupported");
+    assert_eq!(body["error"]["param"], "stream");
+}
+
+#[tokio::test]
+async fn a_streamed_request_passes_through_when_only_the_request_leg_runs() {
+    let upstream = serve(Router::new().route("/v1/chat/completions", post(mock_echo_openai))).await;
+    let calls = Arc::new(AtomicU32::new(0));
+    let sanitizer = serve(stub_sanitizer(calls.clone())).await;
+    let gw = serve_gateway(&config_with_sanitizer(
+        upstream,
+        sanitizer,
+        rolter_core::SanitizeDirection::Request,
+        rolter_core::RestorationPolicy::Never,
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({
+            "model": "test-model",
+            "stream": true,
+            "messages": [{"role": "user", "content": format!("mail {LEAKED_EMAIL} now")}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200, "nothing has to touch the response");
+    let text = resp.text().await.unwrap();
+    assert!(
+        text.contains(PLACEHOLDER),
+        "sanitized upstream echo: {text}"
+    );
+    assert!(!text.contains(LEAKED_EMAIL));
+}
+
+#[tokio::test]
+async fn a_streamed_request_passes_through_when_streaming_is_set_to_passthrough() {
+    let upstream = serve(Router::new().route("/v1/chat/completions", post(mock_echo_openai))).await;
+    let calls = Arc::new(AtomicU32::new(0));
+    let sanitizer = serve(stub_sanitizer(calls.clone())).await;
+    let mut config = config_with_sanitizer(
+        upstream,
+        sanitizer,
+        rolter_core::SanitizeDirection::Both,
+        rolter_core::RestorationPolicy::Never,
+    );
+    config.pii_sanitizer.streaming = rolter_core::StreamingResponse::Passthrough;
+    let gw = serve_gateway(&config).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({
+            "model": "test-model",
+            "stream": true,
+            "messages": [{"role": "user", "content": format!("mail {LEAKED_EMAIL} now")}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.unwrap();
+    // the request leg still ran, so the stream carries the placeholder — what
+    // passthrough waives is the *response* leg, not the request one
+    assert!(text.contains(PLACEHOLDER), "{text}");
+}
+
+#[tokio::test]
+async fn an_unreachable_sanitizer_fails_open_by_default() {
+    let upstream = serve(Router::new().route("/v1/chat/completions", post(mock_echo_openai))).await;
+    // a listener that 500s on every path stands in for a broken service
+    let broken = serve(Router::new().route(
+        "/sanitize",
+        post(|| async { (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "boom") }),
+    ))
+    .await;
+    let gw = serve_gateway(&config_with_sanitizer(
+        upstream,
+        broken,
+        rolter_core::SanitizeDirection::Request,
+        rolter_core::RestorationPolicy::Never,
+    ))
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({
+            "model": "test-model",
+            "messages": [{"role": "user", "content": format!("mail {LEAKED_EMAIL} now")}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200, "fail_open forwards unchanged");
+    let body: Value = resp.json().await.unwrap();
+    assert!(body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap()
+        .contains(LEAKED_EMAIL));
+}
+
+#[tokio::test]
+async fn an_unreachable_sanitizer_blocks_the_request_when_configured_fail_closed() {
+    let upstream = serve(Router::new().route("/v1/chat/completions", post(mock_echo_openai))).await;
+    let broken = serve(Router::new().route(
+        "/sanitize",
+        post(|| async { (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "boom") }),
+    ))
+    .await;
+    let mut config = config_with_sanitizer(
+        upstream,
+        broken,
+        rolter_core::SanitizeDirection::Request,
+        rolter_core::RestorationPolicy::Never,
+    );
+    config.pii_sanitizer.failure_mode = rolter_core::FailureMode::FailClosed;
+    let gw = serve_gateway(&config).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({
+            "model": "test-model",
+            "messages": [{"role": "user", "content": format!("mail {LEAKED_EMAIL} now")}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 502);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "pii_sanitizer_unavailable");
+}

@@ -127,6 +127,11 @@ pub struct GatewayConfig {
     /// proxying, vendor-neutral. Disabled by default (ROL-257)
     #[serde(default)]
     pub guardrail_webhook: crate::guardrail_webhook::GuardrailWebhookConfig,
+    /// external PII sanitizer: a self-hosted service that returns *transformed*
+    /// content (placeholders) rather than an allow/block decision, with
+    /// opt-in restoration. Disabled by default (#848)
+    #[serde(default)]
+    pub pii_sanitizer: crate::pii_sanitizer::PiiSanitizerConfig,
     /// centrally-managed, versioned prompt templates and route decorators,
     /// rendered at admission with structural variable escaping. Disabled by
     /// default (ROL-256)
@@ -2949,6 +2954,7 @@ impl GatewayConfig {
 
         // validate the custom guardrail webhook (url/timeout/auth) at load time
         problems.append(&mut self.guardrail_webhook.validate());
+        problems.append(&mut self.pii_sanitizer.validate());
 
         // validate every enabled plugin instance's endpoint at load time
         problems.append(&mut self.plugins.validate());

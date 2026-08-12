@@ -1123,6 +1123,73 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         }
     }
 
+    // external PII sanitizer: unlike the webhook above, this returns transformed
+    // *content* — entities replaced by deterministic placeholders — plus an
+    // opaque token the same service accepts back to reverse the transform. the
+    // mapping never enters this process, so there is nothing here to leak into
+    // a log, metric or span (#848)
+    let mut pii_sanitized = false;
+    let mut pii_ticket: Option<rolter_core::RestorationTicket> = None;
+    let pii_scope = rolter_core::TokenScope {
+        org: scope.org.clone(),
+        team: scope.team.clone(),
+        project: scope.project.clone(),
+        route: entry.route.model.clone(),
+    };
+    // asking the caller before deciding, because the policy — not the caller —
+    // is what decides. under `never` a caller-set header changes nothing
+    let restore_requested = headers
+        .get(rolter_core::pii_sanitizer::RESTORE_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    let will_restore = snap
+        .pii_sanitizer
+        .restoration
+        .should_restore(restore_requested);
+    if snap.pii_sanitizer.sanitizes_request() {
+        match crate::pii_sanitizer::sanitize(
+            &snap.pii_sanitizer,
+            &state.metrics,
+            "request",
+            &model,
+            &entry.route.model,
+            trace_id,
+            plugin_tenant(&scope),
+            pii_scope.clone(),
+            will_restore,
+            &parsed,
+        )
+        .await
+        {
+            crate::pii_sanitizer::SanitizeOutcome::Unchanged => {}
+            crate::pii_sanitizer::SanitizeOutcome::Sanitized {
+                content,
+                ticket,
+                replaced,
+            } => {
+                // `replaced > 0` short-circuits the deep compare for the case
+                // that matters; a service that rewrote the body while reporting
+                // nothing is still honoured, it just costs a comparison
+                pii_sanitized = replaced > 0 || content != parsed;
+                parsed = content;
+                pii_ticket = ticket;
+            }
+            crate::pii_sanitizer::SanitizeOutcome::Block(reason) => {
+                return crate::error::ApiError::new(StatusCode::BAD_GATEWAY, reason)
+                    .with_code("pii_sanitizer_unavailable")
+                    .into_response();
+            }
+        }
+    }
+
+    // captured here because `model`, `trace_id` and `scope` are moved into the
+    // spend recorder and log row before the response leg runs
+    let pii_model = model.clone();
+    let pii_trace_id = trace_id.to_string();
+    let pii_tenant = plugin_tenant(&scope);
+    let pii_route = entry.route.model.clone();
+
     // pre_upstream plugins: consult after the route is resolved, before
     // forwarding. Same block/transform/fail-open-or-closed contract as
     // pre_route, run in the same stage as the guardrail webhook above so a
@@ -1163,7 +1230,11 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
     }
     guardrails_pre_stage.record(
         "redacted",
-        guardrail_redacted || webhook_transformed || plugin_transformed || pre_route_transformed,
+        guardrail_redacted
+            || webhook_transformed
+            || plugin_transformed
+            || pre_route_transformed
+            || pii_sanitized,
     );
     drop(guardrails_pre_stage);
 
@@ -1180,6 +1251,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         && !plugin_transformed
         && !pre_route_transformed
         && !template_applied
+        && !pii_sanitized
     {
         body.clone()
     } else {
@@ -1234,6 +1306,42 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
     }
     // a stream that got here is one the operator opted out of masking for
     let output_guard = if stream { None } else { output_guard };
+
+    // the sanitizer's response leg needs the whole body for the same reason the
+    // output guardrails do: an entity — or a placeholder — can straddle any SSE
+    // chunk boundary, and neither detection nor reversal is correct on a
+    // fragment. same trade-off, same resolution as `streaming_post_call` (#848)
+    let pii_touches_response = snap.pii_sanitizer.touches_response(restore_requested);
+    if pii_touches_response
+        && stream
+        && snap.pii_sanitizer.streaming == rolter_core::StreamingResponse::Reject
+    {
+        state
+            .metrics
+            .pii_stream_rejections_total
+            .fetch_add(1, Relaxed);
+        return crate::error::ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "this deployment sanitizes or restores response content, which cannot be applied \
+             to a streamed response; retry without \"stream\": true",
+        )
+        .with_code("pii_streaming_unsupported")
+        .with_param("stream")
+        .into_response();
+    }
+    // a stream that got here is one the operator opted out of the response leg
+    // for; the request leg still ran, so PII still did not reach the provider
+    let pii_leg = (pii_touches_response && !stream).then(|| PiiResponseLeg {
+        state: &state,
+        config: &snap.pii_sanitizer,
+        model: &pii_model,
+        route: &pii_route,
+        trace_id: &pii_trace_id,
+        tenant: pii_tenant.clone(),
+        scope: &pii_scope,
+        ticket: pii_ticket.as_ref(),
+        will_restore,
+    });
     // the ensure_request_id middleware guarantees this header is present
     let request_id = headers
         .get(crate::trace::REQUEST_ID_HEADER)
@@ -1885,6 +1993,16 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                                 },
                                 None => bytes,
                             };
+                            // the sanitizer's response leg, after the output
+                            // guardrails and after the cache store: what is
+                            // cached is what the upstream said, so a restore is
+                            // never persisted and a later delivery of the same
+                            // entry is re-evaluated against its own request's
+                            // policy and ticket (#848)
+                            let bytes = match pii_leg.as_ref().filter(|_| status < 400) {
+                                Some(leg) => pii_response_leg_apply(leg, bytes).await,
+                                None => bytes,
+                            };
                             return buffered_response(
                                 bytes,
                                 status,
@@ -1923,6 +2041,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                 output_guard.as_ref(),
                 genai_span.clone(),
                 post_response_plugins.clone(),
+                pii_leg.as_ref(),
             )
             .await
         }
@@ -2326,6 +2445,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
                 recorder,
                 token_recorder,
                 inflight_guard,
+                None,
                 None,
                 None,
                 None,
@@ -2743,6 +2863,7 @@ async fn stream_response(
     output: Option<&crate::guardrails::OutputGuard<'_>>,
     genai_span: Option<tracing::Span>,
     post_response_plugins: Option<crate::plugin_dispatch::PostResponsePlugins<'_>>,
+    pii: Option<&PiiResponseLeg<'_>>,
 ) -> Response {
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -2762,7 +2883,10 @@ async fn stream_response(
     // when a post-call rule applies to this route, so an unguarded route keeps
     // streaming straight through
     if !is_sse
-        && (translation.is_translation() || output.is_some() || post_response_plugins.is_some())
+        && (translation.is_translation()
+            || output.is_some()
+            || post_response_plugins.is_some()
+            || pii.is_some())
     {
         return match response.bytes().await {
             Ok(bytes) => {
@@ -2793,6 +2917,12 @@ async fn stream_response(
                             .into_response();
                         }
                     },
+                    None => bytes,
+                };
+                // last, so the sanitizer sees the body the caller would have
+                // received and a restore is never handed to a plugin
+                let bytes = match pii.filter(|_| status.is_success()) {
+                    Some(leg) => pii_response_leg_apply(leg, bytes).await,
                     None => bytes,
                 };
                 buffered_response(
@@ -2847,6 +2977,100 @@ async fn stream_response(
             "failed to build response",
         )
     })
+}
+
+/// Everything the sanitizer's response leg needs to run over a buffered body.
+/// Built once per request and only when the leg is actually active, so a route
+/// with no sanitizer configured carries nothing.
+#[derive(Clone)]
+struct PiiResponseLeg<'a> {
+    state: &'a AppState,
+    config: &'a rolter_core::PiiSanitizerConfig,
+    model: &'a str,
+    route: &'a str,
+    trace_id: &'a str,
+    tenant: rolter_core::WebhookTenant,
+    scope: &'a rolter_core::TokenScope,
+    ticket: Option<&'a rolter_core::RestorationTicket>,
+    will_restore: bool,
+}
+
+/// Run the PII sanitizer's response leg over a buffered response body (#848).
+///
+/// Two independent steps, in this order: sanitize provider-generated PII, then
+/// restore the placeholders this request's own sanitization introduced. Both
+/// are best-effort — a failure returns the body unchanged, which is safe: the
+/// worst case is a caller receiving placeholders instead of plaintext, never
+/// the reverse.
+async fn pii_response_leg_apply(leg: &PiiResponseLeg<'_>, bytes: Bytes) -> Bytes {
+    let PiiResponseLeg {
+        state,
+        config,
+        model,
+        route,
+        trace_id,
+        tenant,
+        scope,
+        ticket,
+        will_restore,
+    } = leg;
+    let (will_restore, ticket) = (*will_restore, *ticket);
+    let (state, config, scope) = (*state, *config, *scope);
+    // a body that does not parse is not JSON we can walk; forwarding it
+    // untouched is strictly better than failing a successful response
+    let Ok(mut parsed) = serde_json::from_slice::<Value>(&bytes) else {
+        return bytes;
+    };
+
+    if config.sanitizes_response() {
+        match crate::pii_sanitizer::sanitize(
+            config,
+            &state.metrics,
+            "response",
+            model,
+            route,
+            trace_id,
+            tenant.clone(),
+            scope.clone(),
+            // the response leg never asks for reversibility: restoring what the
+            // *provider* generated would hand back the very PII this step exists
+            // to remove
+            false,
+            &parsed,
+        )
+        .await
+        {
+            crate::pii_sanitizer::SanitizeOutcome::Sanitized { content, .. } => parsed = content,
+            // a failed response-leg sanitize does not fail the request even
+            // when fail-closed: the upstream call already happened and was
+            // already billed, so refusing to deliver spends the caller's money
+            // and gives them nothing. the counter records it
+            crate::pii_sanitizer::SanitizeOutcome::Unchanged
+            | crate::pii_sanitizer::SanitizeOutcome::Block(_) => {}
+        }
+    }
+
+    if will_restore {
+        if let Some(ticket) = ticket {
+            if let Some(restored) = crate::pii_sanitizer::restore(
+                config,
+                &state.metrics,
+                ticket,
+                scope,
+                trace_id,
+                tenant.clone(),
+                &parsed,
+            )
+            .await
+            {
+                parsed = restored;
+            }
+        }
+    }
+
+    serde_json::to_vec(&parsed)
+        .map(Bytes::from)
+        .unwrap_or(bytes)
 }
 
 /// Replay a buffered (already fully received) response body through the same
