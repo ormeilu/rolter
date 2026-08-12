@@ -1,11 +1,16 @@
 {
   "common": {
     "cancel": "Отмена",
+    "clearSearch": "Очистить поиск",
+    "copied": "Скопировано",
+    "copy": "Копировать",
     "create": "Создать",
     "delete": "Удалить",
-    "viewDocs": "Документация",
+    "discardChanges": "Отменить несохранённые изменения?",
+    "filters": "Фильтры",
+    "hideFilters": "Скрыть фильтры",
     "search": "Поиск…",
-    "clearSearch": "Очистить поиск"
+    "viewDocs": "Документация"
   },
   "locale": {
     "label": "Язык",

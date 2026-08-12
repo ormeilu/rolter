@@ -1,11 +1,16 @@
 {
   "common": {
     "cancel": "Cancel",
+    "clearSearch": "Clear search",
+    "copied": "Copied",
+    "copy": "Copy",
     "create": "Create",
     "delete": "Delete",
-    "viewDocs": "View docs",
+    "discardChanges": "Discard unsaved changes?",
+    "filters": "Filters",
+    "hideFilters": "Hide filters",
     "search": "Search…",
-    "clearSearch": "Clear search"
+    "viewDocs": "View docs"
   },
   "locale": {
     "label": "Language",

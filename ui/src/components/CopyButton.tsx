@@ -1,5 +1,6 @@
 import { Check, Copy } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 
@@ -9,14 +10,17 @@ import { Button } from "@/components/ui/button";
  */
 export function CopyButton({
   value,
-  label = "Copy",
+  /** overrides the shared `common.copy` label; already-translated when passed */
+  label,
   className,
 }: {
   value: string;
   label?: string;
   className?: string;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = React.useState(false);
+  const copyLabel = label ?? t("common.copy");
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
@@ -43,8 +47,8 @@ export function CopyButton({
       variant="ghost"
       className={className}
       onClick={copy}
-      aria-label={`${label}: ${value}`}
-      title={copied ? "Copied" : label}
+      aria-label={`${copyLabel}: ${value}`}
+      title={copied ? t("common.copied") : copyLabel}
     >
       {copied ? (
         <Check className="h-3.5 w-3.5" />

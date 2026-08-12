@@ -1,5 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { CopyButton } from "@/components/CopyButton";
 import { Button } from "@/components/ui/button";
@@ -87,10 +88,11 @@ export function ProviderSheet({
   const set = (patch: Partial<ProviderDraft>) => setDraft((d) => ({ ...d, ...patch }));
 
   const dirty = initialRef.current !== "" && JSON.stringify(draft) !== initialRef.current;
+  const { t } = useTranslation();
   const guard = React.useCallback(() => {
     if (!dirty) return true;
-    return window.confirm("Discard unsaved changes?");
-  }, [dirty]);
+    return window.confirm(t("common.discardChanges"));
+  }, [dirty, t]);
 
   // edit mode uses the backend's tri-state semantics: omit a field to leave it
   // unchanged, send "" to clear it, send a value to set/rotate it. api_key is

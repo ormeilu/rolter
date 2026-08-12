@@ -1,5 +1,6 @@
 import { Check, ChevronDown, PanelLeftClose, Search } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
 
@@ -102,8 +103,10 @@ export function FilterSearchList({
   options,
   selected,
   onChange,
-  placeholder = "Search…",
+  /** overrides the shared `common.search` placeholder; already-translated */
+  placeholder,
 }: FilterSearchListProps) {
+  const { t } = useTranslation();
   const [query, setQuery] = React.useState("");
   const q = query.trim().toLowerCase();
   const shown = q
@@ -116,7 +119,7 @@ export function FilterSearchList({
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={placeholder}
+          placeholder={placeholder ?? t("common.search")}
           className="w-full min-w-0 bg-transparent text-sm text-foreground outline-none placeholder:text-[color:var(--text-subtle)]"
         />
       </label>
@@ -177,12 +180,14 @@ export interface FilterPanelProps extends React.HTMLAttributes<HTMLElement> {
 }
 
 export function FilterPanel({
-  title = "Filters",
+  /** overrides the shared `common.filters` title; already-translated */
+  title,
   onHide,
   children,
   className,
   ...props
 }: FilterPanelProps) {
+  const { t } = useTranslation();
   return (
     <aside
       className={cn(
@@ -192,10 +197,10 @@ export function FilterPanel({
       {...props}
     >
       <div className="flex items-center justify-between px-2 pb-1.5">
-        <span className="text-sm font-semibold text-foreground">{title}</span>
+        <span className="text-sm font-semibold text-foreground">{title ?? t("common.filters")}</span>
         {onHide && (
           <button
-            title="Hide filters"
+            title={t("common.hideFilters")}
             onClick={onHide}
             className="rounded-md p-1 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >

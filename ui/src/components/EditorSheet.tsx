@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetBody, SheetFooter, SheetHeader } from "@/components/ui/sheet";
@@ -18,6 +19,7 @@ export interface EditorSheetProps {
    * discard-changes confirmation on scrim/Escape/Cancel */
   dirty: boolean;
   errorMessage?: string;
+  /** overrides the shared `common.cancel` label; already-translated when passed */
   cancelLabel?: string;
   saveLabel: string;
   canSave: boolean;
@@ -33,17 +35,19 @@ export function EditorSheet({
   subtitle,
   dirty,
   errorMessage,
-  cancelLabel = "Cancel",
+  cancelLabel,
   saveLabel,
   canSave,
   saving,
   onSave,
   children,
 }: EditorSheetProps) {
+  const { t } = useTranslation();
+
   const guard = React.useCallback(() => {
     if (!dirty) return true;
-    return window.confirm("Discard unsaved changes?");
-  }, [dirty]);
+    return window.confirm(t("common.discardChanges"));
+  }, [dirty, t]);
 
   const close = React.useCallback(() => {
     if (guard()) onOpenChange(false);
@@ -59,7 +63,7 @@ export function EditorSheet({
         )}
         <div className="flex items-center justify-end gap-2.5 px-[22px] py-3.5">
           <Button variant="ghost" onClick={close}>
-            {cancelLabel}
+            {cancelLabel ?? t("common.cancel")}
           </Button>
           <Button disabled={!canSave || saving} onClick={onSave}>
             {saveLabel}

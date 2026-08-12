@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { Plus, X } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { CopyButton } from "@/components/CopyButton";
 import { Button } from "@/components/ui/button";
@@ -202,10 +203,11 @@ export function ProviderGroupSheet({
   const set = (patch: Partial<GroupDraft>) => setDraft((d) => ({ ...d, ...patch }));
 
   const dirty = initialRef.current !== "" && JSON.stringify(draft) !== initialRef.current;
+  const { t } = useTranslation();
   const guard = React.useCallback(() => {
     if (!dirty) return true;
-    return window.confirm("Discard unsaved changes?");
-  }, [dirty]);
+    return window.confirm(t("common.discardChanges"));
+  }, [dirty, t]);
 
   // form lifecycle for the UX stream (#805). the target names the form and the
   // mode; nothing derived from what was typed into it
