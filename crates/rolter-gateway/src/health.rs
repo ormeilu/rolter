@@ -14,63 +14,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use rolter_core::probe::{probe_request, ANTHROPIC_VERSION};
 use rolter_core::{HealthConfig, ProviderKind};
-
-/// the anthropic messages api rejects requests without a version header, even on
-/// the free `GET /v1/models` list endpoint
-const ANTHROPIC_VERSION: &str = "2023-06-01";
-
-/// Resolve the probe request for a provider: the URL and any header the upstream
-/// requires. When the operator left `health.path` at its default (`/`), probe the
-/// provider kind's free, non-inference liveness endpoint (`/v1/models` — a list
-/// call that burns no tokens) so a healthy result means the API itself is up, not
-/// merely that the host answers TCP. An explicit non-default `path` is honoured
-/// verbatim for every provider.
-fn probe_request(
-    kind: ProviderKind,
-    api_base: &str,
-    configured_path: &str,
-) -> (String, Vec<(String, String)>) {
-    let base = api_base.trim_end_matches('/');
-    if configured_path != "/" {
-        return (format!("{base}{configured_path}"), Vec::new());
-    }
-    match kind {
-        ProviderKind::Anthropic => (
-            format!("{base}/v1/models"),
-            vec![(
-                "anthropic-version".to_string(),
-                ANTHROPIC_VERSION.to_string(),
-            )],
-        ),
-        ProviderKind::Tei => (format!("{base}/health"), Vec::new()),
-        ProviderKind::Bedrock => (bedrock_models_url(base), Vec::new()),
-        ProviderKind::Vertex => (vertex_models_url(base), Vec::new()),
-        ProviderKind::Openai
-        | ProviderKind::OpenaiCompatible
-        | ProviderKind::Ollama
-        | ProviderKind::OllamaCloud
-        | ProviderKind::LlamaCpp => (format!("{base}/v1/models"), Vec::new()),
-        _ => (format!("{base}/models"), Vec::new()),
-    }
-}
-
-fn bedrock_models_url(api_base: &str) -> String {
-    let base = api_base.trim_end_matches('/');
-    if let Some(control) = base.strip_prefix("https://bedrock-runtime.") {
-        let host = control.split('/').next().unwrap_or(control);
-        return format!("https://bedrock.{host}/foundation-models");
-    }
-    format!("{}/foundation-models", base.trim_end_matches("/v1"))
-}
-
-fn vertex_models_url(api_base: &str) -> String {
-    let base = api_base.trim_end_matches('/');
-    if let Some(prefix) = base.strip_suffix("/endpoints/openapi") {
-        return format!("{prefix}/publishers/google/models");
-    }
-    format!("{base}/models")
-}
 
 /// A fully-resolved probe request for one provider: either a free liveness GET
 /// or an opt-in minimal completion POST (`also_track_via_llm_call`, ROL-199).

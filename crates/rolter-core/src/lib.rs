@@ -11,6 +11,7 @@ pub mod guardrail_webhook;
 pub mod guardrails;
 pub mod pii_sanitizer;
 pub mod plugin_dispatch;
+pub mod probe;
 pub mod prompt_templates;
 pub mod slug;
 pub mod telemetry;
@@ -44,6 +45,7 @@ pub use pii_sanitizer::{
     TokenScope,
 };
 pub use plugin_dispatch::{PluginInstanceConfig, PluginRequest, PluginStage, PluginsConfig};
+pub use probe::{probe_request, ANTHROPIC_VERSION};
 pub use prompt_templates::{
     CompiledTemplates, Decorator, DecoratorPosition, DecoratorRole, PromptTemplate,
     PromptTemplateActivationScope, PromptTemplateRequestScope, PromptTemplatesConfig, RenderError,
