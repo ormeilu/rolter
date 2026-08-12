@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Shield, Trash2, Users } from "lucide-react";
+import { Loader2, Shield, Trash2, Users } from "lucide-react";
 import * as React from "react";
 
 import { PageBody, Pill } from "@/components/screen";
@@ -86,7 +86,7 @@ function ProfileCard({
           onClick={() => onDelete(profile)}
         >
           {deleting ? (
-            <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            <Loader2 className="size-4 animate-spin" />
           ) : (
             <Trash2 className="size-4" />
           )}
