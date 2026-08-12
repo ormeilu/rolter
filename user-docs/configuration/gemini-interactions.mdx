@@ -88,4 +88,29 @@ Because the thread lives upstream, a route that load-balances a `gemini_interact
 
 ## Unsupported endpoints
 
-The Interactions API only serves chat-shaped traffic. Requests to endpoints with no interactions equivalent — embeddings, audio — are rejected with a `gemini_interactions_unsupported` configuration error rather than being forwarded to an endpoint that cannot answer them. Route those models to a `gemini` or `gemini_native` provider instead.
+The Interactions API only serves chat-shaped traffic. Requests to endpoints with no interactions equivalent — embeddings, audio — are rejected with a `400 gemini_interactions_unsupported` error rather than being forwarded to an endpoint that cannot answer them. Route those models to a `gemini` or `gemini_native` provider instead.
+
+---
+
+## Unsupported content parts
+
+Interactions carries a typed union of content parts. Rolter translates `text` / `input_text` and `image_url` / `input_image`; there is no opaque carrier for anything else.
+
+A message containing a part rolter cannot translate — `input_audio`, a file or document part, or any new part type your client SDK starts sending — is rejected with `400 unsupported_content_part` naming the part:
+
+```json
+{
+  "error": {
+    "message": "the interactions upstream has no equivalent for content part type 'input_audio'; remove it or route this model to a provider that accepts it",
+    "type": "invalid_request_error",
+    "code": "unsupported_content_part",
+    "param": "messages"
+  }
+}
+```
+
+<Note>
+This is deliberate. Dropping the part would send Gemini a request missing content you supplied, and both Gemini and rolter would answer `200` — you would get a confident answer that ignored your attachment, with nothing in the logs to say so. The same rule applies to the `gemini_native` (`generateContent`) dialect.
+</Note>
+
+To send a modality Interactions cannot carry, route that model to a provider whose dialect supports it.

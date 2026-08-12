@@ -22,6 +22,8 @@ Every route in Rolter picks exactly one load-balancing strategy. The strategy ru
 | `precise_cache_aware` | Exact resident-prefix score from vLLM KV events; load fallback | vLLM fleets with KV-event publishing |
 | `lmcache_aware` | Cache availability and free-capacity score from controller occupancy | LMCache-backed fleets |
 | `adaptive` | Weighted blend of latency, cost and load, gated by a global kill switch | Mixed price *and* latency pools, tuned by the gateway |
+| `lora_aware` | Prefer a target that already holds the requested LoRA adapter resident | Fleets serving many adapters over shared base weights |
+| `predicted_latency` | Rank by what *this* request is modelled to cost, from queue depth and prompt size | Heterogeneous pools with variable prompt sizes and deep queues |
 
 ---
 
@@ -175,6 +177,32 @@ Content-Type: application/json
 When the header is absent, these strategies fall back to hashing the prompt text.
 
 ---
+
+<Accordion title="predicted_latency — model this request's cost, don't average past ones">
+  `fastest` ranks on a per-target latency average. That is the right signal when every request is the same size, and the wrong one otherwise: a target whose average is high because it happened to serve the long prompts looks slow even when it is the emptiest box in the fleet, and a target with a deep queue looks fast right up until the queue is what you join.
+
+  `predicted_latency` learns a small model per target instead:
+
+  ```text
+  latency_ms ≈ fixed + per_queued · queue_depth + per_ktoken · prompt_ktokens
+  ```
+
+  The three coefficients are learned online from completed requests. A short prompt arriving while every box is busy goes to the one that shrugs off its queue; a long prompt arriving into idle boxes goes to the one that prefills fastest.
+
+  ```toml rolter.toml
+  [[routes]]
+  model = "llama-3.1-70b"
+  strategy = "predicted_latency"
+  [[routes.targets]]
+  provider = "vllm-a"
+  [[routes.targets]]
+  provider = "vllm-b"
+  ```
+
+  <Note>
+    A target that has not completed 8 requests yet predicts nothing, and Rolter reads that as *unknown*, not *slow*. Switching a route to `predicted_latency` therefore moves no traffic on its own — the route behaves like a least-load pipeline until the models have evidence. Only successful requests teach, so a fast-failing target cannot train itself into looking cheap.
+  </Note>
+</Accordion>
 
 ## Choosing a strategy
 

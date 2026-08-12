@@ -104,3 +104,21 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 topologySpreadConstraints: []
+
+# pre-boot validation (#854). an initContainer runs `rolter check` against the
+# exact environment the workload will get, so a misconfigured release fails at
+# rollout instead of starting degraded. the pod never becomes ready if it fails.
+preflight:
+  enabled: true
+  # fail on warnings too — see the template for why this is the default
+  strict: true
+  # also probe that the datastores accept a TCP connection. off by default: it
+  # turns a config check into a network check, and a transient DNS blip during a
+  # rollout would then block a release that is fine
+  connect: false
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 64Mi

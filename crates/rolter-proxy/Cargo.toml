@@ -21,8 +21,15 @@ tracing.workspace = true
 tower.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 tokio-rustls = { version = "0.26", default-features = false, features = [
   "logging",
   "ring",
   "tls12",
 ] }
+
+# criterion benches use their own harness; `cargo bench -p rolter-proxy`
+# runs them, `cargo bench --no-run` just compiles them (CI guards this)
+[[bench]]
+name = "translate"
+harness = false

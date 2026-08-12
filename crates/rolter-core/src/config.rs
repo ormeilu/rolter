@@ -865,6 +865,10 @@ pub enum BalancingStrategy {
     /// LoRA-adapter affinity: prefer a target that already holds the requested
     /// adapter resident, with prefix affinity and in-flight load behind it
     LoraAware,
+    /// per-request predicted latency: rank targets by what *this* request is
+    /// modelled to cost on each, from the queue it would join and its own
+    /// prompt size, rather than by a per-target average
+    PredictedLatency,
 }
 
 /// A named set of providers addressable as `group-slug/model` (ADR-0017

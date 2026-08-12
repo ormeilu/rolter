@@ -28,6 +28,7 @@ const STRATEGY_TONE: Record<string, [string, string]> = {
   consistent_hash: ["var(--status-warning)", "rgba(245,158,11,.14)"],
   power_of_two: ["var(--red-folk)", "var(--red-tint)"],
   lora_aware: ["var(--status-info)", "rgba(59,130,246,.14)"],
+  predicted_latency: ["var(--status-info)", "rgba(59,130,246,.14)"],
 };
 
 const TARGET_BARS = ["var(--red-folk)", "var(--zinc-400)", "var(--status-info)", "var(--status-success)"];

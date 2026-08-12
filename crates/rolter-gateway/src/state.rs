@@ -305,6 +305,12 @@ impl Snapshot {
                     )
                 }),
                 adaptive: config.adaptive_routing.clone(),
+                // created (and re-found) under the route's own load-tracker
+                // namespace, so it survives the reload that rebuilt this
+                // snapshot along with everything else the tracker holds
+                predictor: loads
+                    .predictor(&route.model, weights.len())
+                    .map(|p| p as Arc<dyn rolter_balancer::scorer::LatencyPredictionSource>),
             };
             let balancer = build_with_stats(route.strategy, &weights, &stats);
             let variant_balancers = route
@@ -335,6 +341,14 @@ impl Snapshot {
                             )
                         }),
                         adaptive: config.adaptive_routing.clone(),
+                        predictor: loads
+                            .predictor(
+                                &crate::handlers::variant_key(&route.model, &v.name),
+                                w.len(),
+                            )
+                            .map(|p| {
+                                p as Arc<dyn rolter_balancer::scorer::LatencyPredictionSource>
+                            }),
                     };
                     build_with_stats(route.strategy, &w, &s)
                 })

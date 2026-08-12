@@ -464,6 +464,47 @@ async fn system_only_profile_normalizes_developer_and_rejects_mid_conversation_r
     assert_eq!(error["error"]["code"], "role_capability_unsupported");
 }
 
+/// #882: a content part the Gemini dialects cannot carry must stop at the
+/// gateway. The upstream here fails the test if it is ever called, because the
+/// bug being fixed was precisely that a shortened body reached the provider and
+/// came back `200`.
+#[tokio::test]
+async fn unsupported_content_parts_never_reach_a_gemini_upstream() {
+    async fn upstream(Json(body): Json<Value>) -> Json<Value> {
+        panic!("gateway forwarded a request with a dropped content part: {body}");
+    }
+
+    let upstream = serve(
+        Router::new()
+            .route("/interactions", post(upstream))
+            .route("/v1beta/models/{model}", post(upstream))
+            .fallback(post(upstream)),
+    )
+    .await;
+    for kind in [ProviderKind::GeminiInteractions, ProviderKind::GeminiNative] {
+        let mut config = config_for("test-model", vec![("up", upstream)]);
+        config.providers[0].kind = kind;
+        config.providers[0].api_key = Some("test-key".to_string());
+        let gw = serve_gateway(&config).await;
+        let rejected = reqwest::Client::new()
+            .post(format!("http://{gw}/v1/chat/completions"))
+            .json(
+                &json!({"model":"test-model","messages":[{"role":"user","content":[
+                    {"type":"text","text":"what is in this recording?"},
+                    {"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}
+                ]}]}),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), 400, "{kind:?} did not fail closed");
+        let error: Value = rejected.json().await.unwrap();
+        assert_eq!(error["error"]["code"], "unsupported_content_part");
+        let message = error["error"]["message"].as_str().unwrap();
+        assert!(message.contains("input_audio"), "{message}");
+    }
+}
+
 #[tokio::test]
 async fn openai_profile_override_preserves_developer() {
     async fn upstream(Json(body): Json<Value>) -> impl IntoResponse {

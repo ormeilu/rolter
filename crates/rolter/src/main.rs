@@ -8,6 +8,7 @@
 //! rolter gateway --config rolter.toml
 //! rolter control --database-url postgres://...
 //! rolter easy-up            # gateway + control + UI in one supervised process
+//! rolter init               # generate a production config and its secrets
 //! rolter check              # pre-boot validation for a production deployment
 //! ```
 //!
@@ -16,6 +17,7 @@
 //! `easy-up` composes both for a zero-config one-command bring-up.
 
 mod easy_up;
+mod init;
 mod preflight;
 
 use clap::{Parser, Subcommand};
@@ -40,6 +42,9 @@ enum Command {
     /// bring up gateway + control + UI in one supervised process (zero-config
     /// with the built-in fake-llm model, or database-backed with --database-url)
     EasyUp(easy_up::EasyUpArgs),
+    /// generate a production deployment's config and secrets, so an operator
+    /// does not have to invent them (the counterpart to `check`)
+    Init(init::InitArgs),
     /// validate a production deployment before starting it, so a
     /// misconfiguration fails loudly instead of starting degraded
     Check(preflight::CheckArgs),
@@ -52,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Gateway(args) => rolter_gateway::run(args).await,
         Command::Control(args) => rolter_control::run(args).await,
         Command::EasyUp(args) => easy_up::run(args).await,
+        Command::Init(args) => init::run(args).await,
         Command::Check(args) => preflight::run(args).await,
     }
 }

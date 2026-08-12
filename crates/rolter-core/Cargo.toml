@@ -48,6 +48,12 @@ opentelemetry_sdk = { workspace = true, features = ["testing"] }
 # `#[tokio::test]` for the scheduler-metrics assertions (#834)
 tokio = { workspace = true }
 
+# criterion benches use their own harness; `cargo bench -p rolter-core`
+# runs them, `cargo bench --no-run` just compiles them (CI guards this)
+[[bench]]
+name = "snapshot"
+harness = false
+
 [[bench]]
 name = "pii_sanitizer"
 harness = false

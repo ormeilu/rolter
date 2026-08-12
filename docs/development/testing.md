@@ -40,6 +40,43 @@ response body in their failure message — with an inferred field name, the
 provider's complaint *is* the finding, and a bare status-code assertion would
 throw it away.
 
+### Configuring the Gemini smoke
+
+`gemini-interactions-smoke.yml` needs one secret before it can verify anything:
+
+1. Create a `live-providers` repository environment (Settings → Environments).
+   Keeping the key there rather than at repository scope means a run against a
+   billed provider is reviewable, not something any workflow can reach for.
+2. Add `GEMINI_API_KEY` to that environment.
+3. Dispatch the workflow (`gh workflow run gemini-interactions-smoke.yml`),
+   optionally with `-f model=<id>`.
+
+Until the secret exists the workflow **fails** rather than skipping. A green
+tick from a run that made no request reads as "the wire format is still
+confirmed" when nothing was checked — worse than no sweep at all. Pass
+`-f allow_unconfigured=true` for a deliberate dry run of the workflow itself.
+
+Each run records the wire shapes it observed into the job summary and uploads
+the full log as an artifact. A billable run should leave evidence behind: the
+next question about a field name is then answered by reading the last run
+rather than by spending another call.
+
+What the suite covers, and why each probe exists:
+
+| Probe | Confirms |
+|---|---|
+| text turn | turn mapping, `system_instruction`, `generation_config`, usage — all documented |
+| inline image part | the inferred `mime_type`/`data` inline part shape |
+| remote image part | the inferred `file_uri` shape — the *other* branch, which the inline probe never reaches |
+| tool call round trip | `function_call` out, `function_result` back, and `call_id` correlation |
+| interaction threading | the id rolter surfaces as the response `id` is the one Google accepts back |
+| every client dialect | Chat Completions, Messages and Responses have separate response translators |
+| every client dialect, streaming | the inferred `step.delta` variants, through all three separate SSE emitters |
+
+A content part the dialect cannot carry is rejected at the gateway with
+`400 unsupported_content_part` rather than being dropped (#882), so an
+unconfirmed part shape fails loudly instead of producing a shortened body.
+
 Test grouping is configured in [`.config/nextest.toml`](../../.config/nextest.toml):
 the Postgres-backed `rolter-store`/`rolter-control` suites share one database and
 reset the schema per test, so they run in a single-threaded group to avoid
@@ -101,10 +138,16 @@ cargo bench -p rolter-balancer   # just the balancer benches
 cargo bench -p rolter-balancer --bench pick   # one bench target
 ```
 
-Current coverage (`rolter-balancer`):
+Current coverage:
+
+`rolter-balancer`
 
 - `pick` — `LoadBalancer::pick` for every built-in strategy over a ~24-target pool with a populated `RouteContext`.
 - `trie` — prefix-trie `insert` (bounded/unbounded, so LRU eviction is measured) and `longest_prefix` on a warm trie.
+
+`rolter-core`
+
+- `snapshot` — the CPU side of config-snapshot generation at 10/100/1000 routes: `sanitize_for_snapshot`, `validate`, and the JSON encode. `/internal/snapshot` is polled by every gateway in the fleet, so this cost is paid fleet-wide on every poll. The encode dominates — ~2.8 ms at 1000 routes against ~150 µs for sanitize — which is why payload size is its own metric (#845).
 
 criterion writes HTML reports to `target/criterion/`. Benches are **not** run in CI (timings are noisy on shared runners), but `cargo clippy --workspace --all-targets -- -D warnings` compiles them on every PR, so they cannot silently bit-rot. Use `just bench-check` (`cargo bench --workspace --no-run`) to compile them locally without running.
 
@@ -188,6 +231,37 @@ launches the shell rather than the full build.
 
 The job is **informational** (`continue-on-error: true`) pending the ROL-124
 promotion path.
+
+#### The screen-story harness
+
+A screen story renders the real page component against a stubbed `fetch`, so it
+exercises the same query wiring, empty/error branches and editor sheets that
+ship. `ui/src/pages/story-harness.tsx` holds the shared pieces — it is not a
+`.stories.tsx` file, so Storybook never tries to render it as a screen:
+
+| Helper | What it is for |
+|---|---|
+| `Harness` | swaps `globalThis.fetch`, clears the persisted scope, renders under a fresh `QueryClient` with `retry: false` |
+| `scoped(handler)` | answers the org → team → project chain every scoped screen resolves first, then defers to `handler` |
+| `routes([...])` | fragment-matched routing table, matched in order so a longer path can precede the prefix it shares |
+| `pending` | a stub that never settles, for the loading state |
+| `clickWhenEnabled` | waits for a button to be *enabled*, not merely present |
+| `sheet()` / `expectSheetClosed()` | the editor sheet, which portals to `document.body` rather than into the canvas |
+| `withConfirm` / `expectClosesWithoutPrompting` | the discard guard from #868, asserted in both answers |
+
+Two traps this encodes. Scope endpoints are matched on the whole pathname: a
+screen's own endpoint often *contains* one of them (`/api/v1/projects/{id}/virtual-keys`),
+and a substring match would answer it with the project list. And most screens
+disable their primary action until the three-request scope chain resolves, so
+`findByRole` followed by a click races and throws `pointer-events: none` —
+`clickWhenEnabled` is the fix.
+
+Each screen should carry `Loaded`, `Loading`, `Empty` and an error/forbidden
+story, one interaction story that opens the primary editor and saves, and at
+least one story exercising the discard guard. Where a sheet opens pre-filled
+(budgets seed `100` / `30d`), assert the seed too: its dirty flag means "differs
+from the seed", not "is non-empty", and getting that backwards makes an
+untouched form prompt on every close.
 
 ### Full-stack compose smoke
 
