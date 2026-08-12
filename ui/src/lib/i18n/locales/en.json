@@ -15,6 +15,7 @@
   "common": {
     "cancel": "Cancel",
     "clearSearch": "Clear search",
+    "close": "Close",
     "copied": "Copied",
     "copy": "Copy",
     "create": "Create",
@@ -204,6 +205,11 @@
       "save": "Save configuration",
       "installConfirm": "Install plugin"
     }
+  },
+  "playground": {
+    "copyAsCode": "Copy as code",
+    "copyAsCodeHint": "The same OpenAI SDK, pointed at Rolter. The key is read from an environment variable so the snippet is safe to paste anywhere.",
+    "language": "Language"
   },
   "providerSheet": {
     "testConnection": "Test connection",
