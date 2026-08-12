@@ -299,6 +299,12 @@ jobs:
       # english mid-sentence, an orphan is copy nothing renders (#489)
       - name: i18n catalog parity
         run: bun run check:i18n
+      # catalog parity cannot see a string that never reached a catalog at all,
+      # which is how `window.confirm("Discard unsaved changes?")` shipped green
+      # (#871). this scans the source for user-facing literals and fails on any
+      # not in the recorded baseline, so the debt can only shrink
+      - name: no new hardcoded user-facing strings
+        run: bun run check:literals
       - name: unit tests (bun test)
         run: bun run test
       - name: build

@@ -9,6 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { InfoHint } from "@/components/ui/info-hint";
@@ -712,10 +713,11 @@ export function ModelSheet({
   }, [open, mode, route, configModel, providers, targets.data, prices.data, editLoading]);
 
   const dirty = !readonly && initialRef.current !== "" && JSON.stringify(draft) !== initialRef.current;
+  const { t } = useTranslation();
   const guard = React.useCallback(() => {
     if (!dirty) return true;
-    return window.confirm("Discard unsaved changes?");
-  }, [dirty]);
+    return window.confirm(t("common.discardChanges"));
+  }, [dirty, t]);
 
   const set = (patch: Partial<ModelDraft>) => setDraft((d) => ({ ...d, ...patch }));
   const setDeep = <K extends "price" | "net" | "rbac" | "caps">(
