@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { CopyAsCodeButton } from "@/components/CodeSnippetDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -141,6 +142,7 @@ function ChatColumn({
   const [image, setImage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [lastPrompt, setLastPrompt] = React.useState("");
   const fileRef = React.useRef<HTMLInputElement>(null);
 
   const attach = (f: File) => {
@@ -152,6 +154,7 @@ function ChatColumn({
   const send = async () => {
     if (!draft.trim() || busy) return;
     const userText = draft;
+    setLastPrompt(userText);
     const attached = image;
     setDraft("");
     setImage(null);
@@ -188,6 +191,14 @@ function ChatColumn({
     <div className="flex h-[460px] flex-col overflow-hidden rounded-lg border border-[color:var(--border-default)] bg-card">
       <div className="flex items-center gap-2 border-b border-[color:var(--border-subtle)] p-2">
         <ModelSelect models={models} value={model} onChange={onModel} />
+        {/* the last thing sent, so the snippet reproduces a call that is known
+            to work rather than whatever is half-typed in the composer */}
+        <CopyAsCodeButton
+          request={{
+            model,
+            prompt: lastPrompt || draft || "Hello!",
+          }}
+        />
         {removable && (
           <Button size="icon" variant="ghost" className="h-8 w-8" onClick={onRemove} aria-label="Remove column">
             <Trash2 className="h-3.5 w-3.5" />
