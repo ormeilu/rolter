@@ -26,3 +26,7 @@ harness = false
 [[bench]]
 name = "trie"
 harness = false
+
+[[bench]]
+name = "predictor"
+harness = false

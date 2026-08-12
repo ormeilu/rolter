@@ -75,6 +75,28 @@ services:
       - redis
       - clickhouse
 
+  # pre-boot validation (#854). behind a profile, so `docker compose up` never
+  # runs it: this file is the *local* stack and is deliberately loose — example
+  # postgres credentials, no KEK, management plane wide open — and gating local
+  # bring-up on production rules would break the one path that is meant to have
+  # no friction.
+  #
+  # point it at a production environment file to check that environment with the
+  # exact binary that will run it:
+  #
+  #   docker compose -f docker/docker-compose.yml --profile preflight \
+  #                  run --rm --env-file /path/to/production.env preflight
+  #
+  # it exits non-zero on anything that would start degraded, which is what makes
+  # it usable as a deploy gate rather than advice.
+  preflight:
+    profiles: ["preflight"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: runtime
+    command: ["/usr/local/bin/rolter", "check", "--strict"]
+
 volumes:
   pgdata:
   chdata:

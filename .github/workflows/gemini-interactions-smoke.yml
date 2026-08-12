@@ -15,6 +15,11 @@ on:
         description: "model to exercise (default gemini-3.6-flash)"
         required: false
         type: string
+      allow_unconfigured:
+        description: "report success instead of failing when GEMINI_API_KEY is unset"
+        required: false
+        default: false
+        type: boolean
   schedule:
     # weekly, monday 05:23 UTC — billable, so not nightly
     - cron: "23 5 * * 1"
@@ -48,23 +53,64 @@ jobs:
         with:
           key: gemini-smoke
 
-      - name: skip when unconfigured
-        id: guard
+      # an unconfigured run used to succeed silently. a weekly green tick that
+      # exercised nothing is worse than no sweep at all: it reads as "the wire
+      # format is still confirmed" when in fact no request was ever made. so a
+      # missing credential fails, unless the caller explicitly asked for a
+      # dry run
+      - name: require a credential
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ALLOW_UNCONFIGURED: ${{ inputs.allow_unconfigured }}
         run: |
-          if [ -z "${GEMINI_API_KEY}" ]; then
-            echo "GEMINI_API_KEY is not configured; skipping the live sweep" >> "$GITHUB_STEP_SUMMARY"
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
+          if [ -n "${GEMINI_API_KEY}" ]; then
+            exit 0
           fi
+          {
+            echo "### No credential configured"
+            echo
+            echo "\`GEMINI_API_KEY\` is not set in the \`live-providers\` environment,"
+            echo "so nothing was verified against the real interactions endpoint."
+            echo
+            echo "See \`docs/development/testing.md\` for what to configure."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${ALLOW_UNCONFIGURED}" = "true" ]; then
+            echo "::warning::GEMINI_API_KEY is unset; dry run requested, reporting success"
+            exit 0
+          fi
+          echo "::error::GEMINI_API_KEY is unset; the live sweep cannot verify anything"
+          exit 1
 
       - name: run the live smoke test
-        if: ${{ steps.guard.outputs.configured == 'true' }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ROLTER_GEMINI_LIVE_MODEL: ${{ inputs.model || 'gemini-3.6-flash' }}
-        # --ignored runs exactly the tests the per-PR gate skips
+        # --ignored runs exactly the tests the per-PR gate skips. the output is
+        # kept: with an inferred field name the upstream's own complaint *is*
+        # the finding, and a failed step that scrolled past it costs another
+        # billable run to recover
         run: |
-          cargo test -p rolter-gateway --test gemini_interactions_live -- --ignored --nocapture
+          set -o pipefail
+          cargo test -p rolter-gateway --test gemini_interactions_live \
+            -- --ignored --nocapture 2>&1 | tee smoke.log
+
+      # the observed shapes are the durable output of a billable run: they let
+      # the next field-name question be answered by reading, not by spending
+      - name: record the observed wire shapes
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### Observed interactions wire shapes"
+            echo
+            echo '```json'
+            grep '^SHAPE ' smoke.log | cut -c 7- || echo "(none recorded)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ always() }}
+        with:
+          name: gemini-interactions-smoke-log
+          path: smoke.log
+          retention-days: 30
+          if-no-files-found: warn

@@ -26,3 +26,85 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "rolter.image" -}}
 {{ printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) }}
 {{- end }}
+
+{{/*
+Pre-boot validation initContainer (#854).
+
+The same `rolter check` an operator runs by hand, run by the cluster with the
+exact environment the workload will get. Sharing one template between the
+gateway and control deployments is the point: three deployment paths that each
+re-implement "is this configured safely" drift, and the one that drifts is the
+one nobody notices until a credential was stored unencrypted.
+
+`--strict` is deliberate here. A warning means the deployment works but is not
+what a production operator meant — bound to every interface, no pepper, no
+redis — and a chart that ships that silently is the failure mode this exists to
+close. Set `preflight.strict=false` to accept warnings, or `preflight.enabled=false`
+to skip it entirely.
+*/}}
+{{- define "rolter.preflight" -}}
+{{- if .root.Values.preflight.enabled }}
+initContainers:
+- name: preflight
+  image: {{ include "rolter.image" .root | quote }}
+  imagePullPolicy: {{ .root.Values.image.pullPolicy }}
+  command: ["/usr/local/bin/rolter"]
+  args:
+    - "check"
+    {{- if .root.Values.preflight.strict }}
+    - "--strict"
+    {{- end }}
+    {{- if .root.Values.preflight.connect }}
+    - "--connect"
+    {{- end }}
+  securityContext: {{ toYaml .root.Values.securityContext | nindent 4 }}
+  env: {{- .env | nindent 4 }}
+  resources: {{ toYaml .root.Values.preflight.resources | nindent 4 }}
+{{- end }}
+{{- end }}
+
+{{/*
+The control plane's environment, defined once so the preflight initContainer
+validates exactly what the container will run with. A second copy would be a
+copy that drifts.
+*/}}
+{{- define "rolter.controlEnv" -}}
+- name: RUST_LOG
+  value: {{ .Values.env.rustLog | quote }}
+{{- if .Values.env.databaseUrl }}
+- name: ROLTER_DATABASE_URL
+  value: {{ .Values.env.databaseUrl | quote }}
+{{- end }}
+{{- if .Values.env.redisUrl }}
+- name: ROLTER_REDIS_URL
+  value: {{ .Values.env.redisUrl | quote }}
+{{- end }}
+{{- if .Values.env.clickhouseUrl }}
+- name: CLICKHOUSE_URL
+  value: {{ .Values.env.clickhouseUrl | quote }}
+{{- end }}
+{{- with .Values.secretEnv }}
+{{ toYaml . }}
+{{- end }}
+{{- with .Values.control.extraEnv }}
+{{ toYaml . }}
+{{- end }}
+{{- end }}
+
+{{/*
+The gateway's environment, for the same reason.
+*/}}
+{{- define "rolter.gatewayEnv" -}}
+- name: RUST_LOG
+  value: {{ .Values.env.rustLog | quote }}
+{{- if .Values.env.redisUrl }}
+- name: REDIS_URL
+  value: {{ .Values.env.redisUrl | quote }}
+{{- end }}
+{{- with .Values.secretEnv }}
+{{ toYaml . }}
+{{- end }}
+{{- with .Values.gateway.extraEnv }}
+{{ toYaml . }}
+{{- end }}
+{{- end }}

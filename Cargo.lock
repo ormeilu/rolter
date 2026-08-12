@@ -2789,11 +2789,13 @@ version = "0.0.10"
 dependencies = [
  "anyhow",
  "clap",
+ "rand 0.10.2",
  "rolter-control",
  "rolter-core",
  "rolter-gateway",
  "rolter-store",
  "tokio",
+ "toml",
  "tracing",
 ]
 
@@ -2862,6 +2864,7 @@ name = "rolter-core"
 version = "0.0.10"
 dependencies = [
  "chrono",
+ "criterion",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
@@ -2919,6 +2922,7 @@ version = "0.0.10"
 dependencies = [
  "arc-swap",
  "bytes",
+ "criterion",
  "dashmap",
  "futures-util",
  "reqwest 0.12.28",

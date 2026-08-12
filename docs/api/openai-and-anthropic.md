@@ -76,6 +76,28 @@ Blocks with no equivalent in the target protocol (for example OpenAI input
 audio sent to an Anthropic Messages upstream) are preserved as opaque content
 blocks; the target may reject them rather than rolter silently dropping data.
 
+The Gemini dialects — `generateContent` and Interactions — are the exception:
+their wire formats are typed part unions with no opaque carrier, so an
+unrecognized part cannot be passed through. Rather than drop it, rolter fails
+the request closed with `400 unsupported_content_part`, naming the part type
+and the upstream dialect:
+
+```json
+{
+  "error": {
+    "message": "the interactions upstream has no equivalent for content part type 'input_audio'; remove it or route this model to a provider that accepts it",
+    "type": "invalid_request_error",
+    "code": "unsupported_content_part",
+    "param": "messages"
+  }
+}
+```
+
+This applies to every client dialect (Chat Completions, Messages, Responses) and
+covers new part types a client SDK starts sending. Only `text`/`input_text` and
+`image_url`/`input_image` have Gemini equivalents today; route models that need
+other modalities to a provider whose dialect carries them.
+
 ## OpenAI Responses
 
 `POST /v1/responses` is routed by its required `model` field. Native OpenAI

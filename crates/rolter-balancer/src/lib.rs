@@ -15,6 +15,7 @@ use rolter_core::BalancingStrategy;
 
 pub mod adaptive;
 pub mod complexity;
+pub mod predictor;
 pub mod scorer;
 pub mod trie;
 use trie::Trie;
@@ -144,6 +145,9 @@ pub struct TargetStats {
     pub kv_cache: Option<std::sync::Arc<dyn scorer::KvCacheSource>>,
     /// live LMCache occupancy/availability source
     pub lmcache: Option<std::sync::Arc<dyn scorer::LmCacheSource>>,
+    /// live per-request latency model for the `predicted_latency` strategy;
+    /// read at pick time and taught by the completion path
+    pub predictor: Option<std::sync::Arc<dyn scorer::LatencyPredictionSource>>,
     /// deployment-wide adaptive-routing policy, read once at build time by the
     /// `adaptive` strategy and ignored by every other one
     pub adaptive: rolter_core::AdaptiveRoutingConfig,
@@ -156,6 +160,7 @@ impl std::fmt::Debug for TargetStats {
             .field("latency", &self.latency.as_ref().map(|_| "<live>"))
             .field("kv_cache", &self.kv_cache.as_ref().map(|_| "<live>"))
             .field("lmcache", &self.lmcache.as_ref().map(|_| "<live>"))
+            .field("predictor", &self.predictor.as_ref().map(|_| "<live>"))
             .field("adaptive", &self.adaptive)
             .finish()
     }
@@ -188,6 +193,16 @@ pub fn build_with_stats(
         BalancingStrategy::Weighted => Box::new(WeightedRoundRobin::new(weights)),
         BalancingStrategy::Pipeline => Box::new(scorer::Pipeline::default_stack(weights)),
         BalancingStrategy::LoraAware => Box::new(scorer::Pipeline::lora_stack(n)),
+        BalancingStrategy::PredictedLatency => match &stats.predictor {
+            Some(source) => Box::new(scorer::Pipeline::predicted_latency_stack(n, source.clone())),
+            // no predictor wired: degrade to least-load, which is what the
+            // stack falls back to while the models are cold anyway
+            None => Box::new(
+                scorer::Pipeline::new(n)
+                    .named("predicted_latency")
+                    .with(Box::new(scorer::LeastLoadScorer::new(n)), 1.0),
+            ),
+        },
         BalancingStrategy::Cheapest => {
             // pad unknown costs so the scorer stays index-aligned with targets
             let mut costs = stats.cost_per_mtok.clone();

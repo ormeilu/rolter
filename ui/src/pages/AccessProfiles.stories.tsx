@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react";
 import * as React from "react";
-import { expect, waitFor, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import AccessProfiles from "./AccessProfiles";
 import type { AccessProfileRow } from "@/lib/api";
@@ -132,6 +132,40 @@ export const Empty: Story = {
     await waitFor(() =>
       expect(canvas.getByText("No access profiles yet")).toBeVisible(),
     );
+  },
+};
+
+// the delete mutation is shared by every card, so `isPending` alone marks the
+// whole grid busy. the pending row is the one the mutation was given, and this
+// story is what stops that regression coming back: one row spins, the other
+// stays clickable.
+export const Deleting: Story = {
+  render: () => (
+    <Harness
+      fetchStub={async (input, init) => {
+        // hang the delete so the pending state stays on screen
+        if (init?.method === "DELETE") return new Promise<Response>(() => {});
+        return stub(async () => json(PROFILES))(input, init);
+      }}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getByText("Support engineers")).toBeVisible(),
+    );
+
+    const target = canvas.getByLabelText("Delete Support engineers");
+    const other = canvas.getByLabelText("Delete On-call");
+    await expect(target).toBeEnabled();
+    await expect(other).toBeEnabled();
+
+    await userEvent.click(target);
+
+    // the clicked row goes busy...
+    await waitFor(() => expect(target).toBeDisabled());
+    // ...and the sibling row is untouched
+    await expect(other).toBeEnabled();
   },
 };
 

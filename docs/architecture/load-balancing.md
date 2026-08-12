@@ -24,6 +24,7 @@ pub trait LoadBalancer: Send + Sync {
 - **precise_cache_aware** — consumes each target's vLLM ZMQ KV-event stream and scores the exact leading fraction of caller-supplied token blocks resident on that target. Missing token ids and stale, malformed, disconnected, or sequence-gapped streams stay neutral; least-load routing remains the fallback.
 - **lmcache_aware** — polls each target's configured LMCache controller signal and prefers available caches with free capacity (`1 - occupancy`). Empty, saturated, failed, and stale controllers stay neutral and fall back to least load.
 - **adaptive** — a weighted blend of observed latency, catalog cost and in-flight load, governed by the deployment-wide `[adaptive_routing]` policy. See below.
+- **predicted_latency** — rank targets by what *this* request is modelled to cost on each of them, from the queue it would join and its own prompt size, rather than by a per-target average. See below.
 - **lora_aware** — LoRA-adapter affinity for a fleet serving many adapters over shared base weights: prefer a target that already holds the requested adapter resident, with prefix affinity and in-flight load behind it. See below.
 
 ## Adaptive routing
@@ -96,6 +97,65 @@ every candidate scores `0.0`. That is neutral rather than a penalty: an equal
 contribution cannot move the argmax, so the rest of the pipeline decides and
 this scorer stays silent instead of guessing.
 
+## Predicted-latency scheduling
+
+`fastest` ranks on a per-target latency EWMA. That is the right signal when
+every request is the same size, and the wrong one otherwise: a target whose
+average is high because it happened to serve the long prompts looks slow even
+when it is the emptiest box in the fleet, and a target with a deep queue looks
+fast right up until the queue is what you join.
+
+`predicted_latency` models the cost instead of averaging it (#853, borrowed
+from llm-d). Per target:
+
+```text
+latency_ms ≈ w0 + w1 · queue_depth + w2 · prompt_ktokens
+```
+
+`w0` is fixed overhead, `w1` is what one queued request ahead of you costs, and
+`w2` is prefill cost per thousand prompt tokens. The three coefficients are
+learned online from completed requests with normalized least mean squares — one
+multiply-add per feature per sample, no matrix, no allocation, no periodic
+refit.
+
+| Scorer | Weight |
+| --- | --- |
+| predicted latency | 1.0 |
+| in-flight load | 0.25 |
+
+Load stays in the stack for two reasons: it carries the route while the models
+are cold, and once they are warm it is the tiebreaker between targets the model
+rates equally — the common case on a homogeneous fleet, where the honest answer
+is "either, take the emptier".
+
+**Three features, not more.** A gateway sees queue depth and prompt size. It
+does not see batch composition, KV-cache pressure, or where the engine is in
+its scheduling loop, and a model with parameters it cannot observe fits noise.
+The interesting error is between "the queue is deep" and "the prompt is long",
+and a linear model separates those. That is the honest ceiling for this vantage
+point.
+
+**A cold target predicts nothing.** Below 8 completed requests a target returns
+no prediction, and the scorer reads that as *unknown*, not as *slow*. A route
+that switches to `predicted_latency` therefore behaves exactly like the
+least-load pipeline until the models have evidence, so the switch itself moves
+no traffic.
+
+**Only successful requests teach.** The same gate the latency EWMA uses: a fast
+failure cannot train a target into looking cheap. Coefficients are clamped, so a
+client that held a stream open for a week produces one bad sample rather than a
+permanently poisoned model.
+
+**Queue depth is read before the increment**, so the model learns the queue a
+request *joined*, not the one it created.
+
+**Models live in the load tracker, not the routing snapshot**, for the same
+reason the latency EWMA does: a config reload must not throw away what they
+learned, or every reload would send the route back to cold behaviour. A route
+that gains a target keeps its existing models and the new target reads as
+unpredicted until the next process start — the conservative direction, since a
+target with no evidence should not be ranked.
+
 ## Choosing a strategy
 
 | Use case | Strategy |
@@ -111,5 +171,6 @@ this scorer stays silent instead of guessing.
 | Heterogeneous pool, minimize latency | `fastest` |
 | Mixed price *and* latency, let the gateway tune | `adaptive` |
 | Many LoRA adapters over shared base weights | `lora_aware` |
+| Heterogeneous pool, variable prompt sizes, deep queues | `predicted_latency` |
 
 Both external strategies perform network I/O only in background tasks. The request hot path reads bounded in-process state and atomics.

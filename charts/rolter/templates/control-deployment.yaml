@@ -1,3 +1,4 @@
+{{- $controlEnv := include "rolter.controlEnv" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -21,6 +22,7 @@ spec:
     spec:
       serviceAccountName: {{ include "rolter.serviceAccountName" . }}
       securityContext: {{ toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- include "rolter.preflight" (dict "root" . "env" $controlEnv) | nindent 6 }}
       containers:
         - name: control
           image: {{ include "rolter.image" . | quote }}
@@ -32,22 +34,7 @@ spec:
             - name: http
               containerPort: 4001
           env:
-            - name: RUST_LOG
-              value: {{ .Values.env.rustLog | quote }}
-            {{- if .Values.env.databaseUrl }}
-            - name: ROLTER_DATABASE_URL
-              value: {{ .Values.env.databaseUrl | quote }}
-            {{- end }}
-            {{- if .Values.env.redisUrl }}
-            - name: ROLTER_REDIS_URL
-              value: {{ .Values.env.redisUrl | quote }}
-            {{- end }}
-            {{- if .Values.env.clickhouseUrl }}
-            - name: CLICKHOUSE_URL
-              value: {{ .Values.env.clickhouseUrl | quote }}
-            {{- end }}
-            {{- with .Values.secretEnv }}{{ toYaml . | nindent 12 }}{{- end }}
-            {{- with .Values.control.extraEnv }}{{ toYaml . | nindent 12 }}{{- end }}
+          env: {{- $controlEnv | nindent 12 }}
           readinessProbe:
             httpGet: {path: /healthz, port: http}
             initialDelaySeconds: 2

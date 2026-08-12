@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils";
 // Select, Textarea, Switch, ...).
 export interface FieldProps extends React.HTMLAttributes<HTMLDivElement> {
   label?: string;
+  /** explicit control id; when omitted the field generates one and applies it
+   * to its child, so the label is never left dangling */
   htmlFor?: string;
   error?: string;
   hint?: string;
@@ -26,17 +28,31 @@ export function Field({
   children,
   ...props
 }: FieldProps) {
+  // almost no caller passes `htmlFor`, which left every label in the dashboard
+  // pointing at nothing: a screen reader announced the control as unlabelled,
+  // and `getByLabelText` could not find it either. Generate the id here and put
+  // it on the child, so the association is the default rather than something
+  // each of ~200 call sites has to remember.
+  const generated = React.useId();
+  const single = React.Children.count(children) === 1 ? children : null;
+  const control = React.isValidElement<{ id?: string }>(single) ? single : null;
+  const controlId = htmlFor ?? control?.props.id ?? (control ? generated : undefined);
+  const labelled =
+    control && !control.props.id && !htmlFor
+      ? React.cloneElement(control, { id: controlId })
+      : children;
+
   return (
     <div className={cn("space-y-1.5", className)} {...props}>
       {label && (
         <div className="flex items-center gap-1.5">
-          <label htmlFor={htmlFor} className="text-sm font-medium leading-none">
+          <label htmlFor={controlId} className="text-sm font-medium leading-none">
             {label}
           </label>
           {info && <InfoHint text={info} label={`About ${label}`} />}
         </div>
       )}
-      {children}
+      {labelled}
       {error ? (
         <p className="text-xs text-destructive">{error}</p>
       ) : hint ? (
