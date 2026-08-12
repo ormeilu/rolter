@@ -161,6 +161,9 @@ pub struct Snapshot {
     /// custom guardrail webhook config, swapped atomically with the snapshot;
     /// inert unless enabled (ROL-257)
     pub guardrail_webhook: rolter_core::GuardrailWebhookConfig,
+    /// external PII sanitizer config, swapped atomically with the snapshot;
+    /// inert unless enabled (#848)
+    pub pii_sanitizer: rolter_core::PiiSanitizerConfig,
     /// versioned prompt templates / route decorators, compiled once per snapshot
     /// and shared across requests; inert unless enabled (ROL-256)
     pub prompt_templates: Arc<rolter_core::CompiledTemplates>,
@@ -426,6 +429,7 @@ impl Snapshot {
             realtime: config.realtime.clone(),
             guardrails: compiled_guardrails,
             guardrail_webhook: config.guardrail_webhook.clone(),
+            pii_sanitizer: config.pii_sanitizer.clone(),
             prompt_templates: Arc::new(rolter_core::CompiledTemplates::from_config(
                 &config.prompt_templates,
             )),

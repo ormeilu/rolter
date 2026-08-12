@@ -155,6 +155,24 @@ most deployments. Revisit both if the planes ever cross an untrusted network.
 - Responses back to clients likewise gain no rolter-added headers.
 - This is a tested guarantee: golden wire tests in `rolter-proxy` capture the raw outbound request head and fail on any unexpected header (see `openai_wire_carries_no_rolter_signature`).
 
+## External PII sanitization (#848)
+
+The gateway can hand request content — and optionally response content — to a self-hosted de-identification service before it reaches a provider. Configured under `[pii_sanitizer]`; see `user-docs/security/pii-sanitizer.mdx` for the operator-facing contract.
+
+The design property worth stating precisely: **the placeholder→plaintext mapping never enters the gateway process.** The sanitizer substitutes deterministic placeholders and returns an opaque restoration token; rolter holds the token and nothing else. There is therefore no log line, metric label, span attribute or cached body from which the original values can be recovered, and no in-memory table for a crash dump to expose.
+
+Consequences that fall out of that choice:
+
+- **`RestorationTicket` is not printable.** Its `Display` renders `<restoration token redacted>`, and the token is reachable only through `token_for(&scope)`, which returns `None` unless the caller's org/team/project/route match the scope the ticket was minted under. A token from one project cannot restore content in another.
+- **Restoration is opt-out, not opt-in-by-default.** `RestorationPolicy::Never` is the default; `CallerAuthorized` honours `x-rolter-pii-restore` only because the *policy* allows it, never because the caller asked.
+- **The response leg never requests reversibility.** Restoring provider-generated content would return the very data that leg exists to remove.
+- **A streamed response with an active response leg is refused** (`pii_streaming_unsupported`, HTTP 400), mirroring `guardrails.streaming_post_call`. Correct streaming restoration would need either a network round trip per chunk — destroying TTFT — or the mapping held in-process, destroying the property above. `streaming = "passthrough"` waives the response leg instead.
+- **A malformed sanitizer reply is a failure**, unlike the guardrail webhook's decision parsing which defaults to allow. Defaulting would forward content the gateway believes is sanitized and is not.
+- **Restore runs after the cache store**, so what is cached is what the upstream said. A later hit on the same entry is re-evaluated against its own request's policy and ticket rather than replaying someone else's restored plaintext.
+- **`fail_open` is the default and is the risk to monitor.** It forwards unsanitized content when the service is down. `rolter_pii_sanitizer_errors_total` rising under `fail_open` means personal data is reaching providers; deployments where the sanitizer is a compliance control should set `fail_closed`.
+
+A response-leg failure never fails the request even under `fail_closed`: the upstream call already happened and was already billed, so refusing to deliver would spend the caller's money and return nothing. The counter records it.
+
 ## Threat model (high level)
 
 - **Tenant isolation**: virtual keys are scoped to a project; model allow-lists prevent access to unconfigured models; cache keys are namespaced to avoid cross-tenant cache poisoning.

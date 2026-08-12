@@ -82,6 +82,7 @@
               "security/user-provisioning",
               "security/mcp-oauth",
               "security/guardrails",
+              "security/pii-sanitizer",
               "security/budgets-and-rate-limits",
               "security/cost-attribution"
             ]

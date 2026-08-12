@@ -139,6 +139,22 @@ pub struct Metrics {
     pub guardrail_webhook_transforms_total: AtomicU64,
     /// custom-guardrail-webhook calls that failed transport (timeout/connect/non-2xx)
     pub guardrail_webhook_errors_total: AtomicU64,
+    /// entities replaced with placeholders by the external PII sanitizer (#848).
+    /// a count of *replacements*, never an entity type or a matched value
+    pub pii_entities_redacted_total: AtomicU64,
+    /// sanitizer calls that failed transport (timeout/connect/non-2xx)
+    pub pii_sanitizer_errors_total: AtomicU64,
+    /// requests rejected because the sanitizer was unreachable and the
+    /// deployment is fail-closed
+    pub pii_sanitizer_blocks_total: AtomicU64,
+    /// responses whose placeholders were turned back into plaintext
+    pub pii_restorations_total: AtomicU64,
+    /// streamed requests refused because the sanitizer's response leg is active
+    pub pii_stream_rejections_total: AtomicU64,
+    /// restore calls that failed. distinct from a sanitizer failure: the
+    /// content is already safe, so this is a usability failure and not a
+    /// disclosure one, and the two must not share a counter
+    pub pii_restore_errors_total: AtomicU64,
     /// requests rejected by a webhook plugin instance (#509)
     pub plugin_blocks_total: AtomicU64,
     /// request/response bodies transformed by a webhook plugin instance
@@ -436,6 +452,42 @@ impl Metrics {
                 name: "rolter_prompt_template_rejections_total",
                 help: "requests rejected for invalid prompt-template variables",
                 value: self.prompt_template_rejections_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_pii_entities_redacted_total",
+                help: "entities replaced with placeholders by the external PII sanitizer",
+                value: self.pii_entities_redacted_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_pii_sanitizer_errors_total",
+                help: "PII sanitizer calls that failed transport",
+                value: self.pii_sanitizer_errors_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_pii_sanitizer_blocks_total",
+                help: "requests rejected because the PII sanitizer was unavailable and the deployment is fail-closed",
+                value: self.pii_sanitizer_blocks_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_pii_restorations_total",
+                help: "responses whose PII placeholders were restored to plaintext",
+                value: self.pii_restorations_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_pii_stream_rejections_total",
+                help: "streamed requests refused because the PII sanitizer's response leg is active",
+                value: self.pii_stream_rejections_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_pii_restore_errors_total",
+                help: "PII restore calls that failed",
+                value: self.pii_restore_errors_total.load(Relaxed),
             },
             Scalar {
                 kind: "counter",

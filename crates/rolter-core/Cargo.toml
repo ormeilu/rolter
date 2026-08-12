@@ -41,8 +41,13 @@ otlp = [
 ]
 
 [dev-dependencies]
+criterion.workspace = true
 # in-memory span and log exporters, so the #809 trace-correlation guarantee is
 # asserted rather than assumed from a dependency default
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 # `#[tokio::test]` for the scheduler-metrics assertions (#834)
 tokio = { workspace = true }
+
+[[bench]]
+name = "pii_sanitizer"
+harness = false
