@@ -163,6 +163,29 @@ docs(architecture): document reload-free config propagation
 
 Commit hygiene is enforced by `commitlint` (PR titles) and the `conventional-pre-commit` hook in `prek.toml`.
 
+## Scope discipline: file an issue for everything you find
+
+Keeping a PR focused only works if the things you leave out survive. **Every
+gap, bug, or idea noticed outside the scope of the current task becomes a
+GitHub issue before that task is reported done.** Mentioning it in chat, in a
+PR body, or in a summary does not count — those are lost the moment the
+conversation ends. Nothing is dropped; everything is tracked.
+
+This applies to whatever you happen to trip over: a pre-existing bug in a file
+you were only passing through, drift against a rule this document already
+states, a missing test, a dependency that wants replacing, a follow-up the
+implementation suggests.
+
+- `gh issue create` on `rolter-ai/rolter`, then `gh project item-add 1 --owner
+  rolter-ai --url <issue-url>`. An issue that is not on the board is not
+  tracked. (`gh project item-list` truncates, so confirm membership through the
+  GraphQL `projectItems` field rather than by grepping the list.)
+- Fill in labels, milestone and priority. Propose a new milestone if none fits.
+- State the problem, where it surfaced (link the PR or file), and what would
+  count as done.
+- Reference the new issue from the PR that found it (`Refs #123`) and leave the
+  PR itself narrow — filing the issue is what buys the right not to widen it.
+
 ## Testing & quality
 
 - Add unit tests next to the code (`#[cfg(test)] mod tests`).
