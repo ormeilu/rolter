@@ -2,18 +2,34 @@ import { Bug, KeyRound, LogOut } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
+import {
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router";
 
 import { LocalePicker } from "@/components/LocalePicker";
+import { OpenModeBanner } from "@/components/OpenModeBanner";
 import { ScopeSwitcher } from "@/components/ScopeSwitcher";
 import { ScreenHeader } from "@/components/ScreenHeader";
-import { NavSidebar, type NavGroup, type NavItem } from "@/components/ui/nav-sidebar";
+import {
+  NavSidebar,
+  type NavGroup,
+  type NavItem,
+} from "@/components/ui/nav-sidebar";
 import { BUILT, NAV, leafKeys, useScreenMeta, type NavDef } from "@/lib/nav";
 import { logout } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
-import { UxScreenProvider, useRouteTelemetry, useUxContext } from "@/lib/ux-react";
+import { isOpenMode } from "@/lib/telemetry";
+import {
+  UxScreenProvider,
+  useRouteTelemetry,
+  useUxContext,
+} from "@/lib/ux-react";
 import Account from "@/pages/Account";
 import { AlertChannels, AlertHistory, AlertRules } from "@/pages/Alerting";
 import AdaptiveDashboard from "@/pages/AdaptiveDashboard";
@@ -239,95 +255,109 @@ export default function App() {
 
   const redirect = LEGACY[key];
   const orgName = scope.orgs.find((o) => o.id === scope.orgId)?.name;
-  const navGroups: NavGroup[] = [{ items: NAV.map((def) => toNavItem(def, t)) }];
-  const role = orgName ? t("shell.roleWithOrg", { org: orgName }) : t("shell.role");
+  const navGroups: NavGroup[] = [
+    { items: NAV.map((def) => toNavItem(def, t)) },
+  ];
+  const role = orgName
+    ? t("shell.roleWithOrg", { org: orgName })
+    : t("shell.role");
   const initials = (email.trim()[0] ?? "?").toUpperCase();
 
   return (
-    <div className="flex h-screen bg-[color:var(--surface-app)] text-foreground">
-      <NavSidebar
-        groups={navGroups}
-        logoSrc="/logo-mark.svg"
-        brand="rolter"
-        activeKey={activeKey}
-        onNavigate={(k) => navigate(`/${k}`)}
-        searchable
-        collapsible
-        footerLinks={[
-          {
-            key: "github",
-            title: t("shell.githubRepo"),
-            icon: GithubIcon,
-            href: "https://github.com/rolter-ai/rolter",
-          },
-          {
-            key: "bug",
-            title: t("shell.reportBug"),
-            icon: <Bug />,
-            href: "https://github.com/rolter-ai/rolter/issues/new",
-          },
-        ]}
-        footerExtra={(collapsed) => <LocalePicker collapsed={collapsed} />}
-        version={`v${__APP_VERSION__}`}
-        user={{
-          name: email,
-          role,
-          initials,
-          onClick: handleSignOut,
-        }}
-        userMenu={(close) => (
-          <div>
-            <div className="flex items-center gap-2 px-3 pb-2 pt-1">
-              <span className="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-[color:var(--red-folk)] text-xs font-semibold text-white">
-                {initials}
-              </span>
-              <div className="min-w-0">
-                <p className="truncate text-xs font-medium text-foreground">{email}</p>
-                <p className="truncate text-[0.6875rem] text-muted-foreground">{role}</p>
+    // the open-mode warning spans the full width above the shell rather than
+    // sitting inside a screen: it is a property of the control plane, not of
+    // whatever screen happens to be open (#970)
+    <div className="flex h-screen flex-col bg-[color:var(--surface-app)] text-foreground">
+      <OpenModeBanner open={isOpenMode()} />
+      <div className="flex min-h-0 flex-1">
+        <NavSidebar
+          groups={navGroups}
+          logoSrc="/logo-mark.svg"
+          brand="rolter"
+          activeKey={activeKey}
+          onNavigate={(k) => navigate(`/${k}`)}
+          searchable
+          collapsible
+          footerLinks={[
+            {
+              key: "github",
+              title: t("shell.githubRepo"),
+              icon: GithubIcon,
+              href: "https://github.com/rolter-ai/rolter",
+            },
+            {
+              key: "bug",
+              title: t("shell.reportBug"),
+              icon: <Bug />,
+              href: "https://github.com/rolter-ai/rolter/issues/new",
+            },
+          ]}
+          footerExtra={(collapsed) => <LocalePicker collapsed={collapsed} />}
+          version={`v${__APP_VERSION__}`}
+          user={{
+            name: email,
+            role,
+            initials,
+            onClick: handleSignOut,
+          }}
+          userMenu={(close) => (
+            <div>
+              <div className="flex items-center gap-2 px-3 pb-2 pt-1">
+                <span className="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-[color:var(--red-folk)] text-xs font-semibold text-white">
+                  {initials}
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium text-foreground">
+                    {email}
+                  </p>
+                  <p className="truncate text-[0.6875rem] text-muted-foreground">
+                    {role}
+                  </p>
+                </div>
+              </div>
+              <div className="border-t border-[color:var(--border-subtle)] py-1.5">
+                <p className="px-3 pb-1 text-[0.625rem] uppercase tracking-[0.08em] text-[color:var(--text-subtle)]">
+                  {t("shell.scope")}
+                </p>
+                <ScopeSwitcher />
+              </div>
+              <div className="border-t border-[color:var(--border-subtle)] pt-1">
+                <MenuRow
+                  icon={<KeyRound />}
+                  onClick={() => {
+                    navigate("/api-keys");
+                    close();
+                  }}
+                >
+                  {t("shell.accountAndKeys")}
+                </MenuRow>
+                <MenuRow
+                  icon={<LogOut />}
+                  danger
+                  onClick={() => {
+                    close();
+                    handleSignOut();
+                  }}
+                >
+                  {t("shell.signOut")}
+                </MenuRow>
               </div>
             </div>
-            <div className="border-t border-[color:var(--border-subtle)] py-1.5">
-              <p className="px-3 pb-1 text-[0.625rem] uppercase tracking-[0.08em] text-[color:var(--text-subtle)]">
-                {t("shell.scope")}
-              </p>
-              <ScopeSwitcher />
-            </div>
-            <div className="border-t border-[color:var(--border-subtle)] pt-1">
-              <MenuRow
-                icon={<KeyRound />}
-                onClick={() => {
-                  navigate("/api-keys");
-                  close();
-                }}
-              >
-                {t("shell.accountAndKeys")}
-              </MenuRow>
-              <MenuRow
-                icon={<LogOut />}
-                danger
-                onClick={() => {
-                  close();
-                  handleSignOut();
-                }}
-              >
-                {t("shell.signOut")}
-              </MenuRow>
-            </div>
-          </div>
-        )}
-      />
-      <main className="min-w-0 flex-1 overflow-hidden border-l border-[color:var(--border-subtle)] bg-background">
-        {redirect != null ? (
-          <Navigate to={`/${redirect}`} replace />
-        ) : (
-          <Routes>
-            {[...LEAVES].map((k) => (
-              <Route key={k} path={`/${k}`} element={<Screen screen={k} />} />
-            ))}
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Routes>
-        )}
-      </main>
+          )}
+        />
+        <main className="min-w-0 flex-1 overflow-hidden border-l border-[color:var(--border-subtle)] bg-background">
+          {redirect != null ? (
+            <Navigate to={`/${redirect}`} replace />
+          ) : (
+            <Routes>
+              {[...LEAVES].map((k) => (
+                <Route key={k} path={`/${k}`} element={<Screen screen={k} />} />
+              ))}
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Routes>
+          )}
+        </main>
+      </div>
     </div>
   );
 }

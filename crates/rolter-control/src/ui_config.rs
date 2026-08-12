@@ -32,6 +32,15 @@ pub(crate) struct UiRuntimeConfig {
     /// reported as `service.version`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// true when the control plane is serving with no admin token, so every
+    /// request is treated as superadmin (#970). The dashboard renders a
+    /// persistent banner while this holds — an operator otherwise cannot tell a
+    /// wide-open control plane from a properly gated one by looking at it.
+    ///
+    /// Omitted when false so the common case injects nothing extra; the
+    /// dashboard reads a missing field as "gated".
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub open_mode: bool,
 }
 
 impl UiRuntimeConfig {
@@ -91,6 +100,7 @@ mod tests {
             otel_endpoint: Some("http://localhost:4318/v1/traces".to_string()),
             otel_service_name: Some("rolter-ui".to_string()),
             version: Some("1.4.2".to_string()),
+            open_mode: false,
         }
     }
 
@@ -141,6 +151,21 @@ mod tests {
         let out = inject("<body>x</body>", &config());
         assert!(out.starts_with("<script>window.__ROLTER_CONFIG__"), "{out}");
         assert!(out.ends_with("<body>x</body>"), "{out}");
+    }
+
+    #[test]
+    fn open_mode_reaches_the_dashboard_only_when_it_is_on() {
+        // gated is the common case and injects nothing, which the dashboard
+        // reads as "no banner"
+        let out = inject("<head></head>", &config());
+        assert!(!out.contains("openMode"), "{out}");
+
+        let open = UiRuntimeConfig {
+            open_mode: true,
+            ..Default::default()
+        };
+        let out = inject("<head></head>", &open);
+        assert!(out.contains("\"openMode\":true"), "{out}");
     }
 
     #[test]

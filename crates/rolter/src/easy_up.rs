@@ -34,8 +34,12 @@ pub struct EasyUpArgs {
     /// bootstrap config file; created from the bundled example if missing
     #[arg(short, long, env = "ROLTER_CONFIG", default_value = "rolter.toml")]
     pub config: PathBuf,
-    /// host both the gateway and the control plane bind to
-    #[arg(long, default_value = "0.0.0.0")]
+    /// host both the gateway and the control plane bind to. Loopback by
+    /// default: `easy-up` is the zero-credential local path, and the control
+    /// plane it starts is unauthenticated unless `--admin-token` is set, which
+    /// must not reach a public interface by omission (#970). Pass
+    /// `--host 0.0.0.0` with an admin token to serve a network
+    #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
     /// gateway (data-plane) port
     #[arg(long, env = "ROLTER_PORT", default_value_t = 4000)]
@@ -54,6 +58,10 @@ pub struct EasyUpArgs {
     /// shared by the control plane (enforces) and gateway (sends)
     #[arg(long, env = "ROLTER_ADMIN_TOKEN")]
     pub admin_token: Option<String>,
+    /// acknowledge serving an unauthenticated management API on a non-loopback
+    /// `--host`. Without it that combination refuses to start (#970)
+    #[arg(long, env = "ROLTER_ALLOW_OPEN_MODE")]
+    pub allow_open_mode: bool,
     /// clickhouse http url; enables the dashboard usage/cost analytics
     #[arg(long, env = "CLICKHOUSE_URL")]
     pub clickhouse_url: Option<String>,
@@ -137,6 +145,7 @@ fn control_args(args: &EasyUpArgs, database_url: Option<String>) -> rolter_contr
         admin_token: args.admin_token.clone(),
         internal_token: None,
         internal_addr: None,
+        allow_open_mode: args.allow_open_mode,
     }
 }
 
@@ -264,12 +273,13 @@ mod tests {
     fn gateway_polls_snapshot_only_in_db_mode() {
         let args = EasyUpArgs {
             config: PathBuf::from("rolter.toml"),
-            host: "0.0.0.0".to_string(),
+            host: "127.0.0.1".to_string(),
             gateway_port: 4000,
             control_port: 4001,
             ui_dir: PathBuf::from("ui/dist"),
             redis_url: None,
             admin_token: None,
+            allow_open_mode: false,
             clickhouse_url: None,
             #[cfg(feature = "postgres")]
             database_url: None,
@@ -285,5 +295,51 @@ mod tests {
             gateway_args(&args, true).snapshot_url.as_deref(),
             Some("http://127.0.0.1:4001/internal/snapshot")
         );
+    }
+
+    #[test]
+    fn easy_up_binds_loopback_by_default() {
+        // easy-up runs with no admin token, so its default bind is the only
+        // thing keeping an unauthenticated management api off the network
+        // (#970). clap owns the default, so assert it through the parser
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct Cli {
+            #[command(flatten)]
+            easy_up: EasyUpArgs,
+        }
+
+        let cli = Cli::parse_from(["rolter"]);
+        assert_eq!(cli.easy_up.host, "127.0.0.1");
+        assert!(!cli.easy_up.allow_open_mode);
+    }
+
+    #[test]
+    fn the_open_mode_acknowledgement_reaches_the_control_plane() {
+        // easy-up builds control args by hand, so a flag that is parsed but not
+        // forwarded would silently refuse to start on --host 0.0.0.0
+        let mut args = EasyUpArgs {
+            config: PathBuf::from("rolter.toml"),
+            host: "0.0.0.0".to_string(),
+            gateway_port: 4000,
+            control_port: 4001,
+            ui_dir: PathBuf::from("ui/dist"),
+            redis_url: None,
+            admin_token: None,
+            allow_open_mode: true,
+            clickhouse_url: None,
+            #[cfg(feature = "postgres")]
+            database_url: None,
+            #[cfg(feature = "postgres")]
+            admin_email: None,
+            #[cfg(feature = "postgres")]
+            admin_password: None,
+            #[cfg(feature = "postgres")]
+            import: None,
+        };
+        assert!(control_args(&args, None).allow_open_mode);
+        args.allow_open_mode = false;
+        assert!(!control_args(&args, None).allow_open_mode);
     }
 }

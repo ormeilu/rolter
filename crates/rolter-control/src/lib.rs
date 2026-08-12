@@ -54,6 +54,7 @@ mod mcp_oauth_flow;
 mod me;
 #[cfg(feature = "postgres")]
 mod model_defaults;
+mod open_mode;
 #[cfg(feature = "postgres")]
 mod plugins;
 mod proxy;
@@ -101,7 +102,12 @@ use rolter_store::{ConfigStore, InMemoryConfigStore};
 #[derive(Parser, Debug)]
 #[command(name = "rolter-control", version, about = "rolter control plane")]
 pub struct Args {
-    #[arg(long, env = "ROLTER_CONTROL_HOST", default_value = "0.0.0.0")]
+    /// address the management API and dashboard bind to. Loopback by default:
+    /// the control plane runs unauthenticated when no `--admin-token` is set,
+    /// and that state must not reach a public interface by omission (#970).
+    /// Containers and clusters set this explicitly — see `charts/` and
+    /// `docker/docker-compose.yml`
+    #[arg(long, env = "ROLTER_CONTROL_HOST", default_value = "127.0.0.1")]
     pub host: String,
     #[arg(long, env = "ROLTER_CONTROL_PORT", default_value_t = 4001)]
     pub port: u16,
@@ -164,6 +170,12 @@ pub struct Args {
     /// reachable on the port the dashboard and management API are served from
     #[arg(long, env = "ROLTER_INTERNAL_ADDR")]
     pub internal_addr: Option<SocketAddr>,
+    /// acknowledge running with no `--admin-token` on a non-loopback bind.
+    /// Without it the control plane refuses to start in that combination,
+    /// because every request would be served as superadmin with no credential
+    /// (see `crate::open_mode`)
+    #[arg(long, env = "ROLTER_ALLOW_OPEN_MODE")]
+    pub allow_open_mode: bool,
 }
 
 /// Names owned by the bootstrap config file: immutable at runtime,
@@ -288,12 +300,15 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .map(|t| Arc::new(t.to_string()));
-    if admin_token.is_none() {
-        tracing::warn!(
-            "ROLTER_ADMIN_TOKEN is unset: the management API and /internal/snapshot are \
-             unauthenticated; set it before exposing the control plane beyond localhost"
-        );
-    }
+    // decided before anything binds: an unauthenticated control plane reachable
+    // from off the machine is refused outright rather than served and warned
+    // about (#970)
+    let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
+    let listeners: Vec<SocketAddr> = std::iter::once(addr)
+        .chain(args.internal_addr)
+        .collect::<Vec<_>>();
+    let open_mode = open_mode::evaluate(admin_token.is_some(), &listeners, args.allow_open_mode)?;
+    open_mode::warn(open_mode, &listeners);
 
     let internal_token = args
         .internal_token
@@ -408,6 +423,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
             .flatten(),
         otel_service_name: args.ui_otel_service_name.clone(),
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        open_mode: open_mode.is_open(),
     };
     if ui_runtime.is_configured() {
         tracing::info!(
@@ -438,7 +454,6 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
                 })),
         );
 
-    let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
     tracing::info!(%addr, ui_dir = %args.ui_dir.display(), "rolter-control listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
