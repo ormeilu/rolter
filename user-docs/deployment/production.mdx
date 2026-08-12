@@ -15,6 +15,38 @@ Running Rolter in production requires a few deliberate decisions around network 
 Work through these steps before sending production traffic to your gateway:
 
 <Steps>
+  <Step title="Generate the configuration and its secrets">
+    Do not invent the secrets by hand. `rolter init` writes a production `rolter.toml` and a `.env` holding four distinct 256-bit secrets — the KEK, the admin token, the internal token and the virtual-key pepper:
+
+    ```bash
+    rolter init --profile production \
+                --database-url postgres://rolter@db.internal:5432/rolter \
+                --redis-url redis://cache.internal:6379
+    ```
+
+    It is non-interactive, so it also runs inside a Dockerfile, a Helm hook or a CI job. Pipe it straight into a secret manager instead of leaving it on disk:
+
+    ```bash
+    rolter init --print --profile production | your-secret-tool import -
+    ```
+
+    <Warning>
+      `rolter init` refuses to overwrite an existing file without `--force`. Regenerating `ROLTER_KEK` strands every credential encrypted under the old one — that failure is total, delayed, and looks like data corruption.
+    </Warning>
+
+    The `--profile local` variant exists for development and deliberately does **not** pass the checks in the next step.
+  </Step>
+  <Step title="Validate before you start anything">
+    ```bash
+    rolter check --strict --config rolter.toml
+    ```
+
+    This is a gate, not a linter: it exits non-zero on anything that would produce a silently-degraded process. The failure it was built for is the one that produces no error at all — a missing `ROLTER_KEK` makes the control plane store provider credentials **unsealed** with only a log warning, so the deployment looks completely healthy while a credential you believed was encrypted at rest is not.
+
+    Add `--connect` to also probe that the database and Redis accept a connection.
+
+    The Helm chart runs exactly this as an init container by default (`preflight.enabled`), against the same environment block the workload gets. See [Cluster deployment](/deployment/cluster).
+  </Step>
   <Step title="Terminate TLS at your ingress or load balancer">
     Rolter's gateway listens on plain HTTP by default. Put a TLS-terminating ingress controller, reverse proxy (e.g. nginx, Caddy, Traefik), or cloud load balancer in front of port 4000. Your clients connect over HTTPS to the ingress; the ingress forwards cleartext HTTP to the gateway over your private network.
 
