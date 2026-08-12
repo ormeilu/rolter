@@ -15,6 +15,9 @@ use std::time::Instant;
 const LATENCY_EWMA_ALPHA: f64 = 0.3;
 
 type LoadMap = HashMap<(String, usize), u64>;
+/// per-model predicted-latency models, keyed by the same namespace the load and
+/// latency maps use
+type PredictorMap = HashMap<String, Arc<rolter_balancer::predictor::LatencyPredictor>>;
 /// per-(model, target) smoothed request latency in milliseconds
 type LatencyMap = HashMap<(String, usize), f64>;
 /// backing store plus the key a [`LoadGuard`] must decrement on drop
@@ -26,6 +29,11 @@ type GuardSlot = (Arc<Mutex<LoadMap>>, (String, usize));
 pub struct LoadTracker {
     inner: Option<Arc<Mutex<LoadMap>>>,
     latency: Option<Arc<Mutex<LatencyMap>>>,
+    /// per-request latency models for the `predicted_latency` strategy (#853).
+    /// Lives here rather than in the routing snapshot for the same reason the
+    /// latency EWMA does: a config reload must not throw away what the models
+    /// learned, or every reload would send the route back to cold behaviour
+    predictors: Option<Arc<Mutex<PredictorMap>>>,
 }
 
 impl LoadTracker {
@@ -34,7 +42,29 @@ impl LoadTracker {
         Self {
             inner: Some(Arc::new(Mutex::new(HashMap::new()))),
             latency: Some(Arc::new(Mutex::new(HashMap::new()))),
+            predictors: Some(Arc::new(Mutex::new(HashMap::new()))),
         }
+    }
+
+    /// The latency model for `model`'s route of `n` targets, creating it on
+    /// first use. Returns `None` on a disabled tracker.
+    ///
+    /// `n` sizes the model only when it is first created. A route that gains a
+    /// target keeps its existing models and the new target simply reads as
+    /// unpredicted until the next process start, which is the conservative
+    /// direction: a fresh target with no evidence should not be ranked.
+    pub fn predictor(
+        &self,
+        model: &str,
+        n: usize,
+    ) -> Option<Arc<rolter_balancer::predictor::LatencyPredictor>> {
+        let predictors = self.predictors.as_ref()?;
+        let mut map = predictors.lock().unwrap();
+        Some(
+            map.entry(model.to_string())
+                .or_insert_with(|| Arc::new(rolter_balancer::predictor::LatencyPredictor::new(n)))
+                .clone(),
+        )
     }
 
     /// Current in-flight counts for targets `0..n` of `model`, indexed to match
@@ -68,15 +98,32 @@ impl LoadTracker {
             return LoadGuard {
                 inner: None,
                 latency: None,
+                predictor: None,
                 started: Instant::now(),
                 record: false,
+                queue_depth: 0,
+                prompt_tokens: 0,
             };
         };
         let key = (model.to_string(), idx);
-        *inner.lock().unwrap().entry(key.clone()).or_insert(0) += 1;
+        // read before the increment: the model learns what queue this request
+        // *joined*, not the one it created
+        let queue_depth = {
+            let mut map = inner.lock().unwrap();
+            let slot = map.entry(key.clone()).or_insert(0);
+            let before = *slot;
+            *slot += 1;
+            before
+        };
         LoadGuard {
             inner: Some((inner.clone(), key)),
             latency: self.latency.clone(),
+            predictor: self
+                .predictors
+                .as_ref()
+                .and_then(|p| p.lock().unwrap().get(model).cloned()),
+            queue_depth,
+            prompt_tokens: 0,
             started: Instant::now(),
             record: false,
         }
@@ -92,8 +139,13 @@ impl LoadTracker {
 pub struct LoadGuard {
     inner: Option<GuardSlot>,
     latency: Option<Arc<Mutex<LatencyMap>>>,
+    predictor: Option<Arc<rolter_balancer::predictor::LatencyPredictor>>,
     started: Instant,
     record: bool,
+    /// in-flight count against this target when the request was dispatched
+    queue_depth: u64,
+    /// prompt size, set by the caller once the body has been parsed
+    prompt_tokens: usize,
 }
 
 impl LoadGuard {
@@ -101,6 +153,13 @@ impl LoadGuard {
     /// smoothed latency when the guard drops (i.e. once streaming finishes).
     pub fn mark_ok(&mut self) {
         self.record = true;
+    }
+
+    /// Record this request's prompt size so a successful completion teaches the
+    /// latency model what a prompt of that size cost. Ignored by every strategy
+    /// other than `predicted_latency`.
+    pub fn set_prompt_tokens(&mut self, tokens: usize) {
+        self.prompt_tokens = tokens;
     }
 }
 
@@ -119,12 +178,24 @@ impl Drop for LoadGuard {
             }
         }
         if self.record {
+            let sample = self.started.elapsed().as_millis() as f64;
             if let Some(latency) = &self.latency {
-                let sample = self.started.elapsed().as_millis() as f64;
                 let mut map = latency.lock().unwrap();
                 map.entry(key.clone())
                     .and_modify(|e| *e += LATENCY_EWMA_ALPHA * (sample - *e))
                     .or_insert(sample);
+            }
+            // same gate as the EWMA: a failed attempt teaches nothing, so a
+            // fast-failing target cannot train itself into looking cheap
+            if let Some(predictor) = &self.predictor {
+                predictor.observe(
+                    key.1,
+                    rolter_balancer::predictor::Features {
+                        queue_depth: self.queue_depth,
+                        prompt_tokens: self.prompt_tokens,
+                    },
+                    sample,
+                );
             }
         }
     }
@@ -185,5 +256,73 @@ mod tests {
         drop(g1);
         // fully drained keys are evicted, snapshot reports zeros
         assert_eq!(t.snapshot("m", 2), vec![0, 0]);
+    }
+
+    #[test]
+    fn a_successful_guard_teaches_the_latency_model_the_queue_it_joined() {
+        let t = LoadTracker::new();
+        // the model must exist before `begin`, exactly as the snapshot build
+        // creates it; a guard opened before that simply teaches nothing
+        let predictor = t.predictor("m", 2).unwrap();
+
+        // two requests already in flight against target 0
+        let _a = t.begin("m", 0);
+        let _b = t.begin("m", 0);
+        let mut third = t.begin("m", 0);
+        third.mark_ok();
+        third.set_prompt_tokens(500);
+        // the sample must be non-zero for the update to move anything
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        drop(third);
+
+        assert_eq!(predictor.samples(0), 1);
+        assert_eq!(predictor.observed(), 1);
+        // one NLMS step from all-zero weights leaves each coefficient
+        // proportional to its own feature, so the coefficients read back the
+        // exact feature row: queue 2 (the queue it *joined*, not the three it
+        // was part of) and 0.5 ktokens
+        let [fixed, per_queued, per_ktok] = predictor.coefficients(0).unwrap();
+        assert!(fixed > 0.0, "a real sample should have moved the bias");
+        assert!(
+            (per_queued / fixed - 2.0).abs() < 1e-9,
+            "queue depth should be 2, got ratio {}",
+            per_queued / fixed
+        );
+        assert!(
+            (per_ktok / fixed - 0.5).abs() < 1e-9,
+            "prompt should be 0.5 ktokens, got ratio {}",
+            per_ktok / fixed
+        );
+    }
+
+    #[test]
+    fn a_failed_attempt_teaches_the_latency_model_nothing() {
+        let t = LoadTracker::new();
+        let predictor = t.predictor("m", 1).unwrap();
+        // unmarked guard: the attempt failed, so it is not a latency sample
+        drop(t.begin("m", 0));
+        assert_eq!(predictor.observed(), 0);
+        assert_eq!(predictor.samples(0), 0);
+    }
+
+    #[test]
+    fn predictors_are_shared_per_namespace_and_survive_a_rebuild() {
+        let t = LoadTracker::new();
+        let first = t.predictor("m", 2).unwrap();
+        let mut g = t.begin("m", 1);
+        g.mark_ok();
+        drop(g);
+        // a config reload asks for the model again; it must be the same one,
+        // still holding what it learned
+        let second = t.predictor("m", 2).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(second.observed(), 1);
+        // a different namespace (a variant pool) gets its own model
+        assert_eq!(t.predictor("m::v", 2).unwrap().observed(), 0);
+    }
+
+    #[test]
+    fn a_disabled_tracker_has_no_predictor() {
+        assert!(LoadTracker::default().predictor("m", 2).is_none());
     }
 }

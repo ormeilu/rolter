@@ -189,6 +189,23 @@ impl Pipeline {
             .with(Box::new(FastestScorer::new(n, source)), 1.0)
             .with(Box::new(LeastLoadScorer::new(n)), 0.25)
     }
+
+    /// The predicted-latency stack: the per-request model dominates, with
+    /// in-flight load behind it.
+    ///
+    /// Load stays in the stack for two reasons. It carries the route while the
+    /// models are cold, and once they are warm it is the tiebreaker between
+    /// targets the model rates equally — which is the common case on a
+    /// homogeneous fleet, where the honest answer is "either, take the emptier".
+    pub fn predicted_latency_stack(
+        n: usize,
+        source: std::sync::Arc<dyn LatencyPredictionSource>,
+    ) -> Self {
+        Self::new(n)
+            .named("predicted_latency")
+            .with(Box::new(PredictedLatencyScorer::new(n, source)), 1.0)
+            .with(Box::new(LeastLoadScorer::new(n)), 0.25)
+    }
 }
 
 impl LoadBalancer for Pipeline {
@@ -325,6 +342,16 @@ pub trait LatencySource: Send + Sync {
     fn latencies(&self, n: usize) -> Vec<f64>;
 }
 
+/// A live source of *predicted* per-request latency, as opposed to the observed
+/// average [`LatencySource`] reports. Implemented by
+/// [`crate::predictor::LatencyPredictor`]; `None` for a target means the model
+/// has too little evidence to be trusted, which is not the same as "slow".
+pub trait LatencyPredictionSource: Send + Sync {
+    /// Predicted milliseconds for each target `0..n` given the current per-target
+    /// `loads` and this request's prompt size.
+    fn predict(&self, n: usize, loads: &[u64], prompt_tokens: usize) -> Vec<Option<f64>>;
+}
+
 /// Live exact KV-cache residency. `scores` returns route-order-aligned resident
 /// prefix fractions, or `None` when token ids are absent or telemetry is stale.
 pub trait KvCacheSource: Send + Sync {
@@ -416,6 +443,43 @@ impl Scorer for FastestScorer {
     fn score(&self, _ctx: &RouteContext, candidates: &[usize], _loads: &[u64]) -> Vec<f32> {
         let latencies = self.source.latencies(self.n);
         rank_lower_better(&latencies, candidates)
+    }
+}
+
+/// Prefer the target this request is predicted to finish soonest on, given the
+/// queue it would join and its own prompt size (#853).
+///
+/// Unlike [`FastestScorer`] this reads `loads`: the whole point is that a
+/// target's cost depends on how busy it is *right now*, so a stale average
+/// cannot substitute. A target the model cannot yet predict scores as unknown,
+/// which leaves the rest of the stack to place the request.
+pub struct PredictedLatencyScorer {
+    source: std::sync::Arc<dyn LatencyPredictionSource>,
+    n: usize,
+}
+
+impl PredictedLatencyScorer {
+    pub fn new(n: usize, source: std::sync::Arc<dyn LatencyPredictionSource>) -> Self {
+        Self { source, n }
+    }
+}
+
+impl Scorer for PredictedLatencyScorer {
+    fn name(&self) -> &'static str {
+        "predicted_latency"
+    }
+    fn score(&self, ctx: &RouteContext, candidates: &[usize], loads: &[u64]) -> Vec<f32> {
+        let tokens = crate::predictor::prompt_tokens(ctx);
+        // an unpredicted target becomes `0.0`, which `rank_lower_better` already
+        // reads as "unknown" and scores neutrally — the same convention every
+        // other lower-is-better signal in this file uses
+        let predicted: Vec<f64> = self
+            .source
+            .predict(self.n, loads, tokens)
+            .into_iter()
+            .map(|p| p.unwrap_or(0.0))
+            .collect();
+        rank_lower_better(&predicted, candidates)
     }
 }
 
@@ -1124,5 +1188,76 @@ mod tests {
         // static contribution (5*1.0) dominates load's 1.0 swing -> target 1
         let got = p.select(&RouteContext::default(), &[0, 5], |_| true);
         assert_eq!(got, Some(1));
+    }
+
+    #[test]
+    fn the_predicted_latency_stack_prefers_the_target_this_request_is_cheapest_on() {
+        use crate::predictor::{Features, LatencyPredictor};
+
+        let predictor = std::sync::Arc::new(LatencyPredictor::new(2));
+        // target 0: queue-sensitive, cheap prefill. target 1: queue-insensitive,
+        // expensive prefill. neither is "the fast one" — it depends on the request
+        for i in 0..200u64 {
+            let queue = i % 6;
+            let tokens = ((i % 4) * 1000) as usize;
+            predictor.observe(
+                0,
+                Features {
+                    queue_depth: queue,
+                    prompt_tokens: tokens,
+                },
+                10.0 + 100.0 * queue as f64,
+            );
+            predictor.observe(
+                1,
+                Features {
+                    queue_depth: queue,
+                    prompt_tokens: tokens,
+                },
+                10.0 + 300.0 * (tokens as f64 / 1000.0),
+            );
+        }
+        let stack = Pipeline::predicted_latency_stack(2, predictor);
+
+        // short prompt into deep queues: target 1 shrugs its queue off
+        let short = RouteContext {
+            prompt: Some("hi"),
+            ..Default::default()
+        };
+        let picks = (0..40)
+            .filter(|_| stack.pick(&short, &[5, 5]) == Some(1))
+            .count();
+        assert!(
+            picks > 30,
+            "short prompt should favour target 1, got {picks}/40"
+        );
+
+        // long prompt into idle queues: target 0 prefills far cheaper
+        let long_prompt = "x".repeat(16_000);
+        let long = RouteContext {
+            prompt: Some(&long_prompt),
+            ..Default::default()
+        };
+        let picks = (0..40)
+            .filter(|_| stack.pick(&long, &[0, 0]) == Some(0))
+            .count();
+        assert!(
+            picks > 30,
+            "long prompt should favour target 0, got {picks}/40"
+        );
+    }
+
+    #[test]
+    fn a_cold_predictor_leaves_the_stack_behaving_like_least_load() {
+        use crate::predictor::LatencyPredictor;
+
+        let stack =
+            Pipeline::predicted_latency_stack(3, std::sync::Arc::new(LatencyPredictor::new(3)));
+        // no target predicts anything, so only the load scorer has an opinion
+        let ctx = RouteContext::default();
+        let picks = (0..40)
+            .filter(|_| stack.pick(&ctx, &[9, 0, 9]) == Some(1))
+            .count();
+        assert!(picks > 30, "cold stack should follow load, got {picks}/40");
     }
 }
