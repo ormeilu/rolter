@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Shield, Trash2, Users } from "lucide-react";
+import { Loader2, Shield, Trash2, Users } from "lucide-react";
 import * as React from "react";
 
 import { PageBody, Pill } from "@/components/screen";
@@ -85,7 +85,11 @@ function ProfileCard({
           disabled={deleting}
           onClick={() => onDelete(profile)}
         >
-          <Trash2 className="size-4" />
+          {deleting ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Trash2 className="size-4" />
+          )}
         </Button>
       </div>
     </div>
@@ -167,7 +171,7 @@ export default function AccessProfiles() {
           <ProfileCard
             key={profile.id}
             profile={profile}
-            deleting={remove.isPending}
+            deleting={remove.isPending && remove.variables === profile.id}
             onDelete={(p) => remove.mutate(p.id)}
           />
         ))}
