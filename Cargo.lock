@@ -2862,6 +2862,7 @@ name = "rolter-core"
 version = "0.0.10"
 dependencies = [
  "chrono",
+ "criterion",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",

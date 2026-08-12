@@ -73,6 +73,7 @@ mod security;
 pub mod seed;
 #[cfg(feature = "postgres")]
 mod sso;
+mod telemetry;
 mod ui_config;
 #[cfg(feature = "postgres")]
 mod ui_events;
@@ -243,6 +244,9 @@ struct ControlState {
     /// every settings write so an edit applies without a restart. Empty by
     /// default, which is the same-origin deployment and adds no headers
     cors: Arc<arc_swap::ArcSwap<cors::CorsPolicy>>,
+    /// OTLP histograms for snapshot generation and API latency (#845). Inert,
+    /// and free, on every deployment without an OTLP endpoint
+    metrics: rolter_core::telemetry::ControlHistograms,
 }
 
 /// Run the control plane to completion. The caller owns argument parsing and
@@ -317,6 +321,17 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
             .map(|c| c.currency.clone())
             .unwrap_or_default(),
     );
+    // snapshot generation is fleet-wide config-propagation delay and CRUD
+    // latency is what makes a slow dashboard write attributable, and neither
+    // was measured (#845). `None` — and no cost — without an OTLP endpoint;
+    // held for the lifetime of `run` so metrics flush on shutdown
+    let metrics_guard = rolter_core::telemetry::install_control_metrics();
+    let metrics = metrics_guard
+        .as_ref()
+        .map(rolter_core::telemetry::MetricsGuard::control_histograms)
+        .unwrap_or_default();
+    let _metrics_guard = metrics_guard;
+
     #[allow(unused_variables)]
     let (store, pool) = build_store(&args, bootstrap).await?;
     let http = reqwest::Client::new();
@@ -335,6 +350,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         http,
         gateway_url,
         cors: Arc::default(),
+        metrics: metrics.clone(),
         pool: pool.clone(),
     };
     #[cfg(not(feature = "postgres"))]
@@ -350,6 +366,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         http,
         gateway_url,
         cors: Arc::default(),
+        metrics: metrics.clone(),
     };
 
     // converge the clickhouse ttl with the stored retention policy. spawned
@@ -539,9 +556,16 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
     // and the SPA fallback, because a browser that is denied the API must be
     // denied it uniformly. it is inert until an operator configures an origin
     // (#813)
+    // per-request spans and latency histograms wrap the whole API, outside the
+    // cors layer so a preflight rejection is measured like any other response
+    // (#845). inert without an OTLP endpoint
     api.layer(axum::middleware::from_fn_with_state(
         state.clone(),
         cors::apply_cors,
+    ))
+    .layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        telemetry::record_request,
     ))
     .with_state(state)
 }
@@ -634,6 +658,7 @@ pub async fn test_app_with_admin_token(
         http: reqwest::Client::new(),
         gateway_url: Arc::new("http://localhost:4000".to_string()),
         cors: Arc::default(),
+        metrics: Default::default(),
         pool: Some(pool),
     };
     Ok(build_app_with(state, true))
@@ -1026,10 +1051,69 @@ async fn get_snapshot(
     headers: axum::http::HeaderMap,
     Query(query): Query<SnapshotQuery>,
 ) -> Response {
+    use tracing::Instrument as _;
+
     // snapshot generation is fleet-wide propagation delay: every gateway waits
     // on it for its config, and until #809 it was invisible. the stage span
-    // costs nothing when no OTLP pipeline is installed
-    let _span = rolter_core::stage_span!("snapshot.build");
+    // costs nothing when no OTLP pipeline is installed.
+    //
+    // the fields are declared `Empty` and recorded after the build, because
+    // what makes this span answer an operator's question — which version, how
+    // big, did it succeed — is only known at the end (#845)
+    let span = rolter_core::stage_span!(
+        "snapshot.build",
+        config_version = tracing::field::Empty,
+        payload_bytes = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+    );
+    let metrics = state.metrics.clone();
+    let started = std::time::Instant::now();
+
+    // `.instrument`, not a held guard: a span that is created but never entered
+    // does not parent the spans created inside it, so `snapshot.sanitize` came
+    // out as a sibling of `snapshot.build` rather than a child of it
+    let built = build_snapshot(state, headers, query)
+        .instrument(span.clone())
+        .await;
+
+    span.record("config_version", built.version);
+    span.record("payload_bytes", built.bytes);
+    span.record("outcome", built.outcome);
+    metrics.record_snapshot(
+        built.outcome,
+        started.elapsed().as_millis() as u64,
+        built.bytes,
+    );
+    built.response
+}
+
+/// One snapshot build, with the numbers the span and histograms need.
+struct BuiltSnapshot {
+    response: Response,
+    /// Bounded (`ok` / `not_modified` / `error`), so it is safe as a metric
+    /// attribute — unlike `version`, which is unbounded and stays on the span.
+    outcome: &'static str,
+    version: i64,
+    /// Serialized payload size. `0` for a 304, which transfers no body.
+    bytes: u64,
+}
+
+impl BuiltSnapshot {
+    fn error(response: Response, version: i64) -> Self {
+        Self {
+            response,
+            outcome: "error",
+            version,
+            bytes: 0,
+        }
+    }
+}
+
+async fn build_snapshot(
+    state: ControlState,
+    headers: axum::http::HeaderMap,
+    query: SnapshotQuery,
+) -> BuiltSnapshot {
     // a node that identifies itself is recorded in the cluster inventory; the
     // poll it already makes is the heartbeat, so there is no second channel
     #[cfg(feature = "postgres")]
@@ -1040,23 +1124,34 @@ async fn get_snapshot(
     let version = match state.store.current_version().await {
         Ok(v) => v,
         Err(err) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": {"message": err.to_string()}})),
+            return BuiltSnapshot::error(
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": {"message": err.to_string()}})),
+                )
+                    .into_response(),
+                0,
             )
-                .into_response()
         }
     };
     if query.version.is_some_and(|requested| requested >= version) {
-        return with_node_state(StatusCode::NOT_MODIFIED.into_response(), &desired_state);
+        return BuiltSnapshot {
+            response: with_node_state(StatusCode::NOT_MODIFIED.into_response(), &desired_state),
+            outcome: "not_modified",
+            version,
+            bytes: 0,
+        };
     }
     match state.store.load().await {
         Ok(mut config) => {
             // prune rows that are only unservable by themselves (a route whose
             // targets aren't set up yet) so one half-built entry can't 500 the
             // snapshot and freeze config propagation for every other tenant
-            let _load = rolter_core::stage_span!("snapshot.sanitize");
-            let omitted = config.sanitize_for_snapshot();
+            let sanitize = rolter_core::stage_span!("snapshot.sanitize");
+            let omitted = {
+                let _entered = sanitize.enter();
+                config.sanitize_for_snapshot()
+            };
             if !omitted.is_empty() {
                 tracing::warn!(
                     ?omitted,
@@ -1067,25 +1162,61 @@ async fn get_snapshot(
             // problems instead so the operator can fix the source
             if let Err(problems) = config.validate() {
                 tracing::error!(?problems, "refusing to serve invalid config snapshot");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": {
-                        "message": "config failed validation",
-                        "problems": problems,
-                    }})),
-                )
-                    .into_response();
+                return BuiltSnapshot::error(
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": {
+                            "message": "config failed validation",
+                            "problems": problems,
+                        }})),
+                    )
+                        .into_response(),
+                    version,
+                );
             }
-            with_node_state(
-                Json(json!({"version": version, "config": config})).into_response(),
-                &desired_state,
-            )
+            // serialized here rather than by `Json`'s `IntoResponse` so the
+            // payload size is known: it is what every gateway in the fleet
+            // transfers on every poll, and the thing to look at first when
+            // propagation gets slow without generation getting slower
+            let encode = rolter_core::stage_span!("snapshot.encode");
+            let body = {
+                let _entered = encode.enter();
+                serde_json::to_vec(&json!({"version": version, "config": config}))
+            };
+            let body = match body {
+                Ok(body) => body,
+                Err(err) => {
+                    return BuiltSnapshot::error(
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({"error": {"message": err.to_string()}})),
+                        )
+                            .into_response(),
+                        version,
+                    )
+                }
+            };
+            let bytes = body.len() as u64;
+            let mut response = axum::response::Response::new(axum::body::Body::from(body));
+            response.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            BuiltSnapshot {
+                response: with_node_state(response, &desired_state),
+                outcome: "ok",
+                version,
+                bytes,
+            }
         }
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": {"message": err.to_string()}})),
-        )
-            .into_response(),
+        Err(err) => BuiltSnapshot::error(
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": {"message": err.to_string()}})),
+            )
+                .into_response(),
+            version,
+        ),
     }
 }
 
@@ -1219,6 +1350,7 @@ mod tests {
             http: reqwest::Client::new(),
             gateway_url: Arc::new("http://localhost:4000".to_string()),
             cors: Arc::default(),
+            metrics: Default::default(),
             #[cfg(feature = "postgres")]
             pool: None,
         }
@@ -1237,6 +1369,43 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
         addr
+    }
+
+    /// #845 replaced `Json(..).into_response()` with an explicit serialize so
+    /// the payload size is measurable. The wire contract must be byte-identical
+    /// to what gateways already parse — a snapshot that changed shape would
+    /// break config propagation fleet-wide.
+    #[tokio::test]
+    async fn the_snapshot_response_is_unchanged_by_the_explicit_encode() {
+        let addr = serve(build_app_with_internal(state_with_token(None))).await;
+        let client = reqwest::Client::new();
+
+        let response = client
+            .get(format!("http://{addr}/internal/snapshot"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
+        let body: Value = response.json().await.unwrap();
+        assert!(body["version"].is_number(), "no version in {body}");
+        assert!(body["config"].is_object(), "no config in {body}");
+
+        // and a caller already at the current version still gets a bodyless 304
+        let version = body["version"].as_i64().unwrap();
+        let not_modified = client
+            .get(format!("http://{addr}/internal/snapshot?version={version}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(not_modified.status(), 304);
+        assert!(not_modified.bytes().await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1355,6 +1524,7 @@ mod tests {
         let state = ControlState {
             gateway_url: Arc::new(format!("http://{up_addr}")),
             cors: Arc::default(),
+            metrics: Default::default(),
             ..state_with_token(None)
         };
         let addr = serve(build_app_with(state, true)).await;
