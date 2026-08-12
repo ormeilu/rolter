@@ -1507,6 +1507,10 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
             // count this attempt as in-flight; the guard falls out of scope (and
             // decrements) on retry, or is moved into the stream wrapper on success
             let mut guard = state.loads.begin(&model, idx);
+            // the latency model learns cost as a function of prompt size, so it
+            // needs this request's size before the guard's drop folds in the
+            // sample (#853). inert on every other strategy
+            guard.set_prompt_tokens(rolter_balancer::predictor::prompt_tokens(&ctx));
 
             let target = &entry.route.targets[idx];
             let provider = match snap.providers.get(&target.provider) {
@@ -2137,6 +2141,10 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
         entry.balancer.observe(idx, &ctx);
         tried.push(idx);
         let mut guard = state.loads.begin(&model, idx);
+        // the latency model learns cost as a function of prompt size, so it
+        // needs this request's size before the guard's drop folds in the
+        // sample (#853). inert on every other strategy
+        guard.set_prompt_tokens(rolter_balancer::predictor::prompt_tokens(&ctx));
 
         let target = &entry.route.targets[idx];
         let provider = match snap.providers.get(&target.provider) {
@@ -2492,6 +2500,10 @@ async fn forward_variants(
 
         // count this attempt as in-flight under the variant's key
         let mut guard = state.loads.begin(&key, ti);
+        // the latency model learns cost as a function of prompt size, so it
+        // needs this request's size before the guard's drop folds in the
+        // sample (#853). inert on every other strategy
+        guard.set_prompt_tokens(rolter_balancer::predictor::prompt_tokens(ctx));
         // weighted pick across the provider's key pool, skipping keys parked
         // on a cooldown — same policy as the classic path
         let multi_key = provider.api_keys.len() > 1;

@@ -377,6 +377,7 @@ export const STRATEGIES = [
   "weighted",
   "pipeline",
   "lora_aware",
+  "predicted_latency",
 ] as const;
 
 export interface OrgRow {
