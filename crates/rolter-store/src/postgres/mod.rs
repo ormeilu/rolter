@@ -324,26 +324,18 @@ struct RouteScopeRow {
     model: String,
 }
 
+/// Read a stored `strategy` column back into its enum.
+///
+/// This defers to the same `serde` derive that writes the value, rather than
+/// repeating the mapping by hand. The hand-written version silently fell behind
+/// twice — `lora_aware` (#896) and `predicted_latency` (#912) were both accepted
+/// by the check constraint and offered in the dashboard while this function
+/// still rejected them, and because every route loads through one query, a
+/// single route on a new strategy failed `/internal/snapshot` outright. The
+/// whole fleet then held its last good config with nothing but a 500 to say why.
 fn parse_strategy(s: &str) -> Result<BalancingStrategy> {
-    Ok(match s {
-        "round_robin" => BalancingStrategy::RoundRobin,
-        "random" => BalancingStrategy::Random,
-        "power_of_two" => BalancingStrategy::PowerOfTwo,
-        "consistent_hash" => BalancingStrategy::ConsistentHash,
-        "cache_aware" => BalancingStrategy::CacheAware,
-        "weighted" => BalancingStrategy::Weighted,
-        "pipeline" => BalancingStrategy::Pipeline,
-        "cheapest" => BalancingStrategy::Cheapest,
-        "fastest" => BalancingStrategy::Fastest,
-        "precise_cache_aware" => BalancingStrategy::PreciseCacheAware,
-        "lmcache_aware" => BalancingStrategy::LmcacheAware,
-        "adaptive" => BalancingStrategy::Adaptive,
-        other => {
-            return Err(Error::Store(format!(
-                "unknown balancing strategy '{other}'"
-            )))
-        }
-    })
+    serde_json::from_value(serde_json::Value::String(s.to_string()))
+        .map_err(|_| Error::Store(format!("unknown balancing strategy '{s}'")))
 }
 
 /// A [`ConfigStore`] backed by Postgres. `load` composes a [`GatewayConfig`]
@@ -1275,6 +1267,81 @@ mod tests {
 
     fn database_url() -> Option<String> {
         std::env::var("ROLTER_TEST_DATABASE_URL").ok()
+    }
+
+    /// Every strategy the enum has, as the string stored in the `strategy`
+    /// column.
+    ///
+    /// The `match` is what makes this maintainable: it is exhaustive, so adding
+    /// a `BalancingStrategy` variant fails to compile here until the new wire
+    /// value is written down, and the test below then proves it round-trips.
+    /// Requires no database, so it guards the read path even on a checkout with
+    /// `ROLTER_TEST_DATABASE_URL` unset.
+    fn wire_name(s: BalancingStrategy) -> &'static str {
+        match s {
+            BalancingStrategy::RoundRobin => "round_robin",
+            BalancingStrategy::Random => "random",
+            BalancingStrategy::PowerOfTwo => "power_of_two",
+            BalancingStrategy::ConsistentHash => "consistent_hash",
+            BalancingStrategy::CacheAware => "cache_aware",
+            BalancingStrategy::Weighted => "weighted",
+            BalancingStrategy::Pipeline => "pipeline",
+            BalancingStrategy::Cheapest => "cheapest",
+            BalancingStrategy::Fastest => "fastest",
+            BalancingStrategy::PreciseCacheAware => "precise_cache_aware",
+            BalancingStrategy::LmcacheAware => "lmcache_aware",
+            BalancingStrategy::Adaptive => "adaptive",
+            BalancingStrategy::LoraAware => "lora_aware",
+            BalancingStrategy::PredictedLatency => "predicted_latency",
+        }
+    }
+
+    const ALL_STRATEGIES: &[BalancingStrategy] = &[
+        BalancingStrategy::RoundRobin,
+        BalancingStrategy::Random,
+        BalancingStrategy::PowerOfTwo,
+        BalancingStrategy::ConsistentHash,
+        BalancingStrategy::CacheAware,
+        BalancingStrategy::Weighted,
+        BalancingStrategy::Pipeline,
+        BalancingStrategy::Cheapest,
+        BalancingStrategy::Fastest,
+        BalancingStrategy::PreciseCacheAware,
+        BalancingStrategy::LmcacheAware,
+        BalancingStrategy::Adaptive,
+        BalancingStrategy::LoraAware,
+        BalancingStrategy::PredictedLatency,
+    ];
+
+    // `lora_aware` (#896) and `predicted_latency` (#912) both shipped a check
+    // constraint and a dashboard option while `parse_strategy` still rejected
+    // them. Every route loads through one query, so one route on a new strategy
+    // failed `/internal/snapshot` for the whole fleet.
+    #[test]
+    fn every_strategy_the_column_can_hold_parses_back() {
+        for &s in ALL_STRATEGIES {
+            let stored = wire_name(s);
+            let parsed = parse_strategy(stored)
+                .unwrap_or_else(|e| panic!("stored strategy '{stored}' does not parse: {e}"));
+            assert_eq!(parsed, s, "'{stored}' parsed to the wrong variant");
+        }
+    }
+
+    #[test]
+    fn the_serialized_form_is_the_name_the_column_stores() {
+        for &s in ALL_STRATEGIES {
+            let json = serde_json::to_string(&s).expect("strategy serializes");
+            assert_eq!(json, format!("\"{}\"", wire_name(s)));
+        }
+    }
+
+    #[test]
+    fn an_unknown_strategy_is_still_an_error() {
+        let err = parse_strategy("teleport").expect_err("unknown strategy must not parse");
+        assert!(
+            err.to_string().contains("teleport"),
+            "the message should name the offending value, got: {err}"
+        );
     }
 
     async fn fresh_pool() -> PgPool {
