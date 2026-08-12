@@ -61,3 +61,9 @@ artifacts/engines/
 
 # storybook writes this next to `ui/` whenever a dev-server boot fails
 ui/debug-storybook.log
+
+# dogfooding stack (#924): the KEK and virtual key are generated per machine by
+# `just dogfood`. the *fleet* keys in integration/dogfood/keys.env are checked
+# in on purpose — these two are not, because they are per-run state, not fixtures
+integration/dogfood/.kek
+integration/dogfood/.virtual-key

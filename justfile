@@ -146,3 +146,101 @@ deny:
 
 # run fmt, lint and tests like ci does
 ci: fmt lint test
+
+# ── dogfooding stack (#924) ──────────────────────────────────────────────────
+# a local rolter with a fleet that looks like a real one, for poking at the
+# dashboard as an operator rather than as the person who wrote the screen.
+#
+# deliberately seeds **no** providers or routes: adding them is the thing being
+# tested. `just dogfood-sheet` prints every endpoint, model and credential to
+# copy-paste. see integration/dogfood/README.md.
+
+# bring up the whole fuck-around stack and print the sheet
+dogfood:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="$HOME/.bun/bin:$PATH"
+    d=integration/dogfood
+
+    # the KEK is per-machine and must outlive a restart: regenerating it would
+    # orphan every provider key already stored under the old one
+    [ -f "$d/.kek" ] || openssl rand -hex 32 > "$d/.kek"
+    kek="$(cat "$d/.kek")"
+
+    echo "[dogfood] docker: postgres, redis, clickhouse, signoz"
+    docker compose -f docker/docker-compose.yml -f docker/docker-compose.signoz.yml \
+      up -d postgres redis clickhouse signoz-zookeeper signoz-clickhouse \
+            signoz-schema-migrator signoz-otel-collector signoz signoz-mcp
+
+    echo "[dogfood] waiting for postgres"
+    for _ in $(seq 1 60); do docker exec rolter-postgres-1 pg_isready -U rolter >/dev/null 2>&1 && break; sleep 1; done
+
+    export ROLTER_DATABASE_URL=postgres://rolter:rolter@127.0.0.1:5432/rolter
+    export ROLTER_KEK="$kek"
+    echo "[dogfood] seeding org + admin user (no providers: add those yourself)"
+    cargo run -q -p rolter-control --features postgres --bin rolter-seed -- \
+      --admin-email admin@rolter.local --admin-password dogfood-admin-2026 >/dev/null
+
+    [ -d ui/node_modules ] || ( cd ui && bun install )
+    [ -d ui/dist ] || ( cd ui && bun run build )
+
+    # portless gives stable .localhost names. an https page cannot post traces
+    # to an http collector, so the browser tracing endpoint needs one too
+    if command -v portless >/dev/null 2>&1; then
+      portless alias rolter 4001 >/dev/null 2>&1 || true
+      portless alias api.rolter 4000 >/dev/null 2>&1 || true
+      portless alias signoz 8080 >/dev/null 2>&1 || true
+      portless alias otel 4318 >/dev/null 2>&1 || true
+    fi
+
+    trap 'kill 0' EXIT
+    set -a; . "$d/keys.env"; set +a
+    export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317
+    export ROLTER_REDIS_URL=redis://127.0.0.1:6379 CLICKHOUSE_URL=http://127.0.0.1:8123
+
+    ( bun "$d/fleet.ts" 2>&1 | sed 's/^/[fleet]   /' ) &
+    ( OTEL_SERVICE_NAME=rolter-control ROLTER_UI_DIR=ui/dist \
+        ROLTER_UI_OTEL_ENDPOINT=https://otel.localhost/v1/traces \
+        ROLTER_UI_OTEL_SERVICE_NAME=rolter-ui \
+        cargo run -q -p rolter-control --features postgres --bin rolter-control 2>&1 \
+        | sed 's/^/[control] /' ) &
+    sleep 6
+    ( OTEL_SERVICE_NAME=rolter-gateway ROLTER_SNAPSHOT_URL=http://127.0.0.1:4001/internal/snapshot \
+        cargo run -q -p rolter-gateway -- --config "$d/gateway.toml" 2>&1 \
+        | sed 's/^/[gateway] /' ) &
+    sleep 6
+    just dogfood-key >/dev/null 2>&1 || true
+    ./"$d"/sheet.sh
+    wait
+
+# print every url, login and fleet endpoint for the dogfooding stack
+dogfood-sheet:
+    ./integration/dogfood/sheet.sh
+
+# mint a gateway virtual key and remember it for the sheet
+dogfood-key:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    c=http://127.0.0.1:4001/api/v1
+    org=$(curl -fsS $c/orgs | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["id"])')
+    team=$(curl -fsS $c/orgs/$org/teams | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["id"])')
+    proj=$(curl -fsS $c/teams/$team/projects | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["id"])')
+    curl -fsS -X POST $c/projects/$proj/virtual-keys -H 'content-type: application/json' \
+      -d '{"name":"dogfood"}' \
+      | python3 -c 'import json,sys;print(json.load(sys.stdin)["key"])' \
+      > integration/dogfood/.virtual-key
+    cat integration/dogfood/.virtual-key
+
+# seed the full 15-provider fleet instead of adding it by hand
+dogfood-seed:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -a; . integration/dogfood/keys.env; set +a
+    export ROLTER_DATABASE_URL=postgres://rolter:rolter@127.0.0.1:5432/rolter
+    export ROLTER_KEK="$(cat integration/dogfood/.kek)"
+    cargo run -q -p rolter-control --features postgres --bin rolter-seed -- \
+      --import integration/dogfood/dogfood.toml
+
+# tear the dogfooding stack down (keeps volumes, so the KEK stays valid)
+dogfood-down:
+    docker compose -f docker/docker-compose.yml -f docker/docker-compose.signoz.yml down

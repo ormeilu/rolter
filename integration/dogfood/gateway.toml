@@ -1,0 +1,19 @@
+# Minimal gateway bootstrap for the dogfooding stack (#924).
+#
+# Deliberately declares no providers and no routes: everything is added through
+# the dashboard so the add/edit/delete flows are the thing being tested. A
+# provider declared here would be merged in as a read-only "config model" that
+# the operator cannot edit in the UI, which is the opposite of the point.
+#
+# `dogfood.toml` beside this file is the full fleet, kept as the reference an
+# operator copies from (and for `rolter-seed --import` when a populated
+# dashboard is wanted instead).
+
+[server]
+bind = "0.0.0.0:4000"
+
+# The gateway writes request logs here; the dashboard's analytics screens read
+# the same table through the control plane's CLICKHOUSE_URL. Without this the
+# analytics screens stay empty with nothing to say why (#929).
+[logging]
+clickhouse_url = "http://127.0.0.1:8123"

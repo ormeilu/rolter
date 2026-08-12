@@ -18,6 +18,25 @@ receivers:
         endpoint: 0.0.0.0:4317
       http:
         endpoint: 0.0.0.0:4318
+        # the dashboard's browser tracing (#805) posts from the operator's
+        # browser, so the exporter is a cross-origin caller and the preflight
+        # has to be answered. without this the spans are dropped by the browser
+        # before the collector ever sees them, and the only symptom is an empty
+        # `rolter-ui` service in SigNoz.
+        #
+        # loopback origins only: this overlay is the local stack. a deployment
+        # that serves the dashboard from a real host must name that origin.
+        cors:
+          allowed_origins:
+            - http://localhost
+            - http://localhost:*
+            - http://127.0.0.1:*
+            # .localhost names, for a portless/traefik-style local proxy that
+            # terminates TLS — an https page cannot post to an http endpoint,
+            # so the browser needs an https origin to talk to
+            - https://*.localhost
+          allowed_headers:
+            - "*"
   # host-level metrics, so a local investigation can tell "rolter is slow" from
   # "the laptop is saturated" (#809). the collector runs in a container, so the
   # host's /proc is bind-mounted read-only and root_path points at it; without
