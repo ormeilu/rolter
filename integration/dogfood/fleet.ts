@@ -138,6 +138,21 @@ function serve(inst: Instance) {
         return json({ status: "ok", label: inst.label });
       }
 
+      // auth is checked before /v1/models, the way the real APIs do. that
+      // matters for "Test connection": the probe is a model-list call, so an
+      // endpoint that served its catalogue unauthenticated would report a
+      // wrong key as a healthy provider
+      if (inst.apiKey) {
+        const auth = req.headers.get("authorization") ?? "";
+        if (auth !== `Bearer ${inst.apiKey}`) {
+          return oaiError(
+            "Incorrect API key provided.",
+            "invalid_request_error",
+            401,
+          );
+        }
+      }
+
       if (url.pathname === "/v1/models") {
         return json({
           object: "list",
@@ -148,20 +163,6 @@ function serve(inst: Instance) {
             owned_by: inst.label,
           })),
         });
-      }
-
-      // auth is checked after /v1/models on purpose: rolter probes the catalog
-      // to discover a provider, and an operator who has not entered the key yet
-      // should still see what the endpoint serves rather than a bare 401
-      if (inst.apiKey) {
-        const auth = req.headers.get("authorization") ?? "";
-        if (auth !== `Bearer ${inst.apiKey}`) {
-          return oaiError(
-            "Incorrect API key provided.",
-            "invalid_request_error",
-            401,
-          );
-        }
       }
 
       if (inst.errorRate && Math.random() < inst.errorRate) {
