@@ -207,6 +207,36 @@ jobs:
           CI: "true"
         run: bash scripts/check-migrations-immutable.sh origin/master
 
+  # ── helm chart: lint and render ─────────────────────────────────────────────
+  # the chart carries the same pre-boot validation the CLI does (#854), and a
+  # chart is the one deployment path with no compiler behind it: a template that
+  # renders to malformed YAML fails at `helm install`, on someone's cluster,
+  # rather than here. render every branch the preflight initContainer has.
+  helm-chart:
+    name: helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.16.4
+      - name: lint
+        run: helm lint charts/rolter
+      - name: render defaults
+        run: helm template ci charts/rolter > /dev/null
+      - name: render with preflight disabled
+        run: helm template ci charts/rolter --set preflight.enabled=false > /dev/null
+      - name: render with every preflight option on
+        run: |
+          helm template ci charts/rolter \
+            --set preflight.connect=true \
+            --set env.databaseUrl=postgres://u:p@db:5432/rolter \
+            --set 'secretEnv[0].name=ROLTER_KEK' \
+            --set 'secretEnv[0].valueFrom.secretKeyRef.name=rolter' \
+            --set 'secretEnv[0].valueFrom.secretKeyRef.key=kek' > /dev/null
+
   # ── workflow lint: validate the CI yaml itself ──────────────────────────────
   # agents edit workflows too; catch syntax and shell smells early.
   actionlint:

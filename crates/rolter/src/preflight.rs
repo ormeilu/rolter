@@ -62,14 +62,19 @@ pub struct CheckArgs {
     /// treat warnings as failures too
     #[arg(long)]
     pub strict: bool,
+
+    /// also probe that the configured datastores accept a TCP connection.
+    /// off by default so `rolter check` stays offline and side-effect free
+    #[arg(long)]
+    pub connect: bool,
 }
 
 /// One finding. `fatal` decides the exit code; a warning is printed and the
 /// run still succeeds unless `--strict`.
 #[derive(Debug, PartialEq, Eq)]
-struct Finding {
+pub(crate) struct Finding {
     fatal: bool,
-    title: String,
+    pub(crate) title: String,
     detail: String,
 }
 
@@ -94,7 +99,7 @@ impl Finding {
 /// How the checks read the environment. Taking this as a trait keeps every
 /// rule unit-testable without mutating real process env, which is global state
 /// and races across parallel tests.
-trait Env {
+pub(crate) trait Env {
     fn get(&self, key: &str) -> Option<String>;
 }
 
@@ -232,13 +237,113 @@ fn redact(url: &str) -> String {
     }
 }
 
-fn run_checks(env: &dyn Env) -> Vec<Finding> {
+/// The virtual-key pepper. Without it a leaked digest is directly usable, and
+/// unlike the KEK nothing warns about its absence at startup.
+fn check_key_pepper(env: &dyn Env, out: &mut Vec<Finding>) {
+    if env.get("ROLTER_KEY_PEPPER").is_none() {
+        out.push(Finding::warn(
+            "ROLTER_KEY_PEPPER is unset",
+            "virtual-key digests are unpeppered, so a leaked digest is usable as-is against \
+             this deployment. Set the same value on every replica — changing it after keys \
+             have been issued invalidates all of them. `rolter init` generates one.",
+        ));
+    }
+}
+
+/// CORS. The dashboard is a same-origin SPA served by the control plane, so a
+/// wildcard origin buys nothing and hands any page on the internet the
+/// authenticated management API through a logged-in operator's browser.
+fn check_cors(env: &dyn Env, out: &mut Vec<Finding>) {
+    if env
+        .get("ROLTER_CORS_ALLOW_ORIGINS")
+        .is_some_and(|v| v.split(',').any(|o| o.trim() == "*"))
+    {
+        out.push(Finding::error(
+            "CORS allows every origin",
+            "ROLTER_CORS_ALLOW_ORIGINS contains `*`. The dashboard is served same-origin by \
+             the control plane and needs no cross-origin grant; a wildcard lets any page a \
+             logged-in operator visits drive the management API as them. List the exact \
+             origins that need it, or remove the variable.",
+        ));
+    }
+}
+
+/// Reachability of the datastores, behind `--connect` because a check that
+/// opens sockets cannot be the default for an offline `rolter check`.
+///
+/// A TCP connect, not a protocol handshake: it needs no driver, works without
+/// the `postgres` feature, and answers the question that actually goes wrong in
+/// a production rollout — the name does not resolve, or nothing is listening.
+/// A database that accepts TCP but rejects the credentials is a different
+/// failure, and one the process reports loudly on its own.
+async fn check_reachability(env: &dyn Env, out: &mut Vec<Finding>) {
+    for (var, fatal) in [("ROLTER_DATABASE_URL", true), ("ROLTER_REDIS_URL", false)] {
+        let Some(url) = env.get(var) else { continue };
+        let Some(target) = host_port(&url) else {
+            continue;
+        };
+        let reachable = tokio::time::timeout(
+            std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS),
+            tokio::net::TcpStream::connect(&target),
+        )
+        .await;
+        let detail = match reachable {
+            Ok(Ok(_)) => continue,
+            Ok(Err(error)) => format!("connecting to {target} failed: {error}"),
+            Err(_) => format!("connecting to {target} timed out after {CONNECT_TIMEOUT_SECS}s"),
+        };
+        let title = format!("{var} is not reachable");
+        out.push(if fatal {
+            Finding::error(title, detail)
+        } else {
+            Finding::warn(title, detail)
+        });
+    }
+}
+
+/// Seconds allowed for a `--connect` probe. Short: this runs before a process
+/// starts, and a check that hangs is worse than one that reports unreachable.
+const CONNECT_TIMEOUT_SECS: u64 = 5;
+
+/// `host:port` from a URL, with the scheme's default port when none is given.
+/// Deliberately string-level — pulling a URL parser in for this would be the
+/// only reason the crate needed one.
+fn host_port(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?']).next()?;
+    // strip any credentials
+    let authority = authority.rsplit('@').next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    // ipv6 literals carry their own colons, so only treat a colon after the
+    // closing bracket (or in a bracket-free authority) as the port separator
+    let has_port = match authority.rfind(']') {
+        Some(bracket) => authority[bracket..].contains(':'),
+        None => authority.contains(':'),
+    };
+    if has_port {
+        return Some(authority.to_string());
+    }
+    let port = match scheme {
+        "postgres" | "postgresql" => 5432,
+        "redis" | "rediss" => 6379,
+        "http" => 80,
+        "https" => 443,
+        _ => return None,
+    };
+    Some(format!("{authority}:{port}"))
+}
+
+pub(crate) fn run_checks(env: &dyn Env) -> Vec<Finding> {
     let mut out = Vec::new();
     check_kek(env, &mut out);
     check_admin_token(env, &mut out);
     check_datastores(env, &mut out);
     check_example_values(env, &mut out);
     check_exposure(env, &mut out);
+    check_key_pepper(env, &mut out);
+    check_cors(env, &mut out);
     out
 }
 
@@ -265,6 +370,10 @@ fn report(findings: &[Finding], strict: bool) -> (String, bool) {
 
 pub async fn run(args: CheckArgs) -> anyhow::Result<()> {
     let mut findings = run_checks(&ProcessEnv);
+
+    if args.connect {
+        check_reachability(&ProcessEnv, &mut findings).await;
+    }
 
     // the config file is optional: a fully DB-backed deployment has none
     if let Some(path) = args.config.as_deref() {
@@ -306,6 +415,7 @@ mod tests {
                 .with("ROLTER_DATABASE_URL", "postgres://user:pw@db:5432/rolter")
                 .with("ROLTER_REDIS_URL", "redis://redis:6379")
                 .with("ROLTER_CONTROL_HOST", "127.0.0.1")
+                .with("ROLTER_KEY_PEPPER", "a-deployment-wide-pepper")
         }
     }
 
@@ -501,5 +611,105 @@ mod tests {
             "postgres://db:5432/rolter"
         );
         assert_eq!(redact("not-a-url"), "not-a-url");
+    }
+    #[test]
+    fn a_missing_key_pepper_warns() {
+        let mut env = FakeEnv::healthy();
+        env.0.remove("ROLTER_KEY_PEPPER");
+        let findings = run_checks(&env);
+        assert_eq!(titles(&findings), ["ROLTER_KEY_PEPPER is unset"]);
+        assert!(!findings[0].fatal, "an unpeppered deployment still works");
+    }
+
+    #[test]
+    fn a_wildcard_cors_origin_is_fatal() {
+        let findings = run_checks(&FakeEnv::healthy().with("ROLTER_CORS_ALLOW_ORIGINS", "*"));
+        assert_eq!(titles(&findings), ["CORS allows every origin"]);
+        assert!(findings[0].fatal);
+        // a wildcard hidden in a list is the same hole
+        let findings = run_checks(
+            &FakeEnv::healthy().with("ROLTER_CORS_ALLOW_ORIGINS", "https://ops.example.com, *"),
+        );
+        assert_eq!(titles(&findings), ["CORS allows every origin"]);
+    }
+
+    #[test]
+    fn named_cors_origins_are_accepted() {
+        let findings = run_checks(
+            &FakeEnv::healthy().with("ROLTER_CORS_ALLOW_ORIGINS", "https://ops.example.com"),
+        );
+        assert!(findings.is_empty(), "{:?}", titles(&findings));
+    }
+
+    #[test]
+    fn host_port_fills_in_the_scheme_default_and_strips_credentials() {
+        assert_eq!(
+            host_port("postgres://user:pw@db.internal/rolter").as_deref(),
+            Some("db.internal:5432")
+        );
+        assert_eq!(
+            host_port("postgres://user:pw@db.internal:6000/rolter").as_deref(),
+            Some("db.internal:6000")
+        );
+        assert_eq!(host_port("redis://cache").as_deref(), Some("cache:6379"));
+        // an ipv6 literal's own colons are not a port
+        assert_eq!(
+            host_port("redis://[2001:db8::1]").as_deref(),
+            Some("[2001:db8::1]:6379")
+        );
+        assert_eq!(
+            host_port("redis://[2001:db8::1]:6380").as_deref(),
+            Some("[2001:db8::1]:6380")
+        );
+        // an unknown scheme has no default port to guess at
+        assert_eq!(host_port("mysql://db"), None);
+        assert_eq!(host_port("not-a-url"), None);
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_database_is_fatal_and_an_unreachable_redis_is_not() {
+        // a loopback port that was just released: the connect is refused
+        // immediately and deterministically. an off-host address would be at the
+        // mercy of whatever the test environment does to outbound traffic
+        let closed = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            drop(listener);
+            addr
+        };
+        let env = FakeEnv::healthy()
+            .with(
+                "ROLTER_DATABASE_URL",
+                &format!("postgres://user:pw@{closed}/rolter"),
+            )
+            .with("ROLTER_REDIS_URL", &format!("redis://{closed}"));
+        let mut findings = Vec::new();
+        check_reachability(&env, &mut findings).await;
+        assert_eq!(
+            titles(&findings),
+            [
+                "ROLTER_DATABASE_URL is not reachable",
+                "ROLTER_REDIS_URL is not reachable"
+            ]
+        );
+        assert!(findings[0].fatal, "no database is not a degraded start");
+        assert!(!findings[1].fatal, "redis has a documented fallback");
+    }
+
+    #[tokio::test]
+    async fn a_reachable_datastore_produces_no_finding() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let env = FakeEnv::healthy().with(
+            "ROLTER_DATABASE_URL",
+            &format!("postgres://user:pw@{addr}/rolter"),
+        );
+        let mut findings = Vec::new();
+        check_reachability(&env, &mut findings).await;
+        assert!(
+            findings.iter().all(|f| !f.title.contains("DATABASE")),
+            "{:?}",
+            titles(&findings)
+        );
     }
 }

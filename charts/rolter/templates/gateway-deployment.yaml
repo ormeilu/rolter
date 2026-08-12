@@ -1,3 +1,4 @@
+{{- $gatewayEnv := include "rolter.gatewayEnv" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,6 +31,7 @@ spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{ toYaml . | nindent 8 }}
       {{- end }}
+      {{- include "rolter.preflight" (dict "root" . "env" $gatewayEnv) | nindent 6 }}
       containers:
         - name: gateway
           image: {{ include "rolter.image" . | quote }}
@@ -41,14 +43,7 @@ spec:
             - name: http
               containerPort: 4000
           env:
-            - name: RUST_LOG
-              value: {{ .Values.env.rustLog | quote }}
-            {{- if .Values.env.redisUrl }}
-            - name: REDIS_URL
-              value: {{ .Values.env.redisUrl | quote }}
-            {{- end }}
-            {{- with .Values.secretEnv }}{{ toYaml . | nindent 12 }}{{- end }}
-            {{- with .Values.gateway.extraEnv }}{{ toYaml . | nindent 12 }}{{- end }}
+          env: {{- $gatewayEnv | nindent 12 }}
           volumeMounts:
             - name: config
               mountPath: /etc/rolter

@@ -1,4 +1,4 @@
-# Pre-boot validation (`rolter check`)
+# Secure configuration (`rolter init` and `rolter check`)
 
 rolter has two deployment paths, and they are deliberately not converging.
 
@@ -12,10 +12,18 @@ validates a production deployment *before* the process starts, so a
 misconfiguration fails loudly instead of starting degraded.
 
 ```bash
+rolter init                       # generate a production config and its secrets
 rolter check                      # validate the current environment
 rolter check --config rolter.toml # also parse and validate the config file
 rolter check --strict             # treat warnings as failures too
+rolter check --connect            # also probe that the datastores accept a connection
 ```
+
+The two are a pair. `check` tells an operator what is wrong; `init` tells them
+what to write. A test in the tree renders a fresh production environment and
+runs the full check suite over it, so what the generator emits is exactly what
+the gate accepts — if they ever drift, an operator would follow the documented
+path and still be told their deployment is broken.
 
 It exits non-zero when anything fatal is found, which makes it usable as a
 container entrypoint step, a Kubernetes init container, or a Helm pre-install
@@ -54,7 +62,18 @@ that looks healthy while quietly not doing what it was configured to do.
 | No example values survive | error | The example database credentials and the e2e throwaway KEK are published in the repository |
 | `ROLTER_REDIS_URL` present | warning | Without it rate limits and budgets are enforced per replica, not per deployment |
 | Control plane not bound to `0.0.0.0` | warning | The management API should not be reachable on every interface |
+| `ROLTER_KEY_PEPPER` present | warning | Without it a leaked virtual-key digest is usable as-is against this deployment |
+| CORS does not allow `*` | error | The dashboard is served same-origin; a wildcard lets any page a logged-in operator visits drive the management API as them |
+| Datastores accept a connection (with `--connect`) | error / warning | A URL that parses but resolves to nothing fails at first use rather than at rollout |
 | Config file parses (with `--config`) | error | A config that fails to load leaves the gateway on whatever it last had |
+
+`--connect` is opt-in because a check that opens sockets cannot be the default
+for a command meant to run offline and without side effects. It is a TCP
+connect, not a protocol handshake: it needs no database driver and answers the
+question that actually goes wrong during a rollout — the name does not resolve,
+or nothing is listening. A datastore that accepts TCP but rejects the
+credentials is a different failure, and one the process reports loudly on its
+own.
 
 Redis and the bind address are warnings rather than errors because a
 single-replica deployment behind an ingress is legitimately fine without either.
@@ -62,6 +81,49 @@ Use `--strict` in an environment where they are not.
 
 Anything resembling credentials in a URL is redacted before printing, since this
 output routinely lands in CI logs.
+
+
+## Generating the configuration (`rolter init`)
+
+`rolter check` failing on a missing `ROLTER_KEK` and suggesting `openssl rand
+-hex 32` still leaves an operator to invent the rest of the file around it.
+`rolter init` writes it.
+
+```bash
+rolter init                                  # rolter.toml + .env, production profile
+rolter init --profile local                  # the loose defaults, for development
+rolter init --print                          # stdout only, for piping into a secret manager
+rolter init --env-only --database-url ...    # just the environment
+```
+
+It generates four distinct secrets — the KEK, the admin token, the internal
+token and the virtual-key pepper — each 256 bits from the system CSPRNG. They
+are distinct by construction and a test asserts it: reusing one value in two
+roles would mean a leaked admin token also decrypts every stored credential.
+
+**Nothing here is interactive.** A generator that prompts cannot run in the
+Dockerfile, the Helm hook or the CI job where a production deployment is
+actually assembled, and an operator who has to answer six questions will
+hand-write a `.env` instead. Flags carry the choices and the defaults are the
+secure ones.
+
+**It will not overwrite without `--force`**, and the refusal says why:
+regenerating `ROLTER_KEK` strands every credential encrypted under the old one.
+That failure is total, delayed, and looks like data corruption.
+
+On unix the generated files are created `0600` at creation time rather than
+chmod'ed afterwards — a `.env` holding the KEK is a credential, and fixing the
+mode after the fact leaves a window.
+
+### What the profiles differ on
+
+| | `--profile production` (default) | `--profile local` |
+|---|---|---|
+| `ROLTER_CONTROL_HOST` | `127.0.0.1` — the management plane is an admin surface | `0.0.0.0` |
+| `[server] require_auth` | `true` — revoking the last key closes the data plane | unset, defers to the deployment shape |
+| Passes `rolter check` | yes, cleanly | no, and deliberately so |
+
+The data plane binds `0.0.0.0` under both: it is the public surface.
 
 ## In a container
 
@@ -72,14 +134,44 @@ misconfigured:
 CMD ["sh", "-c", "rolter check --strict && rolter control"]
 ```
 
-In Kubernetes, prefer an init container so the failure is visible as a distinct
-pod status rather than a crash-looping main container:
+### Docker Compose
+
+The bundled `docker/docker-compose.yml` is the *local* stack and is
+deliberately loose — example postgres credentials, no KEK, management plane wide
+open. Gating local bring-up on production rules would break the one path that is
+meant to have no friction, so the check lives behind a profile and never runs on
+`docker compose up`:
+
+```bash
+docker compose -f docker/docker-compose.yml --profile preflight \
+               run --rm --env-file /path/to/production.env preflight
+```
+
+### Kubernetes and Helm
+
+The chart ships the init container already, enabled by default:
+
+```yaml
+preflight:
+  enabled: true
+  strict: true   # a warning means the deployment works but is not what you meant
+  connect: false # opt in to also probe the datastores
+```
+
+It renders with the **exact** env block the workload container gets — both come
+from one shared template, because three deployment paths that each re-implement
+"is this configured safely" will drift, and the one that drifts is the one
+nobody notices until a credential was stored unencrypted. A `helm chart` CI job
+lints the chart and renders every branch of that template.
+
+If you are writing your own manifests, prefer an init container so the failure
+is visible as a distinct pod status rather than a crash-looping main container:
 
 ```yaml
 initContainers:
   - name: preflight
     image: ghcr.io/rolter-ai/rolter:latest
-    command: ["rolter", "check", "--strict"]
+    command: ["/usr/local/bin/rolter", "check", "--strict"]
     envFrom:
       - secretRef:
           name: rolter-secrets

@@ -26,7 +26,7 @@ use clap::Args;
 /// verifies each crate in isolation, so paths outside the crate root aren't
 /// available; a test (`bundled_example_config_matches_workspace_root`) guards
 /// against the two copies drifting apart.
-const EXAMPLE_CONFIG: &str =
+pub(crate) const EXAMPLE_CONFIG: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/rolter.example.toml"));
 
 #[derive(Args, Debug)]
