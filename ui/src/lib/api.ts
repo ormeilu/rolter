@@ -152,6 +152,14 @@ export interface AnalyticsSummary {
   prompt_tokens: number | string;
   completion_tokens: number | string;
   cost_usd: number | string;
+  /**
+   * Requests in this window that ran against a model with no price row, so
+   * `cost_usd` excludes them entirely (#969). A non-zero value means the spend
+   * figure is a floor, not a total.
+   */
+  unpriced_requests: number | string;
+  /** how many distinct models those requests hit */
+  unpriced_models: number | string;
   errors: number | string;
   avg_latency_ms: number | string;
 }
@@ -168,6 +176,8 @@ export interface AnalyticsByModelRow {
   requests: number | string;
   tokens: number | string;
   cost_usd: number | string;
+  /** requests recorded with no price for this model; see AnalyticsSummary */
+  unpriced_requests: number | string;
   errors: number | string;
   p50_latency_ms: number | string;
   p95_latency_ms: number | string;
