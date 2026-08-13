@@ -23,24 +23,6 @@ cargo install --path crates/rolter
 
 The wheel bundles the compiled `rolter` launcher so Python users can install the CLI with `uv`. `pyproject.toml` uses the maturin backend (`bindings = "bin"`, `manifest-path = crates/rolter/Cargo.toml`).
 
-Each release publishes five wheels plus a source distribution:
-
-| artifact | built on |
-|---|---|
-| `manylinux…x86_64` | `ubuntu-latest`, `target: x86_64` |
-| `manylinux…aarch64` | `ubuntu-latest`, `target: aarch64` |
-| `macosx…arm64` | `macos-latest` (Apple Silicon, native) |
-| `macosx…x86_64` | `macos-latest`, cross-compiled `target: x86_64-apple-darwin` |
-| `win_amd64` | `windows-latest` |
-| `.tar.gz` (sdist) | `ubuntu-latest`, `command: sdist` |
-
-The macOS x86_64 wheel is cross-compiled rather than built on an Intel runner —
-the macOS SDK carries both architectures, so it needs no extra runner. The sdist
-is the fallback for anything with no matching wheel: without one, `pip install
-rolter` fails outright on an unlisted platform instead of building from source.
-`verify-parity` asserts all six are present for the version, so a silently
-missing platform fails the release rather than reaching a user.
-
 ```bash
 uv tool install maturin       # one-time
 uvx maturin build --release   # build a wheel into target/wheels/
@@ -114,9 +96,7 @@ red instead of quietly leaving a channel behind.
 
 | Gate | Effect |
 |---|---|
-| `verify` (reusable `quality.yml`) | the tagged commit passes the same fmt/clippy/test/deny pipeline as CI |
-| `quality.yml`'s `ref` input | pins that gate to the commit being packaged |
-| `verify-external-checks` | CodeQL reported success for the commit; fail-closed |
+| `verify-external-checks` | `ci-ok` **and** CodeQL recorded success for the tagged commit; fail-closed |
 | `RELEASE_REQUIRED_CHECKS` repo variable | exact check-run names the gate above requires (comma-separated) |
 | `PYPI_PUBLISH_ENABLED` repo variable | must be `"true"` or the PyPI publish is skipped |
 | `DOCKER_PUBLISH_ENABLED` repo variable | must be `"true"` or the image publish is skipped |
@@ -131,13 +111,30 @@ holds.
 
 [PyO3/maturin#2334]: https://github.com/PyO3/maturin/issues/2334
 
-That `ref` input is load-bearing. A local reusable workflow (`uses: ./…`) always
-runs the *definition* from the caller's ref, and its checkouts default to the
-caller's ref too. On a `workflow_dispatch` the caller ref is `master` while
-`build-wheels` checks out `inputs.tag` — so without an explicit `ref` the gate
-verifies master and ships the tag. Harmless when they coincide, wrong for a
-backfill of an older tag ([#988]). Every caller of `quality.yml` that publishes
-passes the exact commit-ish it packages; `ci.yml` omits it and gets the default.
+### The gate is asserted, not re-run
+
+`release.yml` does **not** run `quality.yml` itself. It asserts that the tagged
+commit already passed it, by requiring `ci-ok` among the check-runs recorded for
+that SHA. That is deliberate, and it is what makes the gate correct:
+
+A local reusable workflow (`uses: ./…`) always checks out the *caller's* ref. On
+a `workflow_dispatch` the caller ref is `master`, while `build-wheels` checks out
+`inputs.tag` — so a re-run verified master and shipped the tag ([#988]). It
+passed, and told you nothing about what was being packaged. Threading the tag
+into `quality.yml` fixes that but makes the shared workflow check out an
+arbitrary dispatch-supplied ref in a default-branch context, whose caches
+trusted runs later restore — cache poisoning, and CodeQL flags it.
+
+Asserting settles both. Every commit on master carries a `ci-ok` check-run from
+`ci.yml`, and release-plz re-runs the gate on the release commit before tagging,
+so a tagged commit is verified by construction. The assertion binds to the
+*tagged* SHA — which re-running never did — costs no duplicate 20-minute run,
+and checks out nothing.
+
+Because release-plz dispatches the moment it finishes tagging, `ci-ok` is often
+still running for that commit. A pending check is therefore expected, not a
+failure: the job waits up to 45 minutes for a verdict, fails immediately on a
+real non-success, and fails closed if a required check never appears.
 
 [#988]: https://github.com/rolter-ai/rolter/issues/988
 
