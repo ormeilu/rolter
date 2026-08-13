@@ -97,10 +97,20 @@ red instead of quietly leaving a channel behind.
 | Gate | Effect |
 |---|---|
 | `verify` (reusable `quality.yml`) | the tagged commit passes the same fmt/clippy/test/deny pipeline as CI |
-| `verify-external-checks` | CodeQL + secret scanning reported success for the commit; fail-closed |
+| `verify-external-checks` | CodeQL reported success for the commit; fail-closed |
+| `RELEASE_REQUIRED_CHECKS` repo variable | exact check-run names the gate above requires (comma-separated) |
 | `PYPI_PUBLISH_ENABLED` repo variable | must be `"true"` or the PyPI publish is skipped |
 | `DOCKER_PUBLISH_ENABLED` repo variable | must be `"true"` or the image publish is skipped |
 | `pypi` environment | PyPI trusted publishing via OIDC; no long-lived token is stored |
+
+`RELEASE_REQUIRED_CHECKS` holds exact check-run *names*, so it rots whenever a
+scanner is renamed or reconfigured — and since the gate is fail-closed, a stale
+name silently blocks every release instead of failing at the source. This bit
+rolter once already: the variable still named the CodeQL *default setup* jobs
+(`Analyze (rust)`, …) after the repo moved to advanced setup (`codeql (rust)`,
+…), so no release could publish even with a working tag dispatch. If the gate
+reports "required check … not found", compare it against the check-run names
+the job log prints and update the variable.
 
 ### Releasing a tag by hand
 

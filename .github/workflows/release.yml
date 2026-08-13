@@ -34,8 +34,17 @@ jobs:
   # asserts the external app-provided checks (CodeQL, secret scanning) reported
   # success for this commit. fail-closed: pending or missing checks block the
   # publish. required check names are configurable via the
-  # RELEASE_REQUIRED_CHECKS repo variable (comma-separated); defaults cover
-  # CodeQL + GitGuardian.
+  # RELEASE_REQUIRED_CHECKS repo variable (comma-separated).
+  #
+  # these are exact check-run *names*, so they rot when a scanner is renamed or
+  # reconfigured — and because the job is fail-closed, a stale name blocks every
+  # release rather than failing loudly at the source. that is the second half of
+  # #903: the default below used to read `CodeQL,GitGuardian Security Checks`
+  # and the repo variable `Analyze (rust),…`, both of which are default-setup
+  # names that stopped existing when CodeQL moved to advanced setup. no release
+  # could have published even once the tag dispatch was fixed. the default now
+  # tracks the advanced-setup names, and a missing check prints the names that
+  # *do* exist so the fix is obvious from the log.
   verify-external-checks:
     name: assert external checks green
     runs-on: ubuntu-latest
@@ -48,7 +57,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           REF: ${{ inputs.tag || github.sha }}
-          REQUIRED: ${{ vars.RELEASE_REQUIRED_CHECKS || 'CodeQL,GitGuardian Security Checks' }}
+          REQUIRED: ${{ vars.RELEASE_REQUIRED_CHECKS || 'codeql (rust),codeql (actions),codeql (python),codeql (javascript-typescript)' }}
         run: |
           set -euo pipefail
           # resolve the ref (tag on dispatch, sha on push) to a commit sha
@@ -63,7 +72,8 @@ jobs:
             [ -z "$name" ] && continue
             line="$(echo "$runs" | grep -F -m1 "$(printf '%s\t' "$name")" || true)"
             if [ -z "$line" ]; then
-              echo "::error::required check '$name' not found for $SHA (fail-closed)"; fail=1; continue
+              echo "::error::required check '$name' not found for $SHA (fail-closed). if the scanner was renamed or reconfigured, update the RELEASE_REQUIRED_CHECKS repo variable to match the check-run names listed above"
+              fail=1; continue
             fi
             status="$(echo "$line" | cut -f2)"; conclusion="$(echo "$line" | cut -f3)"
             if [ "$status" != "completed" ] || [ "$conclusion" != "success" ]; then
