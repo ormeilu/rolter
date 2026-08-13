@@ -305,9 +305,13 @@ disabled = false # revoke without deleting
 # charging face value bills the wrong number and charging zero bills nothing.
 # static rates are also the only air-gapped-safe source, which is why they are
 # the default and not a live fx feed.
+#
+# this table is also what the dashboard's currency chooser offers: the base
+# followed by every code below. adding a row here is the whole of "make RUB
+# selectable" — there is no list to edit in the frontend.
 # [currency]
 # base = "USD"
-# rates = { EUR = 1.09, GBP = 1.27 }
+# rates = { EUR = 1.09, GBP = 1.27, RUB = 0.011 }
 
 # --- spend caps (enforced against redis-tracked cost) ---
 # a request is blocked with 402 when any matching budget's spend has reached its

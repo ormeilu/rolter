@@ -6,6 +6,8 @@ import {
   AnalyticsUnavailableError,
   ApiError,
   isOpenModeNoSession,
+  isConvertible,
+  type CurrencySettings,
 } from "./api";
 
 // We need to mock global fetch and localStorage
@@ -236,5 +238,38 @@ describe("api client", () => {
         AnalyticsUnavailableError,
       );
     });
+  });
+});
+
+// #965: the currency chooser used to be a literal seven-code list, so a
+// configured RUB was unselectable and an offered JPY was rejected on save.
+describe("isConvertible", () => {
+  const settings = (codes: string[]): CurrencySettings => ({
+    base: codes[0],
+    codes,
+    rates: Object.fromEntries(codes.map((c) => [c, 1])),
+  });
+
+  it("accepts any code the deployment configured", () => {
+    expect(isConvertible(settings(["USD", "RUB"]), "RUB")).toBe(true);
+  });
+
+  it("rejects a code with no rate, however familiar", () => {
+    // GBP shipped in the old hardcoded list but has no rate here
+    expect(isConvertible(settings(["USD", "RUB"]), "GBP")).toBe(false);
+  });
+
+  it("is not a fixed set — it follows the configured table", () => {
+    expect(isConvertible(settings(["EUR"]), "USD")).toBe(false);
+    expect(isConvertible(settings(["EUR", "USD"]), "USD")).toBe(true);
+  });
+
+  it("compares codes case- and whitespace-insensitively", () => {
+    expect(isConvertible(settings(["USD", "RUB"]), " rub ")).toBe(true);
+  });
+
+  it("stays quiet until the settings have loaded", () => {
+    // warning on every price before the table arrives would be a false alarm
+    expect(isConvertible(undefined, "RUB")).toBe(true);
   });
 });

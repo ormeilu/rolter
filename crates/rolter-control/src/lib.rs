@@ -532,6 +532,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
         )
         .route("/api/v1/roles", get(list_roles))
         .route("/api/v1/config", get(get_config))
+        .route("/api/v1/currency", get(get_currency))
         .route("/api/v1/config/problems", get(get_config_problems))
         .merge(analytics::router())
         .merge(health::router())
@@ -1053,6 +1054,46 @@ async fn get_config(State(state): State<ControlState>) -> Json<GatewayConfig> {
     Json(config)
 }
 
+/// The deployment's settlement currency and the codes it can price in.
+///
+/// Served separately from `/api/v1/config` on purpose. That endpoint answers
+/// from the *store*, and the postgres store has no currency table — it holds a
+/// currency per model price and nothing else — so a database-backed deployment
+/// reads back the `CurrencyConfig` default (USD, no rates) no matter what the
+/// bootstrap config says. This answers from `ControlState.currency`, the same
+/// value `require_known_currency` validates writes against.
+#[derive(Debug, serde::Serialize, PartialEq)]
+struct CurrencySettings {
+    /// currency budgets and accumulated spend are denominated in
+    base: String,
+    /// every code a price may be stored in, base first (see
+    /// [`rolter_core::CurrencyConfig::codes`])
+    codes: Vec<String>,
+    /// units of `base` per unit of the keyed currency, for the codes that have
+    /// one; the base is implicitly 1.0 and is not listed
+    rates: std::collections::HashMap<String, f64>,
+}
+
+/// The currency table the dashboard drives its chooser from.
+///
+/// Unauthenticated alongside `/api/v1/config` and `/api/v1/roles`: an operator's
+/// rate table is deployment configuration the pricing screens already display,
+/// not a credential.
+async fn get_currency(State(state): State<ControlState>) -> Json<CurrencySettings> {
+    let codes = state.currency.codes();
+    // report rates under the same normalized spelling as `codes`, so the
+    // dashboard can look one up by the code it was handed
+    let rates = codes
+        .iter()
+        .filter_map(|code| state.currency.rate(code).map(|rate| (code.clone(), rate)))
+        .collect();
+    Json(CurrencySettings {
+        base: state.currency.base_code(),
+        codes,
+        rates,
+    })
+}
+
 /// What the snapshot is *not* serving, and why (#926).
 ///
 /// Since a malformed entry is now dropped from `/internal/snapshot` rather than
@@ -1486,6 +1527,76 @@ mod tests {
             #[cfg(feature = "postgres")]
             pool: None,
         }
+    }
+
+    fn state_with_currency(currency: rolter_core::CurrencyConfig) -> ControlState {
+        ControlState {
+            currency: Arc::new(currency),
+            ..state_with_token(None)
+        }
+    }
+
+    async fn currency_settings(state: ControlState) -> serde_json::Value {
+        let addr = serve(build_app_with(state, false)).await;
+        reqwest::get(format!("http://{addr}/api/v1/currency"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_currency_endpoint_defaults_to_the_base_alone() {
+        let body = currency_settings(state_with_token(None)).await;
+        assert_eq!(body["base"], "USD");
+        assert_eq!(body["codes"], serde_json::json!(["USD"]));
+        // the base needs no row, but it must still be convertible
+        assert_eq!(body["rates"]["USD"], 1.0);
+    }
+
+    /// #965: the dashboard hardcoded seven ISO-4217 codes, so a configured RUB
+    /// was unselectable. The list has to come from the rate table.
+    #[tokio::test]
+    async fn a_configured_currency_is_offered_without_a_code_change() {
+        let body = currency_settings(state_with_currency(rolter_core::CurrencyConfig {
+            base: "USD".to_string(),
+            rates: std::collections::HashMap::from([("RUB".to_string(), 0.011)]),
+        }))
+        .await;
+        assert_eq!(body["codes"], serde_json::json!(["USD", "RUB"]));
+        assert_eq!(body["rates"]["RUB"], 0.011);
+    }
+
+    /// The chooser must not offer what `require_known_currency` would reject:
+    /// GBP is in the hardcoded list the dashboard used to ship, but this
+    /// deployment has no rate for it.
+    #[tokio::test]
+    async fn a_currency_without_a_rate_is_not_offered() {
+        let body = currency_settings(state_with_currency(rolter_core::CurrencyConfig {
+            base: "EUR".to_string(),
+            rates: std::collections::HashMap::from([("RUB".to_string(), 0.0097)]),
+        }))
+        .await;
+        assert_eq!(body["codes"], serde_json::json!(["EUR", "RUB"]));
+        assert!(body["rates"].get("GBP").is_none(), "{body}");
+    }
+
+    /// A non-USD base is the case the hardcoded list got most wrong: it always
+    /// led with USD, whatever the deployment settled in.
+    #[tokio::test]
+    async fn the_base_leads_even_when_it_is_not_usd() {
+        let body = currency_settings(state_with_currency(rolter_core::CurrencyConfig {
+            base: "rub".to_string(),
+            rates: std::collections::HashMap::from([
+                ("USD".to_string(), 91.0),
+                ("EUR".to_string(), 99.0),
+            ]),
+        }))
+        .await;
+        // normalized, base first, remainder alphabetical
+        assert_eq!(body["codes"], serde_json::json!(["RUB", "EUR", "USD"]));
+        assert_eq!(body["base"], "RUB");
     }
 
     /// the default deployment shape: /internal/* on the same listener as the

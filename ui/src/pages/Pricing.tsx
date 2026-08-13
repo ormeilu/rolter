@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
@@ -17,7 +18,9 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   deleteModelPrice,
+  fetchCurrencySettings,
   fetchModelPrices,
+  isConvertible,
   upsertModelPrice,
   type ModelPriceRow,
 } from "@/lib/api";
@@ -34,6 +37,16 @@ export default function Pricing() {
     queryKey: PRICES_QUERY_KEY,
     queryFn: fetchModelPrices,
   });
+  // deployment config, not screen data: a stored price in a code the rate
+  // table does not carry is unconvertible, and reads as zero spend rather
+  // than as an error (#965)
+  const currency = useQuery({
+    queryKey: ["currency-settings"],
+    queryFn: fetchCurrencySettings,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const { t } = useTranslation();
 
 
   // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
@@ -102,6 +115,14 @@ export default function Pricing() {
                 </Badge>
               )}
             </div>
+            {!isConvertible(currency.data, price.currency) && (
+              <p className="text-xs text-amber-600 dark:text-amber-500">
+                {t("pages.pricing.unconvertible", {
+                  code: price.currency,
+                  base: currency.data?.base ?? "",
+                })}
+              </p>
+            )}
             <div className="flex justify-end gap-2 border-t border-[color:var(--border-subtle)] pt-2.5">
               <Button
                 size="sm"
