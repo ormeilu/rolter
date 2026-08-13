@@ -1,7 +1,6 @@
 {
   "name": "rolter-ui",
   "private": true,
-  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,7 +11,7 @@
     "preview": "vite preview",
     "lint": "tsc --noEmit",
     "check:i18n": "bun scripts/check-i18n.ts",
-    "test": "bun test src",
+    "test": "bun test src scripts",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
     "check:literals": "bun scripts/check-literals.ts"

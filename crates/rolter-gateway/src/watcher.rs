@@ -31,6 +31,12 @@ use crate::state::AppState;
 struct SnapshotResponse {
     version: u64,
     config: GatewayConfig,
+    /// entries the control plane dropped because they were unservable on their
+    /// own, one line each saying which and why (#926). Absent when everything
+    /// was served, and absent entirely from an older control plane, so it
+    /// defaults rather than failing the decode
+    #[serde(default)]
+    problems: Vec<String>,
 }
 
 /// Spawn the background watcher. `snapshot_url` is the control plane's
@@ -193,6 +199,18 @@ async fn poll_once(
     }
     state.reload(&body.config, body.version);
     tracing::info!(version = body.version, "applied new config snapshot");
+    // logged here rather than on every poll: this line is only reached when the
+    // version actually moved, so a fleet polling every 5s does not repeat the
+    // same complaint 17k times a day (#926)
+    if !body.problems.is_empty() {
+        tracing::warn!(
+            version = body.version,
+            count = body.problems.len(),
+            problems = ?body.problems,
+            "control plane omitted unservable entries from this config; \
+             requests to them will error"
+        );
+    }
     Ok(Some(body.version))
 }
 
@@ -316,6 +334,90 @@ mod tests {
         // old config stays: no reload recorded, version unchanged
         assert_eq!(state.metrics.config_reloads_total.load(Relaxed), 0);
         assert_eq!(state.metrics.config_version.load(Relaxed), 0);
+    }
+
+    /// #926: a snapshot that carries `problems` is a *partial* config, not a
+    /// broken one. It must apply — the alternative is the gateway refusing the
+    /// same fleet config the control plane just decided to serve.
+    #[tokio::test]
+    async fn a_snapshot_carrying_problems_still_applies() {
+        use axum::routing::get;
+        use axum::{Json, Router};
+
+        async fn snapshot() -> Json<serde_json::Value> {
+            Json(serde_json::json!({
+                "version": 12,
+                "config": {
+                    "providers": [{
+                        "name": "openai",
+                        "kind": "openai",
+                        "api_base": "https://api.openai.com/v1",
+                    }],
+                    "routes": [{"model": "gpt-4o", "targets": [{"provider": "openai"}]}],
+                },
+                "problems": [
+                    "provider 'openrouter-edge' omitted from the snapshot: openrouter \
+                     provider 'openrouter-edge' api_base must be https://openrouter.ai/api/v1"
+                ],
+            }))
+        }
+
+        let app = Router::new().route("/internal/snapshot", get(snapshot));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let state = AppState::new(&GatewayConfig::default());
+        let client = Client::new();
+        let url = format!("http://{addr}/internal/snapshot");
+
+        let applied = poll_once(&client, &state, &url, None).await.unwrap();
+        assert_eq!(applied, Some(12));
+        assert_eq!(state.metrics.config_version.load(Relaxed), 12);
+
+        // and a second poll at the same version is a no-op, which is what keeps
+        // the warning to once per change rather than once per poll
+        assert_eq!(poll_once(&client, &state, &url, None).await.unwrap(), None);
+    }
+
+    /// A control plane that has not been upgraded yet sends no `problems` key
+    /// at all; the field must default rather than fail the decode and take
+    /// config propagation down during a rollout.
+    #[tokio::test]
+    async fn a_snapshot_without_problems_still_decodes() {
+        use axum::routing::get;
+        use axum::{Json, Router};
+
+        async fn snapshot() -> Json<serde_json::Value> {
+            Json(serde_json::json!({
+                "version": 3,
+                "config": {
+                    "providers": [{
+                        "name": "openai",
+                        "kind": "openai",
+                        "api_base": "https://api.openai.com/v1",
+                    }],
+                    "routes": [{"model": "gpt-4o", "targets": [{"provider": "openai"}]}],
+                },
+            }))
+        }
+
+        let app = Router::new().route("/internal/snapshot", get(snapshot));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let state = AppState::new(&GatewayConfig::default());
+        let client = Client::new();
+        let url = format!("http://{addr}/internal/snapshot");
+        assert_eq!(
+            poll_once(&client, &state, &url, None).await.unwrap(),
+            Some(3)
+        );
     }
 
     #[tokio::test]

@@ -66,6 +66,15 @@ services:
       - "4001:4001"
     environment:
       RUST_LOG: info
+      # a container has to bind every interface to be reachable through the
+      # published port; the control plane defaults to loopback so that open
+      # mode cannot escape a developer's machine by omission (#970)
+      ROLTER_CONTROL_HOST: 0.0.0.0
+      # this stack is deliberately open — see the note under `preflight` below.
+      # binding 0.0.0.0 with no ROLTER_ADMIN_TOKEN is refused unless it is
+      # acknowledged, and here it is: the management plane is wide open on
+      # purpose, on whatever network you run compose on
+      ROLTER_ALLOW_OPEN_MODE: "1"
       ROLTER_UI_DIR: /app/ui/dist
       ROLTER_DATABASE_URL: postgres://rolter:rolter@postgres:5432/rolter
       ROLTER_REDIS_URL: redis://redis:6379

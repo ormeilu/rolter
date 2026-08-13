@@ -115,7 +115,13 @@
       "colTime": "Time",
       "colModel": "Model",
       "colStatus": "Status",
-      "colMs": "ms"
+      "colMs": "ms",
+      "unpriced": {
+        "title_one": "{{count}} request in this window is unpriced.",
+        "title_other": "{{count}} requests in this window are unpriced.",
+        "body_one": "They ran against {{count}} model with no price set, so spend below is a floor, not a total. Set a price to include them.",
+        "body_other": "They ran against {{count}} models with no price set, so spend below is a floor, not a total. Set prices to include them."
+      }
     },
     "providers": {
       "search": "Search providers",
@@ -484,9 +490,19 @@
     "refresh": "Refresh",
     "refreshing": "Refreshing…",
     "refreshData": "Refresh data",
-    "refreshingData": "Refreshing data"
+    "refreshingData": "Refreshing data",
+    "openMode": {
+      "title": "Control plane is unauthenticated.",
+      "body": "No admin token is set, so every request to this control plane is served as superadmin — anyone who can reach it can read keys and change providers, routing and budgets. Set ROLTER_ADMIN_TOKEN to close it."
+    }
   },
   "stub": {
     "todo": "TODO — we'll come back to this screen"
+  },
+  "providers": {
+    "unserved": {
+      "title_one": "{{count}} config entry is not being served to gateways",
+      "title_other": "{{count}} config entries are not being served to gateways"
+    }
   }
 }

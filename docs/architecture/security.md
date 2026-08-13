@@ -116,6 +116,34 @@ legitimate, a PEM CA bundle being the obvious one. Malformed JSON now also
 comes back in the same OpenAI-style error envelope as every other failure
 instead of axum's default rejection body.
 
+## Open mode (no admin token)
+
+With no `ROLTER_ADMIN_TOKEN` set, `Principal` short-circuits to `Superadmin` for
+every request: the management API and `/internal/snapshot` have no
+authentication step to fail. This is the zero-credential local-dev shape, and
+`crates/rolter-control/src/open_mode.rs` is what keeps it from being anything
+else. Before either listener is opened, it evaluates "is a token set" against
+every address about to be bound:
+
+| admin token | bind | outcome |
+|---|---|---|
+| set | any | `Closed` — RBAC enforced |
+| unset | all listeners loopback | `OpenLoopback` — allowed, warned |
+| unset | any non-loopback listener | **refuses to start** |
+| unset | non-loopback + `--allow-open-mode` | `OpenAcknowledged` — allowed, warned loudly |
+
+`--internal-addr` counts as a listener here: an exposed credential channel is
+no better than an exposed API, so either one alone is enough to refuse.
+
+The decision also rides into the dashboard through `window.__ROLTER_CONFIG__`
+(`openMode: true`), which renders a persistent banner. Without it the dashboard
+looks identical whether the control plane is gated or wide open, which is the
+property that made this dangerous rather than merely permissive (#970).
+
+This is why `ROLTER_CONTROL_HOST` defaults to `127.0.0.1` rather than
+`0.0.0.0`: containers and clusters set it explicitly, and by then they have a
+reason to have set a token too.
+
 ## Control↔data-plane trust boundary
 
 `GET /internal/snapshot` returns provider `api_key`s **decrypted**. That is by

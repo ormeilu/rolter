@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "bun:test";
-import { initTelemetry, resetTelemetryForTests } from "./telemetry";
+import { initTelemetry, isOpenMode, resetTelemetryForTests } from "./telemetry";
 
 describe("browser telemetry", () => {
   beforeEach(() => {
@@ -26,5 +26,21 @@ describe("browser telemetry", () => {
     expect(
       await initTelemetry({ otelEndpoint: "http://localhost:4318/v1/traces" }),
     ).toBe(false);
+  });
+});
+
+describe("open mode", () => {
+  it("reports gated whenever the control plane did not say otherwise", () => {
+    // the control plane only injects openMode when it is open, so every other
+    // shape has to read as gated — a false positive banner on a properly
+    // secured deployment would teach operators to ignore it
+    expect(isOpenMode(undefined)).toBe(false);
+    expect(isOpenMode({})).toBe(false);
+    expect(isOpenMode({ version: "1.4.2" })).toBe(false);
+    expect(isOpenMode({ openMode: false })).toBe(false);
+  });
+
+  it("reports open only on an explicit true", () => {
+    expect(isOpenMode({ openMode: true })).toBe(true);
   });
 });

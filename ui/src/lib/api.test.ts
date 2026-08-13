@@ -40,9 +40,12 @@ describe("api client", () => {
     it("should make a GET request with auth headers if token exists", async () => {
       localStorageMock["rolter.session.token"] = "test-token";
       fetchMock.mockResolvedValueOnce(
-        new Response(JSON.stringify({ providers: [], routes: [], virtual_keys: [] }), {
-          status: 200,
-        })
+        new Response(
+          JSON.stringify({ providers: [], routes: [], virtual_keys: [] }),
+          {
+            status: 200,
+          },
+        ),
       );
 
       const result = await fetchConfig();
@@ -58,9 +61,12 @@ describe("api client", () => {
 
     it("should make a GET request without auth headers if no token exists", async () => {
       fetchMock.mockResolvedValueOnce(
-        new Response(JSON.stringify({ providers: [], routes: [], virtual_keys: [] }), {
-          status: 200,
-        })
+        new Response(
+          JSON.stringify({ providers: [], routes: [], virtual_keys: [] }),
+          {
+            status: 200,
+          },
+        ),
       );
 
       await fetchConfig();
@@ -72,7 +78,7 @@ describe("api client", () => {
       fetchMock.mockResolvedValueOnce(
         new Response("Not Found", {
           status: 404,
-        })
+        }),
       );
 
       await expect(fetchConfig()).rejects.toThrow("request failed: 404");
@@ -80,9 +86,12 @@ describe("api client", () => {
 
     it("should surface control plane error messages", async () => {
       fetchMock.mockResolvedValueOnce(
-        new Response(JSON.stringify({ error: { message: "superadmin access required" } }), {
-          status: 403,
-        })
+        new Response(
+          JSON.stringify({ error: { message: "superadmin access required" } }),
+          {
+            status: 403,
+          },
+        ),
       );
 
       const request = fetchConfig();
@@ -96,7 +105,7 @@ describe("api client", () => {
       fetchMock.mockResolvedValueOnce(
         new Response(JSON.stringify({ id: "org-1", name: "Test Org" }), {
           status: 200,
-        })
+        }),
       );
 
       const input = { name: "Test Org", slug: "test-org" };
@@ -106,28 +115,50 @@ describe("api client", () => {
       const callArgs = fetchMock.mock.calls[0];
       expect(callArgs[0]).toBe("/api/v1/orgs");
       expect(callArgs[1].method).toBe("POST");
-      expect(callArgs[1].headers).toHaveProperty("Content-Type", "application/json");
+      expect(callArgs[1].headers).toHaveProperty(
+        "Content-Type",
+        "application/json",
+      );
       expect(callArgs[1].body).toBe(JSON.stringify(input));
     });
 
     it("should parse and throw control plane API errors", async () => {
       fetchMock.mockResolvedValueOnce(
-        new Response(JSON.stringify({ error: { message: "Invalid org name" } }), {
-          status: 400,
-        })
+        new Response(
+          JSON.stringify({ error: { message: "Invalid org name" } }),
+          {
+            status: 400,
+          },
+        ),
       );
 
-      await expect(createOrg({ name: "Bad", slug: "bad" })).rejects.toThrow("Invalid org name");
+      await expect(createOrg({ name: "Bad", slug: "bad" })).rejects.toThrow(
+        "Invalid org name",
+      );
     });
   });
 
   describe("getAnalytics (via fetchAnalyticsSummary)", () => {
     it("should fetch analytics data successfully", async () => {
-      const summaryData = { requests: 100, cost_usd: 5.5, tokens: 10, prompt_tokens: 5, completion_tokens: 5, failures: 0, p95_latency_ms: 100, cached_requests: 0, cache_hits: 0, avg_latency_ms: 50, errors: 0 };
+      const summaryData = {
+        requests: 100,
+        cost_usd: 5.5,
+        tokens: 10,
+        prompt_tokens: 5,
+        completion_tokens: 5,
+        failures: 0,
+        p95_latency_ms: 100,
+        cached_requests: 0,
+        cache_hits: 0,
+        avg_latency_ms: 50,
+        errors: 0,
+        unpriced_requests: 0,
+        unpriced_models: 0,
+      };
       fetchMock.mockResolvedValueOnce(
         new Response(JSON.stringify({ data: [summaryData] }), {
           status: 200,
-        })
+        }),
       );
 
       const result = await fetchAnalyticsSummary();
@@ -138,22 +169,29 @@ describe("api client", () => {
 
     it("should throw AnalyticsUnavailableError on 503", async () => {
       fetchMock.mockResolvedValueOnce(
-        new Response(JSON.stringify({ error: { message: "ClickHouse down" } }), {
-          status: 503,
-        })
+        new Response(
+          JSON.stringify({ error: { message: "ClickHouse down" } }),
+          {
+            status: 503,
+          },
+        ),
       );
 
-      await expect(fetchAnalyticsSummary()).rejects.toThrow(AnalyticsUnavailableError);
+      await expect(fetchAnalyticsSummary()).rejects.toThrow(
+        AnalyticsUnavailableError,
+      );
     });
 
     it("should throw AnalyticsUnavailableError on 404 by default", async () => {
       fetchMock.mockResolvedValueOnce(
         new Response("Not found", {
           status: 404,
-        })
+        }),
       );
 
-      await expect(fetchAnalyticsSummary()).rejects.toThrow(AnalyticsUnavailableError);
+      await expect(fetchAnalyticsSummary()).rejects.toThrow(
+        AnalyticsUnavailableError,
+      );
     });
   });
 });

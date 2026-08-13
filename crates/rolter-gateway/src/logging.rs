@@ -108,6 +108,13 @@ pub struct RequestLog {
     pub completion_tokens: u32,
     pub total_tokens: u32,
     pub cost_usd: f64,
+    /// 1 when this request ran against a model with **no price row**, so
+    /// `cost_usd` is not a cost at all — it is the absence of one (#969).
+    ///
+    /// Without this, "this traffic cost nothing" and "we do not know what this
+    /// traffic cost" are the same zero, and an operator can run a fleet for a
+    /// month, see $0.00, and conclude spend is under control.
+    pub unpriced: u8,
     pub latency_ms: u32,
     pub ttft_ms: u32,
     pub error: String,
@@ -151,6 +158,7 @@ impl Default for RequestLog {
             completion_tokens: 0,
             total_tokens: 0,
             cost_usd: 0.0,
+            unpriced: 0,
             latency_ms: 0,
             ttft_ms: 0,
             error: String::new(),
@@ -579,6 +587,9 @@ impl UsageLoggingStream {
         // currency (converted once when the snapshot is assembled, see
         // `state::to_base_currency`), so this is base-currency cost — the field
         // name predates non-USD support (#650)
+        // a missing price is recorded as such rather than collapsing to a zero
+        // that reads like a free request (#969)
+        log.unpriced = u8::from(self.price.is_none());
         log.cost_usd = self
             .price
             .as_ref()
@@ -1295,6 +1306,77 @@ data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\
         assert!(req.contains("\"total_tokens\":10"));
         // 1 usd/token * (4 + 6) tokens = 10.0
         assert!(req.contains("\"cost_usd\":10.0"));
+        // a priced request is not flagged
+        assert!(req.contains("\"unpriced\":0"), "{req}");
+    }
+
+    /// #969: a model with no price row was billed at zero and reported as
+    /// zero, so "this cost nothing" and "we do not know what this cost" were
+    /// the same number. The record has to tell them apart.
+    #[tokio::test]
+    async fn a_model_with_no_price_is_recorded_as_unpriced_not_as_zero_cost() {
+        use futures_util::StreamExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = sock.read(&mut buf).await.unwrap();
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+
+        let metrics = Arc::new(Metrics::default());
+        let sink = LogSink::spawn(
+            format!("http://{addr}"),
+            10,
+            Duration::from_millis(50),
+            100,
+            metrics.clone(),
+        );
+
+        let upstream = br#"{"usage":{"prompt_tokens":4,"completion_tokens":6,"total_tokens":10}}"#;
+        let inner = futures_util::stream::iter(vec![Ok::<Bytes, reqwest::Error>(Bytes::from(
+            upstream.to_vec(),
+        ))]);
+        let mut wrapped = UsageLoggingStream::new(
+            Box::pin(inner),
+            false,
+            Instant::now(),
+            sink,
+            // the whole point: no price row for this model
+            None,
+            RequestLog {
+                request_id: "req-unpriced".to_string(),
+                model: "brand-new-model".to_string(),
+                ..Default::default()
+            },
+            None,
+            None,
+            None,
+        );
+
+        let mut forwarded = Vec::new();
+        while let Some(chunk) = wrapped.next().await {
+            forwarded.extend_from_slice(&chunk.unwrap());
+        }
+        assert_eq!(forwarded, upstream);
+        drop(wrapped);
+
+        let req = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("server timed out")
+            .unwrap();
+        // the tokens were really served, so this is not an empty request
+        assert!(req.contains("\"total_tokens\":10"), "{req}");
+        // and it is marked unpriced, which is what makes the zero readable as
+        // "unknown" rather than "free"
+        assert!(req.contains("\"unpriced\":1"), "{req}");
+        assert!(req.contains("\"cost_usd\":0.0"), "{req}");
     }
 
     #[tokio::test]

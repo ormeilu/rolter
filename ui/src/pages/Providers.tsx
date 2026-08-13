@@ -3,8 +3,18 @@ import { Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 import { Trans, useTranslation } from "react-i18next";
 
-import { ProviderSheet, type ProviderSheetMode } from "@/components/ProviderSheet";
-import { ListHeader, ListRow, ListTable, PageBody, SearchInput } from "@/components/screen";
+import {
+  ProviderSheet,
+  type ProviderSheetMode,
+} from "@/components/ProviderSheet";
+import { UnservedConfigNotice } from "@/components/UnservedConfigNotice";
+import {
+  ListHeader,
+  ListRow,
+  ListTable,
+  PageBody,
+  SearchInput,
+} from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,9 +25,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { CopyButton } from "@/components/CopyButton";
-import { deleteProvider, fetchProviders, type ProviderRow } from "@/lib/api";
+import {
+  deleteProvider,
+  fetchConfigProblems,
+  fetchProviders,
+  type ProviderRow,
+} from "@/lib/api";
 import { useScope } from "@/lib/scope";
-import { useErrorState, useFormTelemetry, useScreenReady } from "@/lib/ux-react";
+import {
+  useErrorState,
+  useFormTelemetry,
+  useScreenReady,
+} from "@/lib/ux-react";
 
 const PROVIDERS_QUERY_KEY = ["providers"];
 
@@ -32,8 +51,20 @@ export default function Providers() {
     enabled: !!scope.orgId,
   });
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: [...PROVIDERS_QUERY_KEY, scope.orgId] });
+  // what the control plane is dropping from the snapshot, so a provider that
+  // silently stopped being served says so here (#926)
+  const problems = useQuery({
+    queryKey: ["config-problems"],
+    queryFn: fetchConfigProblems,
+  });
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({
+      queryKey: [...PROVIDERS_QUERY_KEY, scope.orgId],
+    });
+    // an edit that fixes (or breaks) a provider changes this answer too
+    queryClient.invalidateQueries({ queryKey: ["config-problems"] });
+  };
 
   const removeProvider = useMutation({
     mutationFn: (id: string) => deleteProvider(id),
@@ -44,7 +75,9 @@ export default function Providers() {
     mode: ProviderSheetMode;
     provider?: ProviderRow | null;
   } | null>(null);
-  const [deleteTarget, setDeleteTarget] = React.useState<ProviderRow | null>(null);
+  const [deleteTarget, setDeleteTarget] = React.useState<ProviderRow | null>(
+    null,
+  );
   const [search, setSearch] = React.useState("");
 
   // UX stream (#805). the screen key comes from the enclosing UxScreenProvider
@@ -67,6 +100,8 @@ export default function Providers() {
 
   return (
     <PageBody>
+      <UnservedConfigNotice problems={problems.data ?? []} />
+
       <div className="flex items-center gap-3">
         <SearchInput
           placeholder={t("pages.providers.search")}
@@ -83,10 +118,14 @@ export default function Providers() {
       </div>
 
       {providers.isLoading && (
-        <p className="text-sm text-muted-foreground">{t("pages.providers.loading")}</p>
+        <p className="text-sm text-muted-foreground">
+          {t("pages.providers.loading")}
+        </p>
       )}
       {providers.error && (
-        <p className="text-sm text-destructive">{t("pages.providers.loadFailed")}</p>
+        <p className="text-sm text-destructive">
+          {t("pages.providers.loadFailed")}
+        </p>
       )}
       {scopeBlocked && (
         <p className="text-sm text-muted-foreground">
@@ -94,7 +133,9 @@ export default function Providers() {
         </p>
       )}
       {!scope.isLoading && !scope.error && !scope.orgId && (
-        <p className="text-sm text-muted-foreground">{t("pages.providers.noOrg")}</p>
+        <p className="text-sm text-muted-foreground">
+          {t("pages.providers.noOrg")}
+        </p>
       )}
 
       <ListTable>
@@ -140,7 +181,9 @@ export default function Providers() {
               <button
                 type="button"
                 title={t("pages.providers.deleteTitle")}
-                aria-label={t("pages.providers.deleteOne", { name: provider.name })}
+                aria-label={t("pages.providers.deleteOne", {
+                  name: provider.name,
+                })}
                 onClick={() => setDeleteTarget(provider)}
                 className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
@@ -165,7 +208,10 @@ export default function Providers() {
         onDone={invalidate}
       />
 
-      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+      <Dialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+      >
         <DialogHeader>
           <DialogTitle>{t("pages.providers.deleteTitle")}</DialogTitle>
           <DialogDescription>
@@ -200,7 +246,9 @@ export default function Providers() {
               });
             }}
           >
-            {removeProvider.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {removeProvider.isPending && (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            )}
             {t("common.delete")}
           </Button>
         </DialogFooter>
