@@ -497,6 +497,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
         )
         .route("/api/v1/roles", get(list_roles))
         .route("/api/v1/config", get(get_config))
+        .route("/api/v1/provider-kinds", get(get_provider_kinds))
         .merge(analytics::router())
         .merge(health::router())
         // reverse-proxy the gateway data plane for the dashboard Playground;
@@ -1017,6 +1018,40 @@ async fn get_config(State(state): State<ControlState>) -> Json<GatewayConfig> {
     Json(config)
 }
 
+/// What the dashboard needs to know about a provider kind to configure it.
+#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+struct ProviderKindInfo {
+    /// the wire value stored in `providers.kind`
+    kind: String,
+    /// whether `api_base` must already end in the API version prefix
+    ///
+    /// The base-URL field used to show one static `.../v1` hint for every kind.
+    /// That is right for the ~38 kinds rolter strips the prefix for and wrong
+    /// for the openai-shaped ones — including the default — where it produces
+    /// `/v1/v1/chat/completions` (#947).
+    base_includes_v1: bool,
+}
+
+/// The per-kind `api_base` rule, so the dashboard states it instead of guessing.
+///
+/// Derived from `ProviderKind::ALL` rather than re-listed, so a kind added to
+/// core shows up here without a second edit.
+async fn get_provider_kinds() -> Json<Vec<ProviderKindInfo>> {
+    Json(
+        rolter_core::ProviderKind::ALL
+            .iter()
+            .map(|kind| ProviderKindInfo {
+                // the enum serializes to exactly the stored wire value
+                kind: serde_json::to_value(kind)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default(),
+                base_includes_v1: kind.base_includes_v1(),
+            })
+            .collect(),
+    )
+}
+
 #[derive(Debug, Deserialize)]
 struct SnapshotQuery {
     /// the gateway's last-seen config version; if it's already current, the
@@ -1356,6 +1391,39 @@ mod tests {
             #[cfg(feature = "postgres")]
             pool: None,
         }
+    }
+
+    /// #947: the dashboard has to state, per kind, whether `/v1` belongs in
+    /// `api_base`. Serving it beats duplicating the ~38-kind list in TypeScript.
+    #[tokio::test]
+    async fn the_provider_kinds_endpoint_states_the_v1_rule_per_kind() {
+        let addr = serve(build_app_with(state_with_token(None), false)).await;
+        let body: serde_json::Value = reqwest::get(format!("http://{addr}/api/v1/provider-kinds"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let kinds = body.as_array().expect("a list of kinds");
+        assert_eq!(kinds.len(), rolter_core::ProviderKind::ALL.len());
+
+        let rule = |name: &str| -> bool {
+            kinds
+                .iter()
+                .find(|k| k["kind"] == name)
+                .unwrap_or_else(|| panic!("{name} missing from {body}"))["base_includes_v1"]
+                .as_bool()
+                .expect("a boolean")
+        };
+        // the default kind is the one the old static hint got wrong
+        assert!(!rule("openai"), "openai must not carry /v1 in the base");
+        assert!(!rule("openai_compatible"));
+        assert!(!rule("ollama"));
+        // and the kinds that genuinely need it still say so
+        assert!(rule("mistral"));
+        assert!(rule("openrouter"));
+        assert!(rule("azure_openai"));
     }
 
     /// the default deployment shape: /internal/* on the same listener as the

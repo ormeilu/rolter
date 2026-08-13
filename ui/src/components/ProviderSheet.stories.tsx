@@ -28,16 +28,30 @@ type FetchStub = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 
 /// Answer the probe with a fixed outcome; everything else is inert. The sheet
 /// only calls the network when the operator presses the button.
+const KINDS = [
+  { kind: "openai", base_includes_v1: false },
+  { kind: "openai_compatible", base_includes_v1: false },
+  { kind: "mistral", base_includes_v1: true },
+];
+
 function stub(test: () => Promise<Response>): FetchStub {
   return async (input) => {
     if (String(input).endsWith("/test")) return test();
+    // the sheet asks per kind whether /v1 belongs in api_base (#947)
+    if (String(input).includes("/provider-kinds")) return json(KINDS);
     return json({});
   };
 }
 
 // installed during render, not in an effect: child effects run before the
 // parent's, so an effect would let the first real fetch through
-function Harness({ fetchStub }: { fetchStub: FetchStub }) {
+function Harness({
+  fetchStub,
+  provider = PROVIDER,
+}: {
+  fetchStub: FetchStub;
+  provider?: ProviderRow;
+}) {
   const original = React.useRef<typeof globalThis.fetch | null>(null);
   const client = React.useMemo(() => {
     original.current ??= globalThis.fetch;
@@ -57,7 +71,7 @@ function Harness({ fetchStub }: { fetchStub: FetchStub }) {
         mode="edit"
         onOpenChange={() => {}}
         orgId={PROVIDER.org_id}
-        provider={PROVIDER}
+        provider={provider}
         onDone={() => {}}
       />
     </QueryClientProvider>
@@ -204,5 +218,61 @@ export const Testing: Story = {
     await waitFor(() =>
       expect(canvas.getByRole("button", { name: /testing/i })).toBeDisabled(),
     );
+  },
+};
+
+/**
+ * #947: the base-URL placeholder used to read `https://api.openai.com/v1` for
+ * every kind. For openai-shaped kinds rolter appends `/v1` itself, so that
+ * advice produced `/v1/v1/chat/completions` and every request 404'd.
+ *
+ * The resolved URL is now previewed live, so the doubling is visible before
+ * saving rather than at the first inference call.
+ */
+export const BaseUrlDoublesTheVersionPrefix: Story = {
+  render: () => (
+    <Harness
+      fetchStub={stub(async () => json(result()))}
+      provider={{ ...PROVIDER, api_base: "https://gpustack.localhost/v1" }}
+    />
+  ),
+  play: async () => {
+    const canvas = screen();
+    await expect(
+      await canvas.findByText("https://gpustack.localhost/v1/v1/chat/completions"),
+    ).toBeVisible();
+    await expect(canvas.getByText(/remove the trailing \/v1/i)).toBeVisible();
+  },
+};
+
+/** A well-formed openai-shaped base: previewed, not flagged. */
+export const BaseUrlIsWellFormed: Story = {
+  render: () => <Harness fetchStub={stub(async () => json(result()))} />,
+  play: async () => {
+    const canvas = screen();
+    await expect(
+      await canvas.findByText("https://api.openai.com/v1/chat/completions"),
+    ).toBeVisible();
+    await expect(canvas.queryByText(/remove the trailing/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * The other half of the rule: for a stripping kind the trailing `/v1` is
+ * required, so the same spelling must be accepted and the hint must invert.
+ */
+export const StrippingKindWantsV1InTheBase: Story = {
+  render: () => (
+    <Harness
+      fetchStub={stub(async () => json(result()))}
+      provider={{ ...PROVIDER, kind: "mistral", api_base: "https://api.mistral.ai/v1" }}
+    />
+  ),
+  play: async () => {
+    const canvas = screen();
+    await expect(
+      await canvas.findByText("https://api.mistral.ai/v1/chat/completions"),
+    ).toBeVisible();
+    await expect(canvas.queryByText(/remove the trailing/i)).not.toBeInTheDocument();
   },
 };
