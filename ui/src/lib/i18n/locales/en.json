@@ -126,6 +126,13 @@
         "body_other": "They ran against {{count}} models with no price set, so spend below is a floor, not a total. Set prices to include them."
       }
     },
+    "models": {
+      "unpriced": {
+        "filter": "Unpriced",
+        "badge": "no price set",
+        "hint": "This model has no price row, so its traffic is recorded as unpriced rather than free. Its spend is missing from totals and budgets until a price is set."
+      }
+    },
     "providers": {
       "search": "Search providers",
       "add": "+ Add provider",

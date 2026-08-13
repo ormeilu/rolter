@@ -1,7 +1,9 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Lock, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { ModelPriceCell } from "@/components/ModelPriceCell";
 import { ModelSheet, type ModelSheetMode } from "@/components/ModelSheet";
 import {
   ListHeader,
@@ -52,6 +54,14 @@ interface CatalogRow {
   enabled: boolean;
   inPrice: string;
   outPrice: string;
+  /**
+   * whether a price row applied to this model (#969).
+   *
+   * `null` means the price catalogue could not be read, which is not the same
+   * as "this model has no price" — the screen must not claim the latter when
+   * it only knows the former.
+   */
+  priced: boolean | null;
   weight: string;
 }
 
@@ -59,6 +69,7 @@ interface CatalogRow {
 // sortable grid table with modality/origin pills, the param-lock tooltip, and
 // the unified add/edit/view model sheet
 export default function Models() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const scope = useScope();
 
@@ -96,6 +107,7 @@ export default function Models() {
 
   const [search, setSearch] = React.useState("");
   const [origin, setOrigin] = React.useState<Origin>("all");
+  const [unpricedOnly, setUnpricedOnly] = React.useState(false);
   const { sort, cycle, apply } = useSort<"name" | "provider" | "origin" | "weight">();
   const [sheet, setSheet] = React.useState<{
     mode: ModelSheetMode;
@@ -120,6 +132,11 @@ export default function Models() {
   const providerName = (id: string | undefined) =>
     (id && providers.data?.find((p) => p.id === id)?.name) || "—";
 
+  // an absent price row only means "unpriced" once the catalogue has actually
+  // been read: while it is loading, or if the request failed, every model would
+  // otherwise be reported as unpriced on no evidence
+  const pricesKnown = prices.isSuccess;
+
   const rows: CatalogRow[] = (models.data ?? []).map((entry) => {
     const route = routeByModel.get(entry.model) ?? null;
     const target = route ? targetsByRoute.get(route.id)?.[0] : undefined;
@@ -137,6 +154,7 @@ export default function Models() {
       enabled: route?.enabled ?? true,
       inPrice: price ? `$${price.input_per_mtok}` : "—",
       outPrice: price ? `$${price.output_per_mtok}` : "—",
+      priced: pricesKnown ? !!price : null,
       weight: target ? String(target.weight) : "—",
     };
   });
@@ -145,6 +163,7 @@ export default function Models() {
   const filtered = rows.filter(
     (r) =>
       (origin === "all" || r.origin === origin) &&
+      (!unpricedOnly || r.priced === false) &&
       (!q || r.name.toLowerCase().includes(q) || r.providerName.toLowerCase().includes(q)),
   );
   const sorted = apply(filtered, {
@@ -161,6 +180,7 @@ export default function Models() {
   };
 
   const providerCount = new Set(rows.map((r) => r.providerName).filter((p) => p !== "—")).size;
+  const unpricedCount = rows.filter((r) => r.priced === false).length;
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["models"] });
@@ -219,6 +239,24 @@ export default function Models() {
             </span>
           </button>
         ))}
+        {unpricedCount > 0 && (
+          <button
+            type="button"
+            aria-pressed={unpricedOnly}
+            onClick={() => setUnpricedOnly((on) => !on)}
+            className={cn(
+              "inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+              unpricedOnly
+                ? "border-[color:var(--status-warning)] bg-[color:var(--red-tint)] text-foreground"
+                : "border-[color:var(--border-subtle)] text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t("pages.models.unpriced.filter")}
+            <span className="font-mono text-[11px] text-[color:var(--text-subtle)]">
+              {unpricedCount}
+            </span>
+          </button>
+        )}
         <span className="ml-auto inline-flex items-center gap-[7px] text-xs text-muted-foreground">
           <Pill
             color="var(--text-secondary)"
@@ -305,9 +343,7 @@ export default function Models() {
                 </Pill>
               )}
             </div>
-            <span className="text-right font-mono text-xs text-[color:var(--text-secondary)]">
-              {r.inPrice} · {r.outPrice}
-            </span>
+            <ModelPriceCell priced={r.priced} inPrice={r.inPrice} outPrice={r.outPrice} />
             <span className="text-right font-mono text-xs text-[color:var(--text-secondary)]">
               {r.weight}
             </span>
