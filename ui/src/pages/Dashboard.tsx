@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import { PageBody } from "@/components/screen";
+import { IncompleteSpendNotice } from "@/components/IncompleteSpendNotice";
 import {
   Card,
   CardContent,
@@ -28,7 +29,10 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const num = (v: number | string | undefined): number => Number(v ?? 0);
 
-const WINDOW = { since: new Date(Date.now() - 86_400_000).toISOString(), bucket: "hour" };
+const WINDOW = {
+  since: new Date(Date.now() - 86_400_000).toISOString(),
+  bucket: "hour",
+};
 
 const BAR_PALETTE = [
   "var(--red-folk)",
@@ -76,13 +80,16 @@ export default function Dashboard() {
   });
 
   const unavailable =
-    isUnavailable(summary.error) || isUnavailable(series.error) || isUnavailable(byModel.error);
+    isUnavailable(summary.error) ||
+    isUnavailable(series.error) ||
+    isUnavailable(byModel.error);
 
   if (unavailable) {
     return (
       <PageBody>
         <div className="rounded-lg border border-[color:var(--border-default)]">
-          <EmptyState uxTarget="dashboard-analytics"
+          <EmptyState
+            uxTarget="dashboard-analytics"
             title={t("pages.dashboard.notConfiguredTitle")}
             description={t("pages.dashboard.notConfiguredBody")}
           />
@@ -97,12 +104,20 @@ export default function Dashboard() {
   const errorRate = requests > 0 ? (errors / requests) * 100 : 0;
 
   const spendPoints = (series.data ?? []).map((p) => num(p.cost_usd));
-  const spendLabels = (series.data ?? []).map((p) => p.bucket.slice(11, 16) || p.bucket);
+  const spendLabels = (series.data ?? []).map(
+    (p) => p.bucket.slice(11, 16) || p.bucket,
+  );
 
   const models = byModel.data ?? [];
-  const traffic = models.map((m) => ({ label: m.model, value: num(m.requests) }));
+  const traffic = models.map((m) => ({
+    label: m.model,
+    value: num(m.requests),
+  }));
   const totalReq = traffic.reduce((a, t) => a + t.value, 0);
-  const fmtK = (v: number) => (v >= 1000 ? fmt.number(v / 1000, { maximumFractionDigits: 1 }) + "k" : fmt.number(v));
+  const fmtK = (v: number) =>
+    v >= 1000
+      ? fmt.number(v / 1000, { maximumFractionDigits: 1 }) + "k"
+      : fmt.number(v);
 
   const barMax = Math.max(1, ...models.map((m) => num(m.requests)));
   const bars = [...models]
@@ -127,11 +142,19 @@ export default function Dashboard() {
     <PageBody className="gap-[18px]">
       <div className="grid grid-cols-2 gap-3.5 xl:grid-cols-4">
         {summary.isLoading ? (
-          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} height={104} radius={10} />)
+          Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} height={104} radius={10} />
+          ))
         ) : (
           <>
-            <StatCard label={t("pages.dashboard.statRequests")} value={fmt.number(requests)} />
-            <StatCard label={t("pages.dashboard.statSpend")} value={money(num(s?.cost_usd))} />
+            <StatCard
+              label={t("pages.dashboard.statRequests")}
+              value={fmt.number(requests)}
+            />
+            <StatCard
+              label={t("pages.dashboard.statSpend")}
+              value={money(num(s?.cost_usd))}
+            />
             <StatCard
               label={t("pages.dashboard.statAvgLatency")}
               value={fmt.number(Math.round(num(s?.avg_latency_ms)))}
@@ -139,15 +162,27 @@ export default function Dashboard() {
             />
             <StatCard
               label={t("pages.dashboard.statErrorRate")}
-              value={fmt.number(errorRate, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              value={fmt.number(errorRate, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
               unit="%"
               trend={errorRate > 1 ? "up" : "flat"}
               // russian needs four plural forms here where english needs two
-              delta={errors > 0 ? t("pages.dashboard.errors", { count: errors }) : undefined}
+              delta={
+                errors > 0
+                  ? t("pages.dashboard.errors", { count: errors })
+                  : undefined
+              }
             />
           </>
         )}
       </div>
+
+      <IncompleteSpendNotice
+        requests={num(s?.unpriced_requests)}
+        models={num(s?.unpriced_models)}
+      />
 
       <div className="grid gap-3.5 xl:grid-cols-[1.6fr_1fr]">
         <Card>
@@ -155,7 +190,9 @@ export default function Dashboard() {
             <CardDescription className="text-[0.6875rem] uppercase tracking-[0.07em]">
               {t("pages.dashboard.last24h")}
             </CardDescription>
-            <CardTitle className="text-base">{t("pages.dashboard.spendTitle")}</CardTitle>
+            <CardTitle className="text-base">
+              {t("pages.dashboard.spendTitle")}
+            </CardTitle>
             <CardDescription>{t("pages.dashboard.spendSub")}</CardDescription>
           </CardHeader>
           <CardContent>
@@ -180,7 +217,9 @@ export default function Dashboard() {
             <CardDescription className="text-[0.6875rem] uppercase tracking-[0.07em]">
               {t("pages.dashboard.last24h")}
             </CardDescription>
-            <CardTitle className="text-base">{t("pages.dashboard.trafficTitle")}</CardTitle>
+            <CardTitle className="text-base">
+              {t("pages.dashboard.trafficTitle")}
+            </CardTitle>
             <CardDescription>{t("pages.dashboard.trafficSub")}</CardDescription>
           </CardHeader>
           <CardContent>
@@ -208,7 +247,9 @@ export default function Dashboard() {
             <CardDescription className="text-[0.6875rem] uppercase tracking-[0.07em]">
               {t("pages.dashboard.last24h")}
             </CardDescription>
-            <CardTitle className="text-base">{t("pages.dashboard.byModelTitle")}</CardTitle>
+            <CardTitle className="text-base">
+              {t("pages.dashboard.byModelTitle")}
+            </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-2 px-0.5 py-1">
             {bars.length === 0 && (
@@ -239,7 +280,9 @@ export default function Dashboard() {
             <CardDescription className="text-[0.6875rem] uppercase tracking-[0.07em]">
               {t("pages.dashboard.live")}
             </CardDescription>
-            <CardTitle className="text-base">{t("pages.dashboard.recentTitle")}</CardTitle>
+            <CardTitle className="text-base">
+              {t("pages.dashboard.recentTitle")}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             {recent.isLoading ? (
@@ -252,8 +295,17 @@ export default function Dashboard() {
               <Table
                 rowKey="id"
                 columns={[
-                  { key: "t", header: t("pages.dashboard.colTime"), mono: true, width: "92px" },
-                  { key: "model", header: t("pages.dashboard.colModel"), mono: true },
+                  {
+                    key: "t",
+                    header: t("pages.dashboard.colTime"),
+                    mono: true,
+                    width: "92px",
+                  },
+                  {
+                    key: "model",
+                    header: t("pages.dashboard.colModel"),
+                    mono: true,
+                  },
                   {
                     key: "status",
                     header: t("pages.dashboard.colStatus"),

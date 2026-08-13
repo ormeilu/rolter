@@ -245,6 +245,13 @@ pub(crate) fn run(rows: anyhow::Result<Vec<Value>>) -> Response {
 }
 
 /// Totals over the window: request count, tokens, cost, error count, avg latency.
+/// Totals for the window, plus how much of the window is **unpriced**.
+///
+/// `cost_usd` alone cannot say whether it is a complete figure: traffic against
+/// a model with no price row contributes zero, which is indistinguishable from
+/// traffic that genuinely cost nothing. `unpriced_requests` and
+/// `unpriced_models` are what let a caller present a partial total as partial
+/// rather than as final (#969).
 async fn summary(
     State(state): State<crate::ControlState>,
     Query(q): Query<WindowQuery>,
@@ -259,6 +266,8 @@ async fn summary(
                 sum(prompt_tokens) as prompt_tokens, \
                 sum(completion_tokens) as completion_tokens, \
                 round(sum(cost_usd), 6) as cost_usd, \
+                countIf(unpriced = 1) as unpriced_requests, \
+                uniqIf(model, unpriced = 1) as unpriced_models, \
                 countIf(status >= 400) as errors, \
                 round(avg(latency_ms), 1) as avg_latency_ms \
          from request_logs where {WHERE_WINDOW} format JSON"
@@ -308,6 +317,7 @@ async fn by_model(
                 count() as requests, \
                 sum(total_tokens) as tokens, \
                 round(sum(cost_usd), 6) as cost_usd, \
+                countIf(unpriced = 1) as unpriced_requests, \
                 countIf(status >= 400) as errors, \
                 round(quantile(0.5)(latency_ms), 1) as p50_latency_ms, \
                 round(quantile(0.95)(latency_ms), 1) as p95_latency_ms \

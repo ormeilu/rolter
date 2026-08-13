@@ -115,7 +115,13 @@
       "colTime": "Time",
       "colModel": "Model",
       "colStatus": "Status",
-      "colMs": "ms"
+      "colMs": "ms",
+      "unpriced": {
+        "title_one": "{{count}} request in this window is unpriced.",
+        "title_other": "{{count}} requests in this window are unpriced.",
+        "body_one": "They ran against {{count}} model with no price set, so spend below is a floor, not a total. Set a price to include them.",
+        "body_other": "They ran against {{count}} models with no price set, so spend below is a floor, not a total. Set prices to include them."
+      }
     },
     "providers": {
       "search": "Search providers",
