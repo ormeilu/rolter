@@ -26,6 +26,14 @@ require() {
     fi
 }
 
+forbid() {
+    # $1 file, $2 human description, $3 grep pattern that must NOT match
+    if grep -Eq "$3" "$1"; then
+        echo "error: $1: $2" >&2
+        fail=1
+    fi
+}
+
 for f in "$plz" "$rel"; do
     if [[ ! -f "$f" ]]; then
         echo "error: $f is missing; the release pipeline needs both halves" >&2
@@ -52,13 +60,22 @@ require "$rel" "release.yml dropped the 'tag' dispatch input" \
     '^      tag:'
 require "$rel" "release.yml no longer has a publish-pypi job" \
     '^  publish-pypi:'
+# the gate is asserted, not re-run. calling quality.yml from here would check out
+# the *caller's* ref — master on a dispatch, not the tag being packaged — so the
+# gate would verify one tree while the wheels came from another (#988). worse,
+# threading the tag in instead makes the shared workflow check out a
+# dispatch-supplied ref in a default-branch context, which is cache poisoning.
+forbid "$rel" "release.yml must not re-run quality.yml; assert ci-ok for the tagged sha instead" \
+    '^ *uses: \./\.github/workflows/quality\.yml'
+require "$rel" "the release gate must require ci-ok for the tagged commit" \
+    'RELEASE_REQUIRED_CHECKS \|\| .ci-ok,'
 
 # ── the parity gate ─────────────────────────────────────────────────────────
 # without this a skipped publish drags the run to green instead of red
 require "$rel" "release.yml dropped the verify-parity gate" \
     '^  verify-parity:'
 require "$rel" "verify-parity must observe publish-pypi to catch a skipped publish" \
-    'needs: \[verify, verify-external-checks, build-wheels, publish-pypi, publish-docker\]'
+    'needs: \[verify-external-checks, build-wheels, publish-pypi, publish-docker\]'
 require "$rel" "verify-parity must run with always() or a skipped publish stays invisible" \
     'if: always\(\)'
 

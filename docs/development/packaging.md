@@ -96,7 +96,7 @@ red instead of quietly leaving a channel behind.
 
 | Gate | Effect |
 |---|---|
-| `verify` (reusable `quality.yml`) | the tagged commit passes the same fmt/clippy/test/deny pipeline as CI |
+| `verify-external-checks` | `ci-ok` **and** CodeQL recorded success for the tagged commit; fail-closed |
 | `verify-external-checks` | CodeQL reported success for the commit; fail-closed |
 | `RELEASE_REQUIRED_CHECKS` repo variable | exact check-run names the gate above requires (comma-separated) |
 | `PYPI_PUBLISH_ENABLED` repo variable | must be `"true"` or the PyPI publish is skipped |
@@ -111,6 +111,33 @@ config, and it adds PEP 740 attestations on the `id-token` grant the job already
 holds.
 
 [PyO3/maturin#2334]: https://github.com/PyO3/maturin/issues/2334
+
+### The gate is asserted, not re-run
+
+`release.yml` does **not** run `quality.yml` itself. It asserts that the tagged
+commit already passed it, by requiring `ci-ok` among the check-runs recorded for
+that SHA. That is deliberate, and it is what makes the gate correct:
+
+A local reusable workflow (`uses: ./…`) always checks out the *caller's* ref. On
+a `workflow_dispatch` the caller ref is `master`, while `build-wheels` checks out
+`inputs.tag` — so a re-run verified master and shipped the tag ([#988]). It
+passed, and told you nothing about what was being packaged. Threading the tag
+into `quality.yml` fixes that but makes the shared workflow check out an
+arbitrary dispatch-supplied ref in a default-branch context, whose caches
+trusted runs later restore — cache poisoning, and CodeQL flags it.
+
+Asserting settles both. Every commit on master carries a `ci-ok` check-run from
+`ci.yml`, and release-plz re-runs the gate on the release commit before tagging,
+so a tagged commit is verified by construction. The assertion binds to the
+*tagged* SHA — which re-running never did — costs no duplicate 20-minute run,
+and checks out nothing.
+
+Because release-plz dispatches the moment it finishes tagging, `ci-ok` is often
+still running for that commit. A pending check is therefore expected, not a
+failure: the job waits up to 45 minutes for a verdict, fails immediately on a
+real non-success, and fails closed if a required check never appears.
+
+[#988]: https://github.com/rolter-ai/rolter/issues/988
 
 `RELEASE_REQUIRED_CHECKS` holds exact check-run *names*, so it rots whenever a
 scanner is renamed or reconfigured — and since the gate is fail-closed, a stale
