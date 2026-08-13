@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
 import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +38,7 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 // current project scope — pick another scope_type and paste an id to
 // manage org/team/virtual-key scoped limits.
 export default function Limits() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const scope = useScope();
 
@@ -203,7 +206,11 @@ export default function Limits() {
         </div>
         {budgets.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
         {budgets.error && (
-          <p className="text-sm text-destructive">Failed to load budgets.</p>
+          <LoadError
+            error={budgets.error}
+            resource={t("errors.resources.budgets")}
+            onRetry={() => budgets.refetch()}
+          />
         )}
         {!budgets.isLoading && scopeId && budgets.data?.length === 0 && (
           <p className="text-sm text-muted-foreground">No budgets for this scope.</p>
@@ -242,7 +249,11 @@ export default function Limits() {
           <p className="text-sm text-muted-foreground">Loading…</p>
         )}
         {rateLimits.error && (
-          <p className="text-sm text-destructive">Failed to load rate limits.</p>
+          <LoadError
+            error={rateLimits.error}
+            resource={t("errors.resources.rateLimits")}
+            onRetry={() => rateLimits.refetch()}
+          />
         )}
         {!rateLimits.isLoading && scopeId && rateLimits.data?.length === 0 && (
           <p className="text-sm text-muted-foreground">

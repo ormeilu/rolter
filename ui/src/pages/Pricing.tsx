@@ -3,6 +3,7 @@ import { Plus, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
 import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
@@ -89,7 +90,11 @@ export default function Pricing() {
 
       {prices.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {prices.error && (
-        <p className="text-sm text-destructive">Failed to load model prices.</p>
+        <LoadError
+          error={prices.error}
+          resource={t("errors.resources.modelPrices")}
+          onRetry={() => prices.refetch()}
+        />
       )}
       {!prices.isLoading && prices.data?.length === 0 && (
         <p className="text-sm text-muted-foreground">No model prices set yet.</p>

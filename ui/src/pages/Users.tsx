@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, Pencil, Plus, Trash2 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
 import { EditorSheet } from "@/components/EditorSheet";
 import {
   ListHeader,
@@ -47,6 +49,7 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 // sidebar ScopeSwitcher; account edits (email/password/superadmin) require
 // superadmin on the backend, org-scoped invite/role-grant require org admin.
 export default function Users() {
+  const { t } = useTranslation();
   const scope = useScope();
   const orgId = scope.orgId;
   const queryClient = useQueryClient();
@@ -157,7 +160,14 @@ export default function Users() {
         </p>
       )}
       {(users.error || memberships.error) && (
-        <p className="text-sm text-destructive">Failed to load users.</p>
+        <LoadError
+          error={users.error ?? memberships.error}
+          resource={t("errors.resources.users")}
+          onRetry={() => {
+            users.refetch();
+            memberships.refetch();
+          }}
+        />
       )}
       {orgId && users.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
 

@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Plus, RotateCw, Trash2 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
 import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
 import { SelfServiceUnavailable } from "@/components/SelfServiceUnavailable";
@@ -43,6 +45,7 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 // personally minted and see your own usage/spend. no admin role required — the
 // backend scopes everything to the logged-in account.
 export default function Account() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const scope = useScope();
 
@@ -119,7 +122,11 @@ export default function Account() {
           cannot serve at all — saying so beats a red line about loading (#942) */}
       {selfServiceUnavailable && <SelfServiceUnavailable />}
       {keys.error && !selfServiceUnavailable && (
-        <p className="text-sm text-destructive">Failed to load your keys.</p>
+        <LoadError
+          error={keys.error}
+          resource={t("errors.resources.yourKeys")}
+          onRetry={() => keys.refetch()}
+        />
       )}
       {!keys.isLoading && keys.data?.length === 0 && (
         <p className="text-sm text-muted-foreground">

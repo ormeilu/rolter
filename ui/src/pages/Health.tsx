@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
 import { PageBody } from "@/components/screen";
 import {
   fetchHealthTimeline,
@@ -50,6 +52,7 @@ function Timeline({ buckets }: { buckets: TimelineRow[] }) {
 }
 
 export default function Health() {
+  const { t } = useTranslation();
   const uptime = useQuery({
     queryKey: ["health-uptime", SLA],
     queryFn: () => fetchUptime(SLA),
@@ -89,9 +92,15 @@ export default function Health() {
       </div>
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {error && (
-        <p className="text-sm text-destructive">
-          Failed to load health rollups — is ClickHouse configured?
-        </p>
+        <LoadError
+          error={error}
+          resource={t("errors.resources.healthRollups")}
+          onRetry={() => {
+            uptime.refetch();
+            mttr.refetch();
+            timeline.refetch();
+          }}
+        />
       )}
       {!isLoading && !error && (uptime.data?.length ?? 0) === 0 && (
         <p className="text-sm text-muted-foreground">

@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { ArrowRight, Check, ShieldCheck } from "lucide-react";
 import { Link } from "react-router";
 
+import { LoadError } from "@/components/LoadError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchConfig } from "@/lib/api";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
@@ -14,6 +16,7 @@ const SECTION_TH =
 // this screen points at the real one rather than shipping a second, fake copy
 // of the same switches (#564)
 export default function Config() {
+  const { t } = useTranslation();
   const config = useQuery({ queryKey: ["config"], queryFn: fetchConfig });
 
   // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
@@ -45,9 +48,11 @@ export default function Config() {
         </div>
 
         {config.isError && (
-          <p className="text-sm text-destructive">
-            Failed to load config: {(config.error as Error).message}
-          </p>
+          <LoadError
+            error={config.error}
+            resource={t("errors.resources.config")}
+            onRetry={() => config.refetch()}
+          />
         )}
         {config.isLoading && <Skeleton height={280} radius={10} />}
 

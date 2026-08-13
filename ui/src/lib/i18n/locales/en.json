@@ -26,6 +26,52 @@
     "search": "Search…",
     "viewDocs": "View docs"
   },
+  "errors": {
+    "load": {
+      "retry": "Try again",
+      "signIn": "Sign in again",
+      "unauthenticated": {
+        "title": "Sign in to see {{resource}}",
+        "body": "Your session is missing or has expired, so the control plane refused the request. This is not a problem with the data."
+      },
+      "forbidden": {
+        "title": "You do not have access to {{resource}}",
+        "body": "You are signed in, but your role does not permit reading this. Retrying will not help — ask an administrator to widen your role."
+      },
+      "openMode": {
+        "title": "{{resource}} needs an admin token",
+        "body": "The control plane is running with no admin token, so it has no accounts and cannot serve per-user data to anyone. Signing in will not fix this: set ROLTER_ADMIN_TOKEN and restart it."
+      },
+      "unreachable": {
+        "title": "Cannot reach the control plane",
+        "body": "The request for {{resource}} got no answer at all. Check that the control plane is running and that this dashboard points at the right address."
+      },
+      "server": {
+        "title": "The control plane failed to return {{resource}}",
+        "body": "It answered, and the answer was an error. Its own message is below; the server logs will have more."
+      },
+      "unknown": {
+        "title": "Could not load {{resource}}",
+        "body": "The control plane rejected the request for a reason the dashboard does not recognise. Its own message is below."
+      }
+    },
+    "resources": {
+      "users": "users",
+      "provisioningTokens": "provisioning tokens",
+      "budgets": "budgets",
+      "rateLimits": "rate limits",
+      "providerGroups": "provider groups",
+      "virtualKeys": "virtual keys",
+      "healthRollups": "health rollups",
+      "yourKeys": "your keys",
+      "auditLog": "the audit log",
+      "modelPrices": "model prices",
+      "models": "models",
+      "config": "the effective config",
+      "providers": "providers",
+      "plugins": "plugins"
+    }
+  },
   "locale": {
     "label": "Language",
     "change": "Change language",
@@ -137,7 +183,6 @@
       "search": "Search providers",
       "add": "+ Add provider",
       "loading": "Loading…",
-      "loadFailed": "Failed to load providers.",
       "scopeBlocked": "Add/edit/delete is unavailable: {{error}}. Read-only view still works.",
       "noOrg": "No org configured yet — pick or create one to manage providers.",
       "colName": "Name",
@@ -159,8 +204,6 @@
       "install": "Install plugin",
       "installFirst": "Install first plugin",
       "noOrg": "Choose an organization to manage plugins.",
-      "loadFailed": "Plugin registry unavailable",
-      "retry": "Try again",
       "emptyTitle": "No plugins installed",
       "emptyDescription": "Install a webhook plugin and choose its pipeline stage. It only affects traffic once you enable it.",
       "stageEmpty": "No plugin configured at this stage",
