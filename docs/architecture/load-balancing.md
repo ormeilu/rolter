@@ -174,3 +174,9 @@ target with no evidence should not be ranked.
 | Heterogeneous pool, variable prompt sizes, deep queues | `predicted_latency` |
 
 Both external strategies perform network I/O only in background tasks. The request hot path reads bounded in-process state and atomics.
+
+## Selecting a strategy from the dashboard
+
+The route and provider-group editors offer every strategy in this table except `adaptive`, which is governed by the deployment-wide `[adaptive_routing]` policy and has its own screen — a per-route dropdown would misrepresent how it is controlled. `precise_cache_aware` and `lmcache_aware` are offered with a hint that they need a telemetry source on the target providers, since without one they fall back to least-load silently rather than failing.
+
+A picker always renders the value the route or group already holds, even one it would not otherwise offer — including a strategy set from `rolter.toml` or the API, or one added to the backend allowlist ahead of the dashboard. A native `<select>` whose value matches no option displays the *first* option instead, so before #897 a group balanced by `adaptive` read as `round_robin`. Whatever the menu chooses to offer, editing must never rewrite a strategy the operator did not touch.

@@ -18,18 +18,10 @@ import {
   STRATEGIES,
   type RouteTargetRow,
 } from "@/lib/api";
+import { StrategyHint } from "@/components/StrategyHint";
 import { useScope } from "@/lib/scope";
+import { strategyOptions, strategyTone } from "@/lib/strategies";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
-
-const STRATEGY_TONE: Record<string, [string, string]> = {
-  cache_aware: ["var(--status-info)", "rgba(59,130,246,.14)"],
-  weighted: ["var(--status-success)", "rgba(22,163,74,.14)"],
-  round_robin: ["var(--text-secondary)", "var(--surface-subtle)"],
-  consistent_hash: ["var(--status-warning)", "rgba(245,158,11,.14)"],
-  power_of_two: ["var(--red-folk)", "var(--red-tint)"],
-  lora_aware: ["var(--status-info)", "rgba(59,130,246,.14)"],
-  predicted_latency: ["var(--status-info)", "rgba(59,130,246,.14)"],
-};
 
 const TARGET_BARS = ["var(--red-folk)", "var(--zinc-400)", "var(--status-info)", "var(--status-success)"];
 
@@ -102,7 +94,7 @@ export default function RoutingRules() {
         {(routes.data ?? []).map((r) => {
           const targets = targetsByRoute.get(r.id) ?? [];
           const totalWeight = targets.reduce((a, t) => a + t.weight, 0) || 1;
-          const tone = STRATEGY_TONE[r.strategy] ?? STRATEGY_TONE.round_robin;
+          const tone = strategyTone(r.strategy);
           return (
             <div
               key={r.id}
@@ -259,12 +251,13 @@ function AddRouteDialog({
         </Field>
         <Field label="Strategy">
           <Select value={strategy} onChange={(e) => setStrategy(e.target.value)}>
-            {STRATEGIES.map((s) => (
+            {strategyOptions(strategy).map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>
             ))}
           </Select>
+          <StrategyHint strategy={strategy} />
         </Field>
         <Field label="First target">
           <Select value={providerId} onChange={(e) => setProviderId(e.target.value)}>
