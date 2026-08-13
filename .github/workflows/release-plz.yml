@@ -78,10 +78,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      # only rolter-gateway carries git_tag_enable, so exactly one entry in the
-      # `releases` array has a tag; the rest are crates.io-only publishes. an
-      # empty tag means nothing was released on this push (the common case for a
-      # non-release commit), and the dispatch job below is skipped.
+      # release-plz reports a `tag` for *every* published crate, whether or not
+      # git_tag_enable is set for it — the crates.io-only members get a derived
+      # `<crate>-v<version>` string that was never pushed to git. only
+      # rolter-gateway carries git_tag_enable (`v{{ version }}`), so select that
+      # entry by name rather than taking the first tagged one, which resolved to
+      # `rolter-core-v0.0.11` and handed release.yml a ref that does not exist
+      # (#1026). an empty tag means nothing was released on this push (the common
+      # case for a non-release commit), and the dispatch job below is skipped.
       - name: resolve release tag
         id: tag
         env:
@@ -90,9 +94,16 @@ jobs:
           set -euo pipefail
           tag="$(printf '%s' "${RELEASES:-}" \
             | jq -r 'if . == null then [] else . end
-                     | map(select(.tag != null and .tag != "")) | .[0].tag // ""' \
+                     | map(select(.package_name == "rolter-gateway"))
+                     | .[0].tag // ""' \
             || true)"
           echo "resolved release tag: '${tag}'"
+          # the tag must be one release.yml can check out; a derived crate tag is
+          # never pushed, so fail loudly here instead of dispatching a bad ref
+          if [ -n "$tag" ] && ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::resolved tag '$tag' is not a vX.Y.Z release tag"
+            exit 1
+          fi
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
   # ── hand off to the artifact release ────────────────────────────────────────
@@ -134,9 +145,15 @@ jobs:
         run: |
           set -euo pipefail
           for _ in $(seq 1 20); do
-            runs="$(gh api "repos/$REPO/actions/workflows/release.yml/runs" \
-              -f event=workflow_dispatch -f per_page=20 \
-              -q ".workflow_runs[] | select((.created_at | fromdateiso8601) >= ($started - 120)) | .html_url")"
+            # the query must live in the path: `gh api` silently switches to POST
+            # as soon as any -f/-F parameter is set, which 404s this GET-only
+            # endpoint and — under `set -e` — aborted the retry loop on the first
+            # pass even though the dispatch had worked (#1026). `|| true` keeps a
+            # transient api error inside the loop rather than failing the job.
+            runs="$(gh api \
+              "repos/$REPO/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=20" \
+              -q ".workflow_runs[] | select((.created_at | fromdateiso8601) >= ($started - 120)) | .html_url" \
+              || true)"
             count="$(printf '%s' "$runs" | grep -c . || true)"
             if [ "$count" -ge 1 ]; then
               echo "artifact release run(s) for $TAG:"; echo "$runs"
