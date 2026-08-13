@@ -224,3 +224,107 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  # ── release parity gate ─────────────────────────────────────────────────────
+  # #903 shipped five releases where the github release and crates.io advanced
+  # while pypi stayed on 0.0.5, and nothing anywhere went red. this job is the
+  # regression guard: it asserts every distribution channel actually serves the
+  # tagged version, and fails the release run when one of them does not. it runs
+  # with `always()` so a skipped or failed publish is reported rather than
+  # silently dragging the whole run to "skipped".
+  verify-parity:
+    name: verify release parity
+    if: always()
+    needs: [verify, verify-external-checks, build-wheels, publish-pypi, publish-docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read # read back the GHCR manifest we just pushed
+    steps:
+      - name: assert every enabled channel serves the tagged version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          REF: ${{ inputs.tag || github.ref_name }}
+          PYPI_ENABLED: ${{ vars.PYPI_PUBLISH_ENABLED }}
+          DOCKER_ENABLED: ${{ vars.DOCKER_PUBLISH_ENABLED }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          CHECKS_RESULT: ${{ needs.verify-external-checks.result }}
+          WHEELS_RESULT: ${{ needs.build-wheels.result }}
+          PYPI_RESULT: ${{ needs.publish-pypi.result }}
+          DOCKER_RESULT: ${{ needs.publish-docker.result }}
+        run: |
+          set -euo pipefail
+          VERSION="${REF#v}"
+          fail=0
+          note() { echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
+          note "### release parity for \`$REF\`"; note ""
+
+          require_job() {
+            # $1 job name, $2 result
+            if [ "$2" != "success" ]; then
+              echo "::error::job '$1' did not succeed (result=$2)"
+              note "- ❌ job \`$1\`: $2"
+              fail=1
+            else
+              note "- ✅ job \`$1\`"
+            fi
+          }
+          require_job verify "$VERIFY_RESULT"
+          require_job verify-external-checks "$CHECKS_RESULT"
+          require_job build-wheels "$WHEELS_RESULT"
+
+          # github release
+          if gh api "repos/$REPO/releases/tags/$REF" -q '.tag_name' > /dev/null 2>&1; then
+            note "- ✅ github release \`$REF\`"
+          else
+            echo "::error::no github release for $REF"; note "- ❌ github release \`$REF\` missing"; fail=1
+          fi
+
+          # crates.io (published by release-plz before this workflow is dispatched)
+          if curl -sfL -H 'User-Agent: rolter-release-parity (github.com/rolter-ai/rolter)' \
+               https://crates.io/api/v1/crates/rolter \
+               | jq -e --arg v "$VERSION" '.versions | map(.num) | index($v)' > /dev/null; then
+            note "- ✅ crates.io \`rolter $VERSION\`"
+          else
+            echo "::error::crates.io does not serve rolter $VERSION"
+            note "- ❌ crates.io \`rolter $VERSION\` missing"; fail=1
+          fi
+
+          # pypi — only asserted when publishing is enabled. the index takes a
+          # moment to reflect a fresh upload, so poll rather than race it.
+          if [ "$PYPI_ENABLED" = "true" ]; then
+            require_job publish-pypi "$PYPI_RESULT"
+            found=0
+            for _ in $(seq 1 20); do
+              if curl -sfL https://pypi.org/pypi/rolter/json \
+                   | jq -e --arg v "$VERSION" '.releases | has($v)' > /dev/null; then
+                found=1; break
+              fi
+              sleep 15
+            done
+            if [ "$found" = "1" ]; then
+              note "- ✅ pypi \`rolter $VERSION\`"
+            else
+              echo "::error::pypi does not serve rolter $VERSION after 5m"
+              note "- ❌ pypi \`rolter $VERSION\` missing"; fail=1
+            fi
+          else
+            note "- ⏭️ pypi publishing disabled (PYPI_PUBLISH_ENABLED != true)"
+          fi
+
+          if [ "$DOCKER_ENABLED" = "true" ]; then
+            require_job publish-docker "$DOCKER_RESULT"
+            echo "${GH_TOKEN}" | docker login ghcr.io -u "${ACTOR}" --password-stdin
+            if docker manifest inspect "ghcr.io/${REPO}:${VERSION}" > /dev/null 2>&1; then
+              note "- ✅ ghcr \`${REPO}:${VERSION}\`"
+            else
+              echo "::error::ghcr has no ${REPO}:${VERSION} manifest"
+              note "- ❌ ghcr \`${REPO}:${VERSION}\` missing"; fail=1
+            fi
+          else
+            note "- ⏭️ docker publishing disabled (DOCKER_PUBLISH_ENABLED != true)"
+          fi
+
+          exit $fail
