@@ -1,0 +1,24 @@
+<!--
+  rolter tab icon.
+
+  Not the same file as logo-mark.svg. That mark draws its diamond as 28
+  separate 6.2px squares on a 63px grid; at 16x16 each square lands on about
+  1.5 device pixels and the whole thing greys into a smudge (#941).
+
+  This keeps the identical silhouette — a diamond ring with a centre dot, on
+  the same 63-unit grid — but draws the ring as one stroked path, so the shape
+  survives downscaling instead of dissolving into its own gaps. The stroke
+  width (9.33) is the ring's true perpendicular thickness, measured between the
+  outer and inner edges of the original lattice, and the path runs along its
+  centreline. Rendered at any size, the outline matches the logo.
+
+  Single-toned on purpose: the logo alternates #ff4017 and #b41d21, a contrast
+  that is legible at logo size and invisible at 16px, where it only muddies the
+  colour. #ff4017 alone holds up against both light and dark tab strips.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 63 63" width="63" height="63">
+  <g fill="none" stroke="#ff4017" stroke-width="9.33" stroke-linejoin="round">
+    <path d="M31.5 7 L56 31.5 L31.5 56 L7 31.5 Z" />
+  </g>
+  <rect x="28.4" y="28.4" width="6.2" height="6.2" rx="1.2" fill="#ff4017" />
+</svg>

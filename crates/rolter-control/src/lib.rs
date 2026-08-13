@@ -444,25 +444,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     let index = load_index(&args.ui_dir, &ui_runtime);
 
     let app = build_app_with(state.clone(), !split_internal)
-        // anything not matched by the api falls through to the built SPA.
-        // ServeDir must not serve index.html on its own: every route that ends
-        // at the SPA has to come through the fallback, or it arrives without
-        // the injected runtime config and the dashboard's tracing stays inert.
-        // Routing every miss there is also what lets a deep link like /models
-        // survive a refresh instead of 404ing
-        .fallback_service(
-            ServeDir::new(&args.ui_dir)
-                .append_index_html_on_directories(false)
-                .fallback(get(move || {
-                    let index = index.clone();
-                    async move {
-                        match index {
-                            Some(html) => Html(html).into_response(),
-                            None => StatusCode::NOT_FOUND.into_response(),
-                        }
-                    }
-                })),
-        );
+        .fallback_service(spa_fallback(&args.ui_dir, index));
 
     tracing::info!(%addr, ui_dir = %args.ui_dir.display(), "rolter-control listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -482,6 +464,34 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         axum::serve(internal_listener, internal).await
     },)?;
     Ok(())
+}
+
+/// Everything the API did not match falls through to the built SPA.
+///
+/// `ServeDir` answers first, so a real file in `ui_dir` — the JS bundle, the CSS,
+/// the tab icons (#941) — is served as itself. Only a path with no file behind
+/// it reaches the inner fallback and gets `index.html`, which is what lets a
+/// deep link like `/models` survive a refresh instead of 404ing.
+///
+/// `ServeDir` must not serve `index.html` on its own, hence
+/// `append_index_html_on_directories(false)`: every route that ends at the SPA
+/// has to come through the fallback, or it arrives without the injected runtime
+/// config and the dashboard's tracing stays inert.
+fn spa_fallback(
+    ui_dir: &std::path::Path,
+    index: Option<String>,
+) -> ServeDir<axum::routing::MethodRouter> {
+    ServeDir::new(ui_dir)
+        .append_index_html_on_directories(false)
+        .fallback(get(move || {
+            let index = index.clone();
+            async move {
+                match index {
+                    Some(html) => Html(html).into_response(),
+                    None => StatusCode::NOT_FOUND.into_response(),
+                }
+            }
+        }))
 }
 
 /// Read the dashboard's `index.html` out of `ui_dir` and inject the runtime
@@ -1324,6 +1334,66 @@ mod tests {
             html.contains("<title>rolter</title>"),
             "original kept: {html}"
         );
+    }
+
+    /// #941 added tab icons to `ui/public`, which the build copies verbatim
+    /// into `ui/dist`. Shipping them is only half the job: if the SPA fallback
+    /// answered first, `/favicon.ico` would return `index.html` with a
+    /// `text/html` type and the browser would render no icon at all.
+    #[tokio::test]
+    async fn a_static_asset_is_served_as_itself_not_as_the_spa() {
+        let dir = ScratchUiDir::with_index("assets", "<html>the dashboard</html>");
+        std::fs::write(dir.0.join("favicon.ico"), b"\x00\x00\x01\x00icon-bytes")
+            .expect("write favicon");
+
+        let app = Router::new().fallback_service(spa_fallback(
+            &dir.0,
+            Some("<html>the dashboard</html>".to_string()),
+        ));
+        let addr = serve(app).await;
+
+        let response = reqwest::get(format!("http://{addr}/favicon.ico"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            !content_type.contains("text/html"),
+            "served as the SPA, not as an icon: {content_type}"
+        );
+        assert!(
+            response
+                .bytes()
+                .await
+                .unwrap()
+                .starts_with(b"\x00\x00\x01\x00"),
+            "the icon's own bytes must come back"
+        );
+    }
+
+    /// The other half: a path with no file behind it still reaches the SPA, so
+    /// adding assets did not break deep-link refresh.
+    #[tokio::test]
+    async fn a_deep_link_still_falls_through_to_the_dashboard() {
+        let dir = ScratchUiDir::with_index("deeplink", "<html>the dashboard</html>");
+        let app = Router::new().fallback_service(spa_fallback(
+            &dir.0,
+            Some("<html>the dashboard</html>".to_string()),
+        ));
+        let addr = serve(app).await;
+
+        let body = reqwest::get(format!("http://{addr}/models"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(body.contains("the dashboard"), "{body}");
     }
 
     #[test]
