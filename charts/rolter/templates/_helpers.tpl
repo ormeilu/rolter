@@ -71,6 +71,13 @@ copy that drifts.
 {{- define "rolter.controlEnv" -}}
 - name: RUST_LOG
   value: {{ .Values.env.rustLog | quote }}
+# a pod has to bind every interface for its Service to reach it. the binary
+# defaults to loopback so an unauthenticated control plane cannot reach a
+# network by omission (#970), so the chart sets it back explicitly — and with
+# no ROLTER_ADMIN_TOKEN in secretEnv the control plane then refuses to start,
+# which is the intended outcome for a cluster deployment
+- name: ROLTER_CONTROL_HOST
+  value: {{ .Values.control.host | quote }}
 {{- if .Values.env.databaseUrl }}
 - name: ROLTER_DATABASE_URL
   value: {{ .Values.env.databaseUrl | quote }}

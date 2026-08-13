@@ -478,7 +478,11 @@
     "refresh": "Refresh",
     "refreshing": "Refreshing…",
     "refreshData": "Refresh data",
-    "refreshingData": "Refreshing data"
+    "refreshingData": "Refreshing data",
+    "openMode": {
+      "title": "Control plane is unauthenticated.",
+      "body": "No admin token is set, so every request to this control plane is served as superadmin — anyone who can reach it can read keys and change providers, routing and budgets. Set ROLTER_ADMIN_TOKEN to close it."
+    }
   },
   "stub": {
     "todo": "TODO — we'll come back to this screen"
