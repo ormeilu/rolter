@@ -457,6 +457,15 @@ export const PROVIDER_KINDS = [
   "falcon",
 ] as const;
 
+/**
+ * Every balancing strategy the control plane accepts, in the order of the
+ * `STRATEGIES` allowlist in `crates/rolter-control/src/crud.rs` (#897).
+ *
+ * This is the API contract, not the menu: which of these a picker offers, and
+ * with what caveat, is decided in `lib/strategies.ts`. Adding a strategy to the
+ * backend allowlist without adding it here makes a route on it uneditable from
+ * the dashboard, which is the bug #897 recorded.
+ */
 export const STRATEGIES = [
   "round_robin",
   "random",
@@ -465,6 +474,11 @@ export const STRATEGIES = [
   "cache_aware",
   "weighted",
   "pipeline",
+  "cheapest",
+  "fastest",
+  "precise_cache_aware",
+  "lmcache_aware",
+  "adaptive",
   "lora_aware",
   "predicted_latency",
 ] as const;

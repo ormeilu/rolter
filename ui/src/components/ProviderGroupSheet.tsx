@@ -18,6 +18,8 @@ import {
   type ProviderGroupRow,
   type ProviderRow,
 } from "@/lib/api";
+import { StrategyHint } from "@/components/StrategyHint";
+import { strategyOptions } from "@/lib/strategies";
 import { useFormTelemetry } from "@/lib/ux-react";
 
 export type ProviderGroupSheetMode = "add" | "edit";
@@ -320,12 +322,13 @@ export function ProviderGroupSheet({
 
         <Field label="Strategy" hint="how requests are balanced across member providers">
           <Select value={draft.strategy} onChange={(e) => set({ strategy: e.target.value })}>
-            {STRATEGIES.map((s) => (
+            {strategyOptions(draft.strategy).map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>
             ))}
           </Select>
+          <StrategyHint strategy={draft.strategy} />
         </Field>
 
         <MemberEditor
