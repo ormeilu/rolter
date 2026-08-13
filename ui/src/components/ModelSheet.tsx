@@ -22,11 +22,13 @@ import {
   createRoute,
   createRouteTarget,
   deleteRouteTarget,
+  fetchCurrencySettings,
   fetchModelPrices,
   fetchRouteTargets,
   fetchTeams,
   fetchUsers,
   fetchVirtualKeys,
+  isConvertible,
   ROLES,
   setRouteEnabled,
   STRATEGIES,
@@ -115,7 +117,6 @@ interface ModelDraft {
 }
 
 const MODALITIES: Modality[] = ["chat", "embedding", "image", "audio"];
-const CURRENCIES = ["USD", "EUR", "GBP", "INR", "JPY", "CAD", "AUD"];
 const PARAM_TYPES: ParamType[] = ["string", "int", "float", "boolean", "enum"];
 
 function paramDefs(modality: Modality, reasoning: boolean): DraftParam[] {
@@ -644,6 +645,15 @@ export function ModelSheet({
     queryFn: fetchModelPrices,
     enabled: open && mode === "edit",
   });
+  // the currency chooser is the deployment's rate table, not a literal (#965).
+  // deployment config, so it never goes stale within a session
+  const currency = useQuery({
+    queryKey: ["currency-settings"],
+    queryFn: fetchCurrencySettings,
+    enabled: open,
+    staleTime: Infinity,
+    retry: false,
+  });
 
   // rbac chip sources (best-effort; sections stay usable without them)
   const teams = useQuery({
@@ -904,6 +914,16 @@ export function ModelSheet({
 
   const showCaps = draft.modality === "chat" || draft.modality === "audio";
   const cur = draft.price.currency;
+  // a stored price may name a code the rate table no longer carries; keep it
+  // selectable so saving an unrelated field cannot silently re-denominate it
+  const currencyOptions = React.useMemo(() => {
+    const codes = currency.data?.codes ?? [];
+    const offered = codes.length > 0 ? codes : [cur || "USD"];
+    return offered.some((c) => c.toUpperCase() === cur.trim().toUpperCase())
+      ? offered
+      : [...offered, cur];
+  }, [currency.data, cur]);
+  const currencyUnconvertible = !isConvertible(currency.data, cur);
   const paramManual = draft.paramMode === "manual";
   const headerManual = draft.headerMode === "manual";
   const modeNote =
@@ -1343,7 +1363,7 @@ export function ModelSheet({
                 disabled={readonly}
                 onChange={(e) => setDeep("price", { currency: e.target.value })}
               >
-                {CURRENCIES.map((c) => (
+                {currencyOptions.map((c) => (
                   <option key={c} value={c}>
                     {c}
                   </option>
@@ -1359,6 +1379,14 @@ export function ModelSheet({
               View pricing source ↗
             </a>
           </div>
+          {currencyUnconvertible && (
+            <p className="text-xs text-amber-600 dark:text-amber-500">
+              {t("modelSheet.currencyUnconvertible", {
+                code: cur,
+                base: currency.data?.base ?? "",
+              })}
+            </p>
+          )}
         </Section>
 
         {/* ===== Limits & network ===== */}
