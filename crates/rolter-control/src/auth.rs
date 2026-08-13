@@ -185,23 +185,50 @@ pub enum AuthError {
     /// plainly rather than as a wrong-password: the user has no way to guess
     /// their way past a policy, and hiding it just sends them to support
     PasswordLoginDisabled,
+    /// there is no session *and* the control plane is in open mode, so there
+    /// is no account to have a session for. Distinct from
+    /// [`Self::Unauthenticated`] because the remedy is completely different:
+    /// this one is not fixed by signing in (#942)
+    OpenModeNoSession,
     Internal(String),
 }
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
-            Self::InvalidCredentials => (StatusCode::UNAUTHORIZED, "invalid email or password"),
-            Self::Unauthenticated => (StatusCode::UNAUTHORIZED, "missing or invalid session"),
+        // `code` is the stable, machine-readable half: the dashboard branches on
+        // it to explain an unreachable screen rather than rendering a bare
+        // failure, and messages stay free to be reworded
+        let (status, code, message) = match self {
+            Self::InvalidCredentials => (
+                StatusCode::UNAUTHORIZED,
+                "invalid_credentials",
+                "invalid email or password",
+            ),
+            Self::Unauthenticated => (
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+                "missing or invalid session",
+            ),
             Self::PasswordLoginDisabled => (
                 StatusCode::FORBIDDEN,
+                "password_login_disabled",
                 "password login is disabled for this organization; sign in with sso",
             ),
-            Self::Internal(ref msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.as_str()),
+            Self::OpenModeNoSession => (
+                StatusCode::UNAUTHORIZED,
+                "open_mode_no_session",
+                "no local account session: this control plane is running in open mode \
+                 (no ROLTER_ADMIN_TOKEN), so it has no user accounts to act as. Endpoints \
+                 under /api/v1/me/ are per-user and cannot be served without one — set an \
+                 admin token and create a local account, or use the admin virtual-key API",
+            ),
+            Self::Internal(ref msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal", msg.as_str())
+            }
         };
         (
             status,
-            Json(serde_json::json!({"error": {"message": message}})),
+            Json(serde_json::json!({"error": {"message": message, "code": code}})),
         )
             .into_response()
     }
@@ -370,7 +397,21 @@ impl FromRequestParts<ControlState> for CurrentUser {
         parts: &mut Parts,
         state: &ControlState,
     ) -> Result<Self, Self::Rejection> {
-        let token = bearer_token(&parts.headers).ok_or(AuthError::Unauthenticated)?;
+        // in open mode the admin `Principal` extractor passes every request as
+        // superadmin, so admin routes work while these ones 401 — which reads
+        // as "my login is broken" rather than "this endpoint needs an account
+        // this deployment does not have" (#942). Same fact both extractors
+        // branch on, so the two can never disagree about what open mode is
+        let open_mode = state.admin_token.is_none();
+        let unauthenticated = || {
+            if open_mode {
+                AuthError::OpenModeNoSession
+            } else {
+                AuthError::Unauthenticated
+            }
+        };
+
+        let token = bearer_token(&parts.headers).ok_or_else(unauthenticated)?;
 
         let token_hash = rolter_auth::hash_key(&session_pepper(), token);
         let pool = pool(state);
@@ -378,7 +419,7 @@ impl FromRequestParts<ControlState> for CurrentUser {
             .find_active_by_hash(&token_hash)
             .await
             .map_err(AuthError::from)?
-            .ok_or(AuthError::Unauthenticated)?;
+            .ok_or_else(unauthenticated)?;
         let user = UserRepo(pool)
             .get(session.user_id)
             .await
@@ -447,5 +488,58 @@ mod tests {
         let (a, _) = generate_session_token("pepper");
         let (b, _) = generate_session_token("pepper");
         assert_ne!(a, b);
+    }
+
+    /// Read the `(status, code, message)` an [`AuthError`] renders as.
+    async fn rendered(err: AuthError) -> (StatusCode, String, String) {
+        let response = err.into_response();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        (
+            status,
+            json["error"]["code"].as_str().unwrap().to_string(),
+            json["error"]["message"].as_str().unwrap().to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn every_auth_error_carries_a_machine_readable_code() {
+        // the dashboard branches on `code` to explain a screen it cannot serve;
+        // a variant that renders without one degrades to a bare failure
+        for err in [
+            AuthError::InvalidCredentials,
+            AuthError::Unauthenticated,
+            AuthError::PasswordLoginDisabled,
+            AuthError::OpenModeNoSession,
+            AuthError::Internal("boom".to_string()),
+        ] {
+            let (_, code, message) = rendered(err).await;
+            assert!(!code.is_empty());
+            assert!(!message.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn open_mode_is_distinguishable_from_a_missing_session() {
+        // both are 401, and conflating them is the whole bug (#942): one is
+        // fixed by signing in, the other cannot be
+        let (plain_status, plain_code, _) = rendered(AuthError::Unauthenticated).await;
+        let (open_status, open_code, open_message) = rendered(AuthError::OpenModeNoSession).await;
+
+        assert_eq!(plain_status, StatusCode::UNAUTHORIZED);
+        assert_eq!(open_status, StatusCode::UNAUTHORIZED);
+        assert_ne!(plain_code, open_code);
+        assert_eq!(open_code, "open_mode_no_session");
+
+        // the message has to name the cause and the remedy, or the dashboard is
+        // left saying "unauthorized" in more words
+        assert!(open_message.contains("open mode"), "{open_message}");
+        assert!(
+            open_message.contains("ROLTER_ADMIN_TOKEN"),
+            "{open_message}"
+        );
     }
 }

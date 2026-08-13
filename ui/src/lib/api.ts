@@ -46,12 +46,30 @@ function authHeaders(): Record<string, string> {
 
 export class ApiError extends Error {
   readonly status: number;
+  /**
+   * Stable machine-readable reason from the control plane's
+   * `{"error": {"code": ...}}` body, when it sent one. Screens branch on this
+   * rather than on the message, which is free to be reworded and translated.
+   */
+  readonly code?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
+}
+
+/**
+ * The control plane is running with no admin token, so it has no local accounts
+ * and the per-user `/me/*` endpoints cannot be served to anyone (#942).
+ *
+ * A plain 401 means "sign in"; this one cannot be fixed that way, so the two
+ * must not render alike.
+ */
+export function isOpenModeNoSession(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "open_mode_no_session";
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -62,13 +80,15 @@ async function getJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-/// extract the control api's `{"error": {"message": ...}}` body when present,
-/// falling back to the raw status text
+/// extract the control api's `{"error": {"message": ..., "code": ...}}` body
+/// when present, falling back to the raw status text
 async function apiError(res: Response): Promise<ApiError> {
   try {
-    const body = (await res.json()) as { error?: { message?: string } };
+    const body = (await res.json()) as {
+      error?: { message?: string; code?: string };
+    };
     if (body?.error?.message) {
-      return new ApiError(body.error.message, res.status);
+      return new ApiError(body.error.message, res.status, body.error.code);
     }
   } catch {
     // not json, fall through

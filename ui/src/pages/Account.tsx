@@ -4,6 +4,7 @@ import * as React from "react";
 
 import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
+import { SelfServiceUnavailable } from "@/components/SelfServiceUnavailable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +28,7 @@ import {
   AnalyticsUnavailableError,
   deleteMyKey,
   fetchMyKeys,
+  isOpenModeNoSession,
   fetchMyUsage,
   mintMyKey,
   rotateMyKey,
@@ -45,7 +47,6 @@ export default function Account() {
   const scope = useScope();
 
   const keys = useQuery({ queryKey: ["my-keys"], queryFn: fetchMyKeys });
-
 
   // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
 
@@ -84,18 +85,22 @@ export default function Account() {
   }, [usage.data]);
 
   const usageUnavailable = usage.error instanceof AnalyticsUnavailableError;
+  const selfServiceUnavailable = isOpenModeNoSession(keys.error);
 
   return (
     <PageBody>
       <div className="flex items-center gap-3">
         <span className="text-sm text-muted-foreground">
-          {keys.data?.length ?? 0} keys · programmatic access to the gateway, yours to rotate or
-          revoke
+          {keys.data?.length ?? 0} keys · programmatic access to the gateway,
+          yours to rotate or revoke
         </span>
         <Button
           className="ml-auto"
           onClick={() => setMintOpen(true)}
-          disabled={!scope.projectId}
+          // minting posts to /me/*, which 401s for the same reason the list
+          // did; offering the button would just move the dead end one click
+          // later (#942)
+          disabled={!scope.projectId || selfServiceUnavailable}
           title={
             scope.projectId
               ? undefined
@@ -110,7 +115,10 @@ export default function Account() {
       {keys.isLoading && (
         <p className="text-sm text-muted-foreground">Loading…</p>
       )}
-      {keys.error && (
+      {/* open mode is not a failed request, it is a screen this deployment
+          cannot serve at all — saying so beats a red line about loading (#942) */}
+      {selfServiceUnavailable && <SelfServiceUnavailable />}
+      {keys.error && !selfServiceUnavailable && (
         <p className="text-sm text-destructive">Failed to load your keys.</p>
       )}
       {!keys.isLoading && keys.data?.length === 0 && (

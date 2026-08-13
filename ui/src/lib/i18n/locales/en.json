@@ -510,5 +510,11 @@
       "title_one": "{{count}} config entry is not being served to gateways",
       "title_other": "{{count}} config entries are not being served to gateways"
     }
+  },
+  "account": {
+    "openMode": {
+      "title": "Self-service keys need a local account.",
+      "body": "This control plane is running in open mode with no admin token, so it has no user accounts — there is no \"you\" to mint a key for. Set ROLTER_ADMIN_TOKEN and create a local account to use this screen, or manage keys from the admin Virtual Keys screen instead."
+    }
   }
 }
