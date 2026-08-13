@@ -56,6 +56,12 @@ jobs:
           components: rustfmt, clippy
       - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # never write the shared cache when verifying an externally
+          # supplied ref: a release dispatch can name any commit, and a
+          # cache written from it would be restored by trusted default-
+          # branch runs. read-only is enough to keep releases fast.
+          save-if: ${{ inputs.ref == '' }}
       - name: fmt
         run: cargo fmt --all --check
       - name: clippy (default features)
@@ -101,6 +107,12 @@ jobs:
           toolchain: stable
       - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # never write the shared cache when verifying an externally
+          # supplied ref: a release dispatch can name any commit, and a
+          # cache written from it would be restored by trusted default-
+          # branch runs. read-only is enough to keep releases fast.
+          save-if: ${{ inputs.ref == '' }}
       - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026 # v2.85.11
         with:
           tool: nextest
@@ -124,6 +136,12 @@ jobs:
           toolchain: stable
       - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # never write the shared cache when verifying an externally
+          # supplied ref: a release dispatch can name any commit, and a
+          # cache written from it would be restored by trusted default-
+          # branch runs. read-only is enough to keep releases fast.
+          save-if: ${{ inputs.ref == '' }}
       - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026 # v2.85.11
         with:
           tool: cargo-hack
@@ -147,6 +165,12 @@ jobs:
           toolchain: stable
       - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # never write the shared cache when verifying an externally
+          # supplied ref: a release dispatch can name any commit, and a
+          # cache written from it would be restored by trusted default-
+          # branch runs. read-only is enough to keep releases fast.
+          save-if: ${{ inputs.ref == '' }}
       - name: cargo doc
         run: cargo doc --workspace --no-deps --all-features
 
@@ -320,6 +344,10 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # same reasoning as rust-cache above: no cache writes from a
+          # ref the caller supplied
+          no-cache: ${{ inputs.ref != '' }}
       - name: install
         # dependabot's npm ecosystem bumps ui/package.json but never writes
         # bun.lock, so a frozen install fails on its PRs; reconcile the lockfile
@@ -367,6 +395,10 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # same reasoning as rust-cache above: no cache writes from a
+          # ref the caller supplied
+          no-cache: ${{ inputs.ref != '' }}
       - name: install
         env:
           IS_DEPENDABOT: ${{ github.actor == 'dependabot[bot]' }}
@@ -409,6 +441,12 @@ jobs:
           toolchain: stable
       - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # never write the shared cache when verifying an externally
+          # supplied ref: a release dispatch can name any commit, and a
+          # cache written from it would be restored by trusted default-
+          # branch runs. read-only is enough to keep releases fast.
+          save-if: ${{ inputs.ref == '' }}
       - name: build gateway
         run: cargo build -p rolter-gateway
       - name: boot + probe
@@ -479,6 +517,12 @@ jobs:
           toolchain: stable
       - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # never write the shared cache when verifying an externally
+          # supplied ref: a release dispatch can name any commit, and a
+          # cache written from it would be restored by trusted default-
+          # branch runs. read-only is enough to keep releases fast.
+          save-if: ${{ inputs.ref == '' }}
       - name: cargo package (verifies each crate in isolation)
         run: cargo package --workspace --locked
 
@@ -551,6 +595,12 @@ jobs:
           components: llvm-tools-preview
       - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # never write the shared cache when verifying an externally
+          # supplied ref: a release dispatch can name any commit, and a
+          # cache written from it would be restored by trusted default-
+          # branch runs. read-only is enough to keep releases fast.
+          save-if: ${{ inputs.ref == '' }}
       - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026 # v2.85.11
         with:
           tool: cargo-llvm-cov
@@ -605,6 +655,12 @@ jobs:
         with:
           toolchain: 1.82.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # never write the shared cache when verifying an externally
+          # supplied ref: a release dispatch can name any commit, and a
+          # cache written from it would be restored by trusted default-
+          # branch runs. read-only is enough to keep releases fast.
+          save-if: ${{ inputs.ref == '' }}
       - name: cargo check (msrv)
         run: cargo check --workspace --all-features
 
@@ -624,6 +680,12 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # never write the shared cache when verifying an externally
+          # supplied ref: a release dispatch can name any commit, and a
+          # cache written from it would be restored by trusted default-
+          # branch runs. read-only is enough to keep releases fast.
+          save-if: ${{ inputs.ref == '' }}
       - name: cargo check (macos)
         run: cargo check --workspace --all-features
 
@@ -643,4 +705,10 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # never write the shared cache when verifying an externally
+          # supplied ref: a release dispatch can name any commit, and a
+          # cache written from it would be restored by trusted default-
+          # branch runs. read-only is enough to keep releases fast.
+          save-if: ${{ inputs.ref == '' }}
       - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
