@@ -75,11 +75,41 @@ release-plz.yml ── verify ──► release ──►  crates.io publish
       │
       │ workflow_dispatch -f tag=v{version}      ← dispatch-artifact-release
       ▼
-release.yml ── verify ─┬─► build-wheels (linux x86_64/aarch64, macos, windows)
-                       ├─► publish-pypi   (trusted publishing, OIDC)
-                       ├─► publish-docker (GHCR + optional Docker Hub)
-                       └─► verify-parity  (all channels serve {version})
+release.yml
+  │
+  ├─ gate ──── verify (quality.yml on the tag) + verify-external-checks
+  │
+  ├─ build ─── build-wheels  (5 wheels + sdist)
+  │            build-image   (per arch, pushed as untagged digests)
+  │
+  ├─ smoke ─── smoke-wheels  (install each wheel, run `rolter --version`)
+  │            smoke-image   (run each image digest, check its version)
+  │
+  ├─ publish ─ publish-pypi    (trusted publishing, OIDC)
+  │            publish-docker  (assemble tag manifests: GHCR + Docker Hub)
+  │
+  └─ check ─── verify-parity  (all channels serve {version})
 ```
+
+The stages are a barrier, not decoration. Every publish job depends on *every*
+build and smoke job, so a release is all-or-nothing: a failed wheel can no
+longer leave container images published against a version that has nothing on
+PyPI. Before this split, `publish-docker` did not depend on `build-wheels` at
+all, and exactly that partial release was possible.
+
+Two properties make the barrier real:
+
+- **Images are built as untagged digests** (`push-by-digest`). A digest nobody
+  can resolve by tag is not a release; `publish-docker` only assembles the
+  `:{version}` and `:latest` manifests once everything else has passed.
+- **Nothing is published untested.** The smoke stage installs each wheel and
+  runs each image digest, asserting `rolter --version` matches the tag, while
+  the artifacts are still private. The wheel install uses `--no-index`, so it
+  can only resolve from the freshly built `dist/` and can never pass by
+  silently pulling an older rolter from PyPI.
+
+Each build is its own job, so a single flaky platform can be re-run on its own
+without re-publishing anything that already succeeded.
 
 ### Why the explicit dispatch
 
