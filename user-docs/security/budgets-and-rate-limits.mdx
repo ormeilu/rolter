@@ -48,7 +48,7 @@ output_per_mtok = 15.0
 ```
 
 <Info>
-  Models without a `[[model_prices]]` entry log a `cost_usd` of `0` per request. They can still be used, but their spend does not count toward any budget. Add a price entry for every model you want budgets to track.
+  Models without a `[[model_prices]]` entry log a `cost_usd` of `0` and an `unpriced` flag of `1` per request. They can still be used, but their spend does not count toward any budget. Add a price entry for every model you want budgets to track, and see [Unpriced traffic](#unpriced-traffic) below for how to make that gap fail closed instead of open.
 </Info>
 
 ### Pricing in another currency
@@ -131,6 +131,43 @@ When a request's scope chain matches multiple budget rules (e.g. both an org bud
 <Tip>
   Set an org-level budget as a hard ceiling to protect against unexpected runaway costs, then add project- or key-level budgets to allocate share to individual teams or clients.
 </Tip>
+
+### Unpriced traffic
+
+A budget can only block spend it can see. A model with no `[[model_prices]]` entry accrues **zero**, so it can never exhaust a budget however much is served — the control fails open on exactly the models you most recently added and are least likely to have priced.
+
+`unpriced_policy` is the deliberate decision about that. It is deployment-wide, since it governs what the gateway may serve at all rather than the state of any one counter:
+
+```toml
+unpriced_policy = "block"   # ignore (default) | warn | block
+```
+
+| policy | behaviour |
+| --- | --- |
+| `ignore` | Serve it and accrue nothing. Budgets silently do not cover it. |
+| `warn` | Serve it, but log the model once per hour so an unenforceable budget names itself. |
+| `block` | Refuse at admission with **HTTP 402** and error code `model_unpriced`, naming the model. The check runs before the upstream call, so no tokens are spent on traffic no budget would ever have counted. |
+
+```json
+{
+  "error": {
+    "message": "model 'llama-3.1-8b' has no price, so its cost cannot be counted against a budget. This deployment is configured to refuse traffic it cannot account for; set a price for this model to serve it.",
+    "type": "invalid_request_error",
+    "code": "model_unpriced",
+    "param": "model"
+  }
+}
+```
+
+`ignore` is the default so that upgrading Rolter cannot start refusing traffic for a deployment that has not priced its models yet. Once every routed model has a price, `block` never fires and turns the budget into a guarantee rather than a best effort.
+
+<Note>
+  Unlike budgets themselves, `unpriced_policy` needs no Redis — being unpriced is a property of the config, not of a counter. It is enforced even when budgets are failing open.
+</Note>
+
+<Note>
+  The built-in `fake-llm` model is answered by the gateway before any price lookup, so `block` never makes it unreachable.
+</Note>
 
 ## Step 3 — Configure rate limits
 

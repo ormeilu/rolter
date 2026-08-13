@@ -137,6 +137,9 @@ pub struct Snapshot {
     pub base_currency: String,
     /// spend caps to enforce, shared cheaply with per-request spend recorders
     pub budgets: Arc<Vec<BudgetConfig>>,
+    /// deployment-wide default for traffic the gateway cannot price (#974);
+    /// an applicable budget may tighten it per request
+    pub unpriced_policy: rolter_core::UnpricedPolicy,
     /// throughput caps to enforce, shared cheaply with per-request recorders
     pub rate_limits: Arc<Vec<RateLimitConfig>>,
     /// upstream retry policy applied on transient failures
@@ -433,6 +436,7 @@ impl Snapshot {
             prices,
             base_currency,
             budgets: Arc::new(config.budgets.clone()),
+            unpriced_policy: config.unpriced_policy,
             rate_limits: Arc::new(config.rate_limits.clone()),
             retry: config.retry.clone(),
             queue: config.queue.clone(),
@@ -610,6 +614,9 @@ pub struct AppState {
     pub health_events: HealthEventSink,
     /// enforces spend caps against Redis; disabled when no redis url is set
     pub budgets: BudgetEnforcer,
+    /// dedup for the `warn` unpriced-traffic policy, so an unenforceable budget
+    /// is named once per model per window rather than once per request (#974)
+    pub unpriced_warns: Arc<crate::budgets::UnpricedWarnLog>,
     /// enforces throughput caps against Redis; disabled when no redis url is set
     pub rate_limiter: RateLimiter,
     /// exact-match response cache against Redis; disabled when no redis url is
@@ -744,6 +751,7 @@ impl AppState {
             log,
             health_events,
             budgets,
+            unpriced_warns: Arc::new(crate::budgets::UnpricedWarnLog::default()),
             rate_limiter,
             response_cache,
             response_registry: crate::response_registry::ResponseRegistry::new(&config.responses),
