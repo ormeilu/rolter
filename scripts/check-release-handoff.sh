@@ -67,6 +67,19 @@ require "$rel" "verify-parity must observe publish-pypi to catch a skipped publi
 require "$rel" "verify-parity must run with always() or a skipped publish stays invisible" \
     'if: always\(\)'
 
+# ── the artifact set ────────────────────────────────────────────────────────
+# `macos-latest` is arm64, so without an explicit x86_64 target intel macs get
+# no wheel; without an sdist they get no candidate at all and the install fails
+# outright rather than building from source (#989)
+require "$rel" "release.yml must cross-build the macos x86_64 wheel" \
+    'target: x86_64-apple-darwin'
+require "$rel" "release.yml must build an sdist as the source fallback" \
+    '^          command: sdist'
+require "$rel" "verify-parity must assert the published artifact set" \
+    'expect "macos x86_64 wheel"'
+require "$rel" "verify-parity must assert an sdist was published" \
+    'expect "sdist"'
+
 if [[ "$fail" -ne 0 ]]; then
     cat >&2 <<'EOF'
 
