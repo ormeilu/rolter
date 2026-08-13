@@ -256,6 +256,20 @@ export function fetchConfig(): Promise<GatewayConfigDto> {
   return getJson<GatewayConfigDto>("/api/v1/config");
 }
 
+/**
+ * Config entries the control plane is not serving to gateways, and why (#926).
+ *
+ * A malformed provider is dropped from the snapshot rather than withholding the
+ * whole fleet's config, so without this nothing would say it stopped being
+ * served — every gateway keeps running its last good config and the change
+ * simply never takes effect.
+ */
+export function fetchConfigProblems(): Promise<string[]> {
+  return getJson<{ problems: string[] }>("/api/v1/config/problems").then(
+    (r) => r.problems,
+  );
+}
+
 export function fetchRoles(): Promise<string[]> {
   return getJson<string[]>("/api/v1/roles");
 }
@@ -491,7 +505,9 @@ export interface AccessProfileAssignmentRow {
   created_at: string;
 }
 
-export function fetchAccessProfiles(orgId: string): Promise<AccessProfileRow[]> {
+export function fetchAccessProfiles(
+  orgId: string,
+): Promise<AccessProfileRow[]> {
   return getJson<AccessProfileRow[]>(`/api/v1/orgs/${orgId}/access-profiles`);
 }
 
@@ -510,7 +526,11 @@ export function updateAccessProfile(
   id: string,
   input: { name?: string; description?: string | null },
 ): Promise<AccessProfileRow> {
-  return sendJson<AccessProfileRow>("PUT", `/api/v1/access-profiles/${id}`, input);
+  return sendJson<AccessProfileRow>(
+    "PUT",
+    `/api/v1/access-profiles/${id}`,
+    input,
+  );
 }
 
 export function deleteAccessProfile(id: string): Promise<void> {
@@ -586,7 +606,11 @@ export function updateBusinessUnit(
     retired?: boolean;
   },
 ): Promise<BusinessUnitRow> {
-  return sendJson<BusinessUnitRow>("PUT", `/api/v1/business-units/${id}`, input);
+  return sendJson<BusinessUnitRow>(
+    "PUT",
+    `/api/v1/business-units/${id}`,
+    input,
+  );
 }
 
 export function deleteBusinessUnit(id: string): Promise<void> {
@@ -601,7 +625,11 @@ export function createCustomer(
   orgId: string,
   input: { name: string; slug?: string; business_unit_id?: string | null },
 ): Promise<CustomerRow> {
-  return sendJson<CustomerRow>("POST", `/api/v1/orgs/${orgId}/customers`, input);
+  return sendJson<CustomerRow>(
+    "POST",
+    `/api/v1/orgs/${orgId}/customers`,
+    input,
+  );
 }
 
 export function updateCustomer(
@@ -772,7 +800,9 @@ export interface UpdateProviderGroupInput {
   members?: GroupMemberInput[];
 }
 
-export function fetchProviderGroups(orgId: string): Promise<ProviderGroupRow[]> {
+export function fetchProviderGroups(
+  orgId: string,
+): Promise<ProviderGroupRow[]> {
   return getJson<ProviderGroupRow[]>(`/api/v1/orgs/${orgId}/provider-groups`);
 }
 
@@ -791,7 +821,11 @@ export function updateProviderGroup(
   id: string,
   input: UpdateProviderGroupInput,
 ): Promise<ProviderGroupRow> {
-  return sendJson<ProviderGroupRow>("PUT", `/api/v1/provider-groups/${id}`, input);
+  return sendJson<ProviderGroupRow>(
+    "PUT",
+    `/api/v1/provider-groups/${id}`,
+    input,
+  );
 }
 
 export function deleteProviderGroup(id: string): Promise<void> {
@@ -994,7 +1028,8 @@ export interface PromptTemplateVersionRow {
   created_at: string;
 }
 
-export type PromptTemplateScopeType = "org" | "project" | "route" | "virtual_key";
+export type PromptTemplateScopeType =
+  "org" | "project" | "route" | "virtual_key";
 
 export interface PromptTemplateScopeRow {
   template_id: string;
@@ -1009,7 +1044,9 @@ export interface PromptTemplateScopeInput {
   scope_id: string;
 }
 
-export function fetchPromptTemplates(orgId: string): Promise<PromptTemplateRow[]> {
+export function fetchPromptTemplates(
+  orgId: string,
+): Promise<PromptTemplateRow[]> {
   return getJson<PromptTemplateRow[]>(`/api/v1/orgs/${orgId}/prompt-templates`);
 }
 
@@ -1135,11 +1172,17 @@ export function fetchSkills(orgId: string): Promise<SkillRow[]> {
   return getJson<SkillRow[]>(`/api/v1/orgs/${orgId}/skills`);
 }
 
-export function createSkill(orgId: string, input: CreateSkillInput): Promise<SkillRow> {
+export function createSkill(
+  orgId: string,
+  input: CreateSkillInput,
+): Promise<SkillRow> {
   return sendJson<SkillRow>("POST", `/api/v1/orgs/${orgId}/skills`, input);
 }
 
-export function updateSkill(id: string, input: UpdateSkillInput): Promise<SkillRow> {
+export function updateSkill(
+  id: string,
+  input: UpdateSkillInput,
+): Promise<SkillRow> {
   return sendJson<SkillRow>("PUT", `/api/v1/skills/${id}`, input);
 }
 
@@ -1150,18 +1193,38 @@ export function fetchSkillVersions(id: string): Promise<SkillVersionRow[]> {
 export function createSkillVersion(
   id: string,
   input:
-    | { content: string; content_ref?: never; metadata: Record<string, unknown> }
-    | { content?: never; content_ref: string; metadata: Record<string, unknown> },
+    | {
+        content: string;
+        content_ref?: never;
+        metadata: Record<string, unknown>;
+      }
+    | {
+        content?: never;
+        content_ref: string;
+        metadata: Record<string, unknown>;
+      },
 ): Promise<SkillVersionRow> {
-  return sendJson<SkillVersionRow>("POST", `/api/v1/skills/${id}/versions`, input);
+  return sendJson<SkillVersionRow>(
+    "POST",
+    `/api/v1/skills/${id}/versions`,
+    input,
+  );
 }
 
-export function publishSkillVersion(id: string, version: number): Promise<SkillRow> {
+export function publishSkillVersion(
+  id: string,
+  version: number,
+): Promise<SkillRow> {
   return sendJson<SkillRow>("PUT", `/api/v1/skills/${id}/publish`, { version });
 }
 
-export function rollbackSkillVersion(id: string, version: number): Promise<SkillRow> {
-  return sendJson<SkillRow>("PUT", `/api/v1/skills/${id}/rollback`, { version });
+export function rollbackSkillVersion(
+  id: string,
+  version: number,
+): Promise<SkillRow> {
+  return sendJson<SkillRow>("PUT", `/api/v1/skills/${id}/rollback`, {
+    version,
+  });
 }
 
 // --- budgets, rate limits, model pricing (crates/rolter-control/src/crud.rs) ---
@@ -1687,7 +1750,11 @@ export function fetchSecuritySettings(): Promise<SecuritySettingsDto> {
 export function updateSecuritySettings(
   input: UpdateSecuritySettingsInput,
 ): Promise<SecuritySettingsDto> {
-  return sendJson<SecuritySettingsDto>("PUT", "/api/v1/security-settings", input);
+  return sendJson<SecuritySettingsDto>(
+    "PUT",
+    "/api/v1/security-settings",
+    input,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1772,7 +1839,10 @@ export interface ClientSettingsDto {
 
 export type UpdateClientSettingsInput = Pick<
   ClientSettingsDto,
-  "public_base_url" | "forwarded_headers" | "injected_headers" | "request_id_header"
+  | "public_base_url"
+  | "forwarded_headers"
+  | "injected_headers"
+  | "request_id_header"
 >;
 
 export function fetchClientSettings(): Promise<ClientSettingsDto> {
@@ -2095,7 +2165,11 @@ export function updateAlertChannel(
   id: string,
   input: AlertChannelInput,
 ): Promise<AlertChannelRow> {
-  return sendJson<AlertChannelRow>("PUT", `/api/v1/alert-channels/${id}`, input);
+  return sendJson<AlertChannelRow>(
+    "PUT",
+    `/api/v1/alert-channels/${id}`,
+    input,
+  );
 }
 
 export function deleteAlertChannel(id: string): Promise<void> {
@@ -2393,11 +2467,21 @@ export function fetchMcpServers(orgId: string): Promise<McpServerRow[]> {
   return getJson<McpServerRow[]>(`/api/v1/orgs/${orgId}/mcp-servers`);
 }
 
-export function createMcpServer(orgId: string, input: McpServerInput): Promise<McpServerRow> {
-  return sendJson<McpServerRow>("POST", `/api/v1/orgs/${orgId}/mcp-servers`, input);
+export function createMcpServer(
+  orgId: string,
+  input: McpServerInput,
+): Promise<McpServerRow> {
+  return sendJson<McpServerRow>(
+    "POST",
+    `/api/v1/orgs/${orgId}/mcp-servers`,
+    input,
+  );
 }
 
-export function updateMcpServer(id: string, input: Omit<McpServerInput, "slug" | "source">): Promise<McpServerRow> {
+export function updateMcpServer(
+  id: string,
+  input: Omit<McpServerInput, "slug" | "source">,
+): Promise<McpServerRow> {
   return sendJson<McpServerRow>("PATCH", `/api/v1/mcp-servers/${id}`, input);
 }
 
@@ -2413,24 +2497,50 @@ export function fetchMcpToolGroups(orgId: string): Promise<McpToolGroupRow[]> {
   return getJson<McpToolGroupRow[]>(`/api/v1/orgs/${orgId}/mcp/tool-groups`);
 }
 
-export function createMcpToolGroup(orgId: string, input: Omit<McpToolGroupRow, "id" | "org_id" | "created_at" | "updated_at">): Promise<McpToolGroupRow> {
-  return sendJson<McpToolGroupRow>("POST", `/api/v1/orgs/${orgId}/mcp/tool-groups`, input);
+export function createMcpToolGroup(
+  orgId: string,
+  input: Omit<McpToolGroupRow, "id" | "org_id" | "created_at" | "updated_at">,
+): Promise<McpToolGroupRow> {
+  return sendJson<McpToolGroupRow>(
+    "POST",
+    `/api/v1/orgs/${orgId}/mcp/tool-groups`,
+    input,
+  );
 }
 
-export function updateMcpToolGroup(id: string, input: Omit<McpToolGroupRow, "id" | "org_id" | "slug" | "created_at" | "updated_at">): Promise<McpToolGroupRow> {
-  return sendJson<McpToolGroupRow>("PUT", `/api/v1/mcp/tool-groups/${id}`, input);
+export function updateMcpToolGroup(
+  id: string,
+  input: Omit<
+    McpToolGroupRow,
+    "id" | "org_id" | "slug" | "created_at" | "updated_at"
+  >,
+): Promise<McpToolGroupRow> {
+  return sendJson<McpToolGroupRow>(
+    "PUT",
+    `/api/v1/mcp/tool-groups/${id}`,
+    input,
+  );
 }
 
 export function deleteMcpToolGroup(id: string): Promise<void> {
   return sendJson<void>("DELETE", `/api/v1/mcp/tool-groups/${id}`);
 }
 
-export function fetchMcpSettings(orgId: string): Promise<McpGatewaySettingsRow> {
+export function fetchMcpSettings(
+  orgId: string,
+): Promise<McpGatewaySettingsRow> {
   return getJson<McpGatewaySettingsRow>(`/api/v1/orgs/${orgId}/mcp/settings`);
 }
 
-export function updateMcpSettings(orgId: string, input: Omit<McpGatewaySettingsRow, "org_id" | "updated_at">): Promise<McpGatewaySettingsRow> {
-  return sendJson<McpGatewaySettingsRow>("PUT", `/api/v1/orgs/${orgId}/mcp/settings`, input);
+export function updateMcpSettings(
+  orgId: string,
+  input: Omit<McpGatewaySettingsRow, "org_id" | "updated_at">,
+): Promise<McpGatewaySettingsRow> {
+  return sendJson<McpGatewaySettingsRow>(
+    "PUT",
+    `/api/v1/orgs/${orgId}/mcp/settings`,
+    input,
+  );
 }
 
 export function fetchMcpGrants(orgId: string): Promise<McpOAuthGrantRow[]> {
@@ -2548,7 +2658,10 @@ export interface GuardrailRuleRow {
   updated_at: string;
 }
 
-export type GuardrailRuleInput = Omit<GuardrailRuleRow, "id" | "created_at" | "updated_at">;
+export type GuardrailRuleInput = Omit<
+  GuardrailRuleRow,
+  "id" | "created_at" | "updated_at"
+>;
 
 export interface GuardrailProviderRow {
   id: string;
@@ -2584,8 +2697,15 @@ export const fetchGuardrailProviders = () =>
   getJson<GuardrailProviderRow[]>("/api/v1/guardrails/providers");
 export const createGuardrailProvider = (body: GuardrailProviderInput) =>
   sendJson<GuardrailProviderRow>("POST", "/api/v1/guardrails/providers", body);
-export const updateGuardrailProvider = (id: string, body: GuardrailProviderInput) =>
-  sendJson<GuardrailProviderRow>("PUT", `/api/v1/guardrails/providers/${id}`, body);
+export const updateGuardrailProvider = (
+  id: string,
+  body: GuardrailProviderInput,
+) =>
+  sendJson<GuardrailProviderRow>(
+    "PUT",
+    `/api/v1/guardrails/providers/${id}`,
+    body,
+  );
 export const deleteGuardrailProvider = (id: string) =>
   sendJson<void>("DELETE", `/api/v1/guardrails/providers/${id}`);
 

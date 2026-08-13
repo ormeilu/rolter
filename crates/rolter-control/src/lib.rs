@@ -522,6 +522,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
         )
         .route("/api/v1/roles", get(list_roles))
         .route("/api/v1/config", get(get_config))
+        .route("/api/v1/config/problems", get(get_config_problems))
         .merge(analytics::router())
         .merge(health::router())
         // reverse-proxy the gateway data plane for the dashboard Playground;
@@ -1042,6 +1043,27 @@ async fn get_config(State(state): State<ControlState>) -> Json<GatewayConfig> {
     Json(config)
 }
 
+/// What the snapshot is *not* serving, and why (#926).
+///
+/// Since a malformed entry is now dropped from `/internal/snapshot` rather than
+/// withholding the whole fleet's config, nothing in the dashboard would
+/// otherwise say a provider stopped being served — the failure would be silent
+/// until someone wondered why a change never took effect. This is the same
+/// computation the snapshot runs, so the two cannot report different things.
+///
+/// Unguarded, alongside [`get_config`]: it carries no credentials, only the
+/// names and reasons an operator needs to fix their own config.
+async fn get_config_problems(State(state): State<ControlState>) -> Json<Value> {
+    let mut config = state.store.load().await.unwrap_or_default();
+    let mut problems = config.sanitize_for_snapshot();
+    // structural problems never reach a gateway at all — the snapshot refuses
+    // outright — so an operator needs to see those here too, not just in a log
+    if let Err(fatal) = config.validate() {
+        problems.extend(fatal);
+    }
+    Json(json!({ "problems": problems }))
+}
+
 #[derive(Debug, Deserialize)]
 struct SnapshotQuery {
     /// the gateway's last-seen config version; if it's already current, the
@@ -1185,8 +1207,11 @@ async fn build_snapshot(
                     "omitted unservable entries from the config snapshot"
                 );
             }
-            // never distribute a broken config to gateways: reply with the
-            // problems instead so the operator can fix the source
+            // what survives here is structural: duplicate names, a bad
+            // metrics_path, an unreadable CA bundle. Those genuinely cannot be
+            // served — dropping one of two colliding rows would be a guess —
+            // so they still refuse. Row-local defects were pruned above and
+            // ride out in `problems` instead of withholding the fleet (#926)
             if let Err(problems) = config.validate() {
                 tracing::error!(?problems, "refusing to serve invalid config snapshot");
                 return BuiltSnapshot::error(
@@ -1208,7 +1233,17 @@ async fn build_snapshot(
             let encode = rolter_core::stage_span!("snapshot.encode");
             let body = {
                 let _entered = encode.enter();
-                serde_json::to_vec(&json!({"version": version, "config": config}))
+                // `problems` rides along so the gateway can log what is not
+                // being served and the dashboard can say "this provider is not
+                // being served, because ...". Omitted when empty: it is on
+                // every poll of every gateway in the fleet
+                if omitted.is_empty() {
+                    serde_json::to_vec(&json!({"version": version, "config": config}))
+                } else {
+                    serde_json::to_vec(
+                        &json!({"version": version, "config": config, "problems": omitted}),
+                    )
+                }
             };
             let body = match body {
                 Ok(body) => body,
@@ -1433,6 +1468,136 @@ mod tests {
             .unwrap();
         assert_eq!(not_modified.status(), 304);
         assert!(not_modified.bytes().await.unwrap().is_empty());
+    }
+
+    /// #926: one malformed provider used to withhold the entire fleet's
+    /// configuration — every route, every other provider, every key — because
+    /// `/internal/snapshot` validated all-or-nothing and 500'd. A provider
+    /// nobody routes to must not be able to freeze a fleet.
+    #[tokio::test]
+    async fn one_invalid_provider_does_not_reduce_the_snapshot_to_an_error() {
+        let config: GatewayConfig = serde_json::from_value(json!({
+            "providers": [
+                {
+                    "name": "openai",
+                    "kind": "openai",
+                    "api_base": "https://api.openai.com/v1",
+                },
+                {
+                    "name": "openrouter-edge",
+                    "kind": "openrouter",
+                    "api_base": "https://openrouter.example.com/v1",
+                    "api_key_env": "OPENROUTER_API_KEY",
+                },
+            ],
+            "routes": [
+                {"model": "gpt-4o", "targets": [{"provider": "openai"}]},
+            ],
+        }))
+        .expect("fixture config parses");
+        let mut state = state_with_token(None);
+        state.store = Arc::new(InMemoryConfigStore::new(config));
+
+        let addr = serve(build_app_with_internal(state)).await;
+        let response = reqwest::Client::new()
+            .get(format!("http://{addr}/internal/snapshot"))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 200, "the fleet must still propagate");
+        let body: Value = response.json().await.unwrap();
+
+        // the valid provider and route are served
+        let providers = body["config"]["providers"].as_array().unwrap();
+        assert_eq!(providers.len(), 1, "{body}");
+        assert_eq!(providers[0]["name"], "openai");
+        assert_eq!(body["config"]["routes"].as_array().unwrap().len(), 1);
+
+        // and the dropped entry rides along with its reason, so the gateway can
+        // log it and the dashboard can explain it
+        let problems = body["problems"].as_array().expect("problems in {body}");
+        assert_eq!(problems.len(), 1, "{body}");
+        let problem = problems[0].as_str().unwrap();
+        assert!(problem.contains("openrouter-edge"), "{problem}");
+        assert!(
+            problem.contains("https://openrouter.ai/api/v1"),
+            "{problem}"
+        );
+    }
+
+    /// The dashboard needs the same answer the snapshot reached, or an operator
+    /// has no way to see that a provider stopped being served (#926).
+    #[tokio::test]
+    async fn the_dashboard_can_ask_what_is_not_being_served() {
+        let config: GatewayConfig = serde_json::from_value(json!({
+            "providers": [
+                {
+                    "name": "openai",
+                    "kind": "openai",
+                    "api_base": "https://api.openai.com/v1",
+                },
+                {
+                    "name": "openrouter-edge",
+                    "kind": "openrouter",
+                    "api_base": "https://openrouter.example.com/v1",
+                    "api_key_env": "OPENROUTER_API_KEY",
+                },
+            ],
+            "routes": [
+                {"model": "gpt-4o", "targets": [{"provider": "openai"}]},
+            ],
+        }))
+        .expect("fixture config parses");
+        let mut state = state_with_token(None);
+        state.store = Arc::new(InMemoryConfigStore::new(config));
+
+        let addr = serve(build_app_with_internal(state)).await;
+        let body: Value = reqwest::Client::new()
+            .get(format!("http://{addr}/api/v1/config/problems"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let problems = body["problems"].as_array().unwrap();
+        assert_eq!(problems.len(), 1, "{body}");
+        assert!(
+            problems[0].as_str().unwrap().contains("openrouter-edge"),
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_healthy_config_reports_no_problems_to_the_dashboard() {
+        let addr = serve(build_app_with_internal(state_with_token(None))).await;
+        let body: Value = reqwest::Client::new()
+            .get(format!("http://{addr}/api/v1/config/problems"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(body["problems"].as_array().unwrap().len(), 0, "{body}");
+    }
+
+    /// The common case must not grow a field: `problems` is on the wire of
+    /// every poll of every gateway in the fleet.
+    #[tokio::test]
+    async fn a_healthy_snapshot_carries_no_problems_key() {
+        let addr = serve(build_app_with_internal(state_with_token(None))).await;
+        let body: Value = reqwest::Client::new()
+            .get(format!("http://{addr}/internal/snapshot"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(body.get("problems").is_none(), "{body}");
     }
 
     #[tokio::test]
