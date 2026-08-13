@@ -150,6 +150,28 @@ jobs:
           command: build
           args: --release --out dist --manifest-path crates/rolter/Cargo.toml
 
+      # `macos-latest` is Apple Silicon, so the step above yields an arm64 wheel
+      # only and Intel macs get nothing installable (#989). cross-compile the
+      # x86_64 slice from the same runner — the macOS SDK carries both arches,
+      # so this needs no extra runner and no rosetta.
+      - name: build wheels (macos x86_64)
+        if: matrix.os == 'macos-latest'
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          command: build
+          args: --release --out dist --manifest-path crates/rolter/Cargo.toml
+          target: x86_64-apple-darwin
+
+      # source fallback: without an sdist a platform with no matching wheel has
+      # no candidate at all and `pip install rolter` fails outright rather than
+      # building from source. built once, on linux.
+      - name: build sdist
+        if: matrix.os == 'ubuntu-latest'
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          command: sdist
+          args: --out dist --manifest-path crates/rolter/Cargo.toml
+
       - name: upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -347,6 +369,29 @@ jobs:
             done
             if [ "$found" = "1" ]; then
               note "- ✅ pypi \`rolter $VERSION\`"
+
+              # a version being present is not the same as it being installable
+              # everywhere: v0.0.10 published four wheels and no sdist, so intel
+              # macs had no candidate at all and nothing went red (#989). assert
+              # the whole expected artifact set, by platform tag rather than by
+              # exact filename (the macos version prefix floats).
+              files="$(curl -sfL "https://pypi.org/pypi/rolter/$VERSION/json" | jq -r '.urls[].filename')"
+              echo "pypi artifacts for $VERSION:"; echo "$files"
+              expect() {
+                # $1 human label, $2 grep -E pattern
+                if printf '%s\n' "$files" | grep -Eq "$2"; then
+                  note "  - ✅ $1"
+                else
+                  echo "::error::pypi is missing the $1 artifact for $VERSION"
+                  note "  - ❌ $1 missing"; fail=1
+                fi
+              }
+              expect "linux x86_64 wheel"  'manylinux.*x86_64\.whl$'
+              expect "linux aarch64 wheel" 'manylinux.*aarch64\.whl$'
+              expect "macos arm64 wheel"   'macosx.*arm64\.whl$'
+              expect "macos x86_64 wheel"  'macosx.*x86_64\.whl$'
+              expect "windows wheel"       'win_amd64\.whl$'
+              expect "sdist"               '\.tar\.gz$'
             else
               echo "::error::pypi does not serve rolter $VERSION after 5m"
               note "- ❌ pypi \`rolter $VERSION\` missing"; fail=1
