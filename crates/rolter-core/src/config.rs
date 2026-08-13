@@ -2461,6 +2461,42 @@ impl GatewayConfig {
     /// dropping one of two colliding rows would be worse than refusing.
     pub fn sanitize_for_snapshot(&mut self) -> Vec<String> {
         let mut warnings = Vec::new();
+
+        // a provider whose own definition is invalid cannot serve traffic, but
+        // it is exactly one row: withholding the other fourteen providers and
+        // eleven routes because of it is the wrong blast radius (#926). Drop it
+        // and say so; the routes that depended on it fall out below, since they
+        // are then left with no target pointing at a known provider.
+        //
+        // Cross-provider defects (empty or duplicated names) are deliberately
+        // not considered here — silently dropping one of two colliding rows
+        // would be worse than refusing, so `validate` still rejects those.
+        let invalid: Vec<(usize, String, Vec<String>)> = self
+            .providers
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, provider)| {
+                let problems = self.provider_problems(provider);
+                (!problems.is_empty()).then(|| (idx, provider.name.clone(), problems))
+            })
+            .collect();
+        if !invalid.is_empty() {
+            let dropped: std::collections::HashSet<usize> =
+                invalid.iter().map(|(i, _, _)| *i).collect();
+            let mut idx = 0;
+            self.providers.retain(|_| {
+                let keep = !dropped.contains(&idx);
+                idx += 1;
+                keep
+            });
+            for (_, name, problems) in invalid {
+                warnings.push(format!(
+                    "provider '{name}' omitted from the snapshot: {}",
+                    problems.join("; ")
+                ));
+            }
+        }
+
         let provider_names: std::collections::HashSet<&str> = self
             .providers
             .iter()
@@ -2507,6 +2543,177 @@ impl GatewayConfig {
         warnings
     }
 
+    /// Every problem with `provider` considered on its own — everything
+    /// [`validate`](Self::validate) checks per provider except cross-provider
+    /// facts (an empty or duplicated name), which are not properties of the
+    /// entry in isolation.
+    ///
+    /// Split out so [`sanitize_for_snapshot`](Self::sanitize_for_snapshot) can
+    /// ask the question one provider at a time: a provider nobody routes to
+    /// should not be able to withhold the whole fleet's config (#926).
+    pub fn provider_problems(&self, provider: &ProviderConfig) -> Vec<String> {
+        let mut problems = Vec::new();
+        if !is_http_url(&provider.api_base) {
+            problems.push(format!(
+                "provider '{}' has an invalid api_base '{}' (expected http:// or https:// url)",
+                provider.name, provider.api_base
+            ));
+        }
+        if provider.kind == ProviderKind::Ollama
+            && provider.api_base.trim_end_matches('/').ends_with("/v1")
+        {
+            problems.push(format!(
+                "ollama provider '{}' api_base must be the daemon origin without /v1",
+                provider.name
+            ));
+        }
+        if provider.kind == ProviderKind::OllamaCloud {
+            if provider.api_key_env.as_deref().is_none_or(str::is_empty) {
+                problems.push(format!(
+                    "ollama_cloud provider '{}' requires api_key_env",
+                    provider.name
+                ));
+            }
+            if provider.api_key.is_some() || !provider.api_keys.is_empty() {
+                problems.push(format!(
+                    "ollama_cloud provider '{}' must source its key from api_key_env",
+                    provider.name
+                ));
+            }
+        }
+        if provider.kind == ProviderKind::Openrouter {
+            if provider.api_key_env.as_deref().is_none_or(str::is_empty) {
+                problems.push(format!(
+                    "openrouter provider '{}' requires api_key_env",
+                    provider.name
+                ));
+            }
+            if provider.api_key.is_some() || !provider.api_keys.is_empty() {
+                problems.push(format!(
+                    "openrouter provider '{}' must source its key from api_key_env",
+                    provider.name
+                ));
+            }
+            if provider.api_base.trim_end_matches('/') != "https://openrouter.ai/api/v1" {
+                problems.push(format!(
+                    "openrouter provider '{}' api_base must be https://openrouter.ai/api/v1",
+                    provider.name
+                ));
+            }
+        }
+        // hosted adapters authenticated with an env-sourced key enforce the
+        // same secret hygiene as openrouter
+        if provider.kind.requires_env_api_key()
+            && provider.kind != ProviderKind::Openrouter
+            && provider.kind != ProviderKind::OllamaCloud
+        {
+            let kind = match provider.kind {
+                ProviderKind::Gemini => "gemini",
+                ProviderKind::GeminiNative => "gemini_native",
+                ProviderKind::GeminiInteractions => "gemini_interactions",
+                ProviderKind::Mistral => "mistral",
+                ProviderKind::Groq => "groq",
+                ProviderKind::Xai => "xai",
+                ProviderKind::MetaLlamaApi => "meta_llama_api",
+                ProviderKind::Cohere => "cohere",
+                ProviderKind::Perplexity => "perplexity",
+                ProviderKind::Together => "together",
+                ProviderKind::Fireworks => "fireworks",
+                ProviderKind::Databricks => "databricks",
+                ProviderKind::AlephAlpha => "aleph_alpha",
+                ProviderKind::Nebius => "nebius",
+                ProviderKind::Ovhcloud => "ovhcloud",
+                ProviderKind::Scaleway => "scaleway",
+                ProviderKind::Deepseek => "deepseek",
+                ProviderKind::Qwen => "qwen",
+                ProviderKind::Zhipu => "zhipu",
+                ProviderKind::Kimi => "kimi",
+                ProviderKind::Ernie => "ernie",
+                ProviderKind::Doubao => "doubao",
+                ProviderKind::Hunyuan => "hunyuan",
+                ProviderKind::Yi => "yi",
+                ProviderKind::Minimax => "minimax",
+                ProviderKind::Baichuan => "baichuan",
+                ProviderKind::Gigachat => "gigachat",
+                ProviderKind::YandexGpt => "yandex_gpt",
+                ProviderKind::CloudRu => "cloud_ru",
+                ProviderKind::MtsAi => "mts_ai",
+                ProviderKind::Naver => "naver",
+                ProviderKind::Upstage => "upstage",
+                ProviderKind::Rinna => "rinna",
+                ProviderKind::Rakuten => "rakuten",
+                ProviderKind::Sarvam => "sarvam",
+                ProviderKind::Krutrim => "krutrim",
+                ProviderKind::Falcon => "falcon",
+                _ => "unknown",
+            };
+            if provider.api_key_env.as_deref().is_none_or(str::is_empty) {
+                problems.push(format!(
+                    "{kind} provider '{}' requires api_key_env",
+                    provider.name
+                ));
+            }
+            if provider.api_key.is_some() || !provider.api_keys.is_empty() {
+                problems.push(format!(
+                    "{kind} provider '{}' must source its key from api_key_env",
+                    provider.name
+                ));
+            }
+        }
+        // a provider's api_base is attacker-influenced whenever the admin
+        // surface is: without this the gateway is an SSRF primitive aimed at
+        // whatever its network position can reach
+        if let Err(problem) = self.egress.check_url(
+            &provider.api_base,
+            &format!("provider '{}' api_base", provider.name),
+        ) {
+            problems.push(problem);
+        }
+        for proxy in provider.egress_proxy_pool() {
+            if !is_proxy_reference(proxy) {
+                problems.push(format!(
+                    "provider '{}' has an invalid egress_proxy/egress_proxies entry '{}' (expected http(s)/socks5(h) URL or a whole-value ${{ENV_VAR}} reference without inline credentials)",
+                    provider.name, proxy
+                ));
+            }
+            if let Err(problem) = self
+                .egress
+                .check_url(proxy, &format!("provider '{}' egress proxy", provider.name))
+            {
+                problems.push(problem);
+            }
+        }
+        if let Some(kv) = &provider.kv_events {
+            if !kv.endpoint.starts_with("tcp://") || kv.endpoint.len() <= "tcp://".len() {
+                problems.push(format!(
+                    "provider '{}' kv_events.endpoint must be a non-empty tcp:// URL",
+                    provider.name
+                ));
+            }
+            if kv.max_blocks == 0 || kv.stale_secs == 0 {
+                problems.push(format!(
+                    "provider '{}' kv_events max_blocks and stale_secs must be greater than zero",
+                    provider.name
+                ));
+            }
+        }
+        if let Some(lmcache) = &provider.lmcache {
+            if !is_http_url(&lmcache.endpoint) {
+                problems.push(format!(
+                    "provider '{}' lmcache.endpoint must be an http(s) URL",
+                    provider.name
+                ));
+            }
+            if lmcache.refresh_secs == 0 || lmcache.stale_secs == 0 {
+                problems.push(format!(
+                    "provider '{}' lmcache refresh_secs and stale_secs must be greater than zero",
+                    provider.name
+                ));
+            }
+        }
+        problems
+    }
+
     pub fn validate(&self) -> std::result::Result<(), Vec<String>> {
         let mut problems = Vec::new();
 
@@ -2550,164 +2757,7 @@ impl GatewayConfig {
             } else if !provider_names.insert(provider.name.as_str()) {
                 problems.push(format!("duplicate provider name '{}'", provider.name));
             }
-            if !is_http_url(&provider.api_base) {
-                problems.push(format!(
-                    "provider '{}' has an invalid api_base '{}' (expected http:// or https:// url)",
-                    provider.name, provider.api_base
-                ));
-            }
-            if provider.kind == ProviderKind::Ollama
-                && provider.api_base.trim_end_matches('/').ends_with("/v1")
-            {
-                problems.push(format!(
-                    "ollama provider '{}' api_base must be the daemon origin without /v1",
-                    provider.name
-                ));
-            }
-            if provider.kind == ProviderKind::OllamaCloud {
-                if provider.api_key_env.as_deref().is_none_or(str::is_empty) {
-                    problems.push(format!(
-                        "ollama_cloud provider '{}' requires api_key_env",
-                        provider.name
-                    ));
-                }
-                if provider.api_key.is_some() || !provider.api_keys.is_empty() {
-                    problems.push(format!(
-                        "ollama_cloud provider '{}' must source its key from api_key_env",
-                        provider.name
-                    ));
-                }
-            }
-            if provider.kind == ProviderKind::Openrouter {
-                if provider.api_key_env.as_deref().is_none_or(str::is_empty) {
-                    problems.push(format!(
-                        "openrouter provider '{}' requires api_key_env",
-                        provider.name
-                    ));
-                }
-                if provider.api_key.is_some() || !provider.api_keys.is_empty() {
-                    problems.push(format!(
-                        "openrouter provider '{}' must source its key from api_key_env",
-                        provider.name
-                    ));
-                }
-                if provider.api_base.trim_end_matches('/') != "https://openrouter.ai/api/v1" {
-                    problems.push(format!(
-                        "openrouter provider '{}' api_base must be https://openrouter.ai/api/v1",
-                        provider.name
-                    ));
-                }
-            }
-            // hosted adapters authenticated with an env-sourced key enforce the
-            // same secret hygiene as openrouter
-            if provider.kind.requires_env_api_key()
-                && provider.kind != ProviderKind::Openrouter
-                && provider.kind != ProviderKind::OllamaCloud
-            {
-                let kind = match provider.kind {
-                    ProviderKind::Gemini => "gemini",
-                    ProviderKind::GeminiNative => "gemini_native",
-                    ProviderKind::GeminiInteractions => "gemini_interactions",
-                    ProviderKind::Mistral => "mistral",
-                    ProviderKind::Groq => "groq",
-                    ProviderKind::Xai => "xai",
-                    ProviderKind::MetaLlamaApi => "meta_llama_api",
-                    ProviderKind::Cohere => "cohere",
-                    ProviderKind::Perplexity => "perplexity",
-                    ProviderKind::Together => "together",
-                    ProviderKind::Fireworks => "fireworks",
-                    ProviderKind::Databricks => "databricks",
-                    ProviderKind::AlephAlpha => "aleph_alpha",
-                    ProviderKind::Nebius => "nebius",
-                    ProviderKind::Ovhcloud => "ovhcloud",
-                    ProviderKind::Scaleway => "scaleway",
-                    ProviderKind::Deepseek => "deepseek",
-                    ProviderKind::Qwen => "qwen",
-                    ProviderKind::Zhipu => "zhipu",
-                    ProviderKind::Kimi => "kimi",
-                    ProviderKind::Ernie => "ernie",
-                    ProviderKind::Doubao => "doubao",
-                    ProviderKind::Hunyuan => "hunyuan",
-                    ProviderKind::Yi => "yi",
-                    ProviderKind::Minimax => "minimax",
-                    ProviderKind::Baichuan => "baichuan",
-                    ProviderKind::Gigachat => "gigachat",
-                    ProviderKind::YandexGpt => "yandex_gpt",
-                    ProviderKind::CloudRu => "cloud_ru",
-                    ProviderKind::MtsAi => "mts_ai",
-                    ProviderKind::Naver => "naver",
-                    ProviderKind::Upstage => "upstage",
-                    ProviderKind::Rinna => "rinna",
-                    ProviderKind::Rakuten => "rakuten",
-                    ProviderKind::Sarvam => "sarvam",
-                    ProviderKind::Krutrim => "krutrim",
-                    ProviderKind::Falcon => "falcon",
-                    _ => "unknown",
-                };
-                if provider.api_key_env.as_deref().is_none_or(str::is_empty) {
-                    problems.push(format!(
-                        "{kind} provider '{}' requires api_key_env",
-                        provider.name
-                    ));
-                }
-                if provider.api_key.is_some() || !provider.api_keys.is_empty() {
-                    problems.push(format!(
-                        "{kind} provider '{}' must source its key from api_key_env",
-                        provider.name
-                    ));
-                }
-            }
-            // a provider's api_base is attacker-influenced whenever the admin
-            // surface is: without this the gateway is an SSRF primitive aimed at
-            // whatever its network position can reach
-            if let Err(problem) = self.egress.check_url(
-                &provider.api_base,
-                &format!("provider '{}' api_base", provider.name),
-            ) {
-                problems.push(problem);
-            }
-            for proxy in provider.egress_proxy_pool() {
-                if !is_proxy_reference(proxy) {
-                    problems.push(format!(
-                        "provider '{}' has an invalid egress_proxy/egress_proxies entry '{}' (expected http(s)/socks5(h) URL or a whole-value ${{ENV_VAR}} reference without inline credentials)",
-                        provider.name, proxy
-                    ));
-                }
-                if let Err(problem) = self
-                    .egress
-                    .check_url(proxy, &format!("provider '{}' egress proxy", provider.name))
-                {
-                    problems.push(problem);
-                }
-            }
-            if let Some(kv) = &provider.kv_events {
-                if !kv.endpoint.starts_with("tcp://") || kv.endpoint.len() <= "tcp://".len() {
-                    problems.push(format!(
-                        "provider '{}' kv_events.endpoint must be a non-empty tcp:// URL",
-                        provider.name
-                    ));
-                }
-                if kv.max_blocks == 0 || kv.stale_secs == 0 {
-                    problems.push(format!(
-                        "provider '{}' kv_events max_blocks and stale_secs must be greater than zero",
-                        provider.name
-                    ));
-                }
-            }
-            if let Some(lmcache) = &provider.lmcache {
-                if !is_http_url(&lmcache.endpoint) {
-                    problems.push(format!(
-                        "provider '{}' lmcache.endpoint must be an http(s) URL",
-                        provider.name
-                    ));
-                }
-                if lmcache.refresh_secs == 0 || lmcache.stale_secs == 0 {
-                    problems.push(format!(
-                        "provider '{}' lmcache refresh_secs and stale_secs must be greater than zero",
-                        provider.name
-                    ));
-                }
-            }
+            problems.extend(self.provider_problems(provider));
         }
 
         let mut mcp_server_keys = std::collections::HashSet::new();
@@ -4303,6 +4353,152 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert_eq!(cfg.routes.len(), 1);
         assert_eq!(cfg.routes[0].targets.len(), 1, "kept the servable twin");
+    }
+
+    /// The #926 report exactly: one openrouter provider with a wrong
+    /// `api_base` alongside a healthy fleet. Fourteen valid providers and
+    /// eleven valid routes did not propagate because of it.
+    #[test]
+    fn one_invalid_provider_does_not_withhold_the_whole_fleet() {
+        let mut cfg: GatewayConfig = toml::from_str(
+            r#"
+            [[providers]]
+            name = "openai"
+            kind = "openai"
+            api_base = "https://api.openai.com/v1"
+
+            [[providers]]
+            name = "openrouter-edge"
+            kind = "openrouter"
+            api_base = "https://openrouter.example.com/v1"
+            api_key_env = "OPENROUTER_API_KEY"
+
+            [[routes]]
+            model = "gpt-4o"
+            [[routes.targets]]
+            provider = "openai"
+            "#,
+        )
+        .unwrap();
+        assert!(
+            cfg.validate().is_err(),
+            "precondition: the whole config is invalid today"
+        );
+
+        let warnings = cfg.sanitize_for_snapshot();
+
+        // the bad row is gone, and says why
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("openrouter-edge"), "{warnings:?}");
+        assert!(
+            warnings[0].contains("https://openrouter.ai/api/v1"),
+            "the reason has to ride along, not just the fact: {warnings:?}"
+        );
+
+        // and everything that was fine still propagates
+        let providers: Vec<_> = cfg.providers.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(providers, vec!["openai"]);
+        let models: Vec<_> = cfg.routes.iter().map(|r| r.model.as_str()).collect();
+        assert_eq!(models, vec!["gpt-4o"]);
+        assert!(cfg.validate().is_ok(), "{:?}", cfg.validate());
+    }
+
+    #[test]
+    fn dropping_a_provider_drops_the_routes_that_needed_it() {
+        // the gateway already refuses a route it cannot resolve, so shipping a
+        // route pointing at a dropped provider would only move the error later
+        let mut cfg: GatewayConfig = toml::from_str(
+            r#"
+            [[providers]]
+            name = "openai"
+            kind = "openai"
+            api_base = "https://api.openai.com/v1"
+
+            [[providers]]
+            name = "broken"
+            kind = "openai"
+            api_base = "not-a-url"
+
+            [[routes]]
+            model = "served"
+            [[routes.targets]]
+            provider = "openai"
+
+            [[routes]]
+            model = "orphaned"
+            [[routes.targets]]
+            provider = "broken"
+            "#,
+        )
+        .unwrap();
+
+        let warnings = cfg.sanitize_for_snapshot();
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("'broken'")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("'orphaned'")),
+            "{warnings:?}"
+        );
+
+        let models: Vec<_> = cfg.routes.iter().map(|r| r.model.as_str()).collect();
+        assert_eq!(models, vec!["served"]);
+        assert!(cfg.validate().is_ok(), "{:?}", cfg.validate());
+    }
+
+    #[test]
+    fn a_valid_fleet_is_never_reshaped_by_sanitizing() {
+        // the common path: sanitize must be a no-op, or it is a silent config
+        // rewriter rather than a safety net
+        let mut cfg: GatewayConfig = toml::from_str(
+            r#"
+            [[providers]]
+            name = "openai"
+            kind = "openai"
+            api_base = "https://api.openai.com/v1"
+
+            [[routes]]
+            model = "gpt-4o"
+            [[routes.targets]]
+            provider = "openai"
+            "#,
+        )
+        .unwrap();
+        let before = cfg.clone();
+        assert!(cfg.sanitize_for_snapshot().is_empty());
+        assert_eq!(cfg.providers.len(), before.providers.len());
+        assert_eq!(cfg.routes.len(), before.routes.len());
+    }
+
+    #[test]
+    fn a_duplicate_provider_name_still_refuses_rather_than_guessing() {
+        // not row-local: both rows are individually fine, so dropping one would
+        // be a coin flip over which provider the fleet talks to
+        let mut cfg: GatewayConfig = toml::from_str(
+            r#"
+            [[providers]]
+            name = "openai"
+            kind = "openai"
+            api_base = "https://api.openai.com/v1"
+
+            [[providers]]
+            name = "openai"
+            kind = "openai"
+            api_base = "https://proxy.example.com/v1"
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.sanitize_for_snapshot().is_empty());
+        assert_eq!(cfg.providers.len(), 2);
+        let problems = cfg.validate().unwrap_err();
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("duplicate provider name")),
+            "{problems:?}"
+        );
     }
 
     #[test]
