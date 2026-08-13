@@ -158,14 +158,17 @@ impl BatchWriter {
             return;
         }
         // Heuristic: ~256 bytes per health event line
-        let mut body = String::with_capacity(batch.len() * 256);
+        let mut body = Vec::with_capacity(batch.len() * 256);
         for record in batch.iter() {
-            match serde_json::to_string(record) {
-                Ok(line) => {
-                    body.push_str(&line);
-                    body.push('\n');
+            let start_len = body.len();
+            match serde_json::to_writer(&mut body, record) {
+                Ok(_) => {
+                    body.push(b'\n');
                 }
-                Err(err) => tracing::warn!(%err, "failed to serialize health event"),
+                Err(err) => {
+                    body.truncate(start_len);
+                    tracing::warn!(%err, "failed to serialize health event");
+                }
             }
         }
         let count = batch.len() as u64;
