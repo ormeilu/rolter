@@ -75,7 +75,7 @@ require "$rel" "the release gate must require ci-ok for the tagged commit" \
 require "$rel" "release.yml dropped the verify-parity gate" \
     '^  verify-parity:'
 require "$rel" "verify-parity must observe publish-pypi to catch a skipped publish" \
-    'needs: \[verify-external-checks, build-wheels, publish-pypi, publish-docker\]'
+    'needs: \[verify-external-checks, build-wheels, build-image, smoke-wheels, smoke-image, publish-pypi, publish-docker\]'
 require "$rel" "verify-parity must run with always() or a skipped publish stays invisible" \
     'if: always\(\)'
 
@@ -91,6 +91,25 @@ require "$rel" "verify-parity must assert the published artifact set" \
     'expect "macos x86_64 wheel"'
 require "$rel" "verify-parity must assert an sdist was published" \
     'expect "sdist"'
+
+# ── the publish barrier ─────────────────────────────────────────────────────
+# stage 1 builds, stage 2 smoke-tests, stage 3 publishes. if a publish job stops
+# depending on every build and smoke job, a failed wheel can leave images public
+# against a release with nothing on pypi (#992)
+require "$rel" "release.yml must build images per arch in their own stage" \
+    '^  build-image:'
+require "$rel" "stage 1 must push untagged digests, not tags" \
+    'push-by-digest=true'
+require "$rel" "the publish jobs must wait for every build and smoke job" \
+    '^    needs: \[verify-external-checks, build-wheels, build-image, smoke-wheels, smoke-image\]'
+
+# an artifact that was never run is not a verified artifact
+require "$rel" "release.yml must install and run the built wheel before publishing" \
+    '^  smoke-wheels:'
+require "$rel" "release.yml must run the built image before publishing" \
+    '^  smoke-image:'
+require "$rel" "the wheel smoke test must resolve only from dist/, never pypi" \
+    'no-index'
 
 if [[ "$fail" -ne 0 ]]; then
     cat >&2 <<'EOF'
