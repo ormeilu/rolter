@@ -153,6 +153,14 @@ files = "^crates/rolter-store/migrations/"
 pass_filenames = false
 
 [[repos.hooks]]
+id = "release-handoff"
+name = "release handoff is wired"
+entry = "bash scripts/check-release-handoff.sh"
+language = "system"
+files = "^\\.github/workflows/release(-plz)?\\.yml$"
+pass_filenames = false
+
+[[repos.hooks]]
 id = "cargo-clippy-postgres"
 name = "cargo clippy (postgres)"
 entry = "cargo clippy -p rolter-store --all-targets --features postgres -- -D warnings"

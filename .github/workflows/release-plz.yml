@@ -43,8 +43,7 @@ jobs:
   # on merge of the release PR: publishes every workspace member to crates.io
   # in dependency order (`publish = true` in .github/config/release-plz.toml, using
   # CARGO_REGISTRY_TOKEN), tags `v{version}` and creates the github release.
-  # the pushed tag triggers release.yml, whose pypi publish step is gated
-  # behind the PYPI_PUBLISH_ENABLED repo variable.
+  # the tag alone does NOT start release.yml — see dispatch-artifact-release.
   # same quality/security gate as CI, on the merge commit that would be
   # tagged/published. release-plz-release needs this so cargo publish cannot
   # run on an unverified commit (ROL-103).
@@ -58,6 +57,8 @@ jobs:
     permissions:
       contents: write # push tags + create the github release
       pull-requests: write # release-plz reconciles the release PR state
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       # release-plz pushes tags with the persisted token, so persist-credentials
       # must stay on here
@@ -68,6 +69,7 @@ jobs:
         with:
           toolchain: stable
       - name: run release-plz
+        id: release
         uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5.131
         with:
           command: release
@@ -75,3 +77,81 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      # only rolter-gateway carries git_tag_enable, so exactly one entry in the
+      # `releases` array has a tag; the rest are crates.io-only publishes. an
+      # empty tag means nothing was released on this push (the common case for a
+      # non-release commit), and the dispatch job below is skipped.
+      - name: resolve release tag
+        id: tag
+        env:
+          RELEASES: ${{ steps.release.outputs.releases }}
+        run: |
+          set -euo pipefail
+          tag="$(printf '%s' "${RELEASES:-}" \
+            | jq -r 'if . == null then [] else . end
+                     | map(select(.tag != null and .tag != "")) | .[0].tag // ""' \
+            || true)"
+          echo "resolved release tag: '${tag}'"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+  # ── hand off to the artifact release ────────────────────────────────────────
+  # release-plz tags with the repo GITHUB_TOKEN, and GitHub suppresses downstream
+  # events for token-created refs, so release.yml's `push: tags` trigger never
+  # fires for a real release (that is how v0.0.6-v0.0.10 shipped a github release
+  # and crates.io but never a wheel — #903). `workflow_dispatch` is the documented
+  # exception: it always creates a run, even from the GITHUB_TOKEN. dispatching it
+  # here is therefore the one handoff that cannot be suppressed.
+  dispatch-artifact-release:
+    name: dispatch artifact release
+    needs: release-plz-release
+    if: needs.release-plz-release.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # workflow_dispatch release.yml; nothing else is needed
+    steps:
+      - name: dispatch release.yml for the new tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+          TAG: ${{ needs.release-plz-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # seconds since epoch, used to distinguish our run from older ones
+          started="$(date -u +%s)"
+          gh workflow run release.yml --repo "$REPO" --ref "$REF" -f tag="$TAG"
+          echo "dispatched release.yml for $TAG on $REF"
+          echo "started=$started" >> "$GITHUB_ENV"
+
+      # a dispatch that silently fails to produce a run would put us straight
+      # back in the #903 hole, so confirm the run exists before going green
+      - name: confirm exactly one run started
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-plz-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 20); do
+            runs="$(gh api "repos/$REPO/actions/workflows/release.yml/runs" \
+              -f event=workflow_dispatch -f per_page=20 \
+              -q ".workflow_runs[] | select((.created_at | fromdateiso8601) >= ($started - 120)) | .html_url")"
+            count="$(printf '%s' "$runs" | grep -c . || true)"
+            if [ "$count" -ge 1 ]; then
+              echo "artifact release run(s) for $TAG:"; echo "$runs"
+              {
+                echo "### artifact release dispatched"
+                echo
+                echo "tag: \`$TAG\`"
+                while IFS= read -r url; do echo "- $url"; done <<< "$runs"
+              } >> "$GITHUB_STEP_SUMMARY"
+              if [ "$count" -gt 1 ]; then
+                echo "::warning::$count dispatched release runs started; expected exactly 1"
+              fi
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::dispatched release.yml for $TAG but no workflow run appeared within 5m"
+          exit 1

@@ -207,6 +207,20 @@ jobs:
           CI: "true"
         run: bash scripts/check-migrations-immutable.sh origin/master
 
+  # ── release handoff: release-plz must still dispatch release.yml ────────────
+  # a token-created tag does not fire `push: tags`, so the dispatch in
+  # release-plz.yml is the only thing that starts wheel/pypi publishing. losing
+  # it fails silently — releases keep shipping, just without a wheel (#903).
+  release-handoff:
+    name: release handoff wired
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: check the release handoff is wired
+        run: bash scripts/check-release-handoff.sh
+
   # ── helm chart: lint and render ─────────────────────────────────────────────
   # the chart carries the same pre-boot validation the CLI does (#854), and a
   # chart is the one deployment path with no compiler behind it: a template that
