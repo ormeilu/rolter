@@ -131,6 +131,39 @@ Policy changes propagate to the gateway the same way provider and route changes 
 
 `GET /api/v1/rbac/matrix?org_id=` returns your org's custom roles alongside the built-in ones, so the dashboard's matrix always reflects the current rule set.
 
+## Open mode: running with no admin token
+
+If `ROLTER_ADMIN_TOKEN` is not set, the control plane has **no authentication at
+all**: every request to the management API (`/api/v1/*`) and to
+`/internal/snapshot` is served as superadmin. Anyone who can reach the port can
+read and rotate keys and change providers, routing and budgets.
+
+This exists as a zero-credential local-development affordance, and Rolter keeps
+it from becoming anything else:
+
+- **It cannot bind a public interface by accident.** With no admin token set,
+  the control plane refuses to start unless every listener — the API port and
+  `--internal-addr`, when split out — is on loopback. Binding `0.0.0.0` in this
+  state exits with an error naming the variable that closes it.
+- **It is loud.** Every start in open mode logs a warning naming what is
+  unprotected, rather than only that a variable is missing.
+- **It is visible.** The dashboard shows a persistent banner for as long as the
+  control plane it is talking to is unauthenticated.
+
+Set the token to close it:
+
+```bash
+export ROLTER_ADMIN_TOKEN="$(openssl rand -hex 24)"
+```
+
+<Warning>
+  `--allow-open-mode` (`ROLTER_ALLOW_OPEN_MODE=1`) overrides the loopback
+  refusal and serves an unauthenticated control plane on whatever interface you
+  bound. There is no scenario in which that is right for a deployment reachable
+  by anyone else — the flag exists so that a container or CI harness that must
+  bind `0.0.0.0` can do so deliberately, on a network you control.
+</Warning>
+
 ## Most-restrictive-wins
 
 When evaluating budgets and rate limits, Rolter walks the scope chain from org down to the individual key and applies the most restrictive matching rule. This means an org-level budget acts as a hard ceiling even if a project-level budget is more generous — and a per-key rate limit can tighten throughput below what the project allows.

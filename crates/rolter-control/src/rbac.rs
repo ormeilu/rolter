@@ -25,6 +25,11 @@
 //! that runs open today keeps running open, and one that wants per-user RBAC
 //! opts in by setting the token.
 //!
+//! Open mode cannot be reached by accident from off the machine: the process
+//! refuses to bind a non-loopback listener without an admin token unless
+//! `--allow-open-mode` is passed, warns on every start, and tells the dashboard
+//! to show a persistent banner while it holds. See [`crate::open_mode`].
+//!
 //! ## Precedence ([`resolve_role`])
 //!
 //! Most-specific membership wins: a project-scoped grant beats a team-scoped

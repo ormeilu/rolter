@@ -3,6 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Tab icon (#941). All three files are vendored in ui/public and copied
+      verbatim into ui/dist by the build — the dashboard must run air-gapped,
+      so nothing here may resolve to a CDN.
+
+      The .ico is listed first as the fallback for browsers that do not take an
+      SVG icon; those that do prefer the later, more specific type. Without it
+      the browser falls back to requesting /favicon.ico anyway and 404s.
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>rolter</title>
   </head>
   <body>

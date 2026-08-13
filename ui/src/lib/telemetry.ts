@@ -23,6 +23,28 @@ export interface RolterRuntimeConfig {
   otelServiceName?: string;
   /** Dashboard build version, reported as `service.version`. */
   version?: string;
+  /**
+   * True when the control plane is serving with no admin token, so every
+   * request is treated as superadmin. Absent means gated — the control plane
+   * only injects this field when it is open (#970).
+   */
+  openMode?: boolean;
+}
+
+/**
+ * Whether the control plane that served this dashboard is unauthenticated.
+ *
+ * Read from the injected block rather than an API call: the answer cannot
+ * change without a control-plane restart, and asking an open control plane
+ * whether it is open would be answered by the same unauthenticated surface the
+ * banner is warning about.
+ */
+export function isOpenMode(
+  config: RolterRuntimeConfig | undefined = typeof window === "undefined"
+    ? undefined
+    : window.__ROLTER_CONFIG__,
+): boolean {
+  return config?.openMode === true;
 }
 
 declare global {

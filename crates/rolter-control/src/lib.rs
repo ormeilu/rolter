@@ -54,6 +54,7 @@ mod mcp_oauth_flow;
 mod me;
 #[cfg(feature = "postgres")]
 mod model_defaults;
+mod open_mode;
 #[cfg(feature = "postgres")]
 mod plugins;
 mod proxy;
@@ -101,7 +102,12 @@ use rolter_store::{ConfigStore, InMemoryConfigStore};
 #[derive(Parser, Debug)]
 #[command(name = "rolter-control", version, about = "rolter control plane")]
 pub struct Args {
-    #[arg(long, env = "ROLTER_CONTROL_HOST", default_value = "0.0.0.0")]
+    /// address the management API and dashboard bind to. Loopback by default:
+    /// the control plane runs unauthenticated when no `--admin-token` is set,
+    /// and that state must not reach a public interface by omission (#970).
+    /// Containers and clusters set this explicitly — see `charts/` and
+    /// `docker/docker-compose.yml`
+    #[arg(long, env = "ROLTER_CONTROL_HOST", default_value = "127.0.0.1")]
     pub host: String,
     #[arg(long, env = "ROLTER_CONTROL_PORT", default_value_t = 4001)]
     pub port: u16,
@@ -164,6 +170,22 @@ pub struct Args {
     /// reachable on the port the dashboard and management API are served from
     #[arg(long, env = "ROLTER_INTERNAL_ADDR")]
     pub internal_addr: Option<SocketAddr>,
+    /// acknowledge running with no `--admin-token` on a non-loopback bind.
+    /// Without it the control plane refuses to start in that combination,
+    /// because every request would be served as superadmin with no credential
+    /// (see `crate::open_mode`).
+    ///
+    /// `FalseyValueParser` rather than the derived bool parser: from the
+    /// environment this is set as `=1` at least as often as `=true`, and a
+    /// container that fails to start over which spelling it used is a worse
+    /// outcome than either
+    #[arg(
+        long,
+        env = "ROLTER_ALLOW_OPEN_MODE",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::FalseyValueParser::new(),
+    )]
+    pub allow_open_mode: bool,
 }
 
 /// Names owned by the bootstrap config file: immutable at runtime,
@@ -288,12 +310,15 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .map(|t| Arc::new(t.to_string()));
-    if admin_token.is_none() {
-        tracing::warn!(
-            "ROLTER_ADMIN_TOKEN is unset: the management API and /internal/snapshot are \
-             unauthenticated; set it before exposing the control plane beyond localhost"
-        );
-    }
+    // decided before anything binds: an unauthenticated control plane reachable
+    // from off the machine is refused outright rather than served and warned
+    // about (#970)
+    let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
+    let listeners: Vec<SocketAddr> = std::iter::once(addr)
+        .chain(args.internal_addr)
+        .collect::<Vec<_>>();
+    let open_mode = open_mode::evaluate(admin_token.is_some(), &listeners, args.allow_open_mode)?;
+    open_mode::warn(open_mode, &listeners);
 
     let internal_token = args
         .internal_token
@@ -408,6 +433,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
             .flatten(),
         otel_service_name: args.ui_otel_service_name.clone(),
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        open_mode: open_mode.is_open(),
     };
     if ui_runtime.is_configured() {
         tracing::info!(
@@ -418,27 +444,8 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     let index = load_index(&args.ui_dir, &ui_runtime);
 
     let app = build_app_with(state.clone(), !split_internal)
-        // anything not matched by the api falls through to the built SPA.
-        // ServeDir must not serve index.html on its own: every route that ends
-        // at the SPA has to come through the fallback, or it arrives without
-        // the injected runtime config and the dashboard's tracing stays inert.
-        // Routing every miss there is also what lets a deep link like /models
-        // survive a refresh instead of 404ing
-        .fallback_service(
-            ServeDir::new(&args.ui_dir)
-                .append_index_html_on_directories(false)
-                .fallback(get(move || {
-                    let index = index.clone();
-                    async move {
-                        match index {
-                            Some(html) => Html(html).into_response(),
-                            None => StatusCode::NOT_FOUND.into_response(),
-                        }
-                    }
-                })),
-        );
+        .fallback_service(spa_fallback(&args.ui_dir, index));
 
-    let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
     tracing::info!(%addr, ui_dir = %args.ui_dir.display(), "rolter-control listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
@@ -457,6 +464,34 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         axum::serve(internal_listener, internal).await
     },)?;
     Ok(())
+}
+
+/// Everything the API did not match falls through to the built SPA.
+///
+/// `ServeDir` answers first, so a real file in `ui_dir` — the JS bundle, the CSS,
+/// the tab icons (#941) — is served as itself. Only a path with no file behind
+/// it reaches the inner fallback and gets `index.html`, which is what lets a
+/// deep link like `/models` survive a refresh instead of 404ing.
+///
+/// `ServeDir` must not serve `index.html` on its own, hence
+/// `append_index_html_on_directories(false)`: every route that ends at the SPA
+/// has to come through the fallback, or it arrives without the injected runtime
+/// config and the dashboard's tracing stays inert.
+fn spa_fallback(
+    ui_dir: &std::path::Path,
+    index: Option<String>,
+) -> ServeDir<axum::routing::MethodRouter> {
+    ServeDir::new(ui_dir)
+        .append_index_html_on_directories(false)
+        .fallback(get(move || {
+            let index = index.clone();
+            async move {
+                match index {
+                    Some(html) => Html(html).into_response(),
+                    None => StatusCode::NOT_FOUND.into_response(),
+                }
+            }
+        }))
 }
 
 /// Read the dashboard's `index.html` out of `ui_dir` and inject the runtime
@@ -498,6 +533,7 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
         .route("/api/v1/roles", get(list_roles))
         .route("/api/v1/config", get(get_config))
         .route("/api/v1/currency", get(get_currency))
+        .route("/api/v1/config/problems", get(get_config_problems))
         .merge(analytics::router())
         .merge(health::router())
         // reverse-proxy the gateway data plane for the dashboard Playground;
@@ -1058,6 +1094,27 @@ async fn get_currency(State(state): State<ControlState>) -> Json<CurrencySetting
     })
 }
 
+/// What the snapshot is *not* serving, and why (#926).
+///
+/// Since a malformed entry is now dropped from `/internal/snapshot` rather than
+/// withholding the whole fleet's config, nothing in the dashboard would
+/// otherwise say a provider stopped being served — the failure would be silent
+/// until someone wondered why a change never took effect. This is the same
+/// computation the snapshot runs, so the two cannot report different things.
+///
+/// Unguarded, alongside [`get_config`]: it carries no credentials, only the
+/// names and reasons an operator needs to fix their own config.
+async fn get_config_problems(State(state): State<ControlState>) -> Json<Value> {
+    let mut config = state.store.load().await.unwrap_or_default();
+    let mut problems = config.sanitize_for_snapshot();
+    // structural problems never reach a gateway at all — the snapshot refuses
+    // outright — so an operator needs to see those here too, not just in a log
+    if let Err(fatal) = config.validate() {
+        problems.extend(fatal);
+    }
+    Json(json!({ "problems": problems }))
+}
+
 #[derive(Debug, Deserialize)]
 struct SnapshotQuery {
     /// the gateway's last-seen config version; if it's already current, the
@@ -1201,8 +1258,11 @@ async fn build_snapshot(
                     "omitted unservable entries from the config snapshot"
                 );
             }
-            // never distribute a broken config to gateways: reply with the
-            // problems instead so the operator can fix the source
+            // what survives here is structural: duplicate names, a bad
+            // metrics_path, an unreadable CA bundle. Those genuinely cannot be
+            // served — dropping one of two colliding rows would be a guess —
+            // so they still refuse. Row-local defects were pruned above and
+            // ride out in `problems` instead of withholding the fleet (#926)
             if let Err(problems) = config.validate() {
                 tracing::error!(?problems, "refusing to serve invalid config snapshot");
                 return BuiltSnapshot::error(
@@ -1224,7 +1284,17 @@ async fn build_snapshot(
             let encode = rolter_core::stage_span!("snapshot.encode");
             let body = {
                 let _entered = encode.enter();
-                serde_json::to_vec(&json!({"version": version, "config": config}))
+                // `problems` rides along so the gateway can log what is not
+                // being served and the dashboard can say "this provider is not
+                // being served, because ...". Omitted when empty: it is on
+                // every poll of every gateway in the fleet
+                if omitted.is_empty() {
+                    serde_json::to_vec(&json!({"version": version, "config": config}))
+                } else {
+                    serde_json::to_vec(
+                        &json!({"version": version, "config": config, "problems": omitted}),
+                    )
+                }
             };
             let body = match body {
                 Ok(body) => body,
@@ -1305,6 +1375,66 @@ mod tests {
             html.contains("<title>rolter</title>"),
             "original kept: {html}"
         );
+    }
+
+    /// #941 added tab icons to `ui/public`, which the build copies verbatim
+    /// into `ui/dist`. Shipping them is only half the job: if the SPA fallback
+    /// answered first, `/favicon.ico` would return `index.html` with a
+    /// `text/html` type and the browser would render no icon at all.
+    #[tokio::test]
+    async fn a_static_asset_is_served_as_itself_not_as_the_spa() {
+        let dir = ScratchUiDir::with_index("assets", "<html>the dashboard</html>");
+        std::fs::write(dir.0.join("favicon.ico"), b"\x00\x00\x01\x00icon-bytes")
+            .expect("write favicon");
+
+        let app = Router::new().fallback_service(spa_fallback(
+            &dir.0,
+            Some("<html>the dashboard</html>".to_string()),
+        ));
+        let addr = serve(app).await;
+
+        let response = reqwest::get(format!("http://{addr}/favicon.ico"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            !content_type.contains("text/html"),
+            "served as the SPA, not as an icon: {content_type}"
+        );
+        assert!(
+            response
+                .bytes()
+                .await
+                .unwrap()
+                .starts_with(b"\x00\x00\x01\x00"),
+            "the icon's own bytes must come back"
+        );
+    }
+
+    /// The other half: a path with no file behind it still reaches the SPA, so
+    /// adding assets did not break deep-link refresh.
+    #[tokio::test]
+    async fn a_deep_link_still_falls_through_to_the_dashboard() {
+        let dir = ScratchUiDir::with_index("deeplink", "<html>the dashboard</html>");
+        let app = Router::new().fallback_service(spa_fallback(
+            &dir.0,
+            Some("<html>the dashboard</html>".to_string()),
+        ));
+        let addr = serve(app).await;
+
+        let body = reqwest::get(format!("http://{addr}/models"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(body.contains("the dashboard"), "{body}");
     }
 
     #[test]
@@ -1519,6 +1649,136 @@ mod tests {
             .unwrap();
         assert_eq!(not_modified.status(), 304);
         assert!(not_modified.bytes().await.unwrap().is_empty());
+    }
+
+    /// #926: one malformed provider used to withhold the entire fleet's
+    /// configuration — every route, every other provider, every key — because
+    /// `/internal/snapshot` validated all-or-nothing and 500'd. A provider
+    /// nobody routes to must not be able to freeze a fleet.
+    #[tokio::test]
+    async fn one_invalid_provider_does_not_reduce_the_snapshot_to_an_error() {
+        let config: GatewayConfig = serde_json::from_value(json!({
+            "providers": [
+                {
+                    "name": "openai",
+                    "kind": "openai",
+                    "api_base": "https://api.openai.com/v1",
+                },
+                {
+                    "name": "openrouter-edge",
+                    "kind": "openrouter",
+                    "api_base": "https://openrouter.example.com/v1",
+                    "api_key_env": "OPENROUTER_API_KEY",
+                },
+            ],
+            "routes": [
+                {"model": "gpt-4o", "targets": [{"provider": "openai"}]},
+            ],
+        }))
+        .expect("fixture config parses");
+        let mut state = state_with_token(None);
+        state.store = Arc::new(InMemoryConfigStore::new(config));
+
+        let addr = serve(build_app_with_internal(state)).await;
+        let response = reqwest::Client::new()
+            .get(format!("http://{addr}/internal/snapshot"))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 200, "the fleet must still propagate");
+        let body: Value = response.json().await.unwrap();
+
+        // the valid provider and route are served
+        let providers = body["config"]["providers"].as_array().unwrap();
+        assert_eq!(providers.len(), 1, "{body}");
+        assert_eq!(providers[0]["name"], "openai");
+        assert_eq!(body["config"]["routes"].as_array().unwrap().len(), 1);
+
+        // and the dropped entry rides along with its reason, so the gateway can
+        // log it and the dashboard can explain it
+        let problems = body["problems"].as_array().expect("problems in {body}");
+        assert_eq!(problems.len(), 1, "{body}");
+        let problem = problems[0].as_str().unwrap();
+        assert!(problem.contains("openrouter-edge"), "{problem}");
+        assert!(
+            problem.contains("https://openrouter.ai/api/v1"),
+            "{problem}"
+        );
+    }
+
+    /// The dashboard needs the same answer the snapshot reached, or an operator
+    /// has no way to see that a provider stopped being served (#926).
+    #[tokio::test]
+    async fn the_dashboard_can_ask_what_is_not_being_served() {
+        let config: GatewayConfig = serde_json::from_value(json!({
+            "providers": [
+                {
+                    "name": "openai",
+                    "kind": "openai",
+                    "api_base": "https://api.openai.com/v1",
+                },
+                {
+                    "name": "openrouter-edge",
+                    "kind": "openrouter",
+                    "api_base": "https://openrouter.example.com/v1",
+                    "api_key_env": "OPENROUTER_API_KEY",
+                },
+            ],
+            "routes": [
+                {"model": "gpt-4o", "targets": [{"provider": "openai"}]},
+            ],
+        }))
+        .expect("fixture config parses");
+        let mut state = state_with_token(None);
+        state.store = Arc::new(InMemoryConfigStore::new(config));
+
+        let addr = serve(build_app_with_internal(state)).await;
+        let body: Value = reqwest::Client::new()
+            .get(format!("http://{addr}/api/v1/config/problems"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let problems = body["problems"].as_array().unwrap();
+        assert_eq!(problems.len(), 1, "{body}");
+        assert!(
+            problems[0].as_str().unwrap().contains("openrouter-edge"),
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_healthy_config_reports_no_problems_to_the_dashboard() {
+        let addr = serve(build_app_with_internal(state_with_token(None))).await;
+        let body: Value = reqwest::Client::new()
+            .get(format!("http://{addr}/api/v1/config/problems"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(body["problems"].as_array().unwrap().len(), 0, "{body}");
+    }
+
+    /// The common case must not grow a field: `problems` is on the wire of
+    /// every poll of every gateway in the fleet.
+    #[tokio::test]
+    async fn a_healthy_snapshot_carries_no_problems_key() {
+        let addr = serve(build_app_with_internal(state_with_token(None))).await;
+        let body: Value = reqwest::Client::new()
+            .get(format!("http://{addr}/internal/snapshot"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(body.get("problems").is_none(), "{body}");
     }
 
     #[tokio::test]

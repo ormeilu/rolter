@@ -1,16 +1,19 @@
 import react from "@vitejs/plugin-react";
-import { readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 
-const pkg = JSON.parse(
-  readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
-) as { version: string };
+import { readAppVersion } from "./scripts/app-version";
+
+// the Cargo workspace version is the one release-plz maintains; package.json
+// carried an independent version that nothing bumped (#953)
+const appVersion = readAppVersion(
+  fileURLToPath(new URL("../Cargo.toml", import.meta.url)),
+);
 
 export default defineConfig({
   plugins: [react()],
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_VERSION__: JSON.stringify(appVersion),
   },
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
