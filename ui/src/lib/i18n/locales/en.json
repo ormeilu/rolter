@@ -32,6 +32,9 @@
     "en": "English",
     "ru": "Русский"
   },
+  "modelSheet": {
+    "currencyUnconvertible": "{{code}} has no conversion rate configured, so this price cannot be converted to {{base}} and will not reach spend or budgets. Add it to [currency.rates] in the bootstrap config, or price in {{base}}."
+  },
   "nav": {
     "playground": "Playground",
     "observability": "Observability",
@@ -204,6 +207,9 @@
       "saving": "Saving…",
       "save": "Save configuration",
       "installConfirm": "Install plugin"
+    },
+    "pricing": {
+      "unconvertible": "Priced in {{code}}, which has no conversion rate — this model's spend is missing from {{base}} totals and budgets."
     }
   },
   "playground": {

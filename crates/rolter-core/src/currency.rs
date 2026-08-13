@@ -79,6 +79,30 @@ impl CurrencyConfig {
             .map(|(_, rate)| *rate)
     }
 
+    /// Every currency this deployment can price in: the base plus each code in
+    /// the rate table, normalized and deduplicated, base first and the rest in
+    /// alphabetical order.
+    ///
+    /// This is exactly the set [`Self::rate`] answers for, which is what makes
+    /// it safe to offer as a chooser: the dashboard used to hardcode seven
+    /// ISO-4217 codes, so a configured `RUB` was unselectable while an offered
+    /// `JPY` with no rate was rejected on save (#965). Deriving both the
+    /// chooser and the validator from one function means neither can drift.
+    pub fn codes(&self) -> Vec<String> {
+        let base = self.base_code();
+        let mut rest: Vec<String> = self
+            .rates
+            .keys()
+            .map(|code| normalize_code(code))
+            .filter(|code| !code.is_empty() && *code != base)
+            .collect();
+        rest.sort();
+        rest.dedup();
+        // the base leads because it is the currency spend settles in, and an
+        // operator picking "the default" should land on it without hunting
+        std::iter::once(base).chain(rest).collect()
+    }
+
     /// Problems that make this table unusable, in the shape
     /// [`crate::GatewayConfig::validate`] collects.
     pub fn problems(&self) -> Vec<String> {
@@ -191,6 +215,58 @@ mod tests {
         // the whole point: the caller must be able to fail closed
         assert_eq!(rates().convert(10.0, "XYZ", "USD"), None);
         assert_eq!(rates().convert(10.0, "USD", "XYZ"), None);
+    }
+
+    #[test]
+    fn codes_lead_with_the_base_then_sort() {
+        assert_eq!(rates().config.codes(), ["USD", "BTC", "EUR", "GBP"]);
+    }
+
+    #[test]
+    fn codes_are_exactly_the_set_that_has_a_rate() {
+        // the invariant the dashboard chooser rests on: everything offered is
+        // priceable, and everything priceable is offered
+        let fx = rates();
+        for code in fx.config.codes() {
+            assert!(
+                fx.config.rate(&code).is_some(),
+                "offered but unpriceable: {code}"
+            );
+        }
+        assert!(fx.config.rate("XYZ").is_none());
+        assert!(!fx.config.codes().contains(&"XYZ".to_string()));
+    }
+
+    #[test]
+    fn codes_are_not_a_fixed_set() {
+        // #965: adding a currency must cost a rate-table entry and nothing else
+        let mut config = CurrencyConfig::default();
+        assert_eq!(config.codes(), ["USD"]);
+        config.rates.insert("RUB".to_string(), 0.011);
+        assert_eq!(config.codes(), ["USD", "RUB"]);
+    }
+
+    #[test]
+    fn codes_normalize_and_never_repeat_the_base() {
+        let config = CurrencyConfig {
+            base: " usd ".to_string(),
+            rates: HashMap::from([
+                // the base needs no row, but listing it must not double it up
+                ("usd".to_string(), 1.0),
+                (" rub ".to_string(), 0.011),
+                // an empty code is a config defect, not a currency to offer
+                ("".to_string(), 2.0),
+            ]),
+        };
+        assert_eq!(config.codes(), ["USD", "RUB"]);
+    }
+
+    #[test]
+    fn a_non_base_currency_is_offered_only_once_it_has_a_rate() {
+        let mut config = CurrencyConfig::default();
+        assert!(!config.codes().contains(&"EUR".to_string()));
+        config.rates.insert("EUR".to_string(), 1.09);
+        assert!(config.codes().contains(&"EUR".to_string()));
     }
 
     #[test]
