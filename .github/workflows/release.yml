@@ -28,8 +28,16 @@ jobs:
   # runs the same fmt/clippy/test/cargo-deny pipeline as CI on the tagged
   # commit. publish-pypi needs this, so a tag whose code fails verification
   # never ships.
+  #
+  # the `ref` matters: a local reusable workflow checks out the *caller's* ref by
+  # default, which on a workflow_dispatch is master, not `inputs.tag`. since #903
+  # makes dispatch the primary release path, defaulting would verify master while
+  # build-wheels packages the tag — one tree checked, a different one shipped
+  # (#988). pass the packaged commit-ish explicitly.
   verify:
     uses: ./.github/workflows/quality.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
 
   # asserts the external app-provided checks (CodeQL, secret scanning) reported
   # success for this commit. fail-closed: pending or missing checks block the

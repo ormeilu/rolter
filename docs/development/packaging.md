@@ -97,6 +97,7 @@ red instead of quietly leaving a channel behind.
 | Gate | Effect |
 |---|---|
 | `verify` (reusable `quality.yml`) | the tagged commit passes the same fmt/clippy/test/deny pipeline as CI |
+| `quality.yml`'s `ref` input | pins that gate to the commit being packaged |
 | `verify-external-checks` | CodeQL reported success for the commit; fail-closed |
 | `RELEASE_REQUIRED_CHECKS` repo variable | exact check-run names the gate above requires (comma-separated) |
 | `PYPI_PUBLISH_ENABLED` repo variable | must be `"true"` or the PyPI publish is skipped |
@@ -111,6 +112,16 @@ config, and it adds PEP 740 attestations on the `id-token` grant the job already
 holds.
 
 [PyO3/maturin#2334]: https://github.com/PyO3/maturin/issues/2334
+
+That `ref` input is load-bearing. A local reusable workflow (`uses: ./…`) always
+runs the *definition* from the caller's ref, and its checkouts default to the
+caller's ref too. On a `workflow_dispatch` the caller ref is `master` while
+`build-wheels` checks out `inputs.tag` — so without an explicit `ref` the gate
+verifies master and ships the tag. Harmless when they coincide, wrong for a
+backfill of an older tag ([#988]). Every caller of `quality.yml` that publishes
+passes the exact commit-ish it packages; `ci.yml` omits it and gets the default.
+
+[#988]: https://github.com/rolter-ai/rolter/issues/988
 
 `RELEASE_REQUIRED_CHECKS` holds exact check-run *names*, so it rots whenever a
 scanner is renamed or reconfigured — and since the gate is fail-closed, a stale

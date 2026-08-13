@@ -52,6 +52,11 @@ require "$rel" "release.yml dropped the 'tag' dispatch input" \
     '^      tag:'
 require "$rel" "release.yml no longer has a publish-pypi job" \
     '^  publish-pypi:'
+# a local reusable workflow checks out the caller's ref, which on a dispatch is
+# master — not the tag being packaged. without this the gate verifies one tree
+# and ships another (#988)
+require "$rel" "the verify gate must be pinned to the packaged ref, not the caller's" \
+    'ref: \$\{\{ inputs\.tag \|\| github\.ref \}\}'
 
 # ── the parity gate ─────────────────────────────────────────────────────────
 # without this a skipped publish drags the run to green instead of red
