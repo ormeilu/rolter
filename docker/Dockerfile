@@ -38,6 +38,10 @@ WORKDIR /ui
 COPY ui/package.json ui/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY ui/ ./
+# the dashboard version is read from the Cargo workspace manifest at build
+# time, so that one version stays the only one anybody bumps (#953). without
+# this the vite build fails loudly rather than shipping a wrong version
+COPY Cargo.toml /Cargo.toml
 RUN bun run build
 
 # --- runtime ---
