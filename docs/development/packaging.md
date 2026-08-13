@@ -77,7 +77,7 @@ release-plz.yml ── verify ──► release ──►  crates.io publish
       ▼
 release.yml
   │
-  ├─ gate ──── verify (quality.yml on the tag) + verify-external-checks
+  ├─ gate ──── verify-external-checks (ci-ok + CodeQL green for the tagged sha)
   │
   ├─ build ─── build-wheels  (5 wheels + sdist)
   │            build-image   (per arch, pushed as untagged digests)
@@ -101,7 +101,8 @@ Two properties make the barrier real:
 
 - **Images are built as untagged digests** (`push-by-digest`). A digest nobody
   can resolve by tag is not a release; `publish-docker` only assembles the
-  `:{version}` and `:latest` manifests once everything else has passed.
+  `:{version}` and `:latest` manifests once everything else has passed, from
+  those same digests — so the image is never rebuilt.
 - **Nothing is published untested.** The smoke stage installs each wheel and
   runs each image digest, asserting `rolter --version` matches the tag, while
   the artifacts are still private. The wheel install uses `--no-index`, so it
@@ -144,9 +145,7 @@ red instead of quietly leaving a channel behind.
 
 | Gate | Effect |
 |---|---|
-| `verify` (reusable `quality.yml`) | the tagged commit passes the same fmt/clippy/test/deny pipeline as CI |
-| `quality.yml`'s `ref` input | pins that gate to the commit being packaged |
-| `verify-external-checks` | CodeQL reported success for the commit; fail-closed |
+| `verify-external-checks` | `ci-ok` **and** CodeQL recorded success for the tagged commit; fail-closed |
 | `RELEASE_REQUIRED_CHECKS` repo variable | exact check-run names the gate above requires (comma-separated) |
 | `PYPI_PUBLISH_ENABLED` repo variable | must be `"true"` or the PyPI publish is skipped |
 | `DOCKER_PUBLISH_ENABLED` repo variable | must be `"true"` or the image publish is skipped |
@@ -161,13 +160,30 @@ holds.
 
 [PyO3/maturin#2334]: https://github.com/PyO3/maturin/issues/2334
 
-That `ref` input is load-bearing. A local reusable workflow (`uses: ./…`) always
-runs the *definition* from the caller's ref, and its checkouts default to the
-caller's ref too. On a `workflow_dispatch` the caller ref is `master` while
-`build-wheels` checks out `inputs.tag` — so without an explicit `ref` the gate
-verifies master and ships the tag. Harmless when they coincide, wrong for a
-backfill of an older tag ([#988]). Every caller of `quality.yml` that publishes
-passes the exact commit-ish it packages; `ci.yml` omits it and gets the default.
+### The gate is asserted, not re-run
+
+`release.yml` does **not** run `quality.yml` itself. It asserts that the tagged
+commit already passed it, by requiring `ci-ok` among the check-runs recorded for
+that SHA. That is deliberate, and it is what makes the gate correct:
+
+A local reusable workflow (`uses: ./…`) always checks out the *caller's* ref. On
+a `workflow_dispatch` the caller ref is `master`, while `build-wheels` checks out
+`inputs.tag` — so a re-run verified master and shipped the tag ([#988]). It
+passed, and told you nothing about what was being packaged. Threading the tag
+into `quality.yml` fixes that but makes the shared workflow check out an
+arbitrary dispatch-supplied ref in a default-branch context, whose caches
+trusted runs later restore — cache poisoning, and CodeQL flags it.
+
+Asserting settles both. Every commit on master carries a `ci-ok` check-run from
+`ci.yml`, and release-plz re-runs the gate on the release commit before tagging,
+so a tagged commit is verified by construction. The assertion binds to the
+*tagged* SHA — which re-running never did — costs no duplicate 20-minute run,
+and checks out nothing.
+
+Because release-plz dispatches the moment it finishes tagging, `ci-ok` is often
+still running for that commit. A pending check is therefore expected, not a
+failure: the job waits up to 45 minutes for a verdict, fails immediately on a
+real non-success, and fails closed if a required check never appears.
 
 [#988]: https://github.com/rolter-ai/rolter/issues/988
 

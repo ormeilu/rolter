@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Megaphone, Play, Trash2 } from "lucide-react";
+import { Loader2, Megaphone, Play, Trash2 } from "lucide-react";
 import * as React from "react";
 
 import { EditorSheet } from "@/components/EditorSheet";
@@ -106,10 +106,15 @@ export function AlertChannels() {
                 type="button"
                 title="Delete channel"
                 aria-label="Delete channel"
+                disabled={remove.isPending && remove.variables === c.id}
                 onClick={() => remove.mutate(c.id)}
-                className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                {remove.isPending && remove.variables === c.id ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
               </button>
             </div>
           </div>
@@ -296,10 +301,15 @@ export function AlertRules() {
                   type="button"
                   title="Delete rule"
                   aria-label="Delete rule"
+                  disabled={remove.isPending && remove.variables === r.id}
                   onClick={() => remove.mutate(r.id)}
-                  className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  {remove.isPending && remove.variables === r.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
                 </button>
               </div>
             </div>

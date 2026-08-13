@@ -24,25 +24,22 @@ permissions:
   contents: read
 
 jobs:
-  # ── quality/security gate ───────────────────────────────────────────────────
-  # runs the same fmt/clippy/test/cargo-deny pipeline as CI on the tagged
-  # commit. publish-pypi needs this, so a tag whose code fails verification
-  # never ships.
+  # the whole quality/security gate for the release, asserted rather than re-run.
   #
-  # the `ref` matters: a local reusable workflow checks out the *caller's* ref by
-  # default, which on a workflow_dispatch is master, not `inputs.tag`. since #903
-  # makes dispatch the primary release path, defaulting would verify master while
-  # build-wheels packages the tag — one tree checked, a different one shipped
-  # (#988). pass the packaged commit-ish explicitly.
-  verify:
-    uses: ./.github/workflows/quality.yml
-    with:
-      ref: ${{ inputs.tag || github.ref }}
-
-  # asserts the external app-provided checks (CodeQL, secret scanning) reported
-  # success for this commit. fail-closed: pending or missing checks block the
-  # publish. required check names are configurable via the
-  # RELEASE_REQUIRED_CHECKS repo variable (comma-separated).
+  # this job used to sit beside `verify: uses: ./.github/workflows/quality.yml`,
+  # which re-ran the entire gate here. that had to go: a local reusable workflow
+  # checks out the *caller's* ref, which on a workflow_dispatch is master and not
+  # `inputs.tag`, so it verified one tree while build-wheels packaged another
+  # (#988). threading the tag into quality.yml fixed that but made the shared gate
+  # check out an arbitrary dispatch-supplied ref in a default-branch context —
+  # cache poisoning, flagged by CodeQL, and a real one.
+  #
+  # asserting instead of re-running settles both. every commit on master already
+  # carries a `ci-ok` check-run from ci.yml, and release-plz re-runs the gate on
+  # the release commit before tagging, so the tagged commit is verified by
+  # construction. checking the recorded result binds the gate to the *tagged*
+  # SHA — which re-running never did — costs no duplicate 20-minute run, and
+  # checks out nothing.
   #
   # these are exact check-run *names*, so they rot when a scanner is renamed or
   # reconfigured — and because the job is fail-closed, a stale name blocks every
@@ -65,30 +62,50 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           REF: ${{ inputs.tag || github.sha }}
-          REQUIRED: ${{ vars.RELEASE_REQUIRED_CHECKS || 'codeql (rust),codeql (actions),codeql (python),codeql (javascript-typescript)' }}
+          REQUIRED: ${{ vars.RELEASE_REQUIRED_CHECKS || 'ci-ok,codeql (rust),codeql (actions),codeql (python),codeql (javascript-typescript)' }}
         run: |
           set -euo pipefail
           # resolve the ref (tag on dispatch, sha on push) to a commit sha
           SHA="$(gh api "repos/$REPO/commits/$REF" -q '.sha')"
-          runs="$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate \
-            -q '.check_runs[] | "\(.name)\t\(.status)\t\(.conclusion)"')"
-          echo "check-runs for $SHA:"; echo "$runs"
-          fail=0
           IFS=',' read -ra names <<< "$REQUIRED"
-          for name in "${names[@]}"; do
-            name="$(echo "$name" | sed 's/^ *//;s/ *$//')"
-            [ -z "$name" ] && continue
-            line="$(echo "$runs" | grep -F -m1 "$(printf '%s\t' "$name")" || true)"
-            if [ -z "$line" ]; then
-              echo "::error::required check '$name' not found for $SHA (fail-closed). if the scanner was renamed or reconfigured, update the RELEASE_REQUIRED_CHECKS repo variable to match the check-run names listed above"
-              fail=1; continue
+
+          # release-plz dispatches this the moment it finishes tagging, while
+          # ci.yml is often still running the very same commit, so a required
+          # check being *pending* is expected rather than a failure. wait for a
+          # verdict; only a real non-success, or the timeout, is fatal.
+          deadline=$(( $(date -u +%s) + 45 * 60 ))
+          while :; do
+            runs="$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate \
+              -q '.check_runs[] | "\(.name)\t\(.status)\t\(.conclusion)"')"
+            fail=0; pending=""
+            for name in "${names[@]}"; do
+              name="$(echo "$name" | sed 's/^ *//;s/ *$//')"
+              [ -z "$name" ] && continue
+              line="$(echo "$runs" | grep -F -m1 "$(printf '%s\t' "$name")" || true)"
+              if [ -z "$line" ]; then
+                pending="$pending $name(absent)"; continue
+              fi
+              status="$(echo "$line" | cut -f2)"; conclusion="$(echo "$line" | cut -f3)"
+              if [ "$status" != "completed" ]; then
+                pending="$pending $name($status)"; continue
+              fi
+              if [ "$conclusion" != "success" ]; then
+                echo "::error::required check '$name' concluded '$conclusion' for $SHA (need success)"; fail=1
+              fi
+            done
+            [ "$fail" -ne 0 ] && { echo "check-runs for $SHA:"; echo "$runs"; exit 1; }
+            [ -z "$pending" ] && break
+            if [ "$(date -u +%s)" -ge "$deadline" ]; then
+              echo "check-runs for $SHA:"; echo "$runs"
+              echo "::error::still waiting on:$pending after 45m (fail-closed). if a scanner was renamed or reconfigured, update the RELEASE_REQUIRED_CHECKS repo variable to match the check-run names listed above"
+              exit 1
             fi
-            status="$(echo "$line" | cut -f2)"; conclusion="$(echo "$line" | cut -f3)"
-            if [ "$status" != "completed" ] || [ "$conclusion" != "success" ]; then
-              echo "::error::required check '$name' status=$status conclusion=$conclusion (need completed/success)"; fail=1
-            fi
+            echo "waiting on:$pending"
+            sleep 30
           done
-          exit $fail
+
+          echo "check-runs for $SHA:"; echo "$runs"
+          echo "all required checks succeeded for $SHA"
 
   # ── build maturin wheels ────────────────────────────────────────────────────
   build-wheels:
@@ -161,6 +178,131 @@ jobs:
           name: wheels-${{ matrix.os }}
           path: dist/
 
+  # ── publish to PyPI ─────────────────────────────────────────────────────────
+  # fail-closed: publishes only when the PYPI_PUBLISH_ENABLED repo variable is
+  # set to "true" AND the verify + external-check gates pass for the tagged
+  # commit (ROL-103). wheels still build above as a release artifact regardless.
+  publish-pypi:
+    name: publish to pypi
+    # the publish barrier: every build and smoke job, images included, must have
+    # succeeded. `!cancelled() && !failure()` rather than a bare `vars` check
+    # because build-image/smoke-image are skipped when docker publishing is off,
+    # and a skipped dependency would otherwise skip this job too (#992)
+    if: ${{ !cancelled() && !failure() && vars.PYPI_PUBLISH_ENABLED == 'true' }}
+    needs: [verify-external-checks, build-wheels, build-image, smoke-wheels, smoke-image]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/rolter/
+    permissions:
+      id-token: write  # trusted publishing (OIDC)
+    steps:
+      - name: download all wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist/
+
+      # `maturin upload` is deprecated and slated for removal (PyO3/maturin#2334);
+      # the pypa action is the supported path and speaks the same OIDC trusted
+      # publishing. the publisher identity is the repo + workflow filename +
+      # environment, none of which change here, so the existing pypi trusted
+      # publisher keeps matching. `attestations` (PEP 740) rides on the id-token
+      # grant this job already holds.
+      - name: publish to pypi
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist/
+          skip-existing: true
+          attestations: true
+          print-hash: true
+
+  # ── build container image (stage 1: nothing is public) ──────────────────────
+  # one job per architecture, each pushing an *untagged* digest to GHCR
+  # (`push-by-digest`). an untagged digest is not a release: nothing resolves
+  # `:1.2.3` or `:latest` to it. the tag manifests that make it public are
+  # assembled in stage 2, only once every build and smoke job has passed (#992).
+  #
+  # splitting per arch also lets a flaky architecture be re-run on its own, and
+  # is the prerequisite for moving arm64 onto a native runner instead of QEMU,
+  # which dominates release time (ROL-76).
+  build-image:
+    name: build image (${{ matrix.arch }})
+    if: vars.DOCKER_PUBLISH_ENABLED == 'true'
+    needs: [verify-external-checks]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: arm64
+            platform: linux/arm64
+    permissions:
+      contents: read
+      packages: write # push the untagged digest to GHCR
+    env:
+      REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.tag || github.ref }}
+
+      # only the arm64 leg needs emulation; installing it on amd64 is pure cost
+      - name: set up qemu (arm64 emulation)
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+
+      - name: set up buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # labels only: no `tags`, because tagging is what publishing means here
+      - name: docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+
+      - name: build and push by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: runtime
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      # hand the digest to the later stages as an empty file named after it
+      - name: export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - name: upload digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
   # ── stage 2: prove the artifacts work before anything is public ─────────────
   # nothing used to exercise a built artifact before publishing it: the pipeline
   # checked that files *existed*, never that they installed or ran. #903 asks for
@@ -172,7 +314,6 @@ jobs:
     needs: build-wheels
     runs-on: ${{ matrix.os }}
     strategy:
-      # one platform failing should not mask the state of the others
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -258,139 +399,11 @@ jobs:
             *) echo "::error::version mismatch: expected $VERSION, got '$got'"; exit 1 ;;
           esac
 
-  # ── publish to PyPI ─────────────────────────────────────────────────────────
-  # fail-closed: publishes only when the PYPI_PUBLISH_ENABLED repo variable is
-  # set to "true" AND the verify + external-check gates pass for the tagged
-  # commit (ROL-103). wheels still build above as a release artifact regardless.
-  publish-pypi:
-    name: publish to pypi
-    # the publish barrier: every stage-1 build, images included, must have
-    # succeeded. `!cancelled() && !failure()` rather than a bare `vars` check
-    # because build-image is *skipped* when docker publishing is off, and a
-    # skipped dependency would otherwise skip this job too (#992)
-    if: ${{ !cancelled() && !failure() && vars.PYPI_PUBLISH_ENABLED == 'true' }}
-    needs: [verify, verify-external-checks, build-wheels, build-image, smoke-wheels, smoke-image]
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/project/rolter/
-    permissions:
-      id-token: write  # trusted publishing (OIDC)
-    steps:
-      - name: download all wheels
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: wheels-*
-          merge-multiple: true
-          path: dist/
-
-      # `maturin upload` is deprecated and slated for removal (PyO3/maturin#2334);
-      # the pypa action is the supported path and speaks the same OIDC trusted
-      # publishing. the publisher identity is the repo + workflow filename +
-      # environment, none of which change here, so the existing pypi trusted
-      # publisher keeps matching. `attestations` (PEP 740) rides on the id-token
-      # grant this job already holds.
-      - name: publish to pypi
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          packages-dir: dist/
-          skip-existing: true
-          attestations: true
-          print-hash: true
-
-  # ── build container image (stage 1: nothing is public) ──────────────────────
-  # one job per architecture, each pushing an *untagged* digest to GHCR
-  # (`push-by-digest`). an untagged digest is not a release: nothing resolves
-  # `:1.2.3` or `:latest` to it, and it is invisible to `docker pull`. the tag
-  # manifests that make it public are assembled in stage 2, only once every
-  # build — wheels included — has succeeded (#992).
-  #
-  # splitting per arch also means a flaky architecture can be re-run on its own
-  # without touching anything already built, and is the prerequisite for moving
-  # arm64 onto a native runner instead of QEMU, which dominates release time
-  # (ROL-76).
-  build-image:
-    name: build image (${{ matrix.arch }})
-    if: vars.DOCKER_PUBLISH_ENABLED == 'true'
-    needs: [verify, verify-external-checks]
-    runs-on: ubuntu-latest
-    strategy:
-      # one arch failing should not cancel the other; both get reported
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            platform: linux/amd64
-          - arch: arm64
-            platform: linux/arm64
-    permissions:
-      contents: read
-      packages: write # push the untagged digest to GHCR
-    env:
-      REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ inputs.tag || github.ref }}
-
-      # only the arm64 leg needs emulation; installing it on amd64 is pure cost
-      - name: set up qemu (arm64 emulation)
-        if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-        with:
-          platforms: arm64
-
-      - name: set up buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # labels only: no `tags`, because tagging is what publishing means here
-      - name: docker metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ${{ env.REGISTRY_IMAGE }}
-
-      - name: build and push by digest
-        id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: docker/Dockerfile
-          target: runtime
-          platforms: ${{ matrix.platform }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
-
-      # hand the digest to stage 2 as an empty file named after it
-      - name: export digest
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/digests
-          touch "/tmp/digests/${DIGEST#sha256:}"
-
-      - name: upload digest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: digests-${{ matrix.arch }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
-  # ── publish docker images (stage 2: GHCR + optional Docker Hub) ─────────────
+  # ── publish docker images (stage 3: GHCR + optional Docker Hub) ─────────────
   # assembles the multi-arch tag manifests from the digests stage 1 pushed. this
-  # is the moment the image becomes public, and it needs *every* build job —
-  # wheels included — so a failed wheel can no longer leave images published
-  # against a release that has nothing on pypi (#992).
+  # is the moment the image becomes public, and it needs *every* build and smoke
+  # job — wheels included — so a failed wheel can no longer leave images
+  # published against a release that has nothing on pypi (#992).
   #
   # GHCR always publishes (via GITHUB_TOKEN). Docker Hub is added when the
   # DOCKERHUB_IMAGE repo variable (e.g. docker.io/acme/rolter) plus the
@@ -399,10 +412,10 @@ jobs:
   publish-docker:
     name: publish docker images
     # `!cancelled() && !failure()` rather than a bare `vars` check: build-image
-    # is skipped when docker publishing is off, and a skipped dependency would
-    # otherwise skip this job's siblings too
+    # and smoke-image are skipped when docker publishing is off, and a skipped
+    # dependency would otherwise skip this job too
     if: ${{ !cancelled() && !failure() && vars.DOCKER_PUBLISH_ENABLED == 'true' }}
-    needs: [verify, verify-external-checks, build-wheels, build-image, smoke-wheels, smoke-image]
+    needs: [verify-external-checks, build-wheels, build-image, smoke-wheels, smoke-image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -480,7 +493,7 @@ jobs:
   verify-parity:
     name: verify release parity
     if: always()
-    needs: [verify, verify-external-checks, build-wheels, build-image, smoke-wheels, smoke-image, publish-pypi, publish-docker]
+    needs: [verify-external-checks, build-wheels, build-image, smoke-wheels, smoke-image, publish-pypi, publish-docker]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -494,7 +507,6 @@ jobs:
           REF: ${{ inputs.tag || github.ref_name }}
           PYPI_ENABLED: ${{ vars.PYPI_PUBLISH_ENABLED }}
           DOCKER_ENABLED: ${{ vars.DOCKER_PUBLISH_ENABLED }}
-          VERIFY_RESULT: ${{ needs.verify.result }}
           CHECKS_RESULT: ${{ needs.verify-external-checks.result }}
           WHEELS_RESULT: ${{ needs.build-wheels.result }}
           IMAGE_RESULT: ${{ needs.build-image.result }}
@@ -519,7 +531,6 @@ jobs:
               note "- ✅ job \`$1\`"
             fi
           }
-          require_job verify "$VERIFY_RESULT"
           require_job verify-external-checks "$CHECKS_RESULT"
           require_job build-wheels "$WHEELS_RESULT"
           require_job smoke-wheels "$SMOKE_WHEELS_RESULT"

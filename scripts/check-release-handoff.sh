@@ -26,6 +26,14 @@ require() {
     fi
 }
 
+forbid() {
+    # $1 file, $2 human description, $3 grep pattern that must NOT match
+    if grep -Eq "$3" "$1"; then
+        echo "error: $1: $2" >&2
+        fail=1
+    fi
+}
+
 for f in "$plz" "$rel"; do
     if [[ ! -f "$f" ]]; then
         echo "error: $f is missing; the release pipeline needs both halves" >&2
@@ -52,18 +60,22 @@ require "$rel" "release.yml dropped the 'tag' dispatch input" \
     '^      tag:'
 require "$rel" "release.yml no longer has a publish-pypi job" \
     '^  publish-pypi:'
-# a local reusable workflow checks out the caller's ref, which on a dispatch is
-# master — not the tag being packaged. without this the gate verifies one tree
-# and ships another (#988)
-require "$rel" "the verify gate must be pinned to the packaged ref, not the caller's" \
-    'ref: \$\{\{ inputs\.tag \|\| github\.ref \}\}'
+# the gate is asserted, not re-run. calling quality.yml from here would check out
+# the *caller's* ref — master on a dispatch, not the tag being packaged — so the
+# gate would verify one tree while the wheels came from another (#988). worse,
+# threading the tag in instead makes the shared workflow check out a
+# dispatch-supplied ref in a default-branch context, which is cache poisoning.
+forbid "$rel" "release.yml must not re-run quality.yml; assert ci-ok for the tagged sha instead" \
+    '^ *uses: \./\.github/workflows/quality\.yml'
+require "$rel" "the release gate must require ci-ok for the tagged commit" \
+    'RELEASE_REQUIRED_CHECKS \|\| .ci-ok,'
 
 # ── the parity gate ─────────────────────────────────────────────────────────
 # without this a skipped publish drags the run to green instead of red
 require "$rel" "release.yml dropped the verify-parity gate" \
     '^  verify-parity:'
 require "$rel" "verify-parity must observe publish-pypi to catch a skipped publish" \
-    'needs: \[verify, verify-external-checks, build-wheels, build-image, smoke-wheels, smoke-image, publish-pypi, publish-docker\]'
+    'needs: \[verify-external-checks, build-wheels, build-image, smoke-wheels, smoke-image, publish-pypi, publish-docker\]'
 require "$rel" "verify-parity must run with always() or a skipped publish stays invisible" \
     'if: always\(\)'
 
@@ -81,18 +93,17 @@ require "$rel" "verify-parity must assert an sdist was published" \
     'expect "sdist"'
 
 # ── the publish barrier ─────────────────────────────────────────────────────
-# stage 1 builds everything, stage 2 publishes it. if a publish job stops
-# depending on every build job, a failed wheel can leave images public against a
-# release with nothing on pypi (#992)
-require "$rel" "release.yml must build images per arch in a separate stage" \
+# stage 1 builds, stage 2 smoke-tests, stage 3 publishes. if a publish job stops
+# depending on every build and smoke job, a failed wheel can leave images public
+# against a release with nothing on pypi (#992)
+require "$rel" "release.yml must build images per arch in their own stage" \
     '^  build-image:'
 require "$rel" "stage 1 must push untagged digests, not tags" \
     'push-by-digest=true'
 require "$rel" "the publish jobs must wait for every build and smoke job" \
-    '^    needs: \[verify, verify-external-checks, build-wheels, build-image, smoke-wheels, smoke-image\]'
+    '^    needs: \[verify-external-checks, build-wheels, build-image, smoke-wheels, smoke-image\]'
 
-# an artifact that was never run is not a verified artifact; these catch a
-# release that publishes something it never installed or executed (#903)
+# an artifact that was never run is not a verified artifact
 require "$rel" "release.yml must install and run the built wheel before publishing" \
     '^  smoke-wheels:'
 require "$rel" "release.yml must run the built image before publishing" \
