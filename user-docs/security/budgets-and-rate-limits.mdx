@@ -75,6 +75,14 @@ A rate is how many base units one unit of that currency is worth. The base itsel
   Rates are operator-supplied and static, which is deliberate — Rolter must run air-gapped, so it never reaches out to an FX feed.
 </Warning>
 
+### What the dashboard offers
+
+The currency chooser on a model's pricing section is your rate table, not a built-in list: it shows the base currency followed by every code in `[currency.rates]`. Adding `rates = { RUB = 0.011 }` makes `RUB` selectable on the next control-plane restart, with no dashboard release involved.
+
+That set is read from `GET /api/v1/currency`, which answers from the bootstrap config rather than the database — the store keeps a currency per model price and no rate table, so this is the one place that knows what a deployment can convert. It is also exactly the set the CRUD API accepts, so the chooser cannot offer a code the save would reject.
+
+A price already stored in a code that is no longer in the table still displays, flagged as unconvertible on both the Pricing screen and the model sheet. Its spend is missing from base-currency totals and budgets until you add the rate back.
+
 ## Step 2 — Configure spend budgets
 
 A spend budget blocks incoming requests with **HTTP 402** once the cumulative cost for a scope reaches `limit_usd` within the configured period. Add one `[[budgets]]` block per scope you want to cap.

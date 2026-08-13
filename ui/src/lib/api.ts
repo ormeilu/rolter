@@ -1378,6 +1378,42 @@ export function fetchModelPrices(): Promise<ModelPriceRow[]> {
   return getJson<ModelPriceRow[]>("/api/v1/model-prices");
 }
 
+/**
+ * The deployment's settlement currency and the codes it can price in.
+ *
+ * `codes` is the base currency plus every code in the operator's rate table —
+ * exactly the set the control plane accepts on a price write. The dashboard
+ * used to hardcode seven ISO-4217 codes, which made a configured RUB
+ * unselectable and offered a JPY the API would reject (#965).
+ */
+export interface CurrencySettings {
+  base: string;
+  codes: string[];
+  /** units of `base` per unit of the keyed currency; base is implicitly 1.0 */
+  rates: Record<string, number>;
+}
+
+export function fetchCurrencySettings(): Promise<CurrencySettings> {
+  return getJson<CurrencySettings>("/api/v1/currency");
+}
+
+/**
+ * Whether `code` can be converted into the settlement currency.
+ *
+ * A price already stored in a code the rate table no longer carries must still
+ * display — dropping it would hide real pricing — but it cannot be converted,
+ * so spend that includes it is understated. Callers surface that rather than
+ * silently treating the number as base currency.
+ */
+export function isConvertible(
+  settings: CurrencySettings | undefined,
+  code: string,
+): boolean {
+  if (!settings) return true;
+  const normalized = code.trim().toUpperCase();
+  return settings.codes.some((c) => c.toUpperCase() === normalized);
+}
+
 export function upsertModelPrice(
   input: UpsertModelPriceInput,
 ): Promise<ModelPriceRow> {
