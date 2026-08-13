@@ -24,25 +24,22 @@ permissions:
   contents: read
 
 jobs:
-  # ── quality/security gate ───────────────────────────────────────────────────
-  # runs the same fmt/clippy/test/cargo-deny pipeline as CI on the tagged
-  # commit. publish-pypi needs this, so a tag whose code fails verification
-  # never ships.
+  # the whole quality/security gate for the release, asserted rather than re-run.
   #
-  # the `ref` matters: a local reusable workflow checks out the *caller's* ref by
-  # default, which on a workflow_dispatch is master, not `inputs.tag`. since #903
-  # makes dispatch the primary release path, defaulting would verify master while
-  # build-wheels packages the tag — one tree checked, a different one shipped
-  # (#988). pass the packaged commit-ish explicitly.
-  verify:
-    uses: ./.github/workflows/quality.yml
-    with:
-      ref: ${{ inputs.tag || github.ref }}
-
-  # asserts the external app-provided checks (CodeQL, secret scanning) reported
-  # success for this commit. fail-closed: pending or missing checks block the
-  # publish. required check names are configurable via the
-  # RELEASE_REQUIRED_CHECKS repo variable (comma-separated).
+  # this job used to sit beside `verify: uses: ./.github/workflows/quality.yml`,
+  # which re-ran the entire gate here. that had to go: a local reusable workflow
+  # checks out the *caller's* ref, which on a workflow_dispatch is master and not
+  # `inputs.tag`, so it verified one tree while build-wheels packaged another
+  # (#988). threading the tag into quality.yml fixed that but made the shared gate
+  # check out an arbitrary dispatch-supplied ref in a default-branch context —
+  # cache poisoning, flagged by CodeQL, and a real one.
+  #
+  # asserting instead of re-running settles both. every commit on master already
+  # carries a `ci-ok` check-run from ci.yml, and release-plz re-runs the gate on
+  # the release commit before tagging, so the tagged commit is verified by
+  # construction. checking the recorded result binds the gate to the *tagged*
+  # SHA — which re-running never did — costs no duplicate 20-minute run, and
+  # checks out nothing.
   #
   # these are exact check-run *names*, so they rot when a scanner is renamed or
   # reconfigured — and because the job is fail-closed, a stale name blocks every
@@ -65,30 +62,50 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           REF: ${{ inputs.tag || github.sha }}
-          REQUIRED: ${{ vars.RELEASE_REQUIRED_CHECKS || 'codeql (rust),codeql (actions),codeql (python),codeql (javascript-typescript)' }}
+          REQUIRED: ${{ vars.RELEASE_REQUIRED_CHECKS || 'ci-ok,codeql (rust),codeql (actions),codeql (python),codeql (javascript-typescript)' }}
         run: |
           set -euo pipefail
           # resolve the ref (tag on dispatch, sha on push) to a commit sha
           SHA="$(gh api "repos/$REPO/commits/$REF" -q '.sha')"
-          runs="$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate \
-            -q '.check_runs[] | "\(.name)\t\(.status)\t\(.conclusion)"')"
-          echo "check-runs for $SHA:"; echo "$runs"
-          fail=0
           IFS=',' read -ra names <<< "$REQUIRED"
-          for name in "${names[@]}"; do
-            name="$(echo "$name" | sed 's/^ *//;s/ *$//')"
-            [ -z "$name" ] && continue
-            line="$(echo "$runs" | grep -F -m1 "$(printf '%s\t' "$name")" || true)"
-            if [ -z "$line" ]; then
-              echo "::error::required check '$name' not found for $SHA (fail-closed). if the scanner was renamed or reconfigured, update the RELEASE_REQUIRED_CHECKS repo variable to match the check-run names listed above"
-              fail=1; continue
+
+          # release-plz dispatches this the moment it finishes tagging, while
+          # ci.yml is often still running the very same commit, so a required
+          # check being *pending* is expected rather than a failure. wait for a
+          # verdict; only a real non-success, or the timeout, is fatal.
+          deadline=$(( $(date -u +%s) + 45 * 60 ))
+          while :; do
+            runs="$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate \
+              -q '.check_runs[] | "\(.name)\t\(.status)\t\(.conclusion)"')"
+            fail=0; pending=""
+            for name in "${names[@]}"; do
+              name="$(echo "$name" | sed 's/^ *//;s/ *$//')"
+              [ -z "$name" ] && continue
+              line="$(echo "$runs" | grep -F -m1 "$(printf '%s\t' "$name")" || true)"
+              if [ -z "$line" ]; then
+                pending="$pending $name(absent)"; continue
+              fi
+              status="$(echo "$line" | cut -f2)"; conclusion="$(echo "$line" | cut -f3)"
+              if [ "$status" != "completed" ]; then
+                pending="$pending $name($status)"; continue
+              fi
+              if [ "$conclusion" != "success" ]; then
+                echo "::error::required check '$name' concluded '$conclusion' for $SHA (need success)"; fail=1
+              fi
+            done
+            [ "$fail" -ne 0 ] && { echo "check-runs for $SHA:"; echo "$runs"; exit 1; }
+            [ -z "$pending" ] && break
+            if [ "$(date -u +%s)" -ge "$deadline" ]; then
+              echo "check-runs for $SHA:"; echo "$runs"
+              echo "::error::still waiting on:$pending after 45m (fail-closed). if a scanner was renamed or reconfigured, update the RELEASE_REQUIRED_CHECKS repo variable to match the check-run names listed above"
+              exit 1
             fi
-            status="$(echo "$line" | cut -f2)"; conclusion="$(echo "$line" | cut -f3)"
-            if [ "$status" != "completed" ] || [ "$conclusion" != "success" ]; then
-              echo "::error::required check '$name' status=$status conclusion=$conclusion (need completed/success)"; fail=1
-            fi
+            echo "waiting on:$pending"
+            sleep 30
           done
-          exit $fail
+
+          echo "check-runs for $SHA:"; echo "$runs"
+          echo "all required checks succeeded for $SHA"
 
   # ── build maturin wheels ────────────────────────────────────────────────────
   build-wheels:
@@ -146,7 +163,7 @@ jobs:
   publish-pypi:
     name: publish to pypi
     if: vars.PYPI_PUBLISH_ENABLED == 'true'
-    needs: [verify, verify-external-checks, build-wheels]
+    needs: [verify-external-checks, build-wheels]
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -188,7 +205,7 @@ jobs:
   publish-docker:
     name: publish docker images
     if: vars.DOCKER_PUBLISH_ENABLED == 'true'
-    needs: [verify, verify-external-checks]
+    needs: [verify-external-checks]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -261,7 +278,7 @@ jobs:
   verify-parity:
     name: verify release parity
     if: always()
-    needs: [verify, verify-external-checks, build-wheels, publish-pypi, publish-docker]
+    needs: [verify-external-checks, build-wheels, publish-pypi, publish-docker]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -275,7 +292,6 @@ jobs:
           REF: ${{ inputs.tag || github.ref_name }}
           PYPI_ENABLED: ${{ vars.PYPI_PUBLISH_ENABLED }}
           DOCKER_ENABLED: ${{ vars.DOCKER_PUBLISH_ENABLED }}
-          VERIFY_RESULT: ${{ needs.verify.result }}
           CHECKS_RESULT: ${{ needs.verify-external-checks.result }}
           WHEELS_RESULT: ${{ needs.build-wheels.result }}
           PYPI_RESULT: ${{ needs.publish-pypi.result }}
@@ -297,7 +313,6 @@ jobs:
               note "- ✅ job \`$1\`"
             fi
           }
-          require_job verify "$VERIFY_RESULT"
           require_job verify-external-checks "$CHECKS_RESULT"
           require_job build-wheels "$WHEELS_RESULT"
 
