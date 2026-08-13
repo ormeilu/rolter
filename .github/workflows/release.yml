@@ -153,11 +153,19 @@ jobs:
           merge-multiple: true
           path: dist/
 
+      # `maturin upload` is deprecated and slated for removal (PyO3/maturin#2334);
+      # the pypa action is the supported path and speaks the same OIDC trusted
+      # publishing. the publisher identity is the repo + workflow filename +
+      # environment, none of which change here, so the existing pypi trusted
+      # publisher keeps matching. `attestations` (PEP 740) rides on the id-token
+      # grant this job already holds.
       - name: publish to pypi
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
-          command: upload
-          args: --non-interactive --skip-existing dist/*
+          packages-dir: dist/
+          skip-existing: true
+          attestations: true
+          print-hash: true
 
   # ── publish docker images (GHCR + optional Docker Hub) ───────────────────────
   # fail-closed: runs only when the DOCKER_PUBLISH_ENABLED repo variable is set

@@ -103,6 +103,15 @@ red instead of quietly leaving a channel behind.
 | `DOCKER_PUBLISH_ENABLED` repo variable | must be `"true"` or the image publish is skipped |
 | `pypi` environment | PyPI trusted publishing via OIDC; no long-lived token is stored |
 
+Wheels are built with `maturin-action` but uploaded with `pypa/gh-action-pypi-publish`:
+`maturin upload` is deprecated and slated for removal ([PyO3/maturin#2334]). The
+publisher identity PyPI matches on is the repository, workflow filename and
+environment — not the tool — so the swap is transparent to the trusted-publisher
+config, and it adds PEP 740 attestations on the `id-token` grant the job already
+holds.
+
+[PyO3/maturin#2334]: https://github.com/PyO3/maturin/issues/2334
+
 `RELEASE_REQUIRED_CHECKS` holds exact check-run *names*, so it rots whenever a
 scanner is renamed or reconfigured — and since the gate is fail-closed, a stale
 name silently blocks every release instead of failing at the source. This bit
