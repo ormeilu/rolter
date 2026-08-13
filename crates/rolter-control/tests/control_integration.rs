@@ -1234,6 +1234,48 @@ async fn admin_token_guards_crud_and_snapshot() {
     assert!(allowed.status().is_success(), "{}", allowed.status());
 }
 
+/// The `/me/*` 401 distinguishes "you are not signed in" from "this deployment
+/// has no accounts to sign in to" (#942).
+///
+/// With an admin token configured the control plane is gated, so an anonymous
+/// `/me/*` call is an ordinary missing session and signing in fixes it. In open
+/// mode it is not fixable that way at all, and the two must not render alike.
+#[tokio::test]
+async fn a_gated_control_plane_reports_a_plain_missing_session_on_me() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool, Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+
+    let anon = client
+        .get(format!("http://{addr}/api/v1/me/virtual-keys"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 401);
+    let body: Value = anon.json().await.unwrap();
+    assert_eq!(
+        body["error"]["code"].as_str(),
+        Some("unauthenticated"),
+        "a gated deployment must not claim open mode: {body}"
+    );
+
+    // the admin token is not a session either: it opens admin routes, but
+    // `/me/*` is per-user and there is no user behind a machine token
+    let with_admin = client
+        .get(format!("http://{addr}/api/v1/me/virtual-keys"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(with_admin.status(), 401);
+    let body: Value = with_admin.json().await.unwrap();
+    assert_eq!(body["error"]["code"].as_str(), Some("unauthenticated"));
+}
+
 /// Persisted feature flags are superadmin-only, survive reads, and write an
 /// audit entry for each update.
 #[tokio::test]
@@ -4319,13 +4361,22 @@ async fn self_service_key_lifecycle() {
     .await;
     let token = login["token"].as_str().unwrap().to_string();
 
-    // /me/* requires a session: unauthenticated is rejected
+    // /me/* requires a session: unauthenticated is rejected. this app runs in
+    // open mode, where every admin route beside it passes as superadmin — so
+    // the 401 has to say *which* 401 it is, or it reads as a broken login
+    // rather than an endpoint this deployment cannot serve (#942)
     let anon = client
         .get(format!("{base}/api/v1/me/virtual-keys"))
         .send()
         .await
         .unwrap();
     assert_eq!(anon.status(), 401);
+    let anon: Value = anon.json().await.unwrap();
+    assert_eq!(
+        anon["error"]["code"].as_str(),
+        Some("open_mode_no_session"),
+        "open-mode 401 must be distinguishable: {anon}"
+    );
 
     // mint a key I own in the project I belong to
     let minted = client

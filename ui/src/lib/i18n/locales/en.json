@@ -486,5 +486,11 @@
   },
   "stub": {
     "todo": "TODO — we'll come back to this screen"
+  },
+  "account": {
+    "openMode": {
+      "title": "Self-service keys need a local account.",
+      "body": "This control plane is running in open mode with no admin token, so it has no user accounts — there is no \"you\" to mint a key for. Set ROLTER_ADMIN_TOKEN and create a local account to use this screen, or manage keys from the admin Virtual Keys screen instead."
+    }
   }
 }
