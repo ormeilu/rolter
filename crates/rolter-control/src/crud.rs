@@ -2219,6 +2219,60 @@ fn seal_api_key(api_key: &str) -> ApiResult<(Vec<u8>, Vec<u8>)> {
     Ok(kek.encrypt(api_key)?)
 }
 
+#[cfg(test)]
+mod api_base_tests {
+    use super::*;
+
+    #[test]
+    fn a_doubled_v1_is_refused_for_openai_shaped_kinds() {
+        // the exact base from #947, hit against a real GPUStack instance
+        for kind in ["openai", "openai_compatible", "ollama", "llama_cpp"] {
+            let err = require_wellformed_api_base(kind, "https://gpustack.localhost/v1")
+                .expect_err("{kind} must refuse a doubled base");
+            let message = format!("{err:?}");
+            assert!(message.contains("/v1/v1/chat/completions"), "{message}");
+        }
+    }
+
+    #[test]
+    fn a_v1_base_is_required_for_stripping_kinds() {
+        // the same spelling is correct here, so it must pass untouched
+        for (kind, base) in [
+            ("mistral", "https://api.mistral.ai/v1"),
+            ("groq", "https://api.groq.com/openai/v1"),
+            ("xai", "https://api.x.ai/v1"),
+        ] {
+            assert!(require_wellformed_api_base(kind, base).is_ok(), "{kind}");
+        }
+    }
+
+    #[test]
+    fn a_wellformed_openai_base_passes() {
+        assert!(require_wellformed_api_base("openai", "https://api.openai.com").is_ok());
+        assert!(require_wellformed_api_base("ollama", "http://localhost:11434").is_ok());
+    }
+
+    #[test]
+    fn an_unknown_kind_defers_to_validate_kind() {
+        // reporting "your base is malformed" for a kind that does not exist
+        // would bury the real error
+        assert!(require_wellformed_api_base("not_a_kind", "https://host/v1").is_ok());
+    }
+
+    /// Every kind the CRUD API accepts must be a kind core can parse, or
+    /// `require_wellformed_api_base` silently skips it and the guard is a no-op.
+    #[test]
+    fn every_accepted_kind_is_known_to_core() {
+        for kind in PROVIDER_KINDS {
+            let parsed = serde_json::from_value::<rolter_core::ProviderKind>(
+                serde_json::Value::String(kind.to_string()),
+            );
+            assert!(parsed.is_ok(), "core cannot parse accepted kind '{kind}'");
+        }
+        assert_eq!(PROVIDER_KINDS.len(), rolter_core::ProviderKind::ALL.len());
+    }
+}
+
 fn validate_kind(kind: &str) -> ApiResult<()> {
     if !PROVIDER_KINDS.contains(&kind) {
         return Err(ApiError::Core(Error::Config(format!(
@@ -2226,6 +2280,31 @@ fn validate_kind(kind: &str) -> ApiResult<()> {
         ))));
     }
     Ok(())
+}
+
+/// Reject an `api_base` that would double the version prefix.
+///
+/// For openai-shaped kinds the gateway appends `/v1/chat/completions` itself, so
+/// a base that already ends in `/v1` resolves to `/v1/v1/chat/completions` and
+/// every request 404s. The dashboard used to actively teach this mistake, its
+/// base-URL placeholder being `https://api.openai.com/v1` for all kinds (#947).
+///
+/// Refused rather than silently trimmed: the operator pasted that URL from
+/// somewhere, and quietly rewriting it hides the fact that this provider kind
+/// wants a different base than the one they were reading about.
+fn require_wellformed_api_base(kind: &str, api_base: &str) -> ApiResult<()> {
+    let Ok(parsed) = serde_json::from_value::<rolter_core::ProviderKind>(
+        serde_json::Value::String(kind.to_string()),
+    ) else {
+        // an unknown kind is validate_kind's error to report, not this one's
+        return Ok(());
+    };
+    match parsed.api_base_problem(api_base) {
+        Some(problem) => Err(ApiError::Core(Error::Config(format!(
+            "api_base: {problem}"
+        )))),
+        None => Ok(()),
+    }
 }
 
 /// Resolve the slug for a new provider: an explicit `slug` is validated as-is;
@@ -2293,6 +2372,7 @@ async fn create_provider(
     require_non_empty(&body.api_base, "api_base")?;
     require_allowed_egress(&state, &body.api_base, "api_base")?;
     validate_kind(&body.kind)?;
+    require_wellformed_api_base(&body.kind, &body.api_base)?;
     let slug = resolve_new_slug(&body.name, body.slug.as_deref())?;
     // seal before touching the database so a missing KEK leaves no row behind
     let sealed = body.api_key.as_deref().map(seal_api_key).transpose()?;
@@ -2380,6 +2460,9 @@ async fn update_provider(
     if let Some(api_base) = &body.api_base {
         require_non_empty(api_base, "api_base")?;
         require_allowed_egress(&state, api_base, "api_base")?;
+        // an edit may change either half of the pair, so check the base
+        // against the kind this provider will have once the update lands
+        require_wellformed_api_base(body.kind.as_deref().unwrap_or(&existing.kind), api_base)?;
     }
     let slug_change =
         resolve_slug_change(body.slug.as_deref(), &existing.slug, body.allow_slug_change)?;

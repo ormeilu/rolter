@@ -582,13 +582,10 @@ fn apply_provider_auth_with(
 }
 
 fn provider_url(provider: &ProviderConfig, path: &str) -> String {
-    let base = provider.api_base.trim_end_matches('/');
-    if provider.kind.strips_gateway_v1_prefix() {
-        let suffix = path.strip_prefix("/v1").unwrap_or(path);
-        format!("{base}{suffix}")
-    } else {
-        format!("{base}{path}")
-    }
+    // the rule itself lives in rolter-core, so the dashboard's live preview of
+    // the resolved URL is the same computation the request actually takes and
+    // cannot drift away from it (#947)
+    provider.kind.resolve_upstream_url(&provider.api_base, path)
 }
 
 /// build the gemini native generateContent url from the request. the model is

@@ -6,6 +6,8 @@ import {
   AnalyticsUnavailableError,
   ApiError,
   isOpenModeNoSession,
+  apiBaseDoublesV1,
+  resolveUpstreamUrl,
   isConvertible,
   type CurrencySettings,
 } from "./api";
@@ -238,6 +240,48 @@ describe("api client", () => {
         AnalyticsUnavailableError,
       );
     });
+  });
+});
+
+// #947: the base-URL field taught operators to include /v1, which for
+// openai-shaped kinds doubles into /v1/v1/chat/completions and 404s.
+describe("api_base resolution", () => {
+  it("appends /v1 for kinds that do not carry it in the base", () => {
+    expect(resolveUpstreamUrl("https://api.openai.com", false)).toBe(
+      "https://api.openai.com/v1/chat/completions",
+    );
+  });
+
+  it("reproduces the doubling the old placeholder caused", () => {
+    // the literal base from the dogfooding report
+    expect(resolveUpstreamUrl("https://gpustack.localhost/v1", false)).toBe(
+      "https://gpustack.localhost/v1/v1/chat/completions",
+    );
+    expect(apiBaseDoublesV1("https://gpustack.localhost/v1", false)).toBe(true);
+  });
+
+  it("strips the gateway /v1 for kinds whose base carries it", () => {
+    expect(resolveUpstreamUrl("https://api.mistral.ai/v1", true)).toBe(
+      "https://api.mistral.ai/v1/chat/completions",
+    );
+    // the same spelling is correct here, so it is not flagged
+    expect(apiBaseDoublesV1("https://api.mistral.ai/v1", true)).toBe(false);
+  });
+
+  it("does not double the separator on a trailing slash", () => {
+    expect(resolveUpstreamUrl("https://host/", false)).toBe(
+      "https://host/v1/chat/completions",
+    );
+    expect(apiBaseDoublesV1("https://host/v1/", false)).toBe(true);
+  });
+
+  it("previews nothing for an empty base", () => {
+    expect(resolveUpstreamUrl("", false)).toBe("");
+    expect(apiBaseDoublesV1("", false)).toBe(false);
+  });
+
+  it("does not mistake /v1beta for the version prefix", () => {
+    expect(apiBaseDoublesV1("https://host/v1beta", false)).toBe(false);
   });
 });
 

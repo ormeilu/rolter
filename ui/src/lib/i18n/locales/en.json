@@ -224,11 +224,17 @@
     "language": "Language"
   },
   "providerSheet": {
+    "apiBase": {
+      "doubled": "This base ends in /v1 and rolter appends /v1 itself, so requests would 404. Remove the trailing /v1.",
+      "excludesV1": "Leave off the version prefix — rolter appends /v1 itself for {{kind}}",
+      "includesV1": "Include the version prefix — {{kind}} expects it in the base, e.g. https://api.example.com/v1",
+      "resolvesTo": "Requests resolve to"
+    },
     "testConnection": "Test connection",
-    "testing": "Testing…",
+    "testFailed": "Could not reach this provider",
     "testOk_one": "Reachable · {{count}} model · {{ms}} ms",
     "testOk_other": "Reachable · {{count}} models · {{ms}} ms",
-    "testFailed": "Could not reach this provider"
+    "testing": "Testing…"
   },
   "scope": {
     "loading": "Loading scope…",

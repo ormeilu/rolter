@@ -55,6 +55,12 @@ Each `[[providers]]` block registers an upstream provider the gateway can forwar
 
 <ParamField path="api_base" type="string" required>
   The provider's base URL with no trailing slash, e.g. `https://api.openai.com`.
+
+  **Whether to include `/v1` depends on the provider kind.** For openai-shaped kinds (`openai`, `openai_compatible`, `ollama`, `ollama_cloud`, `llama_cpp`, `anthropic`) Rolter appends the full `/v1/...` path itself, so the base must stop at the host: `https://api.openai.com`, not `https://api.openai.com/v1`. Including it produces `/v1/v1/chat/completions` and every request 404s.
+
+  For the remaining kinds — `mistral`, `groq`, `openrouter`, `azure_openai` and the other hosted OpenAI-compatible clouds — Rolter strips the `/v1` it was asked for, so the base has to supply one: `https://api.mistral.ai/v1`.
+
+  A base that would double the prefix is rejected on write rather than stored. The dashboard states the rule for the selected kind and previews the resolved upstream URL as you type; `GET /api/v1/provider-kinds` returns the same rule per kind if you are automating provider creation.
 </ParamField>
 
 <ParamField path="api_key_env" type="string">

@@ -362,6 +362,51 @@ export function fetchHealthTimeline(bucket = "hour"): Promise<TimelineRow[]> {
 // --- control-plane CRUD (only reachable when rolter-control is started
 // with --database-url; see crates/rolter-control/src/crud.rs) ---
 
+/**
+ * Whether `api_base` must already end in the API version prefix, per kind.
+ *
+ * Served by the control plane rather than restated here: the rule covers ~38
+ * of 48 kinds, and a copy in TypeScript would drift the moment a kind is added
+ * (#947).
+ */
+export interface ProviderKindInfo {
+  kind: string;
+  base_includes_v1: boolean;
+}
+
+export function fetchProviderKinds(): Promise<ProviderKindInfo[]> {
+  return getJson<ProviderKindInfo[]>("/api/v1/provider-kinds");
+}
+
+/**
+ * The upstream URL a gateway request resolves to, mirroring
+ * `ProviderKind::resolve_upstream_url` in rolter-core.
+ *
+ * A Rust test (`every_kind_resolves_by_the_documented_rule`) pins the backend
+ * to exactly this rule, so the preview shown while typing is the URL that will
+ * actually be called.
+ */
+export function resolveUpstreamUrl(
+  apiBase: string,
+  baseIncludesV1: boolean,
+  path = "/v1/chat/completions",
+): string {
+  const base = apiBase.trim().replace(/\/+$/, "");
+  if (!base) return "";
+  return baseIncludesV1 ? base + path.replace(/^\/v1/, "") : base + path;
+}
+
+/**
+ * The doubled-prefix defect, or null when the base is well formed.
+ *
+ * Only a defect for kinds that append `/v1` themselves; for the rest a trailing
+ * `/v1` is required. Mirrors `ProviderKind::api_base_problem`.
+ */
+export function apiBaseDoublesV1(apiBase: string, baseIncludesV1: boolean): boolean {
+  const base = apiBase.trim().replace(/\/+$/, "");
+  return !!base && !baseIncludesV1 && base.endsWith("/v1");
+}
+
 export const PROVIDER_KINDS = [
   "openai",
   "anthropic",

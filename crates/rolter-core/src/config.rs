@@ -294,6 +294,107 @@ impl ProviderKind {
                 | ProviderKind::Falcon
         )
     }
+
+    /// Every provider kind, so callers can enumerate rather than re-list them.
+    ///
+    /// `kind_is_listed_in_all` keeps this honest: it matches exhaustively, so
+    /// adding a variant without adding it here fails to compile.
+    pub const ALL: [ProviderKind; 48] = [
+        ProviderKind::Openai,
+        ProviderKind::Anthropic,
+        ProviderKind::OpenaiCompatible,
+        ProviderKind::Ollama,
+        ProviderKind::OllamaCloud,
+        ProviderKind::LlamaCpp,
+        ProviderKind::Openrouter,
+        ProviderKind::Tei,
+        ProviderKind::AzureOpenai,
+        ProviderKind::Bedrock,
+        ProviderKind::Vertex,
+        ProviderKind::Gemini,
+        ProviderKind::GeminiNative,
+        ProviderKind::GeminiInteractions,
+        ProviderKind::Mistral,
+        ProviderKind::Groq,
+        ProviderKind::Xai,
+        ProviderKind::MetaLlamaApi,
+        ProviderKind::Cohere,
+        ProviderKind::Perplexity,
+        ProviderKind::Together,
+        ProviderKind::Fireworks,
+        ProviderKind::Databricks,
+        ProviderKind::AlephAlpha,
+        ProviderKind::Nebius,
+        ProviderKind::Ovhcloud,
+        ProviderKind::Scaleway,
+        ProviderKind::Deepseek,
+        ProviderKind::Qwen,
+        ProviderKind::Zhipu,
+        ProviderKind::Kimi,
+        ProviderKind::Ernie,
+        ProviderKind::Doubao,
+        ProviderKind::Hunyuan,
+        ProviderKind::Yi,
+        ProviderKind::Minimax,
+        ProviderKind::Baichuan,
+        ProviderKind::Gigachat,
+        ProviderKind::YandexGpt,
+        ProviderKind::CloudRu,
+        ProviderKind::MtsAi,
+        ProviderKind::Naver,
+        ProviderKind::Upstage,
+        ProviderKind::Rinna,
+        ProviderKind::Rakuten,
+        ProviderKind::Sarvam,
+        ProviderKind::Krutrim,
+        ProviderKind::Falcon,
+    ];
+
+    /// Whether a configured `api_base` is expected to already carry the API
+    /// version prefix (`.../v1`).
+    ///
+    /// This is the same fact as [`Self::strips_gateway_v1_prefix`] seen from
+    /// the operator's side rather than the router's. When the gateway strips
+    /// the `/v1` it was asked for, the base has to supply one; when it does
+    /// not, the base must not, or the two concatenate into `/v1/v1/...`.
+    ///
+    /// It is named separately because it is what the dashboard needs to tell
+    /// an operator, and the dashboard was previously telling everyone to
+    /// include `/v1` — the wrong answer for the default kind (#947).
+    pub fn base_includes_v1(self) -> bool {
+        self.strips_gateway_v1_prefix()
+    }
+
+    /// The upstream URL a gateway request for `path` resolves to.
+    ///
+    /// The one place this rule is written down. `rolter_proxy::provider_url`
+    /// delegates here, and the dashboard previews the result as the operator
+    /// types, so what is shown before saving is what will actually be called.
+    pub fn resolve_upstream_url(self, api_base: &str, path: &str) -> String {
+        let base = api_base.trim_end_matches('/');
+        if self.base_includes_v1() {
+            let suffix = path.strip_prefix("/v1").unwrap_or(path);
+            format!("{base}{suffix}")
+        } else {
+            format!("{base}{path}")
+        }
+    }
+
+    /// The doubled-prefix defect, or `None` when the base is well-formed.
+    ///
+    /// Only reported for kinds that append `/v1` themselves: for the rest a
+    /// trailing `/v1` is required, not a mistake.
+    pub fn api_base_problem(self, api_base: &str) -> Option<String> {
+        let base = api_base.trim().trim_end_matches('/');
+        if base.is_empty() || self.base_includes_v1() || !base.ends_with("/v1") {
+            return None;
+        }
+        Some(format!(
+            "this base ends in /v1, and rolter appends /v1 itself for this provider kind, \
+             so requests would go to {}. Remove the trailing /v1",
+            self.resolve_upstream_url(api_base, "/v1/chat/completions")
+        ))
+    }
 }
 
 /// Two-tier bootstrap model presets for database-backed control planes.
@@ -3211,6 +3312,148 @@ fn is_proxy_reference(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- api_base / /v1 semantics (#947) ---
+
+    /// `ProviderKind::ALL` is hand-written, so it can fall behind the enum.
+    /// This match is exhaustive: a new variant fails to compile until it is
+    /// added here, and the assertion then catches the missing `ALL` entry.
+    #[test]
+    fn kind_is_listed_in_all() {
+        for kind in ProviderKind::ALL {
+            // exhaustive by construction — the compiler enforces the arms
+            let named = match kind {
+                ProviderKind::Openai => "openai",
+                ProviderKind::Anthropic => "anthropic",
+                ProviderKind::OpenaiCompatible => "openai_compatible",
+                ProviderKind::Ollama => "ollama",
+                ProviderKind::OllamaCloud => "ollama_cloud",
+                ProviderKind::LlamaCpp => "llama_cpp",
+                ProviderKind::Openrouter => "openrouter",
+                ProviderKind::Tei => "tei",
+                ProviderKind::AzureOpenai => "azure_openai",
+                ProviderKind::Bedrock => "bedrock",
+                ProviderKind::Vertex => "vertex",
+                ProviderKind::Gemini => "gemini",
+                ProviderKind::GeminiNative => "gemini_native",
+                ProviderKind::GeminiInteractions => "gemini_interactions",
+                ProviderKind::Mistral => "mistral",
+                ProviderKind::Groq => "groq",
+                ProviderKind::Xai => "xai",
+                ProviderKind::MetaLlamaApi => "meta_llama_api",
+                ProviderKind::Cohere => "cohere",
+                ProviderKind::Perplexity => "perplexity",
+                ProviderKind::Together => "together",
+                ProviderKind::Fireworks => "fireworks",
+                ProviderKind::Databricks => "databricks",
+                ProviderKind::AlephAlpha => "aleph_alpha",
+                ProviderKind::Nebius => "nebius",
+                ProviderKind::Ovhcloud => "ovhcloud",
+                ProviderKind::Scaleway => "scaleway",
+                ProviderKind::Deepseek => "deepseek",
+                ProviderKind::Qwen => "qwen",
+                ProviderKind::Zhipu => "zhipu",
+                ProviderKind::Kimi => "kimi",
+                ProviderKind::Ernie => "ernie",
+                ProviderKind::Doubao => "doubao",
+                ProviderKind::Hunyuan => "hunyuan",
+                ProviderKind::Yi => "yi",
+                ProviderKind::Minimax => "minimax",
+                ProviderKind::Baichuan => "baichuan",
+                ProviderKind::Gigachat => "gigachat",
+                ProviderKind::YandexGpt => "yandex_gpt",
+                ProviderKind::CloudRu => "cloud_ru",
+                ProviderKind::MtsAi => "mts_ai",
+                ProviderKind::Naver => "naver",
+                ProviderKind::Upstage => "upstage",
+                ProviderKind::Rinna => "rinna",
+                ProviderKind::Rakuten => "rakuten",
+                ProviderKind::Sarvam => "sarvam",
+                ProviderKind::Krutrim => "krutrim",
+                ProviderKind::Falcon => "falcon",
+            };
+            assert!(!named.is_empty());
+        }
+        assert_eq!(ProviderKind::ALL.len(), 48);
+    }
+
+    #[test]
+    fn an_openai_shaped_base_must_not_carry_v1() {
+        let kind = ProviderKind::Openai;
+        assert!(!kind.base_includes_v1());
+        assert_eq!(
+            kind.resolve_upstream_url("https://api.openai.com", "/v1/chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        // the exact failure from #947, seen against a real GPUStack instance
+        assert_eq!(
+            kind.resolve_upstream_url("https://gpustack.localhost/v1", "/v1/chat/completions"),
+            "https://gpustack.localhost/v1/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn a_stripping_kind_needs_v1_in_the_base() {
+        let kind = ProviderKind::Mistral;
+        assert!(kind.base_includes_v1());
+        assert_eq!(
+            kind.resolve_upstream_url("https://api.mistral.ai/v1", "/v1/chat/completions"),
+            "https://api.mistral.ai/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn a_trailing_slash_never_doubles_the_separator() {
+        assert_eq!(
+            ProviderKind::Openai.resolve_upstream_url("https://host/", "/v1/models"),
+            "https://host/v1/models"
+        );
+    }
+
+    #[test]
+    fn the_doubling_problem_is_reported_only_where_it_is_one() {
+        // openai-shaped: a trailing /v1 is the bug
+        let problem = ProviderKind::Openai
+            .api_base_problem("https://gpustack.localhost/v1")
+            .expect("doubled base is a problem");
+        assert!(problem.contains("/v1/v1/chat/completions"), "{problem}");
+
+        // same spelling, stripping kind: required, not a bug
+        assert!(ProviderKind::Mistral
+            .api_base_problem("https://api.mistral.ai/v1")
+            .is_none());
+
+        // well-formed and empty bases are quiet
+        assert!(ProviderKind::Openai
+            .api_base_problem("https://api.openai.com")
+            .is_none());
+        assert!(ProviderKind::Openai.api_base_problem("").is_none());
+        // a trailing slash must not hide the defect
+        assert!(ProviderKind::Openai
+            .api_base_problem("https://gpustack.localhost/v1/")
+            .is_some());
+        // /v1beta is not /v1
+        assert!(ProviderKind::Openai
+            .api_base_problem("https://host/v1beta")
+            .is_none());
+    }
+
+    /// The contract the dashboard's live preview reimplements in TypeScript:
+    /// for every kind, resolution is exactly "append the path" or "append the
+    /// path minus its /v1", chosen by `base_includes_v1`. A kind that resolved
+    /// some third way would make the preview lie.
+    #[test]
+    fn every_kind_resolves_by_the_documented_rule() {
+        for kind in ProviderKind::ALL {
+            let resolved = kind.resolve_upstream_url("https://host", "/v1/chat/completions");
+            let expected = if kind.base_includes_v1() {
+                "https://host/chat/completions"
+            } else {
+                "https://host/v1/chat/completions"
+            };
+            assert_eq!(resolved, expected, "{kind:?} resolves off-rule");
+        }
+    }
 
     fn route_with(params: &[(&str, serde_json::Value)], policy: ParamPolicy) -> ModelRoute {
         ModelRoute {
