@@ -122,7 +122,7 @@ export const Forbidden: Story = {
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/failed to load your keys/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/do not have access to your keys/i)).toBeInTheDocument();
   },
 };
 

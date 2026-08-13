@@ -86,7 +86,13 @@ export const Forbidden: Story = {
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/failed to load virtual keys/i)).toBeInTheDocument();
+    // a 403 is a permission problem, not a data problem (#962): the screen
+    // must say so rather than blame the list it could not read
+    await expect(
+      await canvas.findByText(/do not have access to virtual keys/i),
+    ).toBeInTheDocument();
+    // and must not offer a retry that cannot possibly succeed
+    await expect(canvas.queryByRole("button", { name: /try again/i })).toBeNull();
   },
 };
 

@@ -117,7 +117,7 @@ export const Forbidden: Story = {
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/failed to load users/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/do not have access to users/i)).toBeInTheDocument();
   },
 };
 

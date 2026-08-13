@@ -3,6 +3,7 @@ import { Lock, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
 import { ModelPriceCell } from "@/components/ModelPriceCell";
 import { ModelSheet, type ModelSheetMode } from "@/components/ModelSheet";
 import {
@@ -271,7 +272,13 @@ export default function Models() {
       </div>
 
       {models.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
-      {models.error && <p className="text-sm text-destructive">Failed to load models.</p>}
+      {models.error && (
+        <LoadError
+          error={models.error}
+          resource={t("errors.resources.models")}
+          onRetry={() => models.refetch()}
+        />
+      )}
       {scopeBlocked && (
         <p className="text-sm text-muted-foreground">
           Add/edit/delete is unavailable: {scope.error}. Read-only view still works.

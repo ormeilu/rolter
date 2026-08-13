@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   ProviderGroupSheet,
   type ProviderGroupSheetMode,
 } from "@/components/ProviderGroupSheet";
+import { LoadError } from "@/components/LoadError";
 import { CopyButton } from "@/components/CopyButton";
 import {
   ListHeader,
@@ -37,6 +39,7 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 const GRID = "1.2fr 1fr 1.2fr 2fr 108px";
 
 export default function ProviderGroups() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const scope = useScope();
 
@@ -112,7 +115,11 @@ export default function ProviderGroups() {
 
       {groups.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {groups.error && (
-        <p className="text-sm text-destructive">Failed to load provider groups.</p>
+        <LoadError
+          error={groups.error}
+          resource={t("errors.resources.providerGroups")}
+          onRetry={() => groups.refetch()}
+        />
       )}
       {scopeBlocked && (
         <p className="text-sm text-muted-foreground">

@@ -3,6 +3,7 @@ import { ArrowDown, Plus, Puzzle, Webhook } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -114,11 +115,11 @@ export default function Plugins() {
       </header>
 
       {query.isLoading ? <PluginLoading /> : query.isError ? (
-        <section className="rounded-[10px] border border-[color:var(--status-danger)]/30 bg-[color:var(--status-danger)]/5 p-5">
-          <p className="text-sm font-medium text-[color:var(--status-danger)]">{t("pages.plugins.loadFailed")}</p>
-          <p className="mt-1 text-sm text-muted-foreground">{(query.error as Error).message}</p>
-          <Button className="mt-4" variant="outline" onClick={() => void query.refetch()}>{t("pages.plugins.retry")}</Button>
-        </section>
+        <LoadError
+          error={query.error}
+          resource={t("errors.resources.plugins")}
+          onRetry={() => void query.refetch()}
+        />
       ) : plugins.length === 0 ? (
         <EmptyState uxTarget="plugin-list"
           icon={<Puzzle />}

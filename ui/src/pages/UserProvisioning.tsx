@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookUser, Loader2, Plus } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
 import { CopyButton } from "@/components/CopyButton";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +49,7 @@ function stamp(iso: string | null): string {
 // the screen manages the credentials an IdP authenticates with — the SCIM
 // resource endpoints under /scim/v2 are driven by the IdP, never from here
 export default function UserProvisioning() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const scope = useScope();
   const orgId = scope.orgId;
@@ -168,9 +171,11 @@ export default function UserProvisioning() {
         </p>
       )}
       {tokens.isError && !forbidden && (
-        <p className="text-sm text-destructive">
-          Failed to load provisioning tokens: {(tokens.error as Error).message}
-        </p>
+        <LoadError
+          error={tokens.error}
+          resource={t("errors.resources.provisioningTokens")}
+          onRetry={() => tokens.refetch()}
+        />
       )}
       {revoke.isError && (
         <p className="text-sm text-destructive">{(revoke.error as Error).message}</p>

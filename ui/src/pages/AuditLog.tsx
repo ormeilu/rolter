@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 
+import { LoadError } from "@/components/LoadError";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -76,6 +78,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // server-side paginated, filtered audit log: action/target/actor/time-range
 // filters map to query params, pagination walks the keyset cursor
 export default function AuditLog() {
+  const { t } = useTranslation();
   const scope = useScope();
   const [expanded, setExpanded] = React.useState<string | null>(null);
 
@@ -195,9 +198,11 @@ export default function AuditLog() {
     <PageBody>
       {page.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {page.error && (
-        <p className="text-sm text-destructive">
-          Failed to load audit log: {(page.error as Error).message}
-        </p>
+        <LoadError
+          error={page.error}
+          resource={t("errors.resources.auditLog")}
+          onRetry={() => page.refetch()}
+        />
       )}
       {!scope.isLoading && !scope.error && !scope.orgId && (
         <p className="text-sm text-muted-foreground">
