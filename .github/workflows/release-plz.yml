@@ -144,7 +144,7 @@ jobs:
                 echo "### artifact release dispatched"
                 echo
                 echo "tag: \`$TAG\`"
-                echo "$runs" | sed 's/^/- /'
+                while IFS= read -r url; do echo "- $url"; done <<< "$runs"
               } >> "$GITHUB_STEP_SUMMARY"
               if [ "$count" -gt 1 ]; then
                 echo "::warning::$count dispatched release runs started; expected exactly 1"
