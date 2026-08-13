@@ -175,11 +175,14 @@ dogfood:
     echo "[dogfood] waiting for postgres"
     for _ in $(seq 1 60); do docker exec rolter-postgres-1 pg_isready -U rolter >/dev/null 2>&1 && break; sleep 1; done
 
-    export ROLTER_DATABASE_URL=postgres://rolter:rolter@127.0.0.1:5432/rolter
+    # one credential for every local service that has a human login (#956)
+    set -a; . "$d/creds.env"; set +a
+
+    export ROLTER_DATABASE_URL="postgres://$DEV_PG_USER:$DEV_PG_PASSWORD@127.0.0.1:5432/rolter"
     export ROLTER_KEK="$kek"
     echo "[dogfood] seeding org + admin user (no providers: add those yourself)"
     cargo run -q -p rolter-control --features postgres --bin rolter-seed -- \
-      --admin-email admin@rolter.local --admin-password dogfood-admin-2026 >/dev/null
+      --admin-email "$DEV_EMAIL" --admin-password "$DEV_PASSWORD" >/dev/null
 
     [ -d ui/node_modules ] || ( cd ui && bun install )
     [ -d ui/dist ] || ( cd ui && bun run build )
@@ -210,6 +213,9 @@ dogfood:
         | sed 's/^/[gateway] /' ) &
     sleep 6
     just dogfood-key >/dev/null 2>&1 || true
+    # non-fatal: a SigNoz that already has a different account is a thing to
+    # report, not a reason to tear down a working stack
+    ./"$d"/provision-signoz.sh || true
     ./"$d"/sheet.sh
     wait
 
@@ -240,6 +246,52 @@ dogfood-seed:
     export ROLTER_KEK="$(cat integration/dogfood/.kek)"
     cargo run -q -p rolter-control --features postgres --bin rolter-seed -- \
       --import integration/dogfood/dogfood.toml
+
+# bring an already-running stack in line with creds.env, and print it
+dev-creds:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    d=integration/dogfood
+    set -a; . "$d/creds.env"; set +a
+
+    # postgres only honours POSTGRES_PASSWORD when it initialises an empty data
+    # directory, so an existing volume keeps whatever it was built with. bring
+    # it in line explicitly rather than pretending the env var did it.
+    if docker exec rolter-postgres-1 pg_isready -U "$DEV_PG_USER" >/dev/null 2>&1; then
+      docker exec -e PGPASSWORD="$DEV_PG_PASSWORD" rolter-postgres-1 \
+        psql -U "$DEV_PG_USER" -d rolter -q \
+        -c "alter user $DEV_PG_USER password '$DEV_PG_PASSWORD'" >/dev/null 2>&1 \
+        && echo "[dev-creds] postgres password set" \
+        || echo "[dev-creds] postgres unchanged (already correct, or not reachable)"
+    fi
+
+    export ROLTER_DATABASE_URL="postgres://$DEV_PG_USER:$DEV_PG_PASSWORD@127.0.0.1:5432/rolter"
+    export ROLTER_KEK="$(cat "$d/.kek" 2>/dev/null || true)"
+    echo "[dev-creds] rolter admin -> $DEV_EMAIL"
+    cargo run -q -p rolter-control --features postgres --bin rolter-seed -- \
+      --admin-email "$DEV_EMAIL" --admin-password "$DEV_PASSWORD" >/dev/null
+
+    ./"$d"/provision-signoz.sh || true
+    ./"$d"/sheet.sh
+
+# provision SigNoz with the shared dev login and the checked-in dashboards
+signoz-provision:
+    ./integration/dogfood/provision-signoz.sh
+
+# discard SigNoz's own database (users, dashboards, alerts) and provision it
+# fresh. traces are in ClickHouse and are NOT touched by this.
+signoz-reset:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    read -r -p "remove SigNoz users/dashboards/alerts and re-provision? [y/N] " a
+    [ "$a" = "y" ] || [ "$a" = "Y" ] || { echo "cancelled"; exit 1; }
+    c=docker/docker-compose.yml s=docker/docker-compose.signoz.yml
+    docker compose -f $c -f $s stop signoz
+    docker compose -f $c -f $s rm -f signoz
+    docker volume ls -q --filter name=signoz | grep -E 'sqlite|signoz-db|signoz_db' \
+      | xargs -r docker volume rm
+    docker compose -f $c -f $s up -d signoz
+    ./integration/dogfood/provision-signoz.sh
 
 # tear the dogfooding stack down (keeps volumes, so the KEK stays valid)
 dogfood-down:

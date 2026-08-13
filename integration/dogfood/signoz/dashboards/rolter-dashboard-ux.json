@@ -1,0 +1,114 @@
+{
+  "title": "rolter · dashboard UX",
+  "description": "What the dashboard's own browser tracing sees: which API calls the SPA makes, which fail, and how slow they are. This is the view that surfaced the /me/* 401s in #942 — a screen returning 401 while every route beside it returns 200 is obvious here and invisible in the UI. Imported by `just dogfood` (#956).",
+  "tags": ["rolter", "ui", "provisioned"],
+  "variables": {},
+  "widgets": [
+    {
+      "id": "ux-failing-calls",
+      "title": "Failing API calls by path",
+      "description": "Every non-2xx the dashboard received, grouped by path and status. Path is stripped of its origin so the same call groups across localhost and the portless alias.",
+      "panelTypes": "table",
+      "timePreferance": "GLOBAL_TIME",
+      "isStacked": false,
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "yAxisUnit": "",
+      "query": {
+        "queryType": "clickhouse_sql",
+        "id": "ux-failing-calls-q",
+        "promql": [],
+        "builder": { "queryData": [], "queryFormulas": [] },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": "SELECT toString(attributes_number['http.response.status_code']) AS status, attributes_string['http.request.method'] AS method, replaceRegexpOne(attributes_string['url.full'], 'https?://[^/]+', '') AS path, count() AS calls, toString(max(timestamp)) AS last_seen FROM signoz_traces.distributed_signoz_index_v3 WHERE timestamp >= {{.start_datetime}} AND timestamp <= {{.end_datetime}} AND serviceName = 'rolter-ui' AND attributes_number['http.response.status_code'] >= 400 GROUP BY status, method, path ORDER BY calls DESC LIMIT 30"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ux-status-over-time",
+      "title": "Dashboard API responses by status",
+      "description": "A wall of 401s appearing while 200s continue is the signature of one route family rejecting a session the rest accepts.",
+      "panelTypes": "graph",
+      "timePreferance": "GLOBAL_TIME",
+      "isStacked": true,
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "yAxisUnit": "",
+      "query": {
+        "queryType": "clickhouse_sql",
+        "id": "ux-status-over-time-q",
+        "promql": [],
+        "builder": { "queryData": [], "queryFormulas": [] },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "{{status}}",
+            "disabled": false,
+            "query": "SELECT toStartOfInterval(timestamp, INTERVAL 1 MINUTE) AS ts, toString(attributes_number['http.response.status_code']) AS status, count() AS value FROM signoz_traces.distributed_signoz_index_v3 WHERE timestamp >= {{.start_datetime}} AND timestamp <= {{.end_datetime}} AND serviceName = 'rolter-ui' AND attributes_number['http.response.status_code'] > 0 GROUP BY ts, status ORDER BY ts"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ux-slowest-calls",
+      "title": "Slowest dashboard API calls (p95)",
+      "description": "Which screens are waiting on the control plane.",
+      "panelTypes": "table",
+      "timePreferance": "GLOBAL_TIME",
+      "isStacked": false,
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "yAxisUnit": "ms",
+      "query": {
+        "queryType": "clickhouse_sql",
+        "id": "ux-slowest-calls-q",
+        "promql": [],
+        "builder": { "queryData": [], "queryFormulas": [] },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": "SELECT replaceRegexpOne(attributes_string['url.full'], 'https?://[^/]+', '') AS path, count() AS calls, round(quantile(0.95)(durationNano) / 1e6, 1) AS p95_ms, round(max(durationNano) / 1e6, 1) AS max_ms FROM signoz_traces.distributed_signoz_index_v3 WHERE timestamp >= {{.start_datetime}} AND timestamp <= {{.end_datetime}} AND serviceName = 'rolter-ui' AND attributes_string['url.full'] != '' GROUP BY path ORDER BY p95_ms DESC LIMIT 20"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ux-playground",
+      "title": "Playground traffic through the gateway",
+      "description": "Calls the dashboard made to /gw/v1/* — the Playground's own requests, separated from control-plane CRUD.",
+      "panelTypes": "graph",
+      "timePreferance": "GLOBAL_TIME",
+      "isStacked": false,
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "yAxisUnit": "",
+      "query": {
+        "queryType": "clickhouse_sql",
+        "id": "ux-playground-q",
+        "promql": [],
+        "builder": { "queryData": [], "queryFormulas": [] },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "{{outcome}}",
+            "disabled": false,
+            "query": "SELECT toStartOfInterval(timestamp, INTERVAL 1 MINUTE) AS ts, if(attributes_number['http.response.status_code'] >= 400, concat('failed ', toString(attributes_number['http.response.status_code'])), 'ok') AS outcome, count() AS value FROM signoz_traces.distributed_signoz_index_v3 WHERE timestamp >= {{.start_datetime}} AND timestamp <= {{.end_datetime}} AND serviceName = 'rolter-ui' AND position(attributes_string['url.full'], '/gw/v1/') > 0 GROUP BY ts, outcome ORDER BY ts"
+          }
+        ]
+      }
+    }
+  ],
+  "layout": [
+    { "i": "ux-failing-calls", "x": 0, "y": 0, "w": 12, "h": 4 },
+    { "i": "ux-status-over-time", "x": 0, "y": 4, "w": 6, "h": 3 },
+    { "i": "ux-playground", "x": 6, "y": 4, "w": 6, "h": 3 },
+    { "i": "ux-slowest-calls", "x": 0, "y": 7, "w": 12, "h": 4 }
+  ]
+}

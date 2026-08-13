@@ -1,0 +1,140 @@
+{
+  "title": "rolter · overview",
+  "description": "Traffic, latency and errors across the gateway, the control plane and the dashboard. Imported by `just dogfood` (#956). Panels query signoz_traces directly rather than using the query builder, so they keep working when the builder's shape changes between SigNoz releases.",
+  "tags": ["rolter", "provisioned"],
+  "variables": {},
+  "widgets": [
+    {
+      "id": "rolter-req-rate",
+      "title": "Requests per minute by service",
+      "description": "Every span rolter emits, split by plane. rolter-ui is the dashboard's own browser tracing.",
+      "panelTypes": "graph",
+      "timePreferance": "GLOBAL_TIME",
+      "isStacked": false,
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "yAxisUnit": "",
+      "query": {
+        "queryType": "clickhouse_sql",
+        "id": "rolter-req-rate-q",
+        "promql": [],
+        "builder": { "queryData": [], "queryFormulas": [] },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "{{serviceName}}",
+            "disabled": false,
+            "query": "SELECT toStartOfInterval(timestamp, INTERVAL 1 MINUTE) AS ts, serviceName, count() AS value FROM signoz_traces.distributed_signoz_index_v3 WHERE timestamp >= {{.start_datetime}} AND timestamp <= {{.end_datetime}} AND parentSpanID = '' GROUP BY ts, serviceName ORDER BY ts"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rolter-p95",
+      "title": "p95 latency by service",
+      "description": "Tail latency, not the mean — the mean hides exactly the requests worth looking at.",
+      "panelTypes": "graph",
+      "timePreferance": "GLOBAL_TIME",
+      "isStacked": false,
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "yAxisUnit": "ms",
+      "query": {
+        "queryType": "clickhouse_sql",
+        "id": "rolter-p95-q",
+        "promql": [],
+        "builder": { "queryData": [], "queryFormulas": [] },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "{{serviceName}}",
+            "disabled": false,
+            "query": "SELECT toStartOfInterval(timestamp, INTERVAL 1 MINUTE) AS ts, serviceName, quantile(0.95)(durationNano) / 1e6 AS value FROM signoz_traces.distributed_signoz_index_v3 WHERE timestamp >= {{.start_datetime}} AND timestamp <= {{.end_datetime}} AND parentSpanID = '' GROUP BY ts, serviceName ORDER BY ts"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rolter-errors",
+      "title": "Errored spans per minute",
+      "description": "Anything the instrumentation marked as an error, by service.",
+      "panelTypes": "graph",
+      "timePreferance": "GLOBAL_TIME",
+      "isStacked": false,
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "yAxisUnit": "",
+      "query": {
+        "queryType": "clickhouse_sql",
+        "id": "rolter-errors-q",
+        "promql": [],
+        "builder": { "queryData": [], "queryFormulas": [] },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "{{serviceName}}",
+            "disabled": false,
+            "query": "SELECT toStartOfInterval(timestamp, INTERVAL 1 MINUTE) AS ts, serviceName, count() AS value FROM signoz_traces.distributed_signoz_index_v3 WHERE timestamp >= {{.start_datetime}} AND timestamp <= {{.end_datetime}} AND (hasError = true OR statusCode >= 2) GROUP BY ts, serviceName ORDER BY ts"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rolter-slowest",
+      "title": "Slowest operations (p95)",
+      "description": "Where the time actually goes, by span name.",
+      "panelTypes": "table",
+      "timePreferance": "GLOBAL_TIME",
+      "isStacked": false,
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "yAxisUnit": "ms",
+      "query": {
+        "queryType": "clickhouse_sql",
+        "id": "rolter-slowest-q",
+        "promql": [],
+        "builder": { "queryData": [], "queryFormulas": [] },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": "SELECT serviceName, name AS operation, count() AS calls, round(quantile(0.95)(durationNano) / 1e6, 1) AS p95_ms, round(max(durationNano) / 1e6, 1) AS max_ms FROM signoz_traces.distributed_signoz_index_v3 WHERE timestamp >= {{.start_datetime}} AND timestamp <= {{.end_datetime}} GROUP BY serviceName, operation ORDER BY p95_ms DESC LIMIT 20"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rolter-upstream",
+      "title": "Gateway upstream calls",
+      "description": "What the gateway sent to providers, and how long each took. Empty until a route is exercised.",
+      "panelTypes": "table",
+      "timePreferance": "GLOBAL_TIME",
+      "isStacked": false,
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "yAxisUnit": "ms",
+      "query": {
+        "queryType": "clickhouse_sql",
+        "id": "rolter-upstream-q",
+        "promql": [],
+        "builder": { "queryData": [], "queryFormulas": [] },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": "SELECT name AS operation, count() AS calls, countIf(hasError = true OR statusCode >= 2) AS errors, round(quantile(0.95)(durationNano) / 1e6, 1) AS p95_ms FROM signoz_traces.distributed_signoz_index_v3 WHERE timestamp >= {{.start_datetime}} AND timestamp <= {{.end_datetime}} AND serviceName = 'rolter-gateway' GROUP BY operation ORDER BY calls DESC LIMIT 20"
+          }
+        ]
+      }
+    }
+  ],
+  "layout": [
+    { "i": "rolter-req-rate", "x": 0, "y": 0, "w": 6, "h": 3 },
+    { "i": "rolter-p95", "x": 6, "y": 0, "w": 6, "h": 3 },
+    { "i": "rolter-errors", "x": 0, "y": 3, "w": 12, "h": 3 },
+    { "i": "rolter-slowest", "x": 0, "y": 6, "w": 6, "h": 4 },
+    { "i": "rolter-upstream", "x": 6, "y": 6, "w": 6, "h": 4 }
+  ]
+}
