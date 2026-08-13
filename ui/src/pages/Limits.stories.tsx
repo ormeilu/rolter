@@ -123,8 +123,9 @@ export const Forbidden: Story = {
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/failed to load budgets/i)).toBeInTheDocument();
-    await expect(canvas.getByText(/failed to load rate limits/i)).toBeInTheDocument();
+    // both panels report the permission problem, not a load failure (#962)
+    await expect(await canvas.findByText(/do not have access to budgets/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/do not have access to rate limits/i)).toBeInTheDocument();
   },
 };
 

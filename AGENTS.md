@@ -180,7 +180,23 @@ implementation suggests.
   rolter-ai --url <issue-url>`. An issue that is not on the board is not
   tracked. (`gh project item-list` truncates, so confirm membership through the
   GraphQL `projectItems` field rather than by grepping the list.)
-- Fill in labels, milestone and priority. Propose a new milestone if none fits.
+- Fill in **every** board field, not just the title and body — an issue missing
+  its fields is invisible to the milestone audit and to any roll-up by size:
+  - **Priority** — `Urgent` / `High` / `Medium` / `Low`. Set it explicitly;
+    unprioritized is a decision, not a default.
+  - **Effort** — `XS` (< 1h), `S` (a few hours), `M` (~1 day), `L` (2-3 days),
+    `XL` (a week+). Size from the scope the issue actually states — a migration
+    and its `bump_config_version()` trigger, i18n fan-out across every catalog,
+    or a "research this first" section all cost more than the title suggests.
+  - **Labels** — match the existing conventions (`bug`, `enhancement`,
+    `tech-debt`, plus the area labels such as `ui-dashboard`, `providers-api`).
+  - **Milestone** — always assign one. Propose a new milestone if none fits
+    rather than forcing a bad match or leaving it empty.
+- Set relations where the account has permission to: parent/sub-issue for work
+  that belongs under an epic, and blocked-by/blocks for real sequencing
+  dependencies. Not every token can write these — if the relation cannot be
+  set, say so plainly and state the intended link in the issue body (`Blocked
+  by #123`, `Child of #456`) so it survives for whoever can.
 - State the problem, where it surfaced (link the PR or file), and what would
   count as done.
 - Reference the new issue from the PR that found it (`Refs #123`) and leave the

@@ -325,6 +325,19 @@ disabled = false # revoke without deleting
 # limit_usd = 500.0
 # period = "monthly"   # monthly (default) | daily | total
 
+# what to do about traffic the gateway cannot price. a model with no
+# [[model_prices]] row accrues zero spend, so it can never exceed a budget no
+# matter how much is served — budgets do not apply to it at all. this decides
+# that deliberately instead of passing silently:
+#   ignore  serve it, accrue nothing (default: an upgrade must not start
+#           refusing traffic for a deployment that has priced nothing yet)
+#   warn    serve it, but log the model once per hour and treat the budget as
+#           an incomplete accounting
+#   block   refuse at admission with 402, before any upstream tokens are spent
+# the built-in fake-llm is answered locally, before pricing, so `block` never
+# takes it away.
+# unpriced_policy = "ignore"
+
 # --- throughput caps (redis sliding window, per-minute) ---
 # a request is rejected with 429 (+ retry-after) when a matching limit's
 # trailing-minute request or token count has reached its cap (most-restrictive-

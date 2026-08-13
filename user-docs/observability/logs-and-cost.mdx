@@ -127,9 +127,25 @@ The dashboard reports the same two figures on `GET /api/v1/analytics/summary` (`
 
 The **Models** screen names the cause. A model with no price row shows **no price set** in the in/out price column instead of a dash, and an **Unpriced** filter chip above the table counts them and narrows the list to exactly those models — so the fix for an incomplete spend total is one click from the number that reported it. If the price catalogue itself cannot be read, the column falls back to plain figures rather than reporting every model as unpriced on no evidence.
 
-<Warning>
-  Unpriced traffic accrues **no spend**, so it cannot exceed a budget no matter how much is served. Budgets therefore do not currently apply to a model you have not priced — which is most likely to be a model you just added. Price every model you route to, and treat an unpriced-request count above zero as a gap in cost control rather than a reporting detail.
-</Warning>
+Unpriced traffic accrues **no spend**, so it cannot exceed a budget no matter how much is served — budgets simply do not apply to a model you have not priced. `unpriced_policy` decides what to do about that:
+
+```toml
+unpriced_policy = "block"   # ignore (default) | warn | block
+```
+
+| policy | behaviour |
+| --- | --- |
+| `ignore` | Serve it and accrue nothing. Budgets silently do not cover it. |
+| `warn` | Serve it, but log the model once per hour and treat any budget covering the window as an incomplete accounting. |
+| `block` | Refuse at admission with `402` (`model_unpriced`), naming the model. Nothing is forwarded, so no upstream tokens are spent on traffic that would never have been counted. |
+
+`ignore` is the default so that upgrading cannot start refusing traffic for a deployment that has not priced its models yet — which, on a fresh install, is all of them. Once your price catalogue is complete, `block` costs nothing and closes the gap; the [unpriced-request count](#unpriced-traffic) above is how you tell when you are there.
+
+<Note>
+  The built-in `fake-llm` model is answered by the gateway itself, before any price is looked up, so `block` never takes away the model you smoke-test a deployment with.
+</Note>
+
+Two Prometheus counters track this: `rolter_unpriced_served_total` (requests served with no price — non-zero means your spend figures are a floor) and `rolter_unpriced_blocks_total` (requests refused by `block`).
 
 Rows written before the `unpriced` column existed default to `0`. That under-reports the unpriced share of historical data rather than inventing one.
 

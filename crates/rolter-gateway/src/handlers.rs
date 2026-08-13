@@ -18,7 +18,7 @@ use tracing::Instrument;
 use rolter_balancer::complexity::POLICY_PARAM;
 use rolter_balancer::RouteContext;
 
-use crate::budgets::{ScopeIds, SpendRecorder};
+use crate::budgets::{decide_unpriced, ScopeIds, SpendRecorder, UnpricedDecision};
 use crate::cache::{CachedResponse, ResponseCache};
 use crate::fake_llm;
 use crate::logging::RequestLog;
@@ -1386,9 +1386,14 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         snap.rate_limits.clone(),
         scope.clone(),
     );
+    let price = snap.prices.get(&effective_model).cloned();
+    // refuse before the upstream call when the operator will not serve traffic
+    // they cannot account for (#974)
+    if let Some(refused) = unpriced_admission(&state, &snap, &effective_model, price.is_some()) {
+        return refused;
+    }
     // records this request's cost against its budgets once cost_usd is known
     let recorder = SpendRecorder::new(state.budgets.clone(), snap.budgets.clone(), scope);
-    let price = snap.prices.get(&effective_model).cloned();
 
     let session_key = headers.get("x-session-id").and_then(|v| v.to_str().ok());
     let prompt = std::str::from_utf8(&body).ok();
@@ -2227,8 +2232,13 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
         snap.rate_limits.clone(),
         scope.clone(),
     );
-    let recorder = SpendRecorder::new(state.budgets.clone(), snap.budgets.clone(), scope);
     let price = snap.prices.get(&model).cloned();
+    // see the chat path: refuse unaccountable traffic before spending upstream
+    // tokens on it (#974)
+    if let Some(refused) = unpriced_admission(&state, &snap, &model, price.is_some()) {
+        return refused;
+    }
+    let recorder = SpendRecorder::new(state.budgets.clone(), snap.budgets.clone(), scope);
 
     let token_ids = parse_vllm_token_ids(&headers);
     let ctx = RouteContext {
@@ -3136,6 +3146,49 @@ struct CacheHitLog {
     model: String,
     sample_rate: f64,
     started: Instant,
+}
+
+/// Apply the unpriced-traffic policy before any upstream tokens are spent
+/// (#974).
+///
+/// A model with no price row accrues zero spend, so it can never exceed a
+/// budget however much is served. `block` is the operator saying they would
+/// rather refuse traffic than serve what they cannot account for; it is checked
+/// here, where the model is known and the upstream call has not been made, so
+/// nothing has to be undone.
+///
+/// Returns the refusal response when the request must not be served.
+fn unpriced_admission(
+    state: &AppState,
+    snap: &Snapshot,
+    model: &str,
+    priced: bool,
+) -> Option<Response> {
+    if priced {
+        return None;
+    }
+    match decide_unpriced(snap.unpriced_policy, model, &state.unpriced_warns) {
+        UnpricedDecision::Serve => {
+            state.metrics.unpriced_served_total.fetch_add(1, Relaxed);
+            None
+        }
+        UnpricedDecision::Refuse => {
+            state.metrics.unpriced_blocks_total.fetch_add(1, Relaxed);
+            Some(
+                crate::error::ApiError::new(
+                    StatusCode::PAYMENT_REQUIRED,
+                    format!(
+                        "model '{model}' has no price, so its cost cannot be counted against a \
+                         budget. This deployment is configured to refuse traffic it cannot \
+                         account for; set a price for this model to serve it."
+                    ),
+                )
+                .with_code("model_unpriced")
+                .with_param("model")
+                .into_response(),
+            )
+        }
+    }
 }
 
 /// Governance attribution (`business_unit_id`, `customer_id`) carried by the

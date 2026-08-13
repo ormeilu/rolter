@@ -7,6 +7,7 @@ import {
   ProviderSheet,
   type ProviderSheetMode,
 } from "@/components/ProviderSheet";
+import { LoadError } from "@/components/LoadError";
 import { UnservedConfigNotice } from "@/components/UnservedConfigNotice";
 import {
   ListHeader,
@@ -123,9 +124,11 @@ export default function Providers() {
         </p>
       )}
       {providers.error && (
-        <p className="text-sm text-destructive">
-          {t("pages.providers.loadFailed")}
-        </p>
+        <LoadError
+          error={providers.error}
+          resource={t("errors.resources.providers")}
+          onRetry={() => providers.refetch()}
+        />
       )}
       {scopeBlocked && (
         <p className="text-sm text-muted-foreground">

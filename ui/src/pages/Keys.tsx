@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Plus, Trash2, Key, Loader2 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
 import { CopyButton } from "@/components/CopyButton";
 import { EditorSheet } from "@/components/EditorSheet";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -35,6 +37,7 @@ import { useErrorState, useFormTelemetry, useScreenReady } from "@/lib/ux-react"
 const KEYS_QUERY_KEY = ["virtual-keys"];
 
 export default function Keys() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const scope = useScope();
 
@@ -119,7 +122,11 @@ export default function Keys() {
 
       {keys.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {keys.error && (
-        <p className="text-sm text-destructive">Failed to load virtual keys.</p>
+        <LoadError
+          error={keys.error}
+          resource={t("errors.resources.virtualKeys")}
+          onRetry={() => keys.refetch()}
+        />
       )}
       {scopeBlocked && (
         <p className="text-sm text-muted-foreground">

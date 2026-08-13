@@ -57,3 +57,15 @@ export function useAuth(): AuthState {
   if (!ctx) throw new Error("useAuth must be used within AuthProvider");
   return ctx;
 }
+
+/**
+ * The session if there is a provider above, `null` if there is not.
+ *
+ * For components that *offer* something session-related without depending on
+ * it — [`LoadError`](../components/LoadError.tsx) shows a "sign in again"
+ * button only when signing in is possible. Throwing there would turn a
+ * component whose whole job is to explain a failure into a second failure.
+ */
+export function useOptionalAuth(): AuthState | null {
+  return React.useContext(AuthContext);
+}

@@ -14,8 +14,9 @@ use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
 use rolter_core::{
-    BalancingStrategy, GatewayConfig, McpOAuthSessionConfig, McpServerConfig, ModelRoute,
-    ProviderConfig, ProviderKind, RoleProfile, Target, VirtualKeyConfig, VirtualKeyRecord,
+    BalancingStrategy, GatewayConfig, McpOAuthSessionConfig, McpServerConfig, ModelPriceConfig,
+    ModelRoute, ProviderConfig, ProviderKind, RoleProfile, Target, UnpricedPolicy,
+    VirtualKeyConfig, VirtualKeyRecord,
 };
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
@@ -3299,4 +3300,142 @@ async fn an_unreachable_sanitizer_blocks_the_request_when_configured_fail_closed
     assert_eq!(resp.status(), 502);
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["error"]["code"], "pii_sanitizer_unavailable");
+}
+
+// ── unpriced-traffic budget policy (#974) ───────────────────────────────────
+//
+// A model with no price row accrues zero spend, so it can never exceed a
+// budget however much is served. These cover the operator's three answers to
+// that: serve it silently, serve it loudly, or refuse it.
+
+/// Chat against a route whose model has no price, under `policy`.
+async fn chat_unpriced(policy: UnpricedPolicy) -> reqwest::Response {
+    let upstream = serve(Router::new().route("/v1/chat/completions", post(mock_openai))).await;
+    let mut config = config_for("unpriced-model", vec![("up", upstream)]);
+    config.unpriced_policy = policy;
+    let gw = serve_gateway(&config).await;
+    reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(
+            &json!({"model": "unpriced-model", "messages": [{"role": "user", "content": "ping"}]}),
+        )
+        .send()
+        .await
+        .unwrap()
+}
+
+/// The default must reproduce today's behaviour exactly, so an upgrade does not
+/// start refusing traffic for the deployments #969 measured as fully unpriced.
+#[tokio::test]
+async fn unpriced_ignore_serves_the_request() {
+    assert_eq!(UnpricedPolicy::default(), UnpricedPolicy::Ignore);
+    let resp = chat_unpriced(UnpricedPolicy::Ignore).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], "pong");
+}
+
+/// `warn` is about visibility, not enforcement: the request is still served.
+#[tokio::test]
+async fn unpriced_warn_still_serves_the_request() {
+    let resp = chat_unpriced(UnpricedPolicy::Warn).await;
+    assert_eq!(resp.status(), 200);
+}
+
+/// `block` refuses with 402 and names the model, so the operator knows which
+/// price to set rather than only that something was rejected.
+#[tokio::test]
+async fn unpriced_block_refuses_with_402_naming_the_model() {
+    let resp = chat_unpriced(UnpricedPolicy::Block).await;
+    assert_eq!(resp.status(), 402);
+    let body: Value = resp.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("unpriced-model"),
+        "402 must name the unpriced model: {message}"
+    );
+    assert_eq!(body["error"]["code"], "model_unpriced");
+    assert_eq!(body["error"]["param"], "model");
+}
+
+/// `block` must not be a blanket refusal: a priced model is served exactly as
+/// before, so the policy costs nothing once the catalogue is complete.
+#[tokio::test]
+async fn unpriced_block_serves_a_model_that_has_a_price() {
+    let upstream = serve(Router::new().route("/v1/chat/completions", post(mock_openai))).await;
+    let mut config = config_for("priced-model", vec![("up", upstream)]);
+    config.unpriced_policy = UnpricedPolicy::Block;
+    config.model_prices.push(ModelPriceConfig {
+        model: "priced-model".to_string(),
+        input_per_mtok: 1.0,
+        output_per_mtok: 2.0,
+        cached_input_per_mtok: None,
+        currency: "USD".to_string(),
+    });
+    let gw = serve_gateway(&config).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(&json!({"model": "priced-model", "messages": [{"role": "user", "content": "ping"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+/// The built-in fake-llm is answered locally before routing, so it never
+/// reaches the price lookup. `block` must not take away the model the docs
+/// point at for smoke-testing a deployment without secrets.
+#[tokio::test]
+async fn unpriced_block_leaves_the_builtin_fake_llm_reachable() {
+    let config = GatewayConfig {
+        unpriced_policy: UnpricedPolicy::Block,
+        ..Default::default()
+    };
+    let gw = serve_gateway(&config).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/embeddings"))
+        .json(&json!({"model": "fake-llm", "input": ["hello"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+/// `block` refuses before the upstream call, so no tokens are spent on traffic
+/// that would never have been accounted for.
+#[tokio::test]
+async fn unpriced_block_never_reaches_the_upstream() {
+    let hits = Arc::new(AtomicU32::new(0));
+    let counter = hits.clone();
+    let upstream = serve(Router::new().route(
+        "/v1/chat/completions",
+        post(move |body: Json<Value>| {
+            let counter = counter.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                mock_openai(body).await
+            }
+        }),
+    ))
+    .await;
+    let mut config = config_for("unpriced-model", vec![("up", upstream)]);
+    config.unpriced_policy = UnpricedPolicy::Block;
+    let gw = serve_gateway(&config).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{gw}/v1/chat/completions"))
+        .json(
+            &json!({"model": "unpriced-model", "messages": [{"role": "user", "content": "ping"}]}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 402);
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "the upstream must not be called for traffic the budget cannot account for"
+    );
 }
