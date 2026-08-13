@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.0.11](https://github.com/rolter-ai/rolter/compare/rolter-balancer-v0.0.10...rolter-balancer-v0.0.11) - 2026-08-13
+
+### Features
+- *(balancer)* predicted-latency scheduling ([#912](https://github.com/rolter-ai/rolter/pull/912)) by [@ormeilu](https://github.com/ormeilu)
+- *(balancer)* add lora-aware scheduling strategy [#853] ([#896](https://github.com/rolter-ai/rolter/pull/896)) by [@ormeilu](https://github.com/ormeilu)
+- *(balancer)* expose adaptive routing telemetry to the control plane ([#765](https://github.com/rolter-ai/rolter/pull/765)) by [@ormeilu](https://github.com/ormeilu)
+- *(gateway)* export adaptive routing decision telemetry ([#705](https://github.com/rolter-ai/rolter/pull/705)) by [@ormeilu](https://github.com/ormeilu)
+- *(balancer)* add adaptive routing strategy ([#701](https://github.com/rolter-ai/rolter/pull/701)) by [@ormeilu](https://github.com/ormeilu)
+
+### Performance
+- *(balancer)* reduce ring allocations without affinity churn by [@google-labs-jules[bot]](https://github.com/google-labs-jules[bot])
 ## [0.0.10](https://github.com/rolter-ai/rolter/compare/rolter-balancer-v0.0.9...rolter-balancer-v0.0.10) - 2026-07-21
 
 ### Features
