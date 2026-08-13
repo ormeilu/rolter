@@ -23,6 +23,24 @@ cargo install --path crates/rolter
 
 The wheel bundles the compiled `rolter` launcher so Python users can install the CLI with `uv`. `pyproject.toml` uses the maturin backend (`bindings = "bin"`, `manifest-path = crates/rolter/Cargo.toml`).
 
+Each release publishes five wheels plus a source distribution:
+
+| artifact | built on |
+|---|---|
+| `manylinux…x86_64` | `ubuntu-latest`, `target: x86_64` |
+| `manylinux…aarch64` | `ubuntu-latest`, `target: aarch64` |
+| `macosx…arm64` | `macos-latest` (Apple Silicon, native) |
+| `macosx…x86_64` | `macos-latest`, cross-compiled `target: x86_64-apple-darwin` |
+| `win_amd64` | `windows-latest` |
+| `.tar.gz` (sdist) | `ubuntu-latest`, `command: sdist` |
+
+The macOS x86_64 wheel is cross-compiled rather than built on an Intel runner —
+the macOS SDK carries both architectures, so it needs no extra runner. The sdist
+is the fallback for anything with no matching wheel: without one, `pip install
+rolter` fails outright on an unlisted platform instead of building from source.
+`verify-parity` asserts all six are present for the version, so a silently
+missing platform fails the release rather than reaching a user.
+
 ```bash
 uv tool install maturin       # one-time
 uvx maturin build --release   # build a wheel into target/wheels/
