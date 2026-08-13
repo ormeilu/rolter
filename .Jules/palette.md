@@ -4,3 +4,7 @@
 ## 2026-08-10 - [Keyboard Accessibility: Focus Rings on Buttons]
 **Learning:** Many custom-styled icon buttons and list-item buttons lacked visible focus states for keyboard navigation, making the interface harder to use for accessibility. We applied consistent `focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring` Tailwind classes across multiple pages.
 **Action:** Ensure all future custom interactive elements explicitly handle keyboard focus states using existing Tailwind ring utilities.
+
+## 2023-10-27 - Disabled styling on buttons
+**Learning:** When adding `disabled={true}` to buttons, they might not inherently visually reflect it correctly without explicit Tailwind styling. `disabled:pointer-events-none disabled:opacity-50` ensures that a disabled button is visually dimmed and doesn't trigger hover events.
+**Action:** When updating standard HTML buttons or custom components to respond to `isPending` states, ensure `disabled:pointer-events-none disabled:opacity-50` are added to the Tailwind classes.
