@@ -832,14 +832,17 @@ impl BatchWriter {
             return;
         }
         // Heuristic: ~1024 bytes per log line for pre-allocation
-        let mut body = String::with_capacity(batch.len() * 1024);
+        let mut body = Vec::with_capacity(batch.len() * 1024);
         for record in batch.iter() {
-            match serde_json::to_string(record) {
-                Ok(line) => {
-                    body.push_str(&line);
-                    body.push('\n');
+            let start_len = body.len();
+            match serde_json::to_writer(&mut body, record) {
+                Ok(_) => {
+                    body.push(b'\n');
                 }
-                Err(err) => tracing::warn!(%err, "failed to serialize request log"),
+                Err(err) => {
+                    body.truncate(start_len);
+                    tracing::warn!(%err, "failed to serialize request log");
+                }
             }
         }
         let count = batch.len() as u64;
@@ -859,17 +862,20 @@ impl BatchWriter {
             }
         }
         // Heuristic: ~1024 bytes per payload line for pre-allocation
-        let mut payloads = String::with_capacity(batch.len() * 1024);
+        let mut payloads = Vec::with_capacity(batch.len() * 1024);
         for record in batch.iter().filter(|record| {
             !record.request_payload.is_empty() || !record.response_payload.is_empty()
         }) {
             let payload = PayloadLog::from(record);
-            match serde_json::to_string(&payload) {
-                Ok(line) => {
-                    payloads.push_str(&line);
-                    payloads.push('\n');
+            let start_len = payloads.len();
+            match serde_json::to_writer(&mut payloads, &payload) {
+                Ok(_) => {
+                    payloads.push(b'\n');
                 }
-                Err(err) => tracing::warn!(%err, "failed to serialize request payload"),
+                Err(err) => {
+                    payloads.truncate(start_len);
+                    tracing::warn!(%err, "failed to serialize request payload");
+                }
             }
         }
         if !payloads.is_empty() {

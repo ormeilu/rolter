@@ -37,3 +37,6 @@ To solve this, we can pre-collect all the keys required into a `Vec<String>`, pe
 ## 2024-05-18 - [Rust Vec Search Inefficiency in RBAC]
 **Learning:** Found an O(n^2) inefficiency in `held_roles` within `crates/rolter-control/src/rbac_matrix.rs`. It was using a `Vec::new()` for tracking `seen` pairs of `(Uuid, Uuid)` and doing `seen.contains()` during a loop over grants, which scales poorly if the user is a member of many groups/roles.
 **Action:** Replaced linear `Vec` searches with `std::collections::HashSet` to ensure O(1) deduplication lookups. Also ensured `views` is pre-allocated via `Vec::with_capacity(grants.len())`.
+## 2024-08-13 - [Safely Serializing to Pre-Allocated Buffers]
+**Learning:** When using `serde_json::to_writer` to serialize directly into a pre-allocated `Vec<u8>` (avoiding intermediate `String` allocations), you must handle the edge case where serialization partially fails midway. If unhandled, this leaves incomplete/malformed JSON in the stream.
+**Action:** Always store the initial length of the buffer (`let start_len = buffer.len();`) before calling `serde_json::to_writer(&mut buffer, data)`. On `Err`, explicitly truncate the buffer back to the start length (`buffer.truncate(start_len);`) to maintain stream integrity.
