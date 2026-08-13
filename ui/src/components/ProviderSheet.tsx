@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
@@ -12,8 +12,11 @@ import { Select } from "@/components/ui/select";
 import { Sheet, SheetBody, SheetFooter, SheetHeader } from "@/components/ui/sheet";
 import { useFormTelemetry } from "@/lib/ux-react";
 import {
+  apiBaseDoublesV1,
   createProvider,
+  fetchProviderKinds,
   PROVIDER_KINDS,
+  resolveUpstreamUrl,
   testProvider,
   updateProvider,
   type ProviderRow,
@@ -135,6 +138,22 @@ export function ProviderSheet({
 
   const set = (patch: Partial<ProviderDraft>) => setDraft((d) => ({ ...d, ...patch }));
 
+  // whether /v1 belongs in api_base depends on the kind, so the hint, the
+  // placeholder and the preview all follow the selected one (#947). deployment
+  // metadata, so it never goes stale within a session
+  const kinds = useQuery({
+    queryKey: ["provider-kinds"],
+    queryFn: fetchProviderKinds,
+    staleTime: Infinity,
+    retry: false,
+  });
+  // default to the openai-shaped rule: it is the default kind, and it is the
+  // one the old static ".../v1" placeholder got wrong
+  const baseIncludesV1 =
+    kinds.data?.find((k) => k.kind === draft.kind)?.base_includes_v1 ?? false;
+  const resolvedUrl = resolveUpstreamUrl(draft.apiBase, baseIncludesV1);
+  const baseDoublesV1 = apiBaseDoublesV1(draft.apiBase, baseIncludesV1);
+
   const dirty = initialRef.current !== "" && JSON.stringify(draft) !== initialRef.current;
   const { t } = useTranslation();
   const guard = React.useCallback(() => {
@@ -252,12 +271,39 @@ export function ProviderSheet({
           </Select>
         </Field>
 
-        <Field label="API base">
+        <Field
+          label="API base"
+          hint={t(
+            baseIncludesV1
+              ? "providerSheet.apiBase.includesV1"
+              : "providerSheet.apiBase.excludesV1",
+            { kind: draft.kind },
+          )}
+        >
           <Input
             value={draft.apiBase}
             onChange={(e) => set({ apiBase: e.target.value })}
-            placeholder="https://api.openai.com/v1"
+            placeholder={
+              baseIncludesV1 ? "https://api.example.com/v1" : "https://api.example.com"
+            }
           />
+          {resolvedUrl && (
+            <p
+              className={
+                baseDoublesV1
+                  ? "mt-1.5 text-xs text-destructive"
+                  : "mt-1.5 text-xs text-muted-foreground"
+              }
+            >
+              {t("providerSheet.apiBase.resolvesTo")}{" "}
+              <span className="font-mono break-all">{resolvedUrl}</span>
+            </p>
+          )}
+          {baseDoublesV1 && (
+            <p className="mt-1 text-xs text-destructive">
+              {t("providerSheet.apiBase.doubled")}
+            </p>
+          )}
         </Field>
 
         <Field
