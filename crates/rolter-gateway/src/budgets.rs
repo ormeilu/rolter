@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use rolter_core::{BudgetConfig, BudgetScope};
+use rolter_core::{BudgetConfig, BudgetScope, UnpricedPolicy};
 use tokio::sync::OnceCell;
 
 /// Scope identity of a request, taken from its virtual key. An empty string
@@ -192,6 +192,75 @@ impl BudgetEnforcer {
     }
 }
 
+/// How long a `warn` policy stays quiet about a model it has already named.
+///
+/// The point of `warn` is to tell an operator that a budget is unenforceable,
+/// which is a fact about configuration, not about this request. Logging it per
+/// request would bury that fact in the volume of the traffic reporting it.
+const UNPRICED_WARN_WINDOW: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Once-per-model-per-window dedup for the `warn` unpriced policy (#974).
+#[derive(Default)]
+pub struct UnpricedWarnLog {
+    // a plain mutex over a small map: entries are bounded by the number of
+    // distinct unpriced models, and the lock is only taken on unpriced traffic
+    last: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+}
+
+impl UnpricedWarnLog {
+    /// Whether `model` should be logged now, recording that it was.
+    pub fn should_log(&self, model: &str) -> bool {
+        let now = std::time::Instant::now();
+        let Ok(mut last) = self.last.lock() else {
+            // a poisoned lock must not silence the warning it guards
+            return true;
+        };
+        match last.get(model) {
+            Some(at) if now.duration_since(*at) < UNPRICED_WARN_WINDOW => false,
+            _ => {
+                last.insert(model.to_string(), now);
+                true
+            }
+        }
+    }
+}
+
+/// What the gateway should do with a request whose model has no price row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnpricedDecision {
+    /// forward it; its spend will be missing from every applicable budget
+    Serve,
+    /// refuse at admission — no upstream tokens are spent
+    Refuse,
+}
+
+/// Decide what to do about an unpriced request, emitting the `warn` log as a
+/// side effect (#974).
+///
+/// Called only when the model genuinely has no price, so `ignore` reaching
+/// `Serve` without touching the warn log is the pre-#974 behaviour exactly.
+pub fn decide_unpriced(
+    policy: UnpricedPolicy,
+    model: &str,
+    warn_log: &UnpricedWarnLog,
+) -> UnpricedDecision {
+    match policy {
+        UnpricedPolicy::Ignore => UnpricedDecision::Serve,
+        UnpricedPolicy::Warn => {
+            if warn_log.should_log(model) {
+                tracing::warn!(
+                    model,
+                    "serving a model with no price row: its spend is missing from every \
+                     applicable budget, so those budgets are not a complete accounting. \
+                     Set a price for this model, or set unpriced_policy = \"block\"."
+                );
+            }
+            UnpricedDecision::Serve
+        }
+        UnpricedPolicy::Block => UnpricedDecision::Refuse,
+    }
+}
+
 /// A prepared handle that adds a single request's cost to its applicable
 /// budgets. Built on the request path (which knows the scope + snapshot), then
 /// fired once from the response stream after `cost_usd` is known.
@@ -265,6 +334,83 @@ mod tests {
         // exceeded() short-circuits to None without touching Redis
         assert!(enforcer.exceeded(&budgets, &scope).await.is_none());
         enforcer.record(&budgets, &scope, 5.0).await; // no panic
+    }
+
+    // ── unpriced-traffic policy (#974) ──────────────────────────────────────
+
+    /// `ignore` must reproduce the pre-#974 behaviour exactly: serve, and do
+    /// not even consult the warn log, so nothing is allocated or logged.
+    #[test]
+    fn ignore_serves_unpriced_traffic_and_stays_silent() {
+        let log = UnpricedWarnLog::default();
+        for _ in 0..3 {
+            assert_eq!(
+                decide_unpriced(UnpricedPolicy::Ignore, "gpt-4o", &log),
+                UnpricedDecision::Serve
+            );
+        }
+        assert!(
+            log.last.lock().unwrap().is_empty(),
+            "ignore must not touch the warn log"
+        );
+    }
+
+    #[test]
+    fn warn_serves_unpriced_traffic() {
+        let log = UnpricedWarnLog::default();
+        assert_eq!(
+            decide_unpriced(UnpricedPolicy::Warn, "gpt-4o", &log),
+            UnpricedDecision::Serve
+        );
+    }
+
+    /// The point of `warn` is to report an unenforceable budget, which is a
+    /// fact about configuration. Repeating it per request would bury it in the
+    /// volume of the traffic reporting it.
+    #[test]
+    fn warn_names_each_model_once_per_window() {
+        let log = UnpricedWarnLog::default();
+        assert!(log.should_log("gpt-4o"));
+        assert!(!log.should_log("gpt-4o"));
+        assert!(!log.should_log("gpt-4o"));
+        // a different unpriced model is a different fact, and is still named
+        assert!(log.should_log("deepseek-r1"));
+        assert!(!log.should_log("deepseek-r1"));
+    }
+
+    /// A window that has elapsed lets the model be named again, so a gap that
+    /// was never fixed keeps reporting itself.
+    #[test]
+    fn warn_speaks_again_once_the_window_elapses() {
+        let log = UnpricedWarnLog::default();
+        assert!(log.should_log("gpt-4o"));
+        // rewind the recorded instant past the window rather than sleeping
+        log.last.lock().unwrap().insert(
+            "gpt-4o".to_string(),
+            std::time::Instant::now() - UNPRICED_WARN_WINDOW - std::time::Duration::from_secs(1),
+        );
+        assert!(log.should_log("gpt-4o"));
+    }
+
+    #[test]
+    fn block_refuses_unpriced_traffic() {
+        let log = UnpricedWarnLog::default();
+        assert_eq!(
+            decide_unpriced(UnpricedPolicy::Block, "gpt-4o", &log),
+            UnpricedDecision::Refuse
+        );
+    }
+
+    /// `ignore` is the default precisely so an upgrade does not start refusing
+    /// traffic for the many deployments #969 measured as fully unpriced.
+    #[test]
+    fn the_default_policy_preserves_todays_behaviour() {
+        assert_eq!(UnpricedPolicy::default(), UnpricedPolicy::Ignore);
+        let log = UnpricedWarnLog::default();
+        assert_eq!(
+            decide_unpriced(UnpricedPolicy::default(), "anything", &log),
+            UnpricedDecision::Serve
+        );
     }
 
     #[test]

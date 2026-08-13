@@ -117,6 +117,12 @@ pub struct Metrics {
     pub health_events_dropped_total: AtomicU64,
     /// requests rejected because a matching budget was exhausted
     pub budget_blocks_total: AtomicU64,
+    /// requests refused because the model had no price and the unpriced policy
+    /// is `block` — spend that would never have reached a budget (#974)
+    pub unpriced_blocks_total: AtomicU64,
+    /// requests served against a model with no price row. Non-zero means the
+    /// spend figures for this window are a floor, not a total (#969)
+    pub unpriced_served_total: AtomicU64,
     /// requests rejected because a matching rpm/tpm rate limit was exhausted
     pub rate_limit_blocks_total: AtomicU64,
     /// requests rejected by a built-in guardrail block rule
@@ -404,6 +410,18 @@ impl Metrics {
                 name: "rolter_budget_blocks_total",
                 help: "requests rejected due to an exhausted budget",
                 value: self.budget_blocks_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_unpriced_blocks_total",
+                help: "requests refused because the model has no price (unpriced policy = block)",
+                value: self.unpriced_blocks_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_unpriced_served_total",
+                help: "requests served against a model with no price row",
+                value: self.unpriced_served_total.load(Relaxed),
             },
             Scalar {
                 kind: "counter",

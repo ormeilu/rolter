@@ -64,6 +64,18 @@ pub struct GatewayConfig {
     /// spend caps enforced by the gateway against Redis-tracked cumulative cost
     #[serde(default)]
     pub budgets: Vec<BudgetConfig>,
+    /// what to do about traffic against a model with no price row, which
+    /// accrues no spend and so can never exceed a budget (#974).
+    ///
+    /// Deliberately deployment-wide rather than per-budget: it decides what the
+    /// gateway may serve at all, which is not a property of any one counter,
+    /// and a request that matches no budget needs an answer too. A per-budget
+    /// override is tracked separately — it needs a schema column and a CRUD
+    /// surface to exist for DB-defined budgets as well as toml ones, and a
+    /// setting that silently only worked for half of them would be worse than
+    /// not having it.
+    #[serde(default)]
+    pub unpriced_policy: UnpricedPolicy,
     /// request/token throughput caps enforced against a Redis sliding window
     #[serde(default)]
     pub rate_limits: Vec<RateLimitConfig>,
@@ -1537,6 +1549,33 @@ impl BudgetPeriod {
             BudgetPeriod::Total => None,
         }
     }
+}
+
+/// What a budget does about traffic it cannot price (#974).
+///
+/// A model with no price row accrues zero spend, so it can never exceed a
+/// budget no matter how much is served — a cost control that fails open on
+/// exactly the models an operator just added and is least likely to have priced.
+/// This is the deliberate decision about that, in place of the silent pass.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Deserialize, Serialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum UnpricedPolicy {
+    /// serve it, accrue nothing, say nothing further. The pre-#974 behaviour.
+    ///
+    /// This is the default because `block` would reject traffic on upgrade for
+    /// any deployment with an unpriced model — which #969 measured as most of
+    /// them — and turning a version bump into an outage is not a safe default
+    /// even when the stricter reading is the better policy. The #969 notice is
+    /// what tells an operator this choice is theirs to revisit.
+    #[default]
+    Ignore,
+    /// serve it, but log it and report the budget as an incomplete accounting
+    Warn,
+    /// refuse at admission with 402: a model with no price cannot be accounted
+    /// for, so serving it would spend money the budget will never see
+    Block,
 }
 
 /// A spend cap applied to a scope over a rolling [`BudgetPeriod`]. The gateway

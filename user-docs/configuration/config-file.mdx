@@ -347,6 +347,26 @@ period = "monthly"
 
 ---
 
+### unpriced\_policy
+
+A top-level key deciding what happens to traffic the gateway cannot price. A model with no `[[model_prices]]` entry accrues zero spend, so it can never exhaust a budget however much is served — without this setting, budgets fail open on exactly the models you added most recently.
+
+Unlike budgets, this needs no Redis: being unpriced is a property of the config, not of a counter, so it is enforced even while budget counters are failing open.
+
+<ParamField path="unpriced_policy" default="ignore" type="string">
+  One of `ignore`, `warn`, or `block`. `ignore` serves the request and accrues nothing. `warn` serves it but logs the model once per hour. `block` refuses at admission with HTTP `402` and code `model_unpriced`, before any upstream call. Defaults to `ignore` so that upgrading cannot start refusing traffic on a deployment that has not priced its models yet.
+</ParamField>
+
+```toml
+unpriced_policy = "block"
+```
+
+<Note>
+  The built-in `fake-llm` model is served before any price lookup, so `block` never makes it unreachable.
+</Note>
+
+---
+
 ### \[\[rate\_limits\]\]
 
 Throughput caps reject excess requests with HTTP `429` and a `Retry-After` header. Limits use a Redis sliding-window counter; without Redis they fail open. At least one of `rpm` or `tpm` must be set — a limit with neither never blocks anything.
