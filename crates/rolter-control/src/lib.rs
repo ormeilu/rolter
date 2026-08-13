@@ -173,8 +173,18 @@ pub struct Args {
     /// acknowledge running with no `--admin-token` on a non-loopback bind.
     /// Without it the control plane refuses to start in that combination,
     /// because every request would be served as superadmin with no credential
-    /// (see `crate::open_mode`)
-    #[arg(long, env = "ROLTER_ALLOW_OPEN_MODE")]
+    /// (see `crate::open_mode`).
+    ///
+    /// `FalseyValueParser` rather than the derived bool parser: from the
+    /// environment this is set as `=1` at least as often as `=true`, and a
+    /// container that fails to start over which spelling it used is a worse
+    /// outcome than either
+    #[arg(
+        long,
+        env = "ROLTER_ALLOW_OPEN_MODE",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::FalseyValueParser::new(),
+    )]
     pub allow_open_mode: bool,
 }
 

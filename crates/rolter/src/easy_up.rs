@@ -59,8 +59,14 @@ pub struct EasyUpArgs {
     #[arg(long, env = "ROLTER_ADMIN_TOKEN")]
     pub admin_token: Option<String>,
     /// acknowledge serving an unauthenticated management API on a non-loopback
-    /// `--host`. Without it that combination refuses to start (#970)
-    #[arg(long, env = "ROLTER_ALLOW_OPEN_MODE")]
+    /// `--host`. Without it that combination refuses to start (#970). Accepts
+    /// the truthy spellings an env var actually gets set to, `=1` included
+    #[arg(
+        long,
+        env = "ROLTER_ALLOW_OPEN_MODE",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::FalseyValueParser::new(),
+    )]
     pub allow_open_mode: bool,
     /// clickhouse http url; enables the dashboard usage/cost analytics
     #[arg(long, env = "CLICKHOUSE_URL")]
@@ -313,6 +319,9 @@ mod tests {
         let cli = Cli::parse_from(["rolter"]);
         assert_eq!(cli.easy_up.host, "127.0.0.1");
         assert!(!cli.easy_up.allow_open_mode);
+        // and the flag still works as a flag, with no value
+        let cli = Cli::parse_from(["rolter", "--allow-open-mode"]);
+        assert!(cli.easy_up.allow_open_mode);
     }
 
     #[test]

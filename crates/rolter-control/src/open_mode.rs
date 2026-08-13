@@ -209,6 +209,44 @@ mod tests {
         assert!(OpenMode::OpenAcknowledged.is_open());
     }
 
+    /// A container sets `ROLTER_ALLOW_OPEN_MODE=1` at least as readily as
+    /// `=true`, and clap's derived bool parser accepts only the latter — which
+    /// exited the control plane at startup ("invalid value '1'") rather than
+    /// acknowledging open mode. The spelling must not be load-bearing.
+    #[test]
+    fn the_acknowledgement_accepts_the_truthy_spellings_env_vars_get() {
+        use clap::builder::TypedValueParser;
+        use clap::CommandFactory;
+
+        let parser = clap::builder::FalseyValueParser::new();
+        let command = crate::Args::command();
+        for (value, expected) in [
+            ("1", true),
+            ("true", true),
+            ("TRUE", true),
+            ("yes", true),
+            ("on", true),
+            ("0", false),
+            ("false", false),
+            ("", false),
+        ] {
+            let parsed = parser
+                .parse_ref(&command, None, std::ffi::OsStr::new(value))
+                .expect("every string is a valid falsey value");
+            assert_eq!(parsed, expected, "ROLTER_ALLOW_OPEN_MODE={value:?}");
+        }
+    }
+
+    /// The flag still works as a flag, taking no value on the command line.
+    #[test]
+    fn the_acknowledgement_is_still_a_bare_flag() {
+        use clap::Parser;
+
+        let args = crate::Args::parse_from(["rolter-control", "--allow-open-mode"]);
+        assert!(args.allow_open_mode);
+        assert!(!crate::Args::parse_from(["rolter-control"]).allow_open_mode);
+    }
+
     #[test]
     fn the_refusal_names_the_variable_that_closes_it() {
         let msg = OpenModeRefused {
