@@ -4,6 +4,8 @@ import {
   createOrg,
   fetchAnalyticsSummary,
   AnalyticsUnavailableError,
+  ApiError,
+  isOpenModeNoSession,
 } from "./api";
 
 // We need to mock global fetch and localStorage
@@ -95,6 +97,49 @@ describe("api client", () => {
       const request = fetchConfig();
       await expect(request).rejects.toThrow("superadmin access required");
       await expect(request).rejects.toMatchObject({ status: 403 });
+    });
+
+    it("carries the control plane's error code so screens can branch on it", async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "no local account session",
+              code: "open_mode_no_session",
+            },
+          }),
+          { status: 401 },
+        ),
+      );
+
+      await expect(fetchConfig()).rejects.toMatchObject({
+        status: 401,
+        code: "open_mode_no_session",
+      });
+    });
+  });
+
+  // an open-mode 401 and an ordinary one are both 401; conflating them is the
+  // bug (#942), so the predicate has to be exact about which it recognizes
+  describe("isOpenModeNoSession", () => {
+    it("recognizes only the open-mode code", () => {
+      expect(
+        isOpenModeNoSession(new ApiError("nope", 401, "open_mode_no_session")),
+      ).toBe(true);
+      expect(
+        isOpenModeNoSession(new ApiError("nope", 401, "unauthenticated")),
+      ).toBe(false);
+      expect(isOpenModeNoSession(new ApiError("nope", 401))).toBe(false);
+    });
+
+    it("is false for anything that is not an ApiError", () => {
+      // react-query hands back `unknown`; a plain Error carrying a lookalike
+      // message must not light up the banner
+      expect(isOpenModeNoSession(new Error("open_mode_no_session"))).toBe(
+        false,
+      );
+      expect(isOpenModeNoSession(null)).toBe(false);
+      expect(isOpenModeNoSession(undefined)).toBe(false);
     });
   });
 

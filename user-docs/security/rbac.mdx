@@ -156,6 +156,20 @@ Set the token to close it:
 export ROLTER_ADMIN_TOKEN="$(openssl rand -hex 24)"
 ```
 
+### Self-service endpoints do not work in open mode
+
+The `/api/v1/me/*` routes — the dashboard's **API Keys** screen — are per-user:
+they list the keys *you* minted and scope usage to *your* account. Open mode has
+no accounts, so there is no "you" and these endpoints cannot be served to
+anyone. They return `401` with `code: "open_mode_no_session"`, which the
+dashboard renders as an explanation of what to change rather than a load
+failure.
+
+This is distinct from an ordinary `401` (`code: "unauthenticated"`), which means
+you are simply not signed in and signing in fixes it. Setting
+`ROLTER_ADMIN_TOKEN` and creating a local account is what makes the self-service
+screens work; the admin **Virtual Keys** screen manages keys without one.
+
 <Warning>
   `--allow-open-mode` (`ROLTER_ALLOW_OPEN_MODE=1`) overrides the loopback
   refusal and serves an unauthenticated control plane on whatever interface you
