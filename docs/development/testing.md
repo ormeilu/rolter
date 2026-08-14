@@ -149,6 +149,10 @@ Current coverage:
 
 - `snapshot` — the CPU side of config-snapshot generation at 10/100/1000 routes: `sanitize_for_snapshot`, `validate`, and the JSON encode. `/internal/snapshot` is polled by every gateway in the fleet, so this cost is paid fleet-wide on every poll. The encode dominates — ~2.8 ms at 1000 routes against ~150 µs for sanitize — which is why payload size is its own metric (#845).
 
+`rolter-gateway`
+
+- `admission` — the two registries every upstream attempt consults before anything else: `Breaker::allows` and `Cooldowns::is_parked`, plus the outcome-recording calls beside them. Covers the healthy steady state (no entries recorded), a warm fleet, a tripped/parked target and a 64-model fleet, so the cost is measured where a real gateway actually sits rather than only in the worst case (#1050).
+
 criterion writes HTML reports to `target/criterion/`. Benches are **not** run in CI (timings are noisy on shared runners), but `cargo clippy --workspace --all-targets -- -D warnings` compiles them on every PR, so they cannot silently bit-rot. Use `just bench-check` (`cargo bench --workspace --no-run`) to compile them locally without running.
 
 ## Coverage

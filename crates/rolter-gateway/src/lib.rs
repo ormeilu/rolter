@@ -9,11 +9,15 @@
 
 mod adaptive_telemetry;
 mod admin_proxy;
-mod breaker;
+/// admission registries are `pub` so the criterion benches under `benches/`
+/// can exercise them directly; they carry no stable API promise
+#[doc(hidden)]
+pub mod breaker;
 mod budgets;
 mod cache;
 mod cache_telemetry;
-mod cooldowns;
+#[doc(hidden)]
+pub mod cooldowns;
 mod error;
 mod fake_llm;
 mod genai;
