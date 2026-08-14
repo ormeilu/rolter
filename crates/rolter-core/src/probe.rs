@@ -53,6 +53,66 @@ pub fn probe_request(
     }
 }
 
+/// What a 2xx from [`probe_request`] is actually evidence of.
+///
+/// A status code alone is a weak verdict: a catch-all route, an SPA index, a
+/// reverse proxy or an auth portal all answer 200 at an arbitrary path. When
+/// the probe asks for a model catalogue, the catalogue is the evidence — the
+/// status is only the envelope it arrived in (#980).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeExpectation {
+    /// The probe lists models. A 2xx whose body is not a catalogue answered,
+    /// but did not demonstrate that inference will work.
+    Catalogue,
+    /// The probe is a liveness endpoint with no catalogue to parse, so 2xx is
+    /// the whole verdict — deliberately, not incidentally.
+    Liveness,
+}
+
+/// What the probe for `kind` proves when it answers 2xx.
+///
+/// Only kinds whose probe URL is genuinely a liveness endpoint are
+/// [`ProbeExpectation::Liveness`]; everything else asks for a catalogue, so a
+/// new provider kind defaults to the stricter verdict rather than the weaker
+/// one.
+///
+/// An operator who overrode `health.path` gets `Liveness`: the probe is then
+/// whatever endpoint they nominated, and rolter has no basis to expect a
+/// catalogue from it.
+pub fn probe_expectation(kind: ProviderKind, configured_path: &str) -> ProbeExpectation {
+    if configured_path != "/" {
+        return ProbeExpectation::Liveness;
+    }
+    match kind {
+        // tei serves embeddings; its probe is `/health`, which is a bare 200
+        ProviderKind::Tei => ProbeExpectation::Liveness,
+        _ => ProbeExpectation::Catalogue,
+    }
+}
+
+/// Count the models in a probe response body, when it is a catalogue at all.
+///
+/// Returns `None` when the body is not a model list — an HTML page, a JSON
+/// object with no model array, or anything else an endpoint that is not a
+/// catalogue might answer with. That `None` is the whole point: it is what
+/// separates "answered" from "answered with a model list".
+///
+/// The recognised shapes are the ones rolter's own probe URLs return:
+/// `data` for the openai-shaped `/v1/models`, `modelSummaries` for Bedrock's
+/// `/foundation-models`, and `models`/`publisherModels` for Vertex and the
+/// google-shaped lists.
+pub fn count_catalogue(body: &serde_json::Value) -> Option<usize> {
+    const ARRAY_KEYS: [&str; 4] = ["data", "models", "modelSummaries", "publisherModels"];
+    // a bare top-level array is a catalogue too: some openai-compatible servers
+    // answer `[{...}]` rather than wrapping it
+    if let Some(items) = body.as_array() {
+        return Some(items.len());
+    }
+    ARRAY_KEYS
+        .iter()
+        .find_map(|key| Some(body.get(key)?.as_array()?.len()))
+}
+
 fn bedrock_models_url(api_base: &str) -> String {
     let base = api_base.trim_end_matches('/');
     if let Some(control) = base.strip_prefix("https://bedrock-runtime.") {
@@ -127,6 +187,58 @@ mod tests {
             url,
             "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/l/publishers/google/models"
         );
+    }
+
+    #[test]
+    fn a_catalogue_probe_expects_a_catalogue_and_a_liveness_probe_does_not() {
+        for kind in [
+            ProviderKind::Openai,
+            ProviderKind::Anthropic,
+            ProviderKind::OpenaiCompatible,
+            ProviderKind::Bedrock,
+            ProviderKind::Vertex,
+            ProviderKind::Cohere,
+        ] {
+            assert_eq!(probe_expectation(kind, "/"), ProbeExpectation::Catalogue);
+        }
+        assert_eq!(
+            probe_expectation(ProviderKind::Tei, "/"),
+            ProbeExpectation::Liveness
+        );
+    }
+
+    /// An operator-nominated path is whatever they chose, so rolter has no
+    /// basis to demand a catalogue from it.
+    #[test]
+    fn an_overridden_health_path_is_judged_on_liveness_alone() {
+        assert_eq!(
+            probe_expectation(ProviderKind::Openai, "/healthz"),
+            ProbeExpectation::Liveness
+        );
+    }
+
+    #[test]
+    fn the_catalogue_shapes_every_probe_url_returns_are_counted() {
+        use serde_json::json;
+        assert_eq!(count_catalogue(&json!({"data": [1, 2, 3]})), Some(3));
+        assert_eq!(count_catalogue(&json!({"models": [1]})), Some(1));
+        assert_eq!(count_catalogue(&json!({"modelSummaries": []})), Some(0));
+        assert_eq!(
+            count_catalogue(&json!({"publisherModels": [1, 2]})),
+            Some(2)
+        );
+        assert_eq!(count_catalogue(&json!([1, 2])), Some(2));
+    }
+
+    /// The case that made a doubled base look healthy in #947: a 2xx whose body
+    /// is not a catalogue at all.
+    #[test]
+    fn a_non_catalogue_body_counts_as_no_catalogue() {
+        use serde_json::json;
+        assert_eq!(count_catalogue(&json!({"message": "ok"})), None);
+        assert_eq!(count_catalogue(&json!({"data": "not-an-array"})), None);
+        assert_eq!(count_catalogue(&json!("<!doctype html>")), None);
+        assert_eq!(count_catalogue(&json!(null)), None);
     }
 
     #[test]
