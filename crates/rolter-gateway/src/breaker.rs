@@ -34,11 +34,18 @@ enum Phase {
     HalfOpen,
 }
 
-/// Per-target breaker state: its phase plus the running count of consecutive
-/// transient failures observed while closed.
+/// Per-target breaker state: its phase, the running count of consecutive
+/// transient failures observed while closed, and when that count last moved.
+///
+/// The stamp is set by failures only, never by reads: `allows` is the hot path
+/// and must not pay for an `Instant::now()`, and the only thing a sweep can
+/// destroy is a partial failure count — which is precisely what goes stale when
+/// a target stops failing. A still-busy but long-healthy target is safe to
+/// retire, because an absent entry already means closed with no failures.
 struct Entry {
     phase: Phase,
     consecutive_failures: u32,
+    last_failure: Instant,
 }
 
 impl Default for Entry {
@@ -46,6 +53,7 @@ impl Default for Entry {
         Self {
             phase: Phase::Closed,
             consecutive_failures: 0,
+            last_failure: Instant::now(),
         }
     }
 }
@@ -165,20 +173,80 @@ impl Breaker {
             return false;
         };
         let mut map = inner.map.lock();
-        let Some(entry) = map
-            .get_mut(model)
-            .and_then(|m| m.get_mut(idx))
-            .and_then(Option::as_mut)
-        else {
+        let Some(targets) = map.get_mut(model) else {
             // a target with no entry is already closed with no failures, which
             // is exactly what this call would have written — so the success of
             // a healthy target neither allocates nor grows the map
             return false;
         };
-        let was_tripped = !matches!(entry.phase, Phase::Closed);
-        entry.phase = Phase::Closed;
-        entry.consecutive_failures = 0;
-        was_tripped
+        let Some(slot) = targets.get_mut(idx) else {
+            return false;
+        };
+        let Some(entry) = slot.take() else {
+            return false;
+        };
+        // the entry is *removed* rather than reset: "closed with no failures" is
+        // exactly what an absent entry means, so keeping one would be a row that
+        // says nothing and never leaves. A recovered target therefore gives its
+        // slot back instead of holding it for the process lifetime (#1053)
+        if targets.iter().all(Option::is_none) {
+            map.remove(model);
+        }
+        !matches!(entry.phase, Phase::Closed)
+    }
+
+    /// Drop entries for targets that have gone quiet, so a long-lived process
+    /// does not accumulate a row per `(model, target)` it has ever served —
+    /// including models retired by a config hot-reload, which the gateway
+    /// applies without restarting.
+    ///
+    /// Only **closed** entries are eligible: a target that is currently open or
+    /// half-open is under active probe, and forgetting it would silently
+    /// re-admit traffic to an upstream that is still down. Retiring a closed
+    /// entry costs at most a partial failure count that has not moved for
+    /// `idle`, which is stale by construction.
+    pub fn sweep(&self, idle: Duration) {
+        let Some(inner) = &self.inner else {
+            return;
+        };
+        let now = Instant::now();
+        let mut map = inner.map.lock();
+        map.retain(|_, targets| {
+            for slot in targets.iter_mut() {
+                let retire = slot.as_ref().is_some_and(|e| {
+                    matches!(e.phase, Phase::Closed)
+                        && now.saturating_duration_since(e.last_failure) >= idle
+                });
+                if retire {
+                    *slot = None;
+                }
+            }
+            // trailing empty slots are pure overhead once a route shrinks
+            while targets.last().is_some_and(Option::is_none) {
+                targets.pop();
+            }
+            !targets.is_empty()
+        });
+    }
+
+    /// Number of live `(model, target)` entries held. Exported as a gauge so
+    /// map growth is observable rather than inferred (#1053).
+    pub fn len(&self) -> usize {
+        self.inner
+            .as_ref()
+            .map(|i| {
+                i.map
+                    .lock()
+                    .values()
+                    .map(|t| t.iter().filter(|e| e.is_some()).count())
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+
+    /// Whether the registry holds no per-target state.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Record a transient failure for `(model, idx)`. A failure while half-open
@@ -217,6 +285,7 @@ impl Breaker {
 /// Fold one transient failure into a target's entry. Returns `true` when the
 /// call tripped the target open (a closed→open or half-open→open transition).
 fn record_failure(entry: &mut Entry, failure_threshold: u32, open_until: Instant) -> bool {
+    entry.last_failure = Instant::now();
     entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
     match entry.phase {
         // a failed probe drops straight back to open
@@ -416,6 +485,82 @@ mod tests {
         let b = Breaker::new(true, 1, 30);
         assert!(b.on_failure("m::v", 0));
         assert!(!b.allows("m::v", 0));
+        assert!(b.allows("m", 0));
+    }
+
+    /// A recovered target gives its slot back: "closed with no failures" is
+    /// exactly what an absent entry means, so holding a row for it would be a
+    /// leak that says nothing (#1053).
+    #[test]
+    fn a_recovery_releases_the_entry() {
+        let b = Breaker::new(true, 1, 30);
+        assert!(b.on_failure("m", 0));
+        assert_eq!(b.len(), 1);
+        assert!(b.on_success("m", 0), "the recovery is still reported");
+        assert!(b.is_empty(), "a recovered target must not hold a row");
+        // and the target is admitted, which is what an absent entry means
+        assert!(b.allows("m", 0));
+    }
+
+    /// A partial failure count that has not moved for the idle window is stale
+    /// by construction, so a sweep may retire it.
+    #[test]
+    fn a_sweep_retires_a_stale_closed_entry() {
+        let b = Breaker::new(true, 5, 30);
+        b.on_failure("m", 0); // 1 of 5: closed, but holding a row
+        assert_eq!(b.len(), 1);
+        // a window the entry cannot have been idle for leaves it alone
+        b.sweep(Duration::from_secs(3600));
+        assert_eq!(b.len(), 1, "a fresh entry must survive");
+        // an elapsed window retires it
+        b.sweep(Duration::ZERO);
+        assert!(b.is_empty());
+        // the target reads as closed either way
+        assert!(b.allows("m", 0));
+    }
+
+    /// The sweep must not touch a target under probe, in either non-closed
+    /// phase, or traffic would be re-admitted to an upstream that is still down.
+    #[test]
+    fn a_sweep_keeps_open_and_half_open_targets() {
+        let b = Breaker::new(true, 1, 3600);
+        assert!(b.on_failure("open", 0)); // → Open, long window
+        let probing = Breaker::new(true, 1, 0);
+        assert!(probing.on_failure("probing", 0));
+        assert!(probing.allows("probing", 0)); // → HalfOpen
+
+        b.sweep(Duration::ZERO);
+        probing.sweep(Duration::ZERO);
+
+        assert_eq!(b.len(), 1);
+        assert!(!b.allows("open", 0), "an open target stays skipped");
+        assert_eq!(probing.len(), 1, "a target under probe keeps its entry");
+    }
+
+    /// A model whose every target was retired must not leave an empty shell
+    /// behind, or the outer map leaks one key per retired model.
+    #[test]
+    fn a_sweep_drops_a_model_with_no_surviving_target() {
+        let b = Breaker::new(true, 5, 30);
+        for idx in 0..8 {
+            b.on_failure("m", idx);
+        }
+        assert_eq!(b.len(), 8);
+        b.sweep(Duration::ZERO);
+        assert!(b.is_empty());
+        assert_eq!(
+            b.inner.as_ref().map(|i| i.map.lock().len()),
+            Some(0),
+            "the model key itself must be gone, not merely emptied"
+        );
+    }
+
+    /// A sweep is a no-op on a registry with no backing store.
+    #[test]
+    fn a_sweep_is_a_noop_on_inert_default() {
+        let b = Breaker::default();
+        b.sweep(Duration::ZERO);
+        assert!(b.is_empty());
         assert!(b.allows("m", 0));
     }
 
