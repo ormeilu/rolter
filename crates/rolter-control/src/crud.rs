@@ -1959,6 +1959,10 @@ async fn delete_project(
 /// What a "Test connection" attempt found.
 #[derive(Serialize)]
 struct ProviderTestResult {
+    /// whether the probe demonstrated a working provider API — for kinds whose
+    /// probe is a catalogue that means a parseable model list, not merely a
+    /// 2xx. `false` with a `status` in the 2xx range is the "answered, but not
+    /// with a model list" case, and `error` says so (#980)
     reachable: bool,
     /// the URL actually probed, so an operator can see what was tried rather
     /// than guessing how `api_base` was turned into an endpoint
@@ -1973,6 +1977,71 @@ struct ProviderTestResult {
     /// how many models the upstream listed, when it answered with a catalogue
     models_found: Option<usize>,
     error: Option<String>,
+}
+
+/// What a probe response amounts to, once the body has been read.
+struct ProbeVerdict {
+    reachable: bool,
+    models_found: Option<usize>,
+    error: Option<String>,
+}
+
+/// Decide what a probe proved.
+///
+/// `reachable` used to be `status.is_success()` alone, so any endpoint
+/// answering 2xx at the probed URL — a catch-all route, an SPA index, a reverse
+/// proxy, an auth portal — reported green for a provider that could not serve a
+/// single completion (#980). It is what made the doubled base in #947 look
+/// healthy: the upstream answered 200 at `/v1/v1/models` with something that
+/// was not a catalogue.
+///
+/// So for kinds whose probe *is* a model catalogue, the catalogue is the
+/// evidence and the status is only the envelope. Kinds whose probe is a
+/// liveness endpoint (Tei's `/health`) keep 2xx as the criterion — explicitly,
+/// via [`rolter_core::probe_expectation`], rather than incidentally.
+///
+/// The three outcomes stay distinguishable: success, a flat failure, and
+/// "answered, but not with a model list" — which is neither, and is the one an
+/// operator most needs named, because the host is up and it is the URL or the
+/// service behind it that is wrong.
+fn judge_probe(
+    kind: rolter_core::ProviderKind,
+    status: u16,
+    body: Option<&serde_json::Value>,
+    url: &str,
+    credential: &str,
+) -> ProbeVerdict {
+    // a provider that answers 200 with zero models is reachable but not yet
+    // useful, and the operator should be able to see that difference
+    let models_found = body.and_then(rolter_core::count_catalogue);
+    let answered = (200..300).contains(&status);
+    let proved = answered
+        && match rolter_core::probe_expectation(kind, "/") {
+            rolter_core::ProbeExpectation::Catalogue => models_found.is_some(),
+            rolter_core::ProbeExpectation::Liveness => true,
+        };
+    ProbeVerdict {
+        reachable: proved,
+        models_found: proved.then_some(models_found).flatten(),
+        error: (!proved).then(|| {
+            if answered {
+                format!(
+                    "{status}: {url} answered, but not with a model list. Something other than \
+                     the provider's API is serving that URL — check api_base for a duplicated \
+                     path segment, a catch-all route or a login portal."
+                )
+            } else {
+                match status {
+                    401 | 403 => format!(
+                        "{status}: the upstream rejected the credential (resolved from: \
+                         {credential})"
+                    ),
+                    404 => format!("{status}: reached the host, but {url} is not served there"),
+                    other => format!("{other}: the upstream refused the probe"),
+                }
+            }
+        }),
+    }
 }
 
 /// Probe a stored provider and report whether it actually answers.
@@ -2075,29 +2144,17 @@ async fn test_provider(
 
     let result = match outcome {
         Ok(resp) => {
-            let status = resp.status();
-            // count the catalogue when there is one; a provider that answers 200
-            // with zero models is reachable but not yet useful, and the operator
-            // should be able to see that difference
-            let models_found = resp
-                .json::<serde_json::Value>()
-                .await
-                .ok()
-                .and_then(|body| Some(body.get("data")?.as_array()?.len()));
+            let status = resp.status().as_u16();
+            let body = resp.json::<serde_json::Value>().await.ok();
+            let verdict = judge_probe(parsed_kind, status, body.as_ref(), &url, credential);
             ProviderTestResult {
-                reachable: status.is_success(),
+                reachable: verdict.reachable,
                 probed_url: url.clone(),
-                status: Some(status.as_u16()),
+                status: Some(status),
                 latency_ms,
                 credential,
-                models_found: status.is_success().then_some(models_found).flatten(),
-                error: (!status.is_success()).then(|| match status.as_u16() {
-                    401 | 403 => format!(
-                        "{status}: the upstream rejected the credential (resolved from: {credential})"
-                    ),
-                    404 => format!("{status}: reached the host, but {url} is not served there"),
-                    other => format!("{other}: the upstream refused the probe"),
-                }),
+                models_found: verdict.models_found,
+                error: verdict.error,
             }
         }
         // never surface the raw reqwest error: it can carry the full URL
@@ -2217,6 +2274,117 @@ fn seal_api_key(api_key: &str) -> ApiResult<(Vec<u8>, Vec<u8>)> {
         ))));
     };
     Ok(kek.encrypt(api_key)?)
+}
+
+#[cfg(test)]
+mod probe_verdict_tests {
+    use super::*;
+    use rolter_core::ProviderKind;
+    use serde_json::json;
+
+    fn judge(kind: ProviderKind, status: u16, body: Option<serde_json::Value>) -> ProbeVerdict {
+        judge_probe(
+            kind,
+            status,
+            body.as_ref(),
+            "https://x.test/v1/models",
+            "stored",
+        )
+    }
+
+    /// The case from #980: an upstream answering 200 with an HTML page at the
+    /// probed URL must not read as Reachable. A test that passes where
+    /// inference fails is worse than no test.
+    #[test]
+    fn a_2xx_carrying_a_non_catalogue_body_is_not_reachable() {
+        // reqwest fails to parse html as json, so the body arrives as None
+        let verdict = judge(ProviderKind::Openai, 200, None);
+        assert!(!verdict.reachable, "html answered as a green result");
+        assert_eq!(verdict.models_found, None);
+        let error = verdict.error.expect("the operator must be told why");
+        assert!(error.contains("not with a model list"), "{error}");
+        // distinct from a flat failure: it must not claim the host refused us
+        assert!(!error.contains("refused the probe"), "{error}");
+    }
+
+    /// Valid JSON that simply is not a catalogue — an auth portal's `{"error":…}`
+    /// or a proxy's status document.
+    #[test]
+    fn a_2xx_json_body_with_no_model_array_is_not_reachable() {
+        let verdict = judge(ProviderKind::Openai, 200, Some(json!({"status": "ok"})));
+        assert!(!verdict.reachable);
+        assert!(verdict
+            .error
+            .is_some_and(|e| e.contains("not with a model list")));
+    }
+
+    #[test]
+    fn a_real_catalogue_is_reachable_and_counted() {
+        let verdict = judge(
+            ProviderKind::Openai,
+            200,
+            Some(json!({"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]})),
+        );
+        assert!(verdict.reachable);
+        assert_eq!(verdict.models_found, Some(2));
+        assert!(verdict.error.is_none());
+    }
+
+    /// Reachable but empty is a real state, and a different one from "not a
+    /// catalogue" — the operator can see it in `models_found`.
+    #[test]
+    fn an_empty_catalogue_is_still_reachable() {
+        let verdict = judge(ProviderKind::Openai, 200, Some(json!({"data": []})));
+        assert!(verdict.reachable);
+        assert_eq!(verdict.models_found, Some(0));
+    }
+
+    /// Tei probes `/health`, which has no `data` array. A blanket
+    /// "require a catalogue" would report a healthy embedder as down.
+    #[test]
+    fn a_liveness_probe_keeps_2xx_as_the_criterion() {
+        assert!(judge(ProviderKind::Tei, 200, None).reachable);
+        assert!(judge(ProviderKind::Tei, 200, Some(json!("OK"))).reachable);
+    }
+
+    /// Bedrock and Vertex answer their own catalogue shapes rather than `data`.
+    #[test]
+    fn the_control_plane_catalogue_shapes_are_recognised() {
+        let bedrock = judge(
+            ProviderKind::Bedrock,
+            200,
+            Some(json!({"modelSummaries": [{"modelId": "anthropic.claude"}]})),
+        );
+        assert!(bedrock.reachable);
+        assert_eq!(bedrock.models_found, Some(1));
+
+        let vertex = judge(
+            ProviderKind::Vertex,
+            200,
+            Some(json!({"publisherModels": [{"name": "gemini"}]})),
+        );
+        assert!(vertex.reachable);
+    }
+
+    /// Non-2xx keeps the messages it always had.
+    #[test]
+    fn a_failing_status_still_explains_itself() {
+        let unauthorized = judge(ProviderKind::Openai, 401, None);
+        assert!(!unauthorized.reachable);
+        assert!(unauthorized
+            .error
+            .is_some_and(|e| e.contains("rejected the credential")));
+
+        let missing = judge(ProviderKind::Openai, 404, None);
+        assert!(missing
+            .error
+            .is_some_and(|e| e.contains("not served there")));
+
+        let broken = judge(ProviderKind::Openai, 503, None);
+        assert!(broken
+            .error
+            .is_some_and(|e| e.contains("refused the probe")));
+    }
 }
 
 #[cfg(test)]

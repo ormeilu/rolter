@@ -45,7 +45,9 @@ pub use pii_sanitizer::{
     TokenScope,
 };
 pub use plugin_dispatch::{PluginInstanceConfig, PluginRequest, PluginStage, PluginsConfig};
-pub use probe::{probe_request, ANTHROPIC_VERSION};
+pub use probe::{
+    count_catalogue, probe_expectation, probe_request, ProbeExpectation, ANTHROPIC_VERSION,
+};
 pub use prompt_templates::{
     CompiledTemplates, Decorator, DecoratorPosition, DecoratorRole, PromptTemplate,
     PromptTemplateActivationScope, PromptTemplateRequestScope, PromptTemplatesConfig, RenderError,

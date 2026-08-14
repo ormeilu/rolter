@@ -60,6 +60,26 @@ It issues a `GET` against the provider kind's free model-list endpoint — the s
 
 A `401` names which credential source was used, so a rejected key points at the right place to fix it.
 
+### When something answers, but not with a model list
+
+`reachable` is not "the upstream returned 2xx". For provider kinds whose probe is a model catalogue, it means the response **was** a catalogue. A catch-all route, an SPA index, a reverse proxy or a login portal will all answer `200` at an arbitrary URL, and reporting those as reachable moves you on to debugging the wrong layer.
+
+That case is reported as its own thing — a 2xx status with `reachable: false`:
+
+```json
+{
+  "reachable": false,
+  "probed_url": "https://gpustack.example.com/v1/v1/models",
+  "status": 200,
+  "models_found": null,
+  "error": "200: https://gpustack.example.com/v1/v1/models answered, but not with a model list. Something other than the provider's API is serving that URL — check api_base for a duplicated path segment, a catch-all route or a login portal."
+}
+```
+
+The usual cause is a duplicated path segment in `api_base` — see [the `/v1` rule](#where-the-credential-lives) — where the upstream's own catch-all answers `200` at the doubled path.
+
+Kinds whose probe is a liveness endpoint rather than a catalogue keep 2xx as the criterion. Hugging Face TEI is probed at `/health`, which has no catalogue to return, so a bare `200` there is the whole verdict and `models_found` stays `null`.
+
 <Note>
 The probe reads the **stored** row, not what is currently typed in the form. Save first, then test. The credential is sealed server-side and never leaves the control plane, so a draft key could not be tested without transmitting it somewhere first.
 </Note>
@@ -80,7 +100,7 @@ This is a deployment problem, not a provider problem, and the message says so ra
 
 ### What a green result does not prove
 
-The probe is a model-list call. A few self-hosted runtimes serve their catalogue without checking authorization, so on those a wrong key can still return `reachable: true`. The hosted providers all authenticate the endpoint, so the check is meaningful there. Treat `reachable` as "the endpoint answers", and `401` as authoritative when it appears.
+The probe is a model-list call. A few self-hosted runtimes serve their catalogue without checking authorization, so on those a wrong key can still return `reachable: true`. The hosted providers all authenticate the endpoint, so the check is meaningful there. Treat `reachable` as "the provider's API answered with its catalogue", and `401` as authoritative when it appears.
 
 ---
 
