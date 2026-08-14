@@ -86,11 +86,12 @@ use std::sync::Arc;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{any, get};
 use axum::{Json, Router};
 use clap::Parser;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tower::ServiceExt as _;
 use tower_http::services::ServeDir;
 
 use rolter_auth::Role;
@@ -477,11 +478,14 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
 /// `append_index_html_on_directories(false)`: every route that ends at the SPA
 /// has to come through the fallback, or it arrives without the injected runtime
 /// config and the dashboard's tracing stays inert.
-fn spa_fallback(
-    ui_dir: &std::path::Path,
-    index: Option<String>,
-) -> ServeDir<axum::routing::MethodRouter> {
-    ServeDir::new(ui_dir)
+///
+/// The API surfaces are carved out ahead of `ServeDir` (#928): a typo'd
+/// `/api/v1/keys` used to answer `200 text/html`, so a client checking
+/// `response.ok` read a wrong path as success and only failed later, inside
+/// `JSON.parse`. Those prefixes belong to the API, and an unmatched path under
+/// them is a `404` in the same JSON shape every other API error uses.
+fn spa_fallback(ui_dir: &std::path::Path, index: Option<String>) -> axum::routing::MethodRouter {
+    let files = ServeDir::new(ui_dir)
         .append_index_html_on_directories(false)
         .fallback(get(move || {
             let index = index.clone();
@@ -491,7 +495,46 @@ fn spa_fallback(
                     None => StatusCode::NOT_FOUND.into_response(),
                 }
             }
-        }))
+        }));
+    any(move |request: axum::extract::Request| {
+        let files = files.clone();
+        async move {
+            if is_api_path(request.uri().path()) {
+                return api_not_found(request.uri().path());
+            }
+            match files.oneshot(request).await {
+                Ok(response) => response.into_response(),
+                Err(err) => {
+                    tracing::warn!(%err, "serving the dashboard failed");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            }
+        }
+    })
+}
+
+/// Paths owned by the API rather than by the dashboard's client-side router.
+///
+/// Trailing-slash-free prefixes would also match `/apiary`, so each carries its
+/// separator; the bare prefix itself is included because `/internal` with no
+/// suffix is just as much an API path as `/internal/snapshot`.
+fn is_api_path(path: &str) -> bool {
+    const PREFIXES: [&str; 2] = ["/api", "/internal"];
+    PREFIXES.iter().any(|prefix| {
+        path == *prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|r| r.starts_with('/'))
+    })
+}
+
+/// The API's 404, in the error shape `ApiError` renders everywhere else.
+fn api_not_found(path: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({"error": {"message": format!("no such endpoint: {path}")}})),
+    )
+        .into_response()
 }
 
 /// Read the dashboard's `index.html` out of `ui_dir` and inject the runtime
@@ -1470,6 +1513,74 @@ mod tests {
             .await
             .unwrap();
         assert!(body.contains("the dashboard"), "{body}");
+    }
+
+    /// #928: an unmatched path under an API prefix must answer as the API, not
+    /// as the dashboard. One regex governs both halves, so this and the deep
+    /// link test above are a pair — fixing either by breaking the other is the
+    /// failure mode worth pinning.
+    #[tokio::test]
+    async fn an_unknown_api_path_is_a_json_404_not_the_dashboard() {
+        let dir = ScratchUiDir::with_index("apifourohfour", "<html>the dashboard</html>");
+        let app = Router::new().fallback_service(spa_fallback(
+            &dir.0,
+            Some("<html>the dashboard</html>".to_string()),
+        ));
+        let addr = serve(app).await;
+
+        // `/api/v1/keys` is the real typo from the dogfooding pass: virtual keys
+        // live under `/api/v1/projects/{id}/virtual-keys`
+        for path in ["/api/v1/keys", "/api/v1", "/internal/nope", "/internal"] {
+            let response = reqwest::get(format!("http://{addr}{path}")).await.unwrap();
+            assert_eq!(response.status(), 404, "{path} did not 404");
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            assert!(
+                content_type.contains("application/json"),
+                "{path} answered {content_type}"
+            );
+            let body: serde_json::Value = response.json().await.unwrap();
+            assert!(
+                body["error"]["message"].is_string(),
+                "{path} body is not the api error shape: {body}"
+            );
+        }
+    }
+
+    /// A path that merely starts with the same letters is a dashboard route,
+    /// not an API one — `/apikeys` is a plausible screen name.
+    #[tokio::test]
+    async fn a_route_sharing_an_api_prefixs_letters_still_reaches_the_dashboard() {
+        let dir = ScratchUiDir::with_index("apiprefix", "<html>the dashboard</html>");
+        let app = Router::new().fallback_service(spa_fallback(
+            &dir.0,
+            Some("<html>the dashboard</html>".to_string()),
+        ));
+        let addr = serve(app).await;
+
+        for path in ["/apikeys", "/internals"] {
+            let body = reqwest::get(format!("http://{addr}{path}"))
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap();
+            assert!(body.contains("the dashboard"), "{path}: {body}");
+        }
+    }
+
+    #[test]
+    fn api_paths_are_recognised_by_prefix_not_by_substring() {
+        assert!(is_api_path("/api/v1/keys"));
+        assert!(is_api_path("/api"));
+        assert!(is_api_path("/internal/snapshot"));
+        assert!(!is_api_path("/apikeys"));
+        assert!(!is_api_path("/providers"));
+        assert!(!is_api_path("/"));
     }
 
     #[test]
