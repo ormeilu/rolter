@@ -589,6 +589,30 @@ path = "/metrics"
 
 ---
 
+### \[usage\_recording\]
+
+After a response completes, Rolter adds the request's cost to its applicable budget counters and its tokens to its applicable rate-limit windows. Both write to Redis, so both run off the response path — through a **bounded** queue rather than one detached task per request, so a slow counter store sheds records instead of accumulating work without limit.
+
+Dropping is the deliberate failure mode: a lost record under-counts spend for a single request, while an unbounded queue grows worst exactly when the gateway is already under stress. Overflow is never silent — watch `rolter_usage_records_dropped_total`, and `rolter_usage_records_queued` for pressure before it turns into drops.
+
+This section is inert without a Redis URL: with no counter store there is nothing to record.
+
+<ParamField path="queue_capacity" default="10000" type="integer">
+  Records waiting to be written. New records are dropped (and counted) once the queue is full; the response path never blocks on it.
+</ParamField>
+
+<ParamField path="workers" default="4" type="integer">
+  Concurrent writers draining the queue. Each record is one Redis round trip, so a single consumer would serialise them. Raise this if `rolter_usage_records_queued` sits high against a healthy Redis.
+</ParamField>
+
+```toml
+[usage_recording]
+queue_capacity = 10000
+workers = 4
+```
+
+---
+
 ### \[logging\]
 
 Request and cost logs are written asynchronously in batches, off the hot request path. Logging is disabled entirely when `clickhouse_url` is unset. When the internal queue fills, records are dropped and counted rather than blocking request processing.

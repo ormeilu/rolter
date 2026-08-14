@@ -111,6 +111,12 @@ pub struct Metrics {
     pub logs_written_total: AtomicU64,
     /// request-log rows dropped (queue full or write failed)
     pub logs_dropped_total: AtomicU64,
+    /// budget/rate-limit usage records dropped because the recording queue was
+    /// full — the counter store is not keeping up, and this request's spend is
+    /// missing from its counters (#1051)
+    pub usage_records_dropped_total: AtomicU64,
+    /// usage records waiting to be written, sampled at scrape time
+    pub usage_records_queued: AtomicU64,
     /// provider-health-event rows successfully written to clickhouse
     pub health_events_written_total: AtomicU64,
     /// provider-health-event rows dropped (queue full or write failed)
@@ -374,6 +380,18 @@ impl Metrics {
                 name: "rolter_config_reloads_total",
                 help: "successful config hot-reloads applied",
                 value: self.config_reloads_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_usage_records_dropped_total",
+                help: "budget/rate-limit usage records dropped because the recording queue was full",
+                value: self.usage_records_dropped_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "gauge",
+                name: "rolter_usage_records_queued",
+                help: "usage records waiting to be written to the counter store",
+                value: self.usage_records_queued.load(Relaxed),
             },
             Scalar {
                 kind: "counter",

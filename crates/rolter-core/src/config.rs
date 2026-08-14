@@ -123,6 +123,9 @@ pub struct GatewayConfig {
     pub realtime: RealtimeConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    /// bounded queue for post-response budget and rate-limit recording
+    #[serde(default)]
+    pub usage_recording: UsageRecordingConfig,
     /// deployment-wide gates managed by the control plane
     #[serde(default)]
     pub feature_flags: FeatureFlagsConfig,
@@ -2343,6 +2346,44 @@ pub struct LoggingConfig {
 
 fn default_ui_events() -> bool {
     true
+}
+
+/// Bounded queue that carries post-response budget spend and rate-limit token
+/// recording off the response path.
+///
+/// Recording writes to Redis, so it must not run inline — but firing an
+/// unbounded detached task per request is a queue with infinite depth: when the
+/// counter store slows down the tasks pile up without limit, and the pile-up is
+/// worst exactly when the system is already under stress. This bounds it the
+/// same way the request-log queue is bounded, with an explicit drop policy and a
+/// counter, so overflow is observable rather than silent (#1051).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct UsageRecordingConfig {
+    /// records waiting to be written; the oldest are never blocked on, new
+    /// records are dropped (and counted) once it is full
+    #[serde(default = "default_usage_queue_capacity")]
+    pub queue_capacity: usize,
+    /// concurrent writers draining the queue. More than one because each record
+    /// is a Redis round trip, so a single consumer would serialise them
+    #[serde(default = "default_usage_workers")]
+    pub workers: usize,
+}
+
+impl Default for UsageRecordingConfig {
+    fn default() -> Self {
+        Self {
+            queue_capacity: default_usage_queue_capacity(),
+            workers: default_usage_workers(),
+        }
+    }
+}
+
+fn default_usage_queue_capacity() -> usize {
+    10_000
+}
+
+fn default_usage_workers() -> usize {
+    4
 }
 
 impl Default for LoggingConfig {

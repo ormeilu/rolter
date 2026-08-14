@@ -39,6 +39,7 @@ mod state;
 mod status_page;
 mod trace;
 mod upstream_metrics;
+mod usage_recording;
 mod watcher;
 
 use std::net::SocketAddr;
