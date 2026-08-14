@@ -107,6 +107,9 @@ export default function Dashboard() {
   const spendLabels = (series.data ?? []).map(
     (p) => p.bucket.slice(11, 16) || p.bucket,
   );
+  // buckets exist but every one of them is zero: the window had traffic that
+  // was never priced, which is not the same as spend that happened to be zero
+  const anySpend = spendPoints.some((v) => v > 0);
 
   const models = byModel.data ?? [];
   const traffic = models.map((m) => ({
@@ -202,12 +205,25 @@ export default function Dashboard() {
               <p className="py-16 text-center text-sm text-muted-foreground">
                 {t("pages.dashboard.noRequestsWindow")}
               </p>
+            ) : !anySpend ? (
+              // requests were served but nothing was priced. drawing a flat
+              // line along zero here says "spend is zero", which is a
+              // different fact from "no spend was recorded" — and on a cost
+              // dashboard that difference is the whole point (#960)
+              <p className="py-16 text-center text-sm text-muted-foreground">
+                {t("pages.dashboard.noSpendRecorded")}
+              </p>
             ) : (
               <LineChart
                 series={[{ name: "spend", values: spendPoints }]}
                 labels={spendLabels}
                 height={220}
                 formatValue={(v) => money(v)}
+                emptyState={
+                  <p className="text-sm text-muted-foreground">
+                    {t("pages.dashboard.noRequestsWindow")}
+                  </p>
+                }
               />
             )}
           </CardContent>
