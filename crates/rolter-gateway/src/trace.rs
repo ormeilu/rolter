@@ -359,21 +359,16 @@ mod tests {
     /// Collects every field recorded onto a span after creation, so the tenant
     /// attributes can be asserted as *recorded* rather than merely as called.
     #[derive(Clone, Default)]
-    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>);
+    struct Recorded(std::sync::Arc<parking_lot::Mutex<Vec<(String, String)>>>);
 
     impl Recorded {
         fn get(&self, key: &str) -> Option<String> {
-            let seen = self.0.lock().unwrap();
+            let seen = self.0.lock();
             seen.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
         }
 
         fn keys(&self) -> Vec<String> {
-            self.0
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|(k, _)| k.clone())
-                .collect()
+            self.0.lock().iter().map(|(k, _)| k.clone()).collect()
         }
     }
 
@@ -381,14 +376,12 @@ mod tests {
         fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
             self.0
                 .lock()
-                .unwrap()
                 .push((field.name().to_string(), value.to_string()));
         }
 
         fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
             self.0
                 .lock()
-                .unwrap()
                 .push((field.name().to_string(), format!("{value:?}")));
         }
     }

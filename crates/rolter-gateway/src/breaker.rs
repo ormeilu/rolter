@@ -18,9 +18,10 @@
 //! while disabled it admits every target and records nothing, but keeps its
 //! per-target state so re-enabling resumes where it left off.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The phase a single target's breaker is in.
@@ -116,7 +117,7 @@ impl Breaker {
         let Some(inner) = self.active() else {
             return true;
         };
-        let mut map = inner.map.lock().unwrap();
+        let mut map = inner.map.lock();
         let Some(entry) = map.get_mut(&(model.to_string(), idx)) else {
             return true; // never-seen target is closed by default
         };
@@ -140,7 +141,7 @@ impl Breaker {
         let Some(inner) = self.active() else {
             return false;
         };
-        let mut map = inner.map.lock().unwrap();
+        let mut map = inner.map.lock();
         let entry = map.entry((model.to_string(), idx)).or_default();
         let was_tripped = !matches!(entry.phase, Phase::Closed);
         entry.phase = Phase::Closed;
@@ -158,7 +159,7 @@ impl Breaker {
         };
         let failure_threshold = inner.failure_threshold.load(Relaxed).max(1);
         let open_secs = inner.open_secs.load(Relaxed);
-        let mut map = inner.map.lock().unwrap();
+        let mut map = inner.map.lock();
         let entry = map.entry((model.to_string(), idx)).or_default();
         entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
         let open_until = Instant::now() + Duration::from_secs(open_secs);
@@ -181,6 +182,36 @@ impl Breaker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `std::sync::Mutex` would poison here and every later `allows()` would
+    /// panic — one transient panic anywhere under the lock would turn into a
+    /// permanent, restart-only outage for all traffic (#1049). `parking_lot`
+    /// has no poison state, so the registry survives and keeps admitting.
+    #[test]
+    fn a_panic_under_the_lock_does_not_brick_the_registry() {
+        let b = Breaker::new(true, 3, 30);
+        // put real state in the map so recovery is observable, not vacuous
+        b.on_failure("m", 0);
+        b.on_failure("m", 0);
+        let inner = b
+            .inner
+            .clone()
+            .expect("an enabled breaker has a backing store");
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = inner.map.lock();
+            panic!("a transient panic while the breaker map is locked");
+        }));
+        assert!(panicked.is_err(), "the test's own panic must have fired");
+
+        // the lock is usable again and the pre-panic state is intact: the third
+        // consecutive failure still trips the target, exactly as before
+        assert!(b.allows("m", 0));
+        assert!(b.on_failure("m", 0));
+        assert!(!b.allows("m", 0));
+        // and an unrelated target is still admitted rather than panicking
+        assert!(b.allows("other", 7));
+    }
 
     #[test]
     fn default_registry_is_inert() {
