@@ -2823,6 +2823,24 @@ impl RouteRepo<'_> {
         .map_err(store_err)
     }
 
+    /// Change the balancing strategy of an existing route.
+    ///
+    /// The bootstrap import needs this to make a re-imported `rolter.toml` the
+    /// desired state rather than a first-write-wins snapshot (#927); the value
+    /// is constrained by the database to the strategies a migration allows.
+    pub async fn set_strategy(&self, id: Uuid, strategy: &str) -> Result<Route> {
+        sqlx::query_as(
+            "update routes set strategy = $2 where id = $1
+             returning id, project_id, model, strategy, enabled, params, param_policy, advanced, created_at",
+        )
+        .bind(id)
+        .bind(strategy)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("route {id}")))
+    }
+
     pub async fn set_enabled(&self, id: Uuid, enabled: bool) -> Result<Route> {
         sqlx::query_as(
             "update routes set enabled = $2 where id = $1
@@ -2945,6 +2963,24 @@ impl RouteTargetRepo<'_> {
         .fetch_one(self.0)
         .await
         .map_err(store_err)
+    }
+
+    /// Change the weight of an existing target.
+    ///
+    /// The bootstrap import needs this so a re-imported `rolter.toml` whose
+    /// weights were edited actually applies them (#927), instead of matching
+    /// the target as "already there" and moving on.
+    pub async fn set_weight(&self, id: Uuid, weight: i32) -> Result<RouteTarget> {
+        sqlx::query_as(
+            "update route_targets set weight = $2 where id = $1
+             returning id, route_id, provider_id, upstream_model, weight, created_at",
+        )
+        .bind(id)
+        .bind(weight)
+        .fetch_optional(self.0)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| Error::NotFound(format!("route target {id}")))
     }
 
     pub async fn delete(&self, id: Uuid) -> Result<()> {

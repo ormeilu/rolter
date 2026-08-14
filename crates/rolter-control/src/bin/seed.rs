@@ -2,8 +2,9 @@
 //!
 //! Idempotently creates an org (+ a `default`/`default` team/project), an
 //! optional admin user, and imports providers/routes from a bootstrap
-//! `rolter.toml`. Thin CLI wrapper over [`rolter_control::seed::seed`], which
-//! the unified launcher's `easy-up` subcommand reuses.
+//! `rolter.toml` — the import being an upsert, so the database ends up
+//! matching the file. Thin CLI wrapper over [`rolter_control::seed::seed`],
+//! which the unified launcher's `easy-up` subcommand reuses.
 
 use std::path::PathBuf;
 
@@ -28,7 +29,10 @@ struct Args {
     admin_email: Option<String>,
     #[arg(long)]
     admin_password: Option<String>,
-    /// bootstrap rolter.toml to import providers/routes from
+    /// bootstrap rolter.toml to import providers/routes from. The file is the
+    /// desired state: re-importing an edited file updates the rows it already
+    /// created. Never overwrites a credential sealed through the dashboard,
+    /// and never deletes rows the file no longer mentions
     #[arg(long)]
     import: Option<PathBuf>,
 }

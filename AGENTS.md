@@ -31,7 +31,7 @@ rolter is a high-performance OpenAI/Anthropic-compatible AI gateway and load bal
 - `cargo clippy --workspace --all-targets -- -D warnings` — lint (must be clean)
 - `cargo run -p rolter-gateway -- --config rolter.toml` — run the data plane (add `--snapshot-url http://control:4001/internal/snapshot` to hot-reload config from the control plane without a restart)
 - `cargo run -p rolter-control` — run the control plane + UI host (add `--database-url`/`ROLTER_DATABASE_URL` for the postgres-backed store, CRUD API and `/internal/snapshot`)
-- `cargo run -p rolter-store --features postgres --bin rolter-seed -- --import rolter.example.toml` — idempotent DB bootstrap (org/team/project, optional admin user, providers/routes)
+- `cargo run -p rolter-store --features postgres --bin rolter-seed -- --import rolter.example.toml` — idempotent DB bootstrap (org/team/project, optional admin user, providers/routes). The `--import` file is the **desired state**: re-importing an edited file updates the rows it already created, so the database ends up matching the file. It never overwrites a credential sealed through the dashboard, never changes a provider's slug, and never deletes rows the file no longer mentions
 - `cd ui && bun install` then `bun run dev` / `bun run test` / `bun run build` — UI deps, dev server, unit tests (`bun test src`), production build
 - `docker compose -f docker/docker-compose.yml up -d` — bring up Postgres, Redis, ClickHouse and rolter
 

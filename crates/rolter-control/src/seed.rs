@@ -3,7 +3,26 @@
 //!
 //! [`seed`] creates an org (+ a `default`/`default` team/project), an optional
 //! admin user, and imports providers/routes from a bootstrap `rolter.toml`.
-//! Every step checks for an existing row first, so re-running is a no-op.
+//! The org, team, project and admin steps check for an existing row first, so
+//! re-running creates nothing twice.
+//!
+//! The bootstrap-toml import is an **upsert**: the file is the desired state,
+//! so a re-import of an edited file applies the edits rather than skipping the
+//! rows it already created (#927). "Idempotent" used to mean only that
+//! re-running was safe — an operator who added a missing `api_key_env` and
+//! re-imported got `imported provider` in the log and no change in the
+//! database, and found out through 401s from the upstream that read as a bad
+//! key rather than as config that was never applied.
+//!
+//! Two things are deliberately left alone by a re-import:
+//!
+//! - the **sealed credential** in `provider_keys`. A key rotated through the
+//!   dashboard outranks `api_key_env` in the snapshot's precedence, and a
+//!   stale value in a file must not clobber it.
+//! - a provider's **slug**, its stable identity once assigned.
+//!
+//! Rows present in the database but absent from the file are not deleted: the
+//! file is the desired state for what it names, not an exhaustive inventory.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -151,6 +170,18 @@ async fn import_bootstrap_toml(
     path: &Path,
 ) -> anyhow::Result<()> {
     let config = GatewayConfig::load(path)?;
+    import_config(pool, org_id, project_id, &config).await
+}
+
+/// Upsert an already-parsed bootstrap config. Split out from
+/// [`import_bootstrap_toml`] so the desired-state behaviour can be tested
+/// without going through a file on disk.
+async fn import_config(
+    pool: &PgPool,
+    org_id: Uuid,
+    project_id: Uuid,
+    config: &GatewayConfig,
+) -> anyhow::Result<()> {
     let providers = ProviderRepo(pool);
     let routes = RouteRepo(pool);
     let targets = RouteTargetRepo(pool);
@@ -213,10 +244,42 @@ async fn import_bootstrap_toml(
             .into_iter()
             .find(|row| row.name == p.name);
         let row = match existing {
-            Some(row) => row,
+            // the file is the desired state, so an existing row is brought in
+            // line with it rather than left alone (#927). the sealed credential
+            // in `provider_keys` is never touched: a key rotated through the
+            // dashboard outranks `api_key_env` in the snapshot's precedence and
+            // must not be clobbered by a stale value from a file
+            Some(row) => {
+                let unchanged = row.kind == kind
+                    && row.api_base == p.api_base
+                    && row.api_key_env == p.api_key_env
+                    && row.egress_proxy == p.egress_proxy
+                    && row.egress_proxies.0 == p.egress_proxies;
+                if unchanged {
+                    tracing::info!(provider = %p.name, "provider unchanged");
+                    row
+                } else {
+                    let updated = providers
+                        .update(
+                            row.id,
+                            // slug is immutable once assigned; renaming the
+                            // stable identity of a provider is not something a
+                            // re-import should do behind the operator's back
+                            None,
+                            Some(kind),
+                            Some(&p.api_base),
+                            Some(p.api_key_env.as_deref()),
+                            Some(p.egress_proxy.as_deref()),
+                            Some(&p.egress_proxies),
+                        )
+                        .await?;
+                    tracing::info!(provider = %p.name, "updated provider from file");
+                    updated
+                }
+            }
             None => {
                 let slug = p.slug.clone().unwrap_or_else(|| slugify(&p.name));
-                providers
+                let created = providers
                     .create(
                         org_id,
                         &p.name,
@@ -227,11 +290,12 @@ async fn import_bootstrap_toml(
                         p.egress_proxy.as_deref(),
                         &p.egress_proxies,
                     )
-                    .await?
+                    .await?;
+                tracing::info!(provider = %p.name, "created provider");
+                created
             }
         };
         provider_ids.insert(p.name.clone(), row.id);
-        tracing::info!(provider = %p.name, "imported provider");
     }
 
     for r in &config.routes {
@@ -257,8 +321,25 @@ async fn import_bootstrap_toml(
             .into_iter()
             .find(|row| row.model == r.model);
         let route_row = match existing {
-            Some(row) => row,
-            None => routes.create(project_id, &r.model, strategy).await?,
+            Some(row) if row.strategy == strategy => {
+                tracing::info!(model = %r.model, "route unchanged");
+                row
+            }
+            Some(row) => {
+                let updated = routes.set_strategy(row.id, strategy).await?;
+                tracing::info!(
+                    model = %r.model,
+                    from = %row.strategy,
+                    to = strategy,
+                    "updated route strategy from file"
+                );
+                updated
+            }
+            None => {
+                let created = routes.create(project_id, &r.model, strategy).await?;
+                tracing::info!(model = %r.model, "created route");
+                created
+            }
         };
 
         // round-trip the admin param defaults + override policy (idempotent:
@@ -285,25 +366,44 @@ async fn import_bootstrap_toml(
                 );
                 continue;
             };
-            let already_imported = existing_targets.iter().any(|row| {
+            // provider + upstream model is the natural key; the weight is the
+            // part an operator edits and re-imports, so a match updates it
+            // rather than counting as "already there" (#927)
+            let existing_target = existing_targets.iter().find(|row| {
                 row.provider_id == provider_id
                     && row.upstream_model.as_deref() == t.model.as_deref()
             });
-            if already_imported {
-                continue;
+            match existing_target {
+                Some(row) if row.weight == t.weight as i32 => continue,
+                Some(row) => {
+                    targets.set_weight(row.id, t.weight as i32).await?;
+                    tracing::info!(
+                        model = %r.model,
+                        target_provider = %t.provider,
+                        from = row.weight,
+                        to = t.weight,
+                        "updated target weight from file"
+                    );
+                }
+                None => {
+                    targets
+                        .create(
+                            route_row.id,
+                            provider_id,
+                            t.model.as_deref(),
+                            t.weight as i32,
+                        )
+                        .await?;
+                    tracing::info!(
+                        model = %r.model,
+                        target_provider = %t.provider,
+                        "created route target"
+                    );
+                }
             }
-            targets
-                .create(
-                    route_row.id,
-                    provider_id,
-                    t.model.as_deref(),
-                    t.weight as i32,
-                )
-                .await?;
         }
-        tracing::info!(model = %r.model, "imported route");
     }
-    import_prompt_templates(pool, org_id, project_id, &config).await?;
+    import_prompt_templates(pool, org_id, project_id, config).await?;
 
     Ok(())
 }
@@ -459,10 +559,11 @@ async fn import_prompt_template(
 
 #[cfg(test)]
 mod tests {
-    use super::{import_prompt_template, slugify};
+    use super::{import_bootstrap_toml, import_prompt_template, slugify};
     use rolter_core::{
         Decorator, DecoratorPosition, DecoratorRole, PromptTemplate, TemplateVariable,
     };
+    use rolter_store::postgres::repo::{ProviderRepo, RouteRepo, RouteTargetRepo};
     use std::collections::HashMap;
     use uuid::Uuid;
 
@@ -471,6 +572,204 @@ mod tests {
         assert_eq!(slugify("Default"), "default");
         assert_eq!(slugify("Acme Corp!"), "acme-corp");
         assert_eq!(slugify("  multi  space "), "multi-space");
+    }
+
+    /// #927: a re-import of an edited file used to log `imported provider` and
+    /// change nothing. The operator's next signal was a 401 from the upstream,
+    /// which reads as a bad key rather than as config that was never applied.
+    #[tokio::test]
+    async fn reimporting_an_edited_file_applies_the_edits() {
+        let Some(pool) = scratch_db("reimport").await else {
+            return;
+        };
+        let (org_id, project_id) = bootstrap_org(&pool).await;
+
+        let dir = tempdir("reimport");
+        let path = dir.join("rolter.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[providers]]
+name = "tei-embed-02"
+kind = "tei"
+api_base = "http://tei:80"
+
+[[routes]]
+model = "embed"
+strategy = "round_robin"
+[[routes.targets]]
+provider = "tei-embed-02"
+weight = 1
+"#,
+        )
+        .unwrap();
+        import_bootstrap_toml(&pool, org_id, project_id, &path)
+            .await
+            .unwrap();
+
+        // the exact edit from the issue: an api_key_env that was missing, plus
+        // a corrected base, a different strategy and a re-weighted target
+        std::fs::write(
+            &path,
+            r#"
+[[providers]]
+name = "tei-embed-02"
+kind = "tei"
+api_base = "http://tei:8080"
+api_key_env = "TEI_KEY"
+
+[[routes]]
+model = "embed"
+strategy = "power_of_two"
+[[routes.targets]]
+provider = "tei-embed-02"
+weight = 7
+"#,
+        )
+        .unwrap();
+        import_bootstrap_toml(&pool, org_id, project_id, &path)
+            .await
+            .unwrap();
+
+        let provider = ProviderRepo(&pool)
+            .list(org_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|row| row.name == "tei-embed-02")
+            .expect("the provider must still be there");
+        assert_eq!(
+            provider.api_key_env.as_deref(),
+            Some("TEI_KEY"),
+            "the added api_key_env was not applied"
+        );
+        assert_eq!(provider.api_base, "http://tei:8080");
+
+        let route = RouteRepo(&pool)
+            .list(project_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|row| row.model == "embed")
+            .expect("the route must still be there");
+        assert_eq!(route.strategy, "power_of_two");
+
+        let targets = RouteTargetRepo(&pool).list(route.id).await.unwrap();
+        assert_eq!(targets.len(), 1, "the target was duplicated, not updated");
+        assert_eq!(targets[0].weight, 7);
+
+        // and nothing was duplicated along the way
+        let providers = ProviderRepo(&pool).list(org_id).await.unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(RouteRepo(&pool).list(project_id).await.unwrap().len(), 1);
+    }
+
+    /// The upsert must not reach into `provider_keys`: a key rotated through
+    /// the dashboard outranks `api_key_env`, and a stale file must not
+    /// clobber it.
+    #[tokio::test]
+    async fn a_reimport_leaves_a_dashboard_sealed_credential_alone() {
+        let Some(pool) = scratch_db("sealed").await else {
+            return;
+        };
+        let (org_id, project_id) = bootstrap_org(&pool).await;
+
+        let dir = tempdir("sealed");
+        let path = dir.join("rolter.toml");
+        let without_env = r#"
+[[providers]]
+name = "openai-primary"
+kind = "openai"
+api_base = "https://api.openai.com"
+"#;
+        std::fs::write(&path, without_env).unwrap();
+        import_bootstrap_toml(&pool, org_id, project_id, &path)
+            .await
+            .unwrap();
+
+        let provider_id = ProviderRepo(&pool).list(org_id).await.unwrap()[0].id;
+        // stand in for a rotation through the dashboard
+        sqlx::query(
+            "insert into provider_keys (provider_id, ciphertext, nonce) values ($1, $2, $3)",
+        )
+        .bind(provider_id)
+        .bind(b"sealed-by-the-dashboard".to_vec())
+        .bind(b"nonce".to_vec())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        std::fs::write(
+            &path,
+            r#"
+[[providers]]
+name = "openai-primary"
+kind = "openai"
+api_base = "https://api.openai.com"
+api_key_env = "OPENAI_API_KEY"
+"#,
+        )
+        .unwrap();
+        import_bootstrap_toml(&pool, org_id, project_id, &path)
+            .await
+            .unwrap();
+
+        let sealed: Vec<u8> =
+            sqlx::query_scalar("select ciphertext from provider_keys where provider_id = $1")
+                .bind(provider_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            sealed, b"sealed-by-the-dashboard",
+            "the re-import overwrote a rotated credential"
+        );
+    }
+
+    /// A scratch directory for the bootstrap toml a test writes.
+    fn tempdir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rolter-seed-{label}-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A schema of its own per test: the coverage job runs plain `cargo test`
+    /// against a shared database and would otherwise race.
+    async fn scratch_db(label: &str) -> Option<sqlx::PgPool> {
+        let url = std::env::var("ROLTER_TEST_DATABASE_URL").ok().or_else(|| {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            None
+        })?;
+        let schema = format!("seed_{label}_{}", Uuid::new_v4().simple());
+        let admin = rolter_store::postgres::connect(&url).await.unwrap();
+        sqlx::query(&format!("create schema {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let separator = if url.contains('?') { '&' } else { '?' };
+        let scoped = format!("{url}{separator}options=-c%20search_path%3D{schema}");
+        let pool = rolter_store::postgres::connect(&scoped).await.unwrap();
+        rolter_store::postgres::run_migrations(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    async fn bootstrap_org(pool: &sqlx::PgPool) -> (Uuid, Uuid) {
+        let org_id: Uuid = sqlx::query_scalar(
+            "insert into orgs (name, slug) values ('acme', 'acme') returning id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let team = super::TeamRepo(pool)
+            .create(org_id, "default")
+            .await
+            .unwrap();
+        let project = super::ProjectRepo(pool)
+            .create(team.id, "default")
+            .await
+            .unwrap();
+        (org_id, project.id)
     }
 
     #[tokio::test]
