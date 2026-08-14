@@ -456,6 +456,19 @@ disabled = false # revoke without deleting
 # threshold = 0.92                   # cosine similarity required for a hit
 # max_candidates = 256               # bounded recent-entry scan per route/key
 
+# Post-response usage accounting: adding a request's cost to its budget counters
+# and its tokens to its rate-limit windows. Both write to Redis, so both run off
+# the response path — through a bounded queue, not an unbounded detached task per
+# request, so a slow counter store sheds records instead of accumulating them.
+# Overflow is counted by rolter_usage_records_dropped_total; depth is reported by
+# rolter_usage_records_queued. Inert without a Redis url.
+[usage_recording]
+# records waiting to be written before new ones are dropped
+# queue_capacity = 10000
+# concurrent writers draining the queue; each record is one Redis round trip, so
+# a single consumer would serialise them
+# workers = 4
+
 [logging]
 # request logs are written asynchronously in batches, off the request hot path;
 # logging is disabled entirely when clickhouse_url is unset

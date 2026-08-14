@@ -176,6 +176,20 @@ Both histograms are labelled `{model="..."}` so you can track latency per model 
     The current configuration snapshot version. This increments each time Rolter successfully reloads its configuration. Alert on this staying flat if you expect regular updates, or spiking unexpectedly.
   </Accordion>
 
+  <Accordion title="rolter_usage_records_dropped_total">
+    **Type:** Counter
+
+    Budget-spend and rate-limit token records dropped because the post-response recording queue was full. Each drop means one request's spend is missing from its budget counters and its tokens are missing from its `tpm` windows.
+
+    The queue is bounded on purpose: recording writes to Redis, and an unbounded backlog would grow worst exactly when the gateway is under stress. A non-zero rate here says the counter store is not keeping up — check Redis latency first, then raise `[usage_recording] workers` or `queue_capacity`. Sustained drops mean budget enforcement is under-counting and will let spend through.
+  </Accordion>
+
+  <Accordion title="rolter_usage_records_queued">
+    **Type:** Gauge
+
+    Usage records waiting to be written to the counter store, sampled at scrape time. This is the early-warning signal for the counter above: a queue that sits consistently deep is one traffic spike away from dropping.
+  </Accordion>
+
   <Accordion title="Additional event counters">
     **Type:** Counter (all)
 

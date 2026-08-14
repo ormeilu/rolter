@@ -691,6 +691,19 @@ impl AppState {
             Some(url) => (BudgetEnforcer::new(url), RateLimiter::new(url)),
             None => (BudgetEnforcer::disabled(), RateLimiter::disabled()),
         };
+        // budget spend and rate-limit tokens are recorded after the response,
+        // through a bounded queue rather than a detached task per request, so a
+        // slow counter store sheds records instead of accumulating them (#1051).
+        // Only spawned with a counter store behind it: without redis there is
+        // nothing to record, and an inert sink costs no workers
+        let log = match redis_url {
+            Some(_) => log.with_usage_recorders(crate::usage_recording::UsageRecorderSink::spawn(
+                config.usage_recording.queue_capacity,
+                config.usage_recording.workers,
+                metrics.clone(),
+            )),
+            None => log,
+        };
         // the cache shares the same Redis; keep the client even when the global
         // switch is currently off so a hot-reload can flip `[cache] enabled`
         // without rebuilding state (the snapshot's `cache.enabled` gates use)

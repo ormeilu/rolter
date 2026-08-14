@@ -597,20 +597,27 @@ impl UsageLoggingStream {
             .unwrap_or(0.0);
         log.latency_ms = self.started.elapsed().as_millis() as u32;
         log.ttft_ms = self.ttft_ms.unwrap_or(log.latency_ms);
-        // add this request's cost to its budget counters (async, fire-and-forget
-        // so finalize stays sync and never blocks the response path)
+        // add this request's cost to its budget counters and its tokens to its
+        // rate-limit windows. Both write to redis, so both go onto a bounded
+        // queue rather than running inline — `finalize` stays sync and never
+        // blocks the response path. Unlike the detached task this replaces, the
+        // queue has a depth: when the counter store stalls, records are dropped
+        // and counted instead of piling up without limit (#1051)
         if let Some(recorder) = self.recorder.take() {
             let cost = log.cost_usd;
             if cost > 0.0 {
-                tokio::spawn(async move { recorder.record(cost).await });
+                self.sink
+                    .usage_recorders()
+                    .record(crate::usage_recording::UsageRecord::Spend { recorder, cost });
             }
         }
-        // add this request's tokens to its rate-limit windows (async, same as
-        // above); uses total tokens so a single big request counts against tpm
-        if let Some(token_recorder) = self.token_recorder.take() {
+        // uses total tokens so a single big request counts against tpm
+        if let Some(recorder) = self.token_recorder.take() {
             let tokens = log.total_tokens as u64;
             if tokens > 0 {
-                tokio::spawn(async move { token_recorder.record(tokens).await });
+                self.sink
+                    .usage_recorders()
+                    .record(crate::usage_recording::UsageRecord::Tokens { recorder, tokens });
             }
         }
         self.sink.log(log);
@@ -696,6 +703,9 @@ pub struct LogSink {
     // the passive funnel also feeds provider health events (ROL-197); disabled
     // when no clickhouse url is set
     health_events: crate::health_events::HealthEventSink,
+    /// bounded sink for post-response budget/rate-limit recording; inert until
+    /// [`LogSink::with_usage_recorders`] attaches one
+    usage_recorders: crate::usage_recording::UsageRecorderSink,
 }
 
 impl LogSink {
@@ -706,6 +716,7 @@ impl LogSink {
             health_events: crate::health_events::HealthEventSink::disabled(metrics.clone()),
             metrics,
             usage_buffers: UsageBufferPool::default(),
+            usage_recorders: crate::usage_recording::UsageRecorderSink::default(),
         }
     }
 
@@ -714,6 +725,20 @@ impl LogSink {
     pub fn with_health_events(mut self, sink: crate::health_events::HealthEventSink) -> Self {
         self.health_events = sink;
         self
+    }
+
+    /// Attach the bounded sink that carries budget and rate-limit recording off
+    /// the response path. Composes with the constructors like the above; a sink
+    /// that is never attached leaves usage recording inert, which is what tests
+    /// and embedders get.
+    pub fn with_usage_recorders(mut self, sink: crate::usage_recording::UsageRecorderSink) -> Self {
+        self.usage_recorders = sink;
+        self
+    }
+
+    /// The usage-recording sink, for the response path and for metrics.
+    pub fn usage_recorders(&self) -> &crate::usage_recording::UsageRecorderSink {
+        &self.usage_recorders
     }
 
     /// Build a sink and spawn the background batch writer targeting the
@@ -747,6 +772,7 @@ impl LogSink {
             health_events: crate::health_events::HealthEventSink::disabled(metrics.clone()),
             metrics,
             usage_buffers: UsageBufferPool::default(),
+            usage_recorders: crate::usage_recording::UsageRecorderSink::default(),
         }
     }
 

@@ -43,6 +43,13 @@ pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
 
 /// Prometheus metrics endpoint.
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    // sampled here rather than maintained on the response path: queue depth is
+    // a scrape-time question, and keeping it live would put a counter update on
+    // every request to answer it (#1051)
+    state.metrics.usage_records_queued.store(
+        state.log.usage_recorders().queued() as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let mut body = state.metrics.render();
     // scraped upstream engine series (#850), one label set per provider
     state.upstream_metrics.render(&mut body);
