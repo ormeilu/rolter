@@ -82,7 +82,7 @@ struct Shared {
 
 /// Shared, cheaply-cloneable circuit-breaker registry. A `None` inner is a
 /// permanently inert breaker (used by embedders/tests that never reload); a
-/// `Some` inner can be enabled, disabled and re-tuned live via [`reconfigure`].
+/// `Some` inner can be enabled, disabled and re-tuned live via [`Breaker::reconfigure`].
 /// While disabled it admits every target and records nothing.
 #[derive(Clone, Default)]
 pub struct Breaker {
