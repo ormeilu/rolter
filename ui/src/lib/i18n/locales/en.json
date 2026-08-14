@@ -273,6 +273,11 @@
     },
     "pricing": {
       "unconvertible": "Priced in {{code}}, which has no conversion rate — this model's spend is missing from {{base}} totals and budgets."
+    },
+    "playground": {
+      "groupRoutes": "Routes",
+      "modelsNeedKey": "Showing configured routes. Set a virtual key above to list what the gateway actually serves — provider-pinned and provider-group addresses only appear in the gateway's list.",
+      "modelsUnreachable": "Could not read the gateway's model list with this key, so configured routes are shown instead. Provider-pinned and provider-group addresses are missing from this list."
     }
   },
   "playground": {
