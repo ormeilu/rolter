@@ -12,6 +12,13 @@
 //! changes propagate immediately instead of waiting out the poll interval.
 //! Redis being down never breaks config propagation — the subscriber
 //! reconnects with backoff while interval polling keeps working.
+//!
+//! Which of the two is in effect is logged at startup. Without a redis url the
+//! gateway is polling-only, and a write can take up to the poll interval to
+//! take effect: a virtual key minted in the dashboard is rejected until then,
+//! which is indistinguishable from a wrong key (#933). That is a supported way
+//! to run, but it is stated rather than left to be inferred from a key that
+//! "does not work yet".
 
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
@@ -52,8 +59,25 @@ pub fn spawn(
     admin_token: Option<String>,
 ) {
     let wakeup = Arc::new(Notify::new());
-    if let Some(url) = redis_url {
-        tokio::spawn(subscribe(url, Arc::clone(&wakeup)));
+    // which transport is in effect decides whether a config change lands on the
+    // next request or up to `period` later, and that difference is what an
+    // operator experiences as a brand-new virtual key being rejected as if it
+    // were a wrong one (#933). Polling-only is a supported deployment, but it
+    // has to be stated rather than inferred from a key that "does not work yet"
+    match redis_url {
+        Some(url) => {
+            tracing::info!(
+                poll_interval_secs = period.as_secs(),
+                "config propagation: redis pub/sub + interval polling (changes apply immediately)"
+            );
+            tokio::spawn(subscribe(url, Arc::clone(&wakeup)));
+        }
+        None => tracing::warn!(
+            poll_interval_secs = period.as_secs(),
+            "config propagation: interval polling only — no redis url configured, so a new \
+             virtual key, provider or route can take up to the poll interval to take effect \
+             and will be rejected until then"
+        ),
     }
     tokio::spawn(async move {
         // a dedicated short-timeout client so a hung control plane can't wedge
