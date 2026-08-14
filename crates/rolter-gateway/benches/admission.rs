@@ -63,11 +63,13 @@ fn breaker_admission(c: &mut Criterion) {
     // a gateway fronting many routes: the model map is wide, so the model-level
     // lookup is doing real work rather than hitting a single-entry map
     group.bench_function("cold_wide_fleet", |b| {
-        let breaker = Breaker::new(true, 5, 30);
+        // a high threshold so each model holds a live *closed* entry rather
+        // than tripping open — and note a recovery would release the entry
+        // outright, which would leave this measuring an empty map
+        let breaker = Breaker::new(true, u32::MAX, 30);
         let models: Vec<String> = (0..64).map(|i| format!("{MODEL}-{i}")).collect();
         for m in &models {
             breaker.on_failure(m, 0);
-            breaker.on_success(m, 0);
         }
         b.iter(|| {
             for m in &models {

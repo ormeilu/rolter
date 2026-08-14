@@ -825,6 +825,17 @@ impl AppState {
             config.breaker.failure_threshold,
             config.breaker.open_secs,
         );
+        // a reload is where models and targets get retired, and the gateway
+        // applies one without restarting — so it is also where the breaker
+        // sheds entries nothing routes to any more. Open and half-open targets
+        // are kept: they are under probe and forgetting one would re-admit
+        // traffic to an upstream that is still down (#1053)
+        self.breaker
+            .sweep(breaker_idle_ttl(config.breaker.open_secs));
+        self.metrics.breaker_entries.store(
+            self.breaker.len() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         self.metrics
             .config_version
             .store(version, std::sync::atomic::Ordering::Relaxed);
@@ -832,6 +843,15 @@ impl AppState {
             .config_reloads_total
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
+}
+
+/// How long a closed breaker entry may sit with an unmoved failure count before
+/// a reload retires it. Scaled off the configured open window so a deployment
+/// that trips slowly is not swept out from under itself, with a floor so the
+/// common case of a short window still keeps a meaningful history.
+fn breaker_idle_ttl(open_secs: u64) -> std::time::Duration {
+    const FLOOR: std::time::Duration = std::time::Duration::from_secs(900);
+    std::time::Duration::from_secs(open_secs.saturating_mul(10)).max(FLOOR)
 }
 
 #[cfg(test)]
@@ -982,6 +1002,132 @@ mod tests {
         config.breaker.enabled = false;
         state.reload(&config, 2);
         assert!(state.breaker.allows("m", 0));
+    }
+
+    /// The gateway hot-reloads config without restarting, so a long-lived
+    /// process serves many config generations. Entries for models those reloads
+    /// retired must not accumulate for the process lifetime (#1053).
+    #[test]
+    fn breaker_entries_do_not_accumulate_across_reloads_that_retire_models() {
+        let mut config = GatewayConfig::default();
+        config.breaker.enabled = true;
+        config.breaker.failure_threshold = 3;
+        config.breaker.open_secs = 30;
+        let state = AppState::with_logging(&config, None);
+
+        for generation in 0..50u64 {
+            // each generation routes to its own model, which the next one retires
+            let model = format!("retired-model-{generation}");
+            // a partial failure count: below threshold, so the target stays
+            // closed and is exactly the entry that used to linger forever
+            state.breaker.on_failure(&model, 0);
+            state.breaker.on_failure(&model, 1);
+            // a sweep only retires entries whose failure count has not moved
+            // for the idle window, so drive it by sweeping with a zero window —
+            // the reload path uses the real one
+            state.breaker.sweep(std::time::Duration::ZERO);
+            state.reload(&config, generation + 1);
+            assert!(
+                state.breaker.is_empty(),
+                "generation {generation} left {} entries behind",
+                state.breaker.len()
+            );
+        }
+    }
+
+    /// A target under probe must survive the sweep: forgetting an open breaker
+    /// would silently re-admit traffic to an upstream that is still down.
+    #[test]
+    fn a_sweep_never_forgets_an_open_or_half_open_target() {
+        let mut config = GatewayConfig::default();
+        config.breaker.enabled = true;
+        config.breaker.failure_threshold = 1;
+        config.breaker.open_secs = 3600;
+        let state = AppState::with_logging(&config, None);
+
+        // "open": tripped with a long window still to run
+        assert!(state.breaker.on_failure("open-model", 0));
+        assert!(!state.breaker.allows("open-model", 0));
+
+        // "half-open": tripped with a window that has already elapsed, then
+        // probed, which moves it to half-open
+        state.breaker.reconfigure(true, 1, /* open_secs */ 0);
+        assert!(state.breaker.on_failure("probing-model", 0));
+        assert!(
+            state.breaker.allows("probing-model", 0),
+            "the elapsed window admits a half-open probe"
+        );
+        state.breaker.reconfigure(true, 1, 3600);
+
+        // a closed entry alongside them, which *is* eligible
+        state.breaker.reconfigure(true, 5, 3600);
+        state.breaker.on_failure("healthy-model", 0);
+
+        state.breaker.sweep(std::time::Duration::ZERO);
+
+        assert!(
+            !state.breaker.allows("open-model", 0),
+            "the open target must still be skipped after a sweep"
+        );
+        assert!(
+            state.breaker.allows("probing-model", 0),
+            "the half-open target is admitted, but must still hold its entry"
+        );
+        // a failure on the half-open target re-opens it, which is only possible
+        // if the sweep kept its phase
+        state.breaker.reconfigure(true, 5, 3600);
+        assert!(
+            state.breaker.on_failure("probing-model", 0),
+            "a half-open target that was forgotten would need 5 failures to trip"
+        );
+        assert_eq!(
+            state.breaker.len(),
+            2,
+            "only the closed entry should have been retired"
+        );
+    }
+
+    /// The gauge is what makes registry growth observable rather than inferred.
+    #[test]
+    fn reload_publishes_the_breaker_entry_count() {
+        let mut config = GatewayConfig::default();
+        config.breaker.enabled = true;
+        config.breaker.failure_threshold = 1;
+        config.breaker.open_secs = 3600;
+        let state = AppState::with_logging(&config, None);
+        let gauge = || {
+            state
+                .metrics
+                .breaker_entries
+                .load(std::sync::atomic::Ordering::Relaxed)
+        };
+
+        state.reload(&config, 1);
+        assert_eq!(gauge(), 0);
+
+        state.breaker.on_failure("m", 0);
+        state.breaker.on_failure("m", 1);
+        state.reload(&config, 2);
+        assert_eq!(gauge(), 2, "two tripped targets should be reported");
+
+        // recovery gives the slots back, and the next reload says so
+        state.breaker.on_success("m", 0);
+        state.breaker.on_success("m", 1);
+        state.reload(&config, 3);
+        assert_eq!(gauge(), 0);
+    }
+
+    /// The idle window scales off the configured open window, with a floor.
+    #[test]
+    fn breaker_idle_ttl_scales_with_the_open_window() {
+        use std::time::Duration;
+        // a short window still keeps a meaningful history
+        assert_eq!(breaker_idle_ttl(0), Duration::from_secs(900));
+        assert_eq!(breaker_idle_ttl(30), Duration::from_secs(900));
+        // a slow-tripping deployment is not swept out from under itself
+        assert_eq!(breaker_idle_ttl(600), Duration::from_secs(6000));
+        // and an absurd window cannot overflow into a tiny one
+        assert!(breaker_idle_ttl(u64::MAX) >= Duration::from_secs(900));
     }
 
     fn provider_cfg(name: &str, slug: Option<&str>) -> ProviderConfig {

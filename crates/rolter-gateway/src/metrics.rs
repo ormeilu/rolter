@@ -107,6 +107,9 @@ pub struct Metrics {
     pub config_reloads_total: AtomicU64,
     /// failed snapshot fetches/parses since start
     pub config_reload_failures_total: AtomicU64,
+    /// live per-(model, target) circuit-breaker entries after the last reload,
+    /// so registry growth across config generations is observable (#1053)
+    pub breaker_entries: AtomicU64,
     /// request-log rows successfully written to clickhouse
     pub logs_written_total: AtomicU64,
     /// request-log rows dropped (queue full or write failed)
@@ -398,6 +401,12 @@ impl Metrics {
                 name: "rolter_config_reload_failures_total",
                 help: "failed config snapshot fetches",
                 value: self.config_reload_failures_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "gauge",
+                name: "rolter_breaker_entries",
+                help: "per-target circuit-breaker entries held, measured at the last config reload",
+                value: self.breaker_entries.load(Relaxed),
             },
             Scalar {
                 kind: "counter",

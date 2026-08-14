@@ -190,6 +190,14 @@ Both histograms are labelled `{model="..."}` so you can track latency per model 
     Usage records waiting to be written to the counter store, sampled at scrape time. This is the early-warning signal for the counter above: a queue that sits consistently deep is one traffic spike away from dropping.
   </Accordion>
 
+  <Accordion title="rolter_breaker_entries">
+    **Type:** Gauge
+
+    Live per-`(model, target)` circuit-breaker entries the gateway is holding, sampled at the last configuration reload.
+
+    The gateway hot-reloads configuration without restarting, so a long-lived process serves many configuration generations. Each reload retires entries for targets nothing routes to any more; targets that are currently open or half-open are kept, because forgetting one would silently re-admit traffic to an upstream that is still down. In a healthy fleet this gauge sits at or near zero — a recovered target releases its entry — and rises only while targets are actually failing. A value that climbs steadily across reloads and never falls is the signal that something is retaining state it should not.
+  </Accordion>
+
   <Accordion title="Additional event counters">
     **Type:** Counter (all)
 
