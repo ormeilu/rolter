@@ -11,6 +11,7 @@ import {
   Upload,
 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { CopyAsCodeButton } from "@/components/CodeSnippetDialog";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +49,20 @@ import {
 // default for every modality in local dev.
 const FAKE = "fake-llm";
 
+/** One selectable address, with whatever the gateway said owns it. */
+export interface ModelOption {
+  id: string;
+  /** `owned_by` from `/v1/models`; absent when the list came from routes */
+  ownedBy?: string;
+}
+
+/**
+ * Where the picker's contents came from. The distinction matters because the
+ * two sources do not list the same things, and quietly swapping one for the
+ * other is what #946 is about.
+ */
+export type ModelSource = "gateway" | "no-key" | "unreachable";
+
 /**
  * Every id the gateway will actually accept.
  *
@@ -56,12 +71,13 @@ const FAKE = "fake-llm";
  * addresses, so listing routes alone left a provider group impossible to select
  * here — on the one screen whose job is to send it a request (#938).
  *
- * The gateway call needs a virtual key, so the control-plane list is the
- * fallback until one is set. That keeps the picker populated for someone who
- * has not filled in the key bar yet, and it degrades to exactly the old
- * behaviour rather than to an empty dropdown.
+ * The gateway call needs a virtual key. Without one — or with one the gateway
+ * rejects — the route list is still shown, because an empty dropdown helps
+ * nobody, but the caller is told which source it got (#946). Silently
+ * substituting a strictly smaller list was the bug: a provider group simply
+ * vanished, with nothing on screen to say why.
  */
-function useModelNames(): string[] {
+function useModelCatalog(): { options: ModelOption[]; source: ModelSource } {
   const key = getPlaygroundKey();
   const routes = useQuery({ queryKey: ["models"], queryFn: fetchModels });
   const gateway = useQuery({
@@ -71,10 +87,27 @@ function useModelNames(): string[] {
     retry: false,
   });
 
-  const names = gateway.data
-    ? gateway.data.map((m) => m.id)
-    : (routes.data ?? []).map((m) => m.model);
-  return names.includes(FAKE) ? names : [FAKE, ...names];
+  const source: ModelSource = gateway.data
+    ? "gateway"
+    : key
+      ? "unreachable"
+      : "no-key";
+
+  const options: ModelOption[] = gateway.data
+    ? gateway.data.map((m) => ({ id: m.id, ownedBy: m.owned_by }))
+    : (routes.data ?? []).map((m) => ({ id: m.model }));
+
+  // the built-in always works, so it stays selectable whatever the source
+  const withFake = options.some((o) => o.id === FAKE)
+    ? options
+    : [{ id: FAKE, ownedBy: "rolter" }, ...options];
+  return { options: withFake, source };
+}
+
+/** Routes have bare ids; pins and groups are addressed `owner/model`. */
+function groupLabel(option: ModelOption, routesLabel: string): string {
+  if (!option.id.includes("/")) return routesLabel;
+  return option.ownedBy ?? option.id.split("/")[0];
 }
 
 function ModelSelect({
@@ -83,23 +116,62 @@ function ModelSelect({
   onChange,
   className,
 }: {
-  models: string[];
+  models: ModelOption[];
   value: string;
   onChange: (v: string) => void;
   className?: string;
 }) {
+  const { t } = useTranslation();
+  const routesLabel = t("pages.playground.groupRoutes");
+  // routes, provider pins and groups look identical as bare strings, so they
+  // are grouped by owner — `owned_by` already carries what is needed (#946)
+  const groups = new Map<string, ModelOption[]>();
+  for (const option of models) {
+    const label = groupLabel(option, routesLabel);
+    const bucket = groups.get(label);
+    if (bucket) bucket.push(option);
+    else groups.set(label, [option]);
+  }
+
   return (
     <Select
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className={className ?? "h-8 text-xs"}
     >
-      {models.map((m) => (
-        <option key={m} value={m}>
-          {m}
-        </option>
+      {[...groups].map(([label, options]) => (
+        <optgroup key={label} label={label}>
+          {options.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.id}
+            </option>
+          ))}
+        </optgroup>
       ))}
     </Select>
+  );
+}
+
+/**
+ * Says which list the picker is showing when it is not the gateway's.
+ *
+ * The fallback itself is fine — an empty dropdown would be worse — but it
+ * lists routes only, so provider pins and provider groups are missing from
+ * it. Without this notice they just vanish, which reads as the group not
+ * existing rather than as a list rolter could not fetch (#946).
+ */
+function ModelSourceNotice({ source }: { source: ModelSource }) {
+  const { t } = useTranslation();
+  if (source === "gateway") return null;
+  return (
+    <p
+      role="status"
+      className="rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] px-3 py-2 text-xs text-muted-foreground"
+    >
+      {source === "no-key"
+        ? t("pages.playground.modelsNeedKey")
+        : t("pages.playground.modelsUnreachable")}
+    </p>
   );
 }
 
@@ -154,7 +226,7 @@ function ChatColumn({
   removable,
   multimodal,
 }: {
-  models: string[];
+  models: ModelOption[];
   model: string;
   onModel: (v: string) => void;
   onRemove: () => void;
@@ -300,13 +372,14 @@ function ChatColumn({
   );
 }
 
-function ChatMode({ models }: { models: string[] }) {
+function ChatMode({ models }: { models: ModelOption[] }) {
   const [cols, setCols] = React.useState<{ model: string }[]>([{ model: FAKE }]);
   const [multimodal, setMultimodal] = React.useState(false);
   const compare = cols.length > 1;
   const setModel = (i: number, v: string) =>
     setCols((c) => c.map((col, j) => (j === i ? { model: v } : col)));
-  const add = () => setCols((c) => [...c, { model: models[c.length % models.length] }]);
+  const add = () =>
+    setCols((c) => [...c, { model: models[c.length % models.length]?.id ?? FAKE }]);
   const remove = (i: number) => setCols((c) => c.filter((_, j) => j !== i));
 
   return (
@@ -393,7 +466,7 @@ function pca2(vectors: number[][]): { x: number; y: number }[] {
   }));
 }
 
-function EmbeddingsMode({ models }: { models: string[] }) {
+function EmbeddingsMode({ models }: { models: ModelOption[] }) {
   const [model, setModel] = React.useState(FAKE);
   const [texts, setTexts] = React.useState<string[]>([
     "reset my password",
@@ -493,7 +566,7 @@ function EmbeddingsMode({ models }: { models: string[] }) {
 }
 
 /* ---------------- image ---------------- */
-function ImageMode({ models }: { models: string[] }) {
+function ImageMode({ models }: { models: ModelOption[] }) {
   const [model, setModel] = React.useState(FAKE);
   const [prompt, setPrompt] = React.useState(
     "A cross-stitch folk pattern of a fox, deep red thread on black linen",
@@ -573,7 +646,7 @@ function ImageMode({ models }: { models: string[] }) {
 }
 
 /* ---------------- audio ---------------- */
-function AudioMode({ models }: { models: string[] }) {
+function AudioMode({ models }: { models: ModelOption[] }) {
   const [tab, setTab] = React.useState("tts");
   const [model, setModel] = React.useState(FAKE);
   const [text, setText] = React.useState(
@@ -686,8 +759,8 @@ function AudioMode({ models }: { models: string[] }) {
 }
 
 /* ---------------- realtime (WebSocket) ---------------- */
-function RealtimeMode({ models }: { models: string[] }) {
-  const [model, setModel] = React.useState(models[0] ?? FAKE);
+function RealtimeMode({ models }: { models: ModelOption[] }) {
+  const [model, setModel] = React.useState(models[0]?.id ?? FAKE);
   const [live, setLive] = React.useState(false);
   const [log, setLog] = React.useState<string[]>([]);
   const [draft, setDraft] = React.useState("");
@@ -798,11 +871,12 @@ function RealtimeMode({ models }: { models: string[] }) {
 /* ---------------- page ---------------- */
 export default function Playground() {
   const [mode, setMode] = React.useState("chat");
-  const models = useModelNames();
+  const { options: models, source } = useModelCatalog();
 
   return (
     <div className="flex flex-col gap-5 p-[22px]">
       <KeyBar />
+      <ModelSourceNotice source={source} />
       <Tabs
         value={mode}
         onChange={setMode}
