@@ -1399,6 +1399,78 @@ mod tests {
         assert_eq!(current_version(&pool).await.unwrap(), v0 + 3);
     }
 
+    /// #933: a virtual key created in the dashboard was rejected for up to the
+    /// gateway's 5s poll interval, which is indistinguishable from a wrong key
+    /// — and since the Keys screen shows a key's full value only at creation,
+    /// the natural reaction (assume the copy went wrong, mint another) burns a
+    /// key the operator cannot recover on every retry.
+    ///
+    /// A key write has to bump `config_version` in the same transaction, the
+    /// way every other data-plane-visible table does, so the control plane has
+    /// a new version to publish on `rolter.config` and the gateway refetches
+    /// immediately instead of waiting for its poll. This pins both halves: the
+    /// bump, and the key being in the snapshot the bumped version serves.
+    #[tokio::test]
+    async fn a_virtual_key_write_bumps_the_version_and_lands_in_the_next_snapshot() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: ROLTER_TEST_DATABASE_URL not set");
+            return;
+        };
+        let pool = fresh_pool().await;
+        let (_user_id, project_id) = tenancy_with_owned_key(&pool, "unrelated-existing-key").await;
+
+        let before = current_version(&pool).await.unwrap();
+        sqlx::query(
+            "insert into virtual_keys (project_id, key_hash, key_prefix, name)
+             values ($1, 'brand-new-hash', 'sk-rolter-abc', 'minted-in-the-dashboard')",
+        )
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let after = current_version(&pool).await.unwrap();
+        assert!(
+            after > before,
+            "a virtual-key insert left config_version at {before}: the gateway has nothing to \
+             refetch on, so the key stays rejected until the next poll"
+        );
+
+        // the bump is only useful if the snapshot that version names actually
+        // carries the key — a version bump pointing at a snapshot without it
+        // would fail exactly the same way
+        let store = PostgresConfigStore::new(pool.clone());
+        let snapshot = store.load().await.unwrap();
+        assert!(
+            snapshot
+                .db_virtual_keys
+                .iter()
+                .any(|k| k.key_hash == "brand-new-hash"),
+            "the key bumped the version but is not in the snapshot that version serves"
+        );
+
+        // disable and delete are data-plane-visible too: a revoked key must
+        // stop working as promptly as a new one starts
+        let disabled_from = current_version(&pool).await.unwrap();
+        sqlx::query("update virtual_keys set disabled = true where key_hash = 'brand-new-hash'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            current_version(&pool).await.unwrap() > disabled_from,
+            "disabling a key did not bump the version"
+        );
+
+        let deleted_from = current_version(&pool).await.unwrap();
+        sqlx::query("delete from virtual_keys where key_hash = 'brand-new-hash'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            current_version(&pool).await.unwrap() > deleted_from,
+            "deleting a key did not bump the version"
+        );
+    }
+
     /// org → team → project → user, with a virtual key the user owns.
     /// Returns `(user_id, project_id)`.
     async fn tenancy_with_owned_key(pool: &PgPool, key_hash: &str) -> (Uuid, Uuid) {
