@@ -129,8 +129,25 @@ is how v0.0.6 through v0.0.10 shipped while PyPI sat on 0.0.5 ([#903]).
 `scripts/check-release-handoff.sh` (a merge gate in `quality.yml` and a prek
 hook) asserts the wiring is still in place.
 
+### Which tag the dispatch carries
+
+`releases`, the output release-plz hands back, contains a `tag` for **every**
+published crate — not only the one with `git_tag_enable`. The crates.io-only
+members get a derived `<crate>-v<version>` string that was never pushed to git.
+Only `rolter-gateway` is configured with `git_tag_name = "v{{ version }}"`, so
+`resolve release tag` selects that entry **by package name**; an empty result
+means nothing was released on this push and the dispatch job is skipped.
+
+Taking the first tagged entry instead is what broke v0.0.11 ([#1026]): the array
+starts with `rolter-core`, the dispatch carried `rolter-core-v0.0.11`, and
+`release.yml` failed at checkout on a ref that does not exist — so v0.0.11 went
+to crates.io and GitHub Releases with no wheel, and PyPI stayed on 0.0.10. The
+step now also rejects any resolved tag that is not `vX.Y.Z`, so a bad ref fails
+before it is dispatched rather than halfway through the artifact build.
+
 [gh-token]: https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow
 [#903]: https://github.com/rolter-ai/rolter/issues/903
+[#1026]: https://github.com/rolter-ai/rolter/issues/1026
 
 ### Parity gate
 

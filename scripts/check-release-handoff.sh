@@ -53,6 +53,27 @@ require "$plz" "the handoff must run after release-plz-release, on its tag outpu
 require "$plz" "release-plz-release must expose the resolved tag as a job output" \
     '^      tag: \$\{\{ steps\.tag\.outputs\.tag \}\}'
 
+# ── the tag the handoff carries ─────────────────────────────────────────────
+# release-plz emits a `tag` for every published crate, not just the one with
+# git_tag_enable: the crates.io-only members get a derived `<crate>-v<version>`
+# string that was never pushed. picking the first tagged entry resolved
+# `rolter-core-v0.0.11`, release.yml checked out a ref that does not exist, and
+# v0.0.11 shipped to crates.io with no wheel (#1026). select by package name and
+# refuse anything that is not a vX.Y.Z tag.
+require "$plz" "the tag must be selected by package_name, not by array position" \
+    'select\(\.package_name == "rolter-gateway"\)'
+require "$plz" "the resolved tag must be validated as a vX.Y.Z release tag" \
+    "grep -Eq '\\^v\\[0-9\\]"
+forbid "$plz" "do not take the first tagged release; crates.io-only tags are never pushed" \
+    'map\(select\(\.tag != null and \.tag != ""\)\) \| \.\[0\]'
+
+# `gh api` switches to POST as soon as any -f/-F is present, which 404s the
+# GET-only workflow-runs endpoint and aborted the confirmation loop (#1026)
+forbid "$plz" "the run-confirmation query must be in the path; -f makes gh api POST" \
+    '^ *-f event=workflow_dispatch'
+require "$plz" "the handoff must confirm a release run actually started" \
+    'actions/workflows/release\.yml/runs\?event=workflow_dispatch'
+
 # ── the receiving end ───────────────────────────────────────────────────────
 require "$rel" "release.yml dropped its workflow_dispatch trigger" \
     '^  workflow_dispatch:'
