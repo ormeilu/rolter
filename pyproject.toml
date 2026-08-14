@@ -32,3 +32,9 @@ Repository = "https://github.com/rolter-ai/rolter"
 bindings = "bin"
 manifest-path = "crates/rolter/Cargo.toml"
 strip = true
+# maturin detects the root LICENSE and writes `License-File: LICENSE` into
+# PKG-INFO, but the sdist is packaged from the crate manifest, which does not
+# reach a file outside `crates/rolter/`. pypi validates that every declared
+# License-File is present and rejects the upload with a 400 otherwise, so the
+# sdist has to carry it explicitly (#1029). the wheels already include it.
+include = [{ path = "LICENSE", format = "sdist" }]

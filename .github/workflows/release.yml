@@ -473,9 +473,20 @@ jobs:
         run: |
           set -euo pipefail
           echo "digests to assemble:"; ls -1
-          # shellcheck disable=SC2046  # word splitting is how the args are built
-          docker buildx imagetools create \
-            $(jq -cr '.target."docker-metadata-action".tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+          # DOCKER_METADATA_OUTPUT_JSON is the flat metadata document
+          # (`{"tags":[…],"labels":{…}}`); `.target."docker-metadata-action"` is
+          # the *bake* shape, exported separately as the bake file. reading the
+          # bake path here made jq emit "Cannot iterate over null" and imagetools
+          # abort with "can't push with no tags specified", so no manifest was
+          # ever assembled and ghcr never got the 0.0.11 tag (#1031).
+          tags="$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          if [ -z "$tags" ]; then
+            echo "::error::no tags resolved from DOCKER_METADATA_OUTPUT_JSON"
+            exit 1
+          fi
+          echo "assembling tags: $tags"
+          # shellcheck disable=SC2046,SC2086  # word splitting is how the args are built
+          docker buildx imagetools create $tags \
             $(printf "$REGISTRY_IMAGE@sha256:%s " *)
 
       - name: inspect published manifest
