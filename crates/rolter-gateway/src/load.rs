@@ -5,8 +5,9 @@
 //! survive config hot-reloads) and a count is held for the full lifetime of a
 //! request, including the streamed response body, via an RAII [`LoadGuard`].
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// smoothing factor for the per-target latency EWMA: high enough to follow a
@@ -59,7 +60,7 @@ impl LoadTracker {
         n: usize,
     ) -> Option<Arc<rolter_balancer::predictor::LatencyPredictor>> {
         let predictors = self.predictors.as_ref()?;
-        let mut map = predictors.lock().unwrap();
+        let mut map = predictors.lock();
         Some(
             map.entry(model.to_string())
                 .or_insert_with(|| Arc::new(rolter_balancer::predictor::LatencyPredictor::new(n)))
@@ -73,7 +74,7 @@ impl LoadTracker {
         let Some(inner) = &self.inner else {
             return Vec::new();
         };
-        let map = inner.lock().unwrap();
+        let map = inner.lock();
         (0..n)
             .map(|i| map.get(&(model.to_string(), i)).copied().unwrap_or(0))
             .collect()
@@ -85,7 +86,7 @@ impl LoadTracker {
         let Some(latency) = &self.latency else {
             return Vec::new();
         };
-        let map = latency.lock().unwrap();
+        let map = latency.lock();
         (0..n)
             .map(|i| map.get(&(model.to_string(), i)).copied().unwrap_or(0.0))
             .collect()
@@ -109,7 +110,7 @@ impl LoadTracker {
         // read before the increment: the model learns what queue this request
         // *joined*, not the one it created
         let queue_depth = {
-            let mut map = inner.lock().unwrap();
+            let mut map = inner.lock();
             let slot = map.entry(key.clone()).or_insert(0);
             let before = *slot;
             *slot += 1;
@@ -121,7 +122,7 @@ impl LoadTracker {
             predictor: self
                 .predictors
                 .as_ref()
-                .and_then(|p| p.lock().unwrap().get(model).cloned()),
+                .and_then(|p| p.lock().get(model).cloned()),
             queue_depth,
             prompt_tokens: 0,
             started: Instant::now(),
@@ -169,7 +170,7 @@ impl Drop for LoadGuard {
             return;
         };
         {
-            let mut map = map.lock().unwrap();
+            let mut map = map.lock();
             if let Some(v) = map.get_mut(key) {
                 *v = v.saturating_sub(1);
                 if *v == 0 {
@@ -180,7 +181,7 @@ impl Drop for LoadGuard {
         if self.record {
             let sample = self.started.elapsed().as_millis() as f64;
             if let Some(latency) = &self.latency {
-                let mut map = latency.lock().unwrap();
+                let mut map = latency.lock();
                 map.entry(key.clone())
                     .and_modify(|e| *e += LATENCY_EWMA_ALPHA * (sample - *e))
                     .or_insert(sample);

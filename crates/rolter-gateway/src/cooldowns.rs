@@ -4,8 +4,9 @@
 //! the routing snapshot (it must survive config hot-reloads) and is keyed by
 //! `(public model, target index)`.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Map of parked targets keyed by `(public model, target index)` to the instant
@@ -34,7 +35,7 @@ impl Cooldowns {
             return false;
         };
         let key = (model.to_string(), idx);
-        let mut map = inner.lock().unwrap();
+        let mut map = inner.lock();
         match map.get(&key) {
             Some(until) if *until > Instant::now() => true,
             Some(_) => {
@@ -55,7 +56,7 @@ impl Cooldowns {
             return;
         }
         let until = Instant::now() + Duration::from_secs(secs);
-        let mut map = inner.lock().unwrap();
+        let mut map = inner.lock();
         let slot = map.entry((model.to_string(), idx)).or_insert(until);
         if until > *slot {
             *slot = until;
@@ -95,7 +96,7 @@ mod tests {
         c.park("m", 2, 1);
         // force expiry by rewriting the deadline into the past
         if let Some(inner) = &c.inner {
-            inner.lock().unwrap().insert(
+            inner.lock().insert(
                 ("m".to_string(), 2),
                 Instant::now() - Duration::from_secs(1),
             );
@@ -107,7 +108,6 @@ mod tests {
             .as_ref()
             .unwrap()
             .lock()
-            .unwrap()
             .get(&("m".to_string(), 2))
             .is_none());
     }

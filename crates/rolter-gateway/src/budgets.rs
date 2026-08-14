@@ -203,18 +203,17 @@ const UNPRICED_WARN_WINDOW: std::time::Duration = std::time::Duration::from_secs
 #[derive(Default)]
 pub struct UnpricedWarnLog {
     // a plain mutex over a small map: entries are bounded by the number of
-    // distinct unpriced models, and the lock is only taken on unpriced traffic
-    last: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    // distinct unpriced models, and the lock is only taken on unpriced traffic.
+    // parking_lot rather than std so a panic under the lock cannot poison it
+    // and silence the warning it guards
+    last: parking_lot::Mutex<std::collections::HashMap<String, std::time::Instant>>,
 }
 
 impl UnpricedWarnLog {
     /// Whether `model` should be logged now, recording that it was.
     pub fn should_log(&self, model: &str) -> bool {
         let now = std::time::Instant::now();
-        let Ok(mut last) = self.last.lock() else {
-            // a poisoned lock must not silence the warning it guards
-            return true;
-        };
+        let mut last = self.last.lock();
         match last.get(model) {
             Some(at) if now.duration_since(*at) < UNPRICED_WARN_WINDOW => false,
             _ => {
@@ -350,7 +349,7 @@ mod tests {
             );
         }
         assert!(
-            log.last.lock().unwrap().is_empty(),
+            log.last.lock().is_empty(),
             "ignore must not touch the warn log"
         );
     }
@@ -385,7 +384,7 @@ mod tests {
         let log = UnpricedWarnLog::default();
         assert!(log.should_log("gpt-4o"));
         // rewind the recorded instant past the window rather than sleeping
-        log.last.lock().unwrap().insert(
+        log.last.lock().insert(
             "gpt-4o".to_string(),
             std::time::Instant::now() - UNPRICED_WARN_WINDOW - std::time::Duration::from_secs(1),
         );

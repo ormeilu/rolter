@@ -10,8 +10,9 @@
 //! provider down. When every target of a route is unhealthy the caller fails open
 //! rather than rejecting the request.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use rolter_core::probe::{probe_request, ANTHROPIC_VERSION};
@@ -267,7 +268,6 @@ impl Health {
         };
         inner
             .lock()
-            .unwrap()
             .get(provider)
             .map(|s| s.healthy)
             .unwrap_or(true)
@@ -279,7 +279,7 @@ impl Health {
         let Some(inner) = &self.inner else {
             return;
         };
-        inner.lock().unwrap().insert(
+        inner.lock().insert(
             provider.to_string(),
             ProbeState {
                 healthy,
@@ -293,7 +293,7 @@ impl Health {
     /// now-disabled prober must not stay skipped forever.
     pub fn clear(&self) {
         if let Some(inner) = &self.inner {
-            inner.lock().unwrap().clear();
+            inner.lock().clear();
         }
     }
 
@@ -305,7 +305,6 @@ impl Health {
         };
         inner
             .lock()
-            .unwrap()
             .entry(provider.to_string())
             .or_default()
             .should_probe()
@@ -323,7 +322,6 @@ impl Health {
         let inner = self.inner.as_ref()?;
         inner
             .lock()
-            .unwrap()
             .entry(provider.to_string())
             .or_default()
             .on_result(outcome, fail_after, recover_after)
