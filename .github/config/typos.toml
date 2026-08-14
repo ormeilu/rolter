@@ -13,6 +13,11 @@ extend-ignore-re = [
   "emial",
   # "sk-abd": a deliberately-wrong virtual key in the auth verify tests
   "sk-abd",
+  # "menbers"/"moduls": deliberately-misspelled field names in the crud
+  # deny-unknown-fields tests (#940), which assert a body carrying a field no
+  # struct declares is rejected. correcting them would delete the test's subject
+  "\"menbers\"",
+  "\"moduls\"",
   # "abc"/"abd": trie test fixtures exercising shared-prefix node counting
   "\"abd\"",
   # canonical W3C traceparent / B3 example ids in the trace tests: hex spans the

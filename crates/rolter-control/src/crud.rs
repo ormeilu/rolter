@@ -643,6 +643,7 @@ async fn list_orgs(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateOrg {
     name: String,
     slug: String,
@@ -712,6 +713,7 @@ async fn list_business_units(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateBusinessUnit {
     name: String,
     /// Stable URL-safe identity; derived from `name` when omitted.
@@ -750,6 +752,7 @@ async fn create_business_unit(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UpdateBusinessUnit {
     name: Option<String>,
     slug: Option<String>,
@@ -845,6 +848,7 @@ async fn list_customers(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateCustomer {
     name: String,
     /// Stable URL-safe identity; derived from `name` when omitted.
@@ -892,6 +896,7 @@ async fn create_customer(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UpdateCustomer {
     name: Option<String>,
     slug: Option<String>,
@@ -1030,6 +1035,7 @@ async fn list_prompt_templates(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreatePromptTemplate {
     name: String,
     /// Stable URL-safe identity; derived from `name` when omitted.
@@ -1070,6 +1076,7 @@ async fn create_prompt_template(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UpdatePromptTemplate {
     name: Option<String>,
     /// Omit to leave unchanged; otherwise set to the trimmed value.
@@ -1160,6 +1167,7 @@ async fn list_prompt_template_versions(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreatePromptTemplateVersion {
     #[serde(default)]
     variables: serde_json::Value,
@@ -1209,6 +1217,7 @@ async fn create_prompt_template_version(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PublishPromptTemplateVersion {
     version: i32,
 }
@@ -1287,12 +1296,14 @@ impl PromptTemplateScopeKind {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PromptTemplateScopeInput {
     scope_type: PromptTemplateScopeKind,
     scope_id: Uuid,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SetPromptTemplateScopes {
     scopes: Vec<PromptTemplateScopeInput>,
 }
@@ -1466,6 +1477,7 @@ async fn resolve_published_skill(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateSkill {
     name: String,
     /// Stable URL-safe identity; derived from `name` when omitted.
@@ -1547,6 +1559,7 @@ async fn create_skill(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UpdateSkill {
     name: Option<String>,
     /// Omit to leave unchanged; otherwise set to the trimmed value.
@@ -1660,6 +1673,7 @@ async fn list_skill_versions(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateSkillVersion {
     content: Option<String>,
     content_ref: Option<String>,
@@ -1760,6 +1774,7 @@ async fn create_skill_version(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PublishSkillVersion {
     version: i32,
 }
@@ -1835,6 +1850,7 @@ async fn list_teams(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateTeam {
     name: String,
 }
@@ -1902,6 +1918,7 @@ async fn list_projects(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateProject {
     name: String,
 }
@@ -2195,6 +2212,7 @@ async fn list_providers(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateProvider {
     name: String,
     /// stable URL-safe identity; when omitted it is derived from `name`
@@ -2576,6 +2594,7 @@ async fn create_provider(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UpdateProvider {
     /// new slug; rejected unless `allow_slug_change` is true, since the slug is
     /// a stable identity that addresses (`provider-slug/model`) depend on
@@ -2713,6 +2732,7 @@ struct ProviderGroupView {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GroupMemberInput {
     provider_id: Uuid,
     /// upstream model rewrite; omit for passthrough of the requested model
@@ -2784,6 +2804,7 @@ async fn list_provider_groups(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateProviderGroup {
     name: String,
     /// stable URL-safe identity; derived from `name` when omitted
@@ -2833,6 +2854,7 @@ async fn create_provider_group(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UpdateProviderGroup {
     name: Option<String>,
     slug: Option<String>,
@@ -2947,6 +2969,7 @@ async fn list_routes(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateRoute {
     model: String,
     #[serde(default = "default_strategy")]
@@ -3008,6 +3031,7 @@ async fn create_route(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SetRouteEnabled {
     enabled: bool,
 }
@@ -3037,6 +3061,7 @@ async fn set_route_enabled(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SetRouteParams {
     /// admin default inference params (json object, e.g. {"temperature": 0})
     #[serde(default)]
@@ -3165,6 +3190,7 @@ fn normalize_json_object(value: serde_json::Value, field: &str) -> ApiResult<ser
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SetRouteAdvanced {
     #[serde(default)]
     advanced: serde_json::Value,
@@ -3320,6 +3346,7 @@ async fn list_route_targets(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateRouteTarget {
     provider_id: Uuid,
     upstream_model: Option<String>,
@@ -3399,6 +3426,7 @@ async fn list_virtual_keys(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateVirtualKey {
     name: Option<String>,
     #[serde(default)]
@@ -3478,6 +3506,7 @@ async fn create_virtual_key(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SetVirtualKeyProviders {
     /// empty restores the permissive default
     #[serde(default)]
@@ -3509,6 +3538,7 @@ async fn set_virtual_key_providers(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SetVirtualKeyAttribution {
     /// Omit to leave unchanged, null to clear, UUID to set.
     #[serde(default)]
@@ -3588,6 +3618,7 @@ async fn set_virtual_key_attribution(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SetVirtualKeyDisabled {
     disabled: bool,
 }
@@ -3617,6 +3648,7 @@ async fn set_virtual_key_disabled(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SetVirtualKeyCache {
     /// null clears the override (inherit the route); false/true force it
     #[serde(default)]
@@ -3710,6 +3742,7 @@ async fn list_budgets(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateBudget {
     scope_type: String,
     scope_id: Uuid,
@@ -3798,6 +3831,7 @@ async fn list_rate_limits(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateRateLimit {
     scope_type: String,
     scope_id: Uuid,
@@ -3870,6 +3904,7 @@ async fn list_model_prices(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UpsertModelPrice {
     model: String,
     input_per_mtok: String,
@@ -4087,6 +4122,7 @@ async fn list_users(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateUser {
     email: String,
     /// optional initial password; omit for an sso-only shell account that
@@ -4154,6 +4190,7 @@ async fn create_user(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UpdateUser {
     email: Option<String>,
     password: Option<String>,
@@ -4264,6 +4301,7 @@ async fn list_memberships(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateMembership {
     user_id: Uuid,
     /// one of `org` | `team` | `project`
@@ -4529,6 +4567,73 @@ mod control_char_tests {
             "emoji": "проверка 🚀",
         }))
         .is_ok());
+    }
+}
+
+/// #940: a CRUD body carrying a field the API does not know used to be
+/// accepted and the field dropped. `POST /routes` with a `targets` array
+/// returned `200 OK` and created a route with zero targets — an object that
+/// cannot serve a single request, reported as a success.
+#[cfg(test)]
+mod unknown_field_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The path SafeJson takes: `serde_json::Value` in, the request type out.
+    /// Only the error is returned — the request types are deliberately not
+    /// `Debug`, and what is under test is the rejection, not the value.
+    fn parse<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> Result<(), String> {
+        serde_json::from_value::<T>(value)
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    fn rejection<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> String {
+        match parse::<T>(value) {
+            Err(problem) => problem,
+            Ok(()) => panic!("an unknown field was accepted and silently dropped"),
+        }
+    }
+
+    #[test]
+    fn a_route_payload_with_targets_is_rejected_rather_than_silently_dropped() {
+        let problem = rejection::<CreateRoute>(json!({
+            "model": "gpt-4o",
+            "targets": [{"provider": "openai", "model": "gpt-4o"}],
+        }));
+        // the 400 has to name the offending key, or the caller is left
+        // guessing which of their fields went nowhere
+        assert!(problem.contains("targets"), "{problem}");
+        assert!(problem.contains("unknown field"), "{problem}");
+    }
+
+    #[test]
+    fn the_same_payload_without_the_bogus_field_still_parses() {
+        assert!(
+            parse::<CreateRoute>(json!({"model": "gpt-4o"})).is_ok(),
+            "a valid body must keep working"
+        );
+    }
+
+    #[test]
+    fn the_rule_covers_providers_groups_and_keys_too() {
+        assert!(parse::<CreateProvider>(json!({
+            "name": "openai",
+            "kind": "openai",
+            "api_base": "https://api.openai.com",
+            "api_kye": "sk-typo",
+        }))
+        .is_err());
+        assert!(parse::<CreateProviderGroup>(json!({
+            "name": "pool",
+            "menbers": [],
+        }))
+        .is_err());
+        assert!(parse::<CreateVirtualKey>(json!({
+            "name": "ci",
+            "moduls": ["gpt-4o"],
+        }))
+        .is_err());
     }
 }
 
