@@ -9,11 +9,17 @@
 
 mod adaptive_telemetry;
 mod admin_proxy;
-mod breaker;
+// admission registries are `pub` so the criterion benches under `benches/` can
+// exercise them directly; they carry no stable API promise. a `///` here would
+// make rustdoc resolve the module's own intra-doc links in this scope instead
+// of the module's, so keep it a plain comment
+#[doc(hidden)]
+pub mod breaker;
 mod budgets;
 mod cache;
 mod cache_telemetry;
-mod cooldowns;
+#[doc(hidden)]
+pub mod cooldowns;
 mod error;
 mod fake_llm;
 mod genai;

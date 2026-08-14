@@ -41,6 +41,12 @@ scalar_api_reference = { version = "0.2.2", default-features = false }
 
 [dev-dependencies]
 libc.workspace = true
+criterion.workspace = true
 # a capturing layer, so the tenant attributes are asserted to land on the span
 # rather than assumed from the call site (#836)
 tracing-subscriber.workspace = true
+
+# criterion benches use their own harness; `cargo bench -p rolter-gateway`
+[[bench]]
+name = "admission"
+harness = false

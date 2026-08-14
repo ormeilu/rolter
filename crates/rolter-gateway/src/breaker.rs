@@ -50,7 +50,24 @@ impl Default for Entry {
     }
 }
 
-type BreakerMap = HashMap<(String, usize), Entry>;
+/// Breaker state for one model's targets, addressed by target index.
+///
+/// A `Vec` rather than a second map: target indices are positions in a route's
+/// target list, so they are small and dense, and indexing costs a bounds check
+/// instead of a second hash. `None` is a target with no recorded outcome, which
+/// is indistinguishable from a closed one.
+type ModelBreakers = Vec<Option<Entry>>;
+
+/// Per-target breaker state keyed by public model, then addressed by target index.
+///
+/// Split rather than a flat `(String, usize)` key: a flat tuple cannot be looked
+/// up from a `&str`, so every read had to materialise a `String` just to hash
+/// it. `allows` is a read-only admission check run per request per candidate
+/// target — including the common case where the target was never seen and the
+/// answer is an immediate `true` — so that allocation sat on the hottest path in
+/// the gateway. Splitting keeps reads borrowed, hashes the model exactly once
+/// and confines allocation to a model's first recorded failure (#1050).
+type BreakerMap = HashMap<String, ModelBreakers>;
 
 /// Shared, interior-mutable breaker state. The map holds per-target phase (kept
 /// across config hot-reloads); the atomics hold the enable flag and tuning, which
@@ -65,7 +82,7 @@ struct Shared {
 
 /// Shared, cheaply-cloneable circuit-breaker registry. A `None` inner is a
 /// permanently inert breaker (used by embedders/tests that never reload); a
-/// `Some` inner can be enabled, disabled and re-tuned live via [`reconfigure`].
+/// `Some` inner can be enabled, disabled and re-tuned live via [`Breaker::reconfigure`].
 /// While disabled it admits every target and records nothing.
 #[derive(Clone, Default)]
 pub struct Breaker {
@@ -118,7 +135,13 @@ impl Breaker {
             return true;
         };
         let mut map = inner.map.lock();
-        let Some(entry) = map.get_mut(&(model.to_string(), idx)) else {
+        // borrowed throughout: the never-seen case must not allocate, and it is
+        // the overwhelmingly common one
+        let Some(entry) = map
+            .get_mut(model)
+            .and_then(|m| m.get_mut(idx))
+            .and_then(Option::as_mut)
+        else {
             return true; // never-seen target is closed by default
         };
         match entry.phase {
@@ -142,7 +165,16 @@ impl Breaker {
             return false;
         };
         let mut map = inner.map.lock();
-        let entry = map.entry((model.to_string(), idx)).or_default();
+        let Some(entry) = map
+            .get_mut(model)
+            .and_then(|m| m.get_mut(idx))
+            .and_then(Option::as_mut)
+        else {
+            // a target with no entry is already closed with no failures, which
+            // is exactly what this call would have written — so the success of
+            // a healthy target neither allocates nor grows the map
+            return false;
+        };
         let was_tripped = !matches!(entry.phase, Phase::Closed);
         entry.phase = Phase::Closed;
         entry.consecutive_failures = 0;
@@ -159,23 +191,45 @@ impl Breaker {
         };
         let failure_threshold = inner.failure_threshold.load(Relaxed).max(1);
         let open_secs = inner.open_secs.load(Relaxed);
-        let mut map = inner.map.lock();
-        let entry = map.entry((model.to_string(), idx)).or_default();
-        entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
         let open_until = Instant::now() + Duration::from_secs(open_secs);
-        match entry.phase {
-            // a failed probe drops straight back to open
-            Phase::HalfOpen => {
-                entry.phase = Phase::Open(open_until);
-                true
-            }
-            Phase::Closed if entry.consecutive_failures >= failure_threshold => {
-                entry.phase = Phase::Open(open_until);
-                true
-            }
-            // already open, or not yet at threshold
-            _ => false,
+        let mut map = inner.map.lock();
+        // a target that has already failed once is the common case while a
+        // fault persists, and it needs no allocation; only a model's first
+        // failure owns its name
+        if let Some(entry) = map
+            .get_mut(model)
+            .and_then(|m| m.get_mut(idx))
+            .and_then(Option::as_mut)
+        {
+            return record_failure(entry, failure_threshold, open_until);
         }
+        // reached only on a target's *first* failure, at most once per target
+        // per process, so owning the model name here costs nothing measurable
+        let targets = map.entry(model.to_string()).or_default();
+        if targets.len() <= idx {
+            targets.resize_with(idx + 1, || None);
+        }
+        let entry = targets[idx].get_or_insert_with(Entry::default);
+        record_failure(entry, failure_threshold, open_until)
+    }
+}
+
+/// Fold one transient failure into a target's entry. Returns `true` when the
+/// call tripped the target open (a closed→open or half-open→open transition).
+fn record_failure(entry: &mut Entry, failure_threshold: u32, open_until: Instant) -> bool {
+    entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
+    match entry.phase {
+        // a failed probe drops straight back to open
+        Phase::HalfOpen => {
+            entry.phase = Phase::Open(open_until);
+            true
+        }
+        Phase::Closed if entry.consecutive_failures >= failure_threshold => {
+            entry.phase = Phase::Open(open_until);
+            true
+        }
+        // already open, or not yet at threshold
+        _ => false,
     }
 }
 
@@ -297,6 +351,72 @@ mod tests {
         b.reconfigure(true, 4, 30);
         assert!(b.on_failure("m", 0));
         assert!(!b.allows("m", 0));
+    }
+
+    /// Number of `(model, target)` entries currently held, across all models.
+    fn entries(b: &Breaker) -> usize {
+        b.inner
+            .as_ref()
+            .map(|i| i.map.lock().values().map(|m| m.len()).sum())
+            .unwrap_or(0)
+    }
+
+    /// A healthy target's success is indistinguishable from having no entry at
+    /// all, so it must not create one — this is what keeps the all-healthy
+    /// steady state both allocation-free and map-growth-free.
+    #[test]
+    fn a_success_on_a_never_seen_target_records_nothing() {
+        let b = Breaker::new(true, 3, 30);
+        for _ in 0..1_000 {
+            assert!(!b.on_success("m", 0));
+        }
+        assert_eq!(entries(&b), 0, "healthy traffic must not populate the map");
+        // and the target is of course still admitted
+        assert!(b.allows("m", 0));
+    }
+
+    /// A success must still close a target that actually was tripped — the
+    /// no-entry short-circuit above must not swallow a real recovery.
+    #[test]
+    fn a_success_still_closes_a_tripped_target() {
+        let b = Breaker::new(true, 3, 30);
+        b.on_failure("m", 0);
+        b.on_failure("m", 0);
+        assert!(b.on_failure("m", 0), "the third failure trips it open");
+        assert!(!b.allows("m", 0));
+        assert!(b.on_success("m", 0), "the recovery must be reported");
+        assert!(b.allows("m", 0));
+        // the failure count was reset too, not merely the phase: two more
+        // failures must not be enough to trip it again
+        assert!(!b.on_failure("m", 0));
+        assert!(!b.on_failure("m", 0));
+        assert!(b.allows("m", 0));
+        assert_eq!(entries(&b), 1);
+    }
+
+    /// The key is nested now; two models sharing a target index must not alias.
+    #[test]
+    fn models_with_the_same_target_index_do_not_alias() {
+        let b = Breaker::new(true, 1, 30);
+        assert!(b.on_failure("a", 0)); // trips a/0 open
+        assert!(!b.allows("a", 0));
+        // same index, different model: untouched and still admitted
+        assert!(b.allows("b", 0));
+        assert!(b.on_failure("b", 0));
+        assert!(!b.allows("b", 0));
+        // and a's state did not move when b tripped
+        assert!(!b.allows("a", 0));
+        assert_eq!(entries(&b), 2);
+    }
+
+    /// A model name containing the separator-ish characters a flat key might
+    /// have used must still be a distinct model.
+    #[test]
+    fn model_names_are_compared_whole() {
+        let b = Breaker::new(true, 1, 30);
+        assert!(b.on_failure("m::v", 0));
+        assert!(!b.allows("m::v", 0));
+        assert!(b.allows("m", 0));
     }
 
     #[test]
