@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Shield, ShieldOff } from "lucide-react";
+import { KeyRound, Loader2, Shield, ShieldOff } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -474,10 +474,14 @@ export function AuthSessions() {
                           : "Revoke this session; the consent behind it stands"
                       }
                       aria-label={`Revoke session on ${server}`}
-                      disabled={state === "revoked" || revoke.isPending}
+                      disabled={state === "revoked" || (revoke.isPending && revoke.variables === s.id)}
                       onClick={() => revoke.mutate(s.id)}
                     >
-                      <ShieldOff className="h-3.5 w-3.5" />
+                      {revoke.isPending && revoke.variables === s.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <ShieldOff className="h-3.5 w-3.5" />
+                      )}
                     </RowIconButton>
                   </ListRow>
                 );
