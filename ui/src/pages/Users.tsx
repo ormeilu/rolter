@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Pencil, Plus, Trash2 } from "lucide-react";
+import { Ban, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
@@ -236,10 +236,14 @@ export default function Users() {
                 <RowIconButton
                   danger={active}
                   title={active ? "Deactivate user" : "Reactivate user"}
-                  disabled={toggleActive.isPending}
+                  disabled={toggleActive.isPending && toggleActive.variables?.id === user.id}
                   onClick={() => toggleActive.mutate(user)}
                 >
-                  <Ban className="h-3.5 w-3.5" />
+                  {toggleActive.isPending && toggleActive.variables?.id === user.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Ban className="h-3.5 w-3.5" />
+                  )}
                 </RowIconButton>
               </div>
             </ListRow>
