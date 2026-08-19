@@ -8,3 +8,6 @@
 ## 2023-10-27 - Disabled styling on buttons
 **Learning:** When adding `disabled={true}` to buttons, they might not inherently visually reflect it correctly without explicit Tailwind styling. `disabled:pointer-events-none disabled:opacity-50` ensures that a disabled button is visually dimmed and doesn't trigger hover events.
 **Action:** When updating standard HTML buttons or custom components to respond to `isPending` states, ensure `disabled:pointer-events-none disabled:opacity-50` are added to the Tailwind classes.
+## 2023-10-27 - Loading States for Async Mutations
+**Learning:** When adding visual loading states (`<Loader2 className="mr-2 h-4 w-4 animate-spin" />`) or disabling buttons for row-level actions in a mapped list sharing a `useMutation`, you must qualify the loading/disabled state using `mutation.variables === row.id` (or similar, depending on the mutation payload structure) to avoid disabling all items globally when any one row is mutating. Also, `import { Loader2 } from "lucide-react";` needs to be carefully merged with existing lucide-react imports if present to pass the TypeScript linter.
+**Action:** Always check the payload structure of the `mutate` call and verify `mutation.isPending && mutation.variables === id` before showing row-level loading states.

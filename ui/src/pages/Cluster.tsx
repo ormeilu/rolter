@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Network } from "lucide-react";
+import { Loader2, Network } from "lucide-react";
 import * as React from "react";
 
 import { PageBody } from "@/components/screen";
@@ -124,6 +124,7 @@ export default function Cluster() {
               disabled={drain.isPending}
               onClick={() => drain.mutate({ id: row.id, draining: !draining })}
             >
+              {drain.isPending && drain.variables?.id === row.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {draining ? "Return to service" : "Drain"}
             </Button>
             {/* a node that is still running reappears on its next poll, so
@@ -139,6 +140,7 @@ export default function Cluster() {
               }
               onClick={() => forget.mutate(row.id)}
             >
+              {forget.isPending && forget.variables === row.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Forget
             </Button>
           </div>
