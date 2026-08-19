@@ -7,6 +7,7 @@
 //!
 //! The binary is a thin wrapper over [`run`]; the unified `rolter` launcher
 //! reuses the same entrypoint as its `control` subcommand.
+pub(crate) mod utils;
 
 #[cfg(feature = "postgres")]
 mod access_control;

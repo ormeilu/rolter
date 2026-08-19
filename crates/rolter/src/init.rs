@@ -91,7 +91,7 @@ pub struct InitArgs {
 fn secret() -> String {
     let mut bytes = [0u8; SECRET_BYTES];
     rand::rng().fill_bytes(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    hex_encode(&bytes)
 }
 
 /// The environment file's contents.
@@ -294,6 +294,16 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    const HEX_CHARS: &[u8] = b"0123456789abcdef";
+    for b in bytes {
+        out.push(HEX_CHARS[(b >> 4) as usize] as char);
+        out.push(HEX_CHARS[(b & 0xf) as usize] as char);
+    }
+    out
 }
 
 #[cfg(test)]

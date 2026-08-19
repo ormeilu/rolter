@@ -366,13 +366,9 @@ async fn me(
 pub(crate) fn generate_session_token(pepper: &str) -> (String, String) {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
-    let token = format!("rolter_sess_{}", hex_encode(&bytes));
+    let token = format!("rolter_sess_{}", crate::utils::hex_encode(&bytes));
     let hash = rolter_auth::hash_key(pepper, &token);
     (token, hash)
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// The authenticated user resolved from `Authorization: Bearer <token>` (a
@@ -479,7 +475,7 @@ mod tests {
     #[test]
     fn hex_encode_correctness() {
         let bytes = [0xde, 0xad, 0xbe, 0xef, 0x00, 0xff, 0x01, 0x0a];
-        let encoded = hex_encode(&bytes);
+        let encoded = crate::utils::hex_encode(&bytes);
         assert_eq!(encoded, "deadbeef00ff010a");
     }
 

@@ -3459,14 +3459,10 @@ pub(crate) fn key_pepper() -> String {
 pub(crate) fn generate_virtual_key(pepper: &str) -> (String, String, String) {
     let mut bytes = [0u8; 24];
     rand::rng().fill_bytes(&mut bytes);
-    let key = format!("sk-rolter-{}", hex_encode(&bytes));
+    let key = format!("sk-rolter-{}", crate::utils::hex_encode(&bytes));
     let hash = rolter_auth::hash_key(pepper, &key);
     let prefix = key.chars().take(12).collect::<String>();
     (key, hash, prefix)
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 async fn create_virtual_key(

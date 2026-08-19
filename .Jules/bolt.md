@@ -40,3 +40,6 @@ To solve this, we can pre-collect all the keys required into a `Vec<String>`, pe
 ## 2024-08-13 - [Safely Serializing to Pre-Allocated Buffers]
 **Learning:** When using `serde_json::to_writer` to serialize directly into a pre-allocated `Vec<u8>` (avoiding intermediate `String` allocations), you must handle the edge case where serialization partially fails midway. If unhandled, this leaves incomplete/malformed JSON in the stream.
 **Action:** Always store the initial length of the buffer (`let start_len = buffer.len();`) before calling `serde_json::to_writer(&mut buffer, data)`. On `Err`, explicitly truncate the buffer back to the start length (`buffer.truncate(start_len);`) to maintain stream integrity.
+## 2026-08-04 - Hex Encoding Performance
+**Learning:** Using `bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()` for hex encoding is extremely slow due to the overhead of the `format!` macro in a tight loop and allocations per byte. A test showed a ~5x slowdown compared to writing directly to a pre-allocated string using char lookups.
+**Action:** When hex encoding, avoid `format!` inside `map`. Instead, use `String::with_capacity(bytes.len() * 2)` and push characters from a constant byte array lookup like `b"0123456789abcdef"`.
