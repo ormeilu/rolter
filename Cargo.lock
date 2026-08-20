@@ -2789,6 +2789,7 @@ dependencies = [
  "anyhow",
  "clap",
  "rand 0.10.2",
+ "rolter-auth",
  "rolter-control",
  "rolter-core",
  "rolter-gateway",

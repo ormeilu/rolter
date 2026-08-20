@@ -23,6 +23,7 @@ clap.workspace = true
 rand.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+rolter-auth = { version = "0.0.11", path = "../rolter-auth" }
 
 [dev-dependencies]
 # parsing the generated config back to prove it is usable

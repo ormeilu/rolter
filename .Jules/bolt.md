@@ -40,3 +40,6 @@ To solve this, we can pre-collect all the keys required into a `Vec<String>`, pe
 ## 2024-08-13 - [Safely Serializing to Pre-Allocated Buffers]
 **Learning:** When using `serde_json::to_writer` to serialize directly into a pre-allocated `Vec<u8>` (avoiding intermediate `String` allocations), you must handle the edge case where serialization partially fails midway. If unhandled, this leaves incomplete/malformed JSON in the stream.
 **Action:** Always store the initial length of the buffer (`let start_len = buffer.len();`) before calling `serde_json::to_writer(&mut buffer, data)`. On `Err`, explicitly truncate the buffer back to the start length (`buffer.truncate(start_len);`) to maintain stream integrity.
+## 2024-11-20 - [Avoid Formatting in Loops]
+**Learning:** Found a recurring pattern where `format!("{b:02x}")` inside iterators caused unnecessary heap allocations (e.g., generating hex tokens). A specialized encode function that pre-allocates based on expected length and uses character shifts (`char::from_digit`) drastically reduces allocations.
+**Action:** Use `rolter_auth::hex_encode(&bytes)` when hex-encoding byte slices rather than building strings on the fly inside `.map()`.

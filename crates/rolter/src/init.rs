@@ -91,7 +91,7 @@ pub struct InitArgs {
 fn secret() -> String {
     let mut bytes = [0u8; SECRET_BYTES];
     rand::rng().fill_bytes(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    rolter_auth::hex_encode(&bytes)
 }
 
 /// The environment file's contents.

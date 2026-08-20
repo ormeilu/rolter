@@ -54,18 +54,22 @@ pub fn verify_key(presented: &str, expected: &str) -> bool {
 /// (env/config): the same key under different peppers yields different digests,
 /// so a leaked hash cannot be matched without it. An empty pepper still hashes
 /// the key, which keeps plaintext out of memory even when no secret is set.
+pub fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(char::from_digit((byte >> 4) as u32, 16).unwrap());
+        out.push(char::from_digit((byte & 0x0f) as u32, 16).unwrap());
+    }
+    out
+}
+
 pub fn hash_key(pepper: &str, key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(pepper.as_bytes());
     hasher.update([0x1f]); // domain separator between pepper and key
     hasher.update(key.as_bytes());
     let digest = hasher.finalize();
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        out.push(char::from_digit((byte >> 4) as u32, 16).unwrap());
-        out.push(char::from_digit((byte & 0x0f) as u32, 16).unwrap());
-    }
-    out
+    hex_encode(&digest)
 }
 
 /// Whether `model` is permitted by an allow-list. An empty list allows all.
