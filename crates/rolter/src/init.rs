@@ -91,7 +91,13 @@ pub struct InitArgs {
 fn secret() -> String {
     let mut bytes = [0u8; SECRET_BYTES];
     rand::rng().fill_bytes(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    let mut s = String::with_capacity(bytes.len() * 2);
+    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+    for &b in &bytes {
+        s.push(HEX_CHARS[(b >> 4) as usize] as char);
+        s.push(HEX_CHARS[(b & 0x0f) as usize] as char);
+    }
+    s
 }
 
 /// The environment file's contents.

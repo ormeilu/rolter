@@ -46,6 +46,8 @@ pub fn verify_key(presented: &str, expected: &str) -> bool {
     a.ct_eq(b).into()
 }
 
+pub mod hex;
+
 /// Derive the peppered lookup digest for a virtual key.
 ///
 /// Returns the lowercase-hex SHA-256 of `pepper || 0x1f || key`. The digest is
@@ -60,12 +62,7 @@ pub fn hash_key(pepper: &str, key: &str) -> String {
     hasher.update([0x1f]); // domain separator between pepper and key
     hasher.update(key.as_bytes());
     let digest = hasher.finalize();
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        out.push(char::from_digit((byte >> 4) as u32, 16).unwrap());
-        out.push(char::from_digit((byte & 0x0f) as u32, 16).unwrap());
-    }
-    out
+    hex::encode(&digest)
 }
 
 /// Whether `model` is permitted by an allow-list. An empty list allows all.

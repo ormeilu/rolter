@@ -3466,7 +3466,7 @@ pub(crate) fn generate_virtual_key(pepper: &str) -> (String, String, String) {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    rolter_auth::hex::encode(bytes)
 }
 
 async fn create_virtual_key(

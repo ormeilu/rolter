@@ -372,7 +372,7 @@ pub(crate) fn generate_session_token(pepper: &str) -> (String, String) {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    rolter_auth::hex::encode(bytes)
 }
 
 /// The authenticated user resolved from `Authorization: Bearer <token>` (a
