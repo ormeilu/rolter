@@ -277,7 +277,7 @@ pub(crate) fn random_token() -> String {
     use rand::Rng;
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    rolter_auth::hex_encode(&bytes)
 }
 
 /// Begin a login: record the state and redirect to the provider.

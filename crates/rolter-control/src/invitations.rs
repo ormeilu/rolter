@@ -338,7 +338,7 @@ fn generate_invite_token() -> (String, String) {
     rand::rng().fill_bytes(&mut bytes);
     let token: String = format!(
         "rolter_invite_{}",
-        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        rolter_auth::hex_encode(&bytes)
     );
     let hash = rolter_auth::hash_key(&session_pepper(), &token);
     (token, hash)

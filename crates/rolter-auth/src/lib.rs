@@ -60,8 +60,13 @@ pub fn hash_key(pepper: &str, key: &str) -> String {
     hasher.update([0x1f]); // domain separator between pepper and key
     hasher.update(key.as_bytes());
     let digest = hasher.finalize();
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
+    hex_encode(&digest)
+}
+
+/// Hex-encode a byte slice into a lowercase string.
+pub fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
         out.push(char::from_digit((byte >> 4) as u32, 16).unwrap());
         out.push(char::from_digit((byte & 0x0f) as u32, 16).unwrap());
     }

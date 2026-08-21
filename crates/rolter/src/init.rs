@@ -91,7 +91,14 @@ pub struct InitArgs {
 fn secret() -> String {
     let mut bytes = [0u8; SECRET_BYTES];
     rand::rng().fill_bytes(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    {
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            out.push(char::from_digit((byte >> 4) as u32, 16).unwrap());
+            out.push(char::from_digit((byte & 0x0f) as u32, 16).unwrap());
+        }
+        out
+    }
 }
 
 /// The environment file's contents.
