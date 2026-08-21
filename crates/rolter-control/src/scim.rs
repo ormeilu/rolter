@@ -712,10 +712,7 @@ fn generate_scim_token(pepper: &str) -> (String, String) {
     use rand::Rng;
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
-    let token = format!(
-        "rolter_scim_{}",
-        rolter_auth::hex_encode(&bytes)
-    );
+    let token = format!("rolter_scim_{}", rolter_auth::hex_encode(&bytes));
     let hash = rolter_auth::hash_key(pepper, &token);
     (token, hash)
 }

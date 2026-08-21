@@ -371,8 +371,6 @@ pub(crate) fn generate_session_token(pepper: &str) -> (String, String) {
     (token, hash)
 }
 
-
-
 /// The authenticated user resolved from `Authorization: Bearer <token>` (a
 /// live, unexpired [`Session`] row). Extracting this on a handler is enough
 /// to require login; per-role authorization on top of it is ROL-34.

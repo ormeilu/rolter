@@ -3465,8 +3465,6 @@ pub(crate) fn generate_virtual_key(pepper: &str) -> (String, String, String) {
     (key, hash, prefix)
 }
 
-
-
 async fn create_virtual_key(
     principal: Principal,
     State(state): State<ControlState>,
