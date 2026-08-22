@@ -33,6 +33,27 @@ so they are never set by hand.
 explicitly — unprioritized is a decision, not a default. `Urgent` means it
 blocks other work right now, not that it matters a lot.
 
+### Area
+
+Which part of the system the work lands in — one value, the dominant one.
+Matches the Conventional Commit scopes in `AGENTS.md`, so the field and the
+eventual PR title agree:
+
+`gateway` · `control` · `ui` · `proxy` · `balancer` · `store` · `auth` ·
+`core` · `docs` · `ci` · `infra` · `cross-cutting`
+
+Labels already carry topic (`security`, `performance`, `tech-debt`); Area
+carries *location*, which is what makes "everything queued against the data
+plane" or "how much UI work is left before 1.0" answerable in one grouping.
+
+Plenty of issues touch two areas — a migration plus a dashboard screen, a
+gateway change plus its docs. Pick the one where the work actually lives.
+`cross-cutting` is for epics and research spikes that genuinely have no centre,
+not for anything with a second file in it.
+
+Not seeded by automation: a scope guessed from a title would be wrong often
+enough to be worse than blank. Set it when you file.
+
 ### Effort
 
 `XS` (< 1h), `S` (a few hours), `M` (~1 day), `L` (2–3 days), `XL` (a week or
