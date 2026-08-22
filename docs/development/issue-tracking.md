@@ -1,0 +1,113 @@
+# Issue tracking
+
+Work is tracked as GitHub issues on `rolter-ai/rolter`, projected onto the
+[rolter board](https://github.com/orgs/rolter-ai/projects/1) (Projects v2, org
+project #1). The board is the roll-up: an issue that is not on it is not
+tracked, and an issue missing its fields is invisible to any grouping by
+milestone, priority or size.
+
+`.github/workflows/project-automation.yml` adds every newly opened issue and
+pull request to the board and seeds the fields it can. Everything else is set
+by whoever files the issue.
+
+## Fields
+
+### Status
+
+| Value | Meaning |
+|---|---|
+| `Backlog` | Accepted but not scheduled. Nobody is expected to pick it up next. |
+| `Todo` | Scheduled and ready to start; scope and fields are settled. |
+| `In Progress` | Someone — or an agent worktree — is actively working on it. |
+| `In Review` | A pull request is open, waiting on review or on `ci-ok`. |
+| `Done` | Merged or otherwise resolved. |
+| `Canceled` | Deliberately not doing it; the reason is in the issue. |
+
+New issues are seeded `Todo`, new pull requests `In Review`. `Done` and
+`Canceled` are applied by the board's built-in workflows when the item closes,
+so they are never set by hand.
+
+### Priority
+
+`Urgent` / `High` / `Medium` / `Low`, seeded `Medium` on new issues. Set it
+explicitly — unprioritized is a decision, not a default. `Urgent` means it
+blocks other work right now, not that it matters a lot.
+
+### Effort
+
+`XS` (< 1h), `S` (a few hours), `M` (~1 day), `L` (2–3 days), `XL` (a week or
+more). Not seeded, because a size is a judgement rather than a default.
+
+Size from the scope the issue actually states, not from the title. A migration
+drags its `bump_config_version()` trigger with it; a dashboard string fans out
+across every i18n catalog; a "research this first" section is most of the cost.
+
+## Milestones
+
+Every issue gets one. Propose a new milestone rather than forcing a bad match
+or leaving it empty.
+
+| Milestone | What belongs in it |
+|---|---|
+| Release 1.0.0 | Only work that blocks tagging 1.0.0. If you could ship 1.0.0 with it still open, it belongs somewhere else. |
+| Post-1.0 polish | Real, wanted work that does not block the tag: dashboard polish, internal refactors, extra providers, anything blocked on an upstream dependency. |
+| Release 2.0.0 | Post-1.0 capabilities that are their own body of work — subscription-backed provider auth, agent-CLI egress DLP, pluggable custom AI APIs, external secret backends. |
+| Maintenance, CI & DX | Repo hygiene, CI hardening, dependency triage, contributor experience. |
+| Research & inspiration | Spikes and prior-art surveys that inform the roadmap without shipping anything. |
+| Stretch | Optional or exploratory scope per `ROADMAP.md`. |
+
+The Release 1.0.0 description promises that everything in it blocks the
+release. Post-1.0 polish exists so that promise stays literally true — moving a
+non-blocker there is not a demotion.
+
+## Relations
+
+Set them where the token has permission:
+
+- **parent / sub-issue** for work that belongs under an epic
+- **blocked by / blocks** for real sequencing dependencies
+
+Not every token can write these. If a relation cannot be set, say so plainly
+and state the intended link in the issue body (`Blocked by #123`, `Child of
+#456`) so it survives for whoever can.
+
+## Filing
+
+`gh issue create`, then `gh project item-add 1 --owner rolter-ai --url <url>`.
+`gh project item-list` truncates, so confirm membership through the GraphQL
+`projectItems` field rather than by grepping the list.
+
+State the problem, where it surfaced (link the PR or the file), and what would
+count as done. Everything noticed outside the scope of the current task becomes
+an issue before that task is reported done — see the scope-discipline section of
+`AGENTS.md`.
+
+## Editing the board's single-select options
+
+Projects v2 option ids are **not stable**. `updateProjectV2Field` replaces a
+field's option list rather than patching it: every option is minted a fresh id
+and the field is cleared on every existing item in the project. The ids pinned
+in `project-automation.yml` stop resolving at the same moment, so newly opened
+issues land with no status at all.
+
+Before touching the options:
+
+1. snapshot the current values —
+
+   ```
+   gh api graphql --paginate -f query='
+     query($endCursor: String) { organization(login:"rolter-ai"){ projectV2(number:1){
+       items(first:100, after:$endCursor){ pageInfo{hasNextPage endCursor}
+         nodes{ id fieldValues(first:20){ nodes{
+           ... on ProjectV2ItemFieldSingleSelectValue { name field {
+             ... on ProjectV2SingleSelectField { name } } } } } } } } }}'
+   ```
+
+2. pass the **complete** option list to `updateProjectV2Field`, including the
+   ones you are keeping
+3. re-read the new ids with
+   `gh project field-list 1 --owner rolter-ai --format json`
+4. restore the snapshot with `updateProjectV2ItemFieldValue`, in batches of
+   about five mutations per request — larger batches hit
+   `Resource limits for this query exceeded`
+5. update the ids in `project-automation.yml` in the same change
