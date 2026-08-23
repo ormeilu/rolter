@@ -10,8 +10,10 @@ import {
   RotateCcw,
   Settings2,
   ShieldCheck,
+  Trash2,
 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,6 +32,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   createSkill,
   createSkillVersion,
+  deleteSkill,
   fetchSkillVersions,
   fetchSkills,
   publishSkillVersion,
@@ -109,6 +112,7 @@ export default function SkillsRepository() {
   const [draft, setDraft] = React.useState<Draft>({ ...EMPTY_DRAFT });
   const [createOpen, setCreateOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [rollbackVersion, setRollbackVersion] = React.useState<number>();
   const [notice, setNotice] = React.useState<string>();
 
@@ -207,6 +211,23 @@ export default function SkillsRepository() {
     },
   });
 
+  const remove = useMutation({
+    mutationFn: () => deleteSkill(selectedId as string),
+    onSuccess: async () => {
+      const removedId = selectedId;
+      // clear the selection first so the workbench never renders against a
+      // skill the control plane has already dropped
+      setSelectedId(undefined);
+      setSelectedVersion(undefined);
+      setDeleteOpen(false);
+      setNotice(undefined);
+      queryClient.setQueryData<SkillRow[]>(["skills", scope.orgId], (current = []) =>
+        current.filter((item) => item.id !== removedId),
+      );
+      await queryClient.invalidateQueries({ queryKey: ["skills", scope.orgId] });
+    },
+  });
+
   const settings = useMutation({
     mutationFn: (input: UpdateSkillInput) => updateSkill(selectedId as string, input),
     onSuccess: (skill) => {
@@ -283,6 +304,7 @@ export default function SkillsRepository() {
             onSave={() => save.mutate()}
             onPublish={(version) => publish.mutate(version)}
             onSettings={() => setSettingsOpen(true)}
+            onDelete={() => setDeleteOpen(true)}
           />
         )}
 
@@ -326,8 +348,26 @@ export default function SkillsRepository() {
         onClose={() => setRollbackVersion(undefined)}
         onConfirm={() => rollbackVersion && rollback.mutate(rollbackVersion)}
       />
+      <DeleteSkillDialog
+        open={deleteOpen && !!selected}
+        skill={selected}
+        pending={remove.isPending}
+        error={remove.error as Error | null}
+        onOpenChange={setDeleteOpen}
+        onConfirm={() => remove.mutate()}
+      />
     </div>
   );
+}
+
+function DeleteSkillDialog({ open, skill, pending, error, onOpenChange, onConfirm }: { open: boolean; skill?: SkillRow; pending: boolean; error: Error | null; onOpenChange: (open: boolean) => void; onConfirm: () => void }) {
+  const { t } = useTranslation();
+  const [confirmation, setConfirmation] = React.useState("");
+  React.useEffect(() => { if (!open) setConfirmation(""); }, [open]);
+  // retiring hides a skill but keeps its history; deleting drops every
+  // immutable version, so make the operator retype the slug first
+  const matches = confirmation.trim() === skill?.slug;
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogHeader><DialogTitle>{t("pages.skillsRepo.deleteTitle", { name: skill?.name ?? "" })}</DialogTitle><DialogDescription>{skill?.published_version ? t("pages.skillsRepo.deletePublished", { version: skill.published_version }) : t("pages.skillsRepo.deleteUnpublished")} {t("pages.skillsRepo.deleteConsequence")}</DialogDescription></DialogHeader><label className="block text-xs font-medium">{t("pages.skillsRepo.deleteConfirmLabel", { slug: skill?.slug ?? "" })}<Input className="mt-1" autoFocus value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={skill?.slug} /></label>{error && <p role="alert" className="mt-2 text-xs text-[color:var(--status-danger)]">{error.message}</p>}<DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>{t("pages.skillsRepo.cancel")}</Button><Button variant="destructive" disabled={pending || !matches} onClick={onConfirm}><Trash2 className="h-4 w-4" />{pending ? t("pages.skillsRepo.deleting") : t("pages.skillsRepo.deleteSubmit")}</Button></DialogFooter></Dialog>;
 }
 
 function replaceSkill(queryClient: ReturnType<typeof useQueryClient>, orgId: string | undefined, skill: SkillRow) {
@@ -359,7 +399,8 @@ function SkillIndex({ skills, selectedId, onSelect, onCreate }: { skills: SkillR
   );
 }
 
-function SkillWorkbench({ skill, baseVersion, draft, notice, pending, error, onDraftChange, onSave, onPublish, onSettings }: { skill: SkillRow; baseVersion?: SkillVersionRow; draft: Draft; notice?: string; pending: boolean; error: Error | null; onDraftChange: (draft: Draft) => void; onSave: () => void; onPublish: (version: number) => void; onSettings: () => void }) {
+function SkillWorkbench({ skill, baseVersion, draft, notice, pending, error, onDraftChange, onSave, onPublish, onSettings, onDelete }: { skill: SkillRow; baseVersion?: SkillVersionRow; draft: Draft; notice?: string; pending: boolean; error: Error | null; onDraftChange: (draft: Draft) => void; onSave: () => void; onPublish: (version: number) => void; onSettings: () => void; onDelete: () => void }) {
+  const { t } = useTranslation();
   const problem = draftProblem(draft);
   const selectedPublished = baseVersion?.version === skill.published_version;
   return (
@@ -367,7 +408,7 @@ function SkillWorkbench({ skill, baseVersion, draft, notice, pending, error, onD
       <header className="border-b border-[color:var(--border-subtle)] px-4 py-3 sm:px-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-lg font-semibold tracking-[-0.02em]">{skill.name}</h2>{skill.retired_at ? <Badge tone="neutral">Retired</Badge> : skill.published_version ? <Badge tone="success" dot>v{skill.published_version} live</Badge> : <Badge tone="warning">Unpublished</Badge>}</div><p className="mt-1 max-w-2xl text-sm text-muted-foreground">{skill.description || "No description yet."}</p></div>
-          <div className="flex flex-wrap items-center gap-2"><Button variant="ghost" onClick={onSettings}><Settings2 className="h-4 w-4" /> Settings</Button>{baseVersion && !selectedPublished && !skill.retired_at && <Button variant="outline" disabled={pending} onClick={() => onPublish(baseVersion.version)}><Check className="h-4 w-4" /> Publish v{baseVersion.version}</Button>}<Button disabled={pending || !!problem || !!skill.retired_at} onClick={onSave}><FilePlus2 className="h-4 w-4" />{pending ? "Saving…" : "Save new version"}</Button></div>
+          <div className="flex flex-wrap items-center gap-2"><Button variant="ghost" onClick={onSettings}><Settings2 className="h-4 w-4" /> {t("pages.skillsRepo.settings")}</Button><Button variant="ghost" aria-label={t("pages.skillsRepo.deleteAction", { name: skill.name })} onClick={onDelete}><Trash2 className="h-4 w-4" /></Button>{baseVersion && !selectedPublished && !skill.retired_at && <Button variant="outline" disabled={pending} onClick={() => onPublish(baseVersion.version)}><Check className="h-4 w-4" /> Publish v{baseVersion.version}</Button>}<Button disabled={pending || !!problem || !!skill.retired_at} onClick={onSave}><FilePlus2 className="h-4 w-4" />{pending ? "Saving…" : "Save new version"}</Button></div>
         </div>
         <div className="mt-3 flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1 text-xs"><span className="font-mono text-[color:var(--text-subtle)]">{skill.slug}</span><span className="text-muted-foreground">minimum role: {skill.minimum_role}</span><span className="text-muted-foreground">{skill.allowed_team_ids.length ? `${skill.allowed_team_ids.length} teams` : "all org teams"}</span>{baseVersion && <span className="text-muted-foreground">editing from immutable v{baseVersion.version}</span>}{problem && <span role="alert" className="text-[color:var(--status-danger)]">{problem}</span>}{error && <span role="alert" className="text-[color:var(--status-danger)]">{error.message}</span>}{notice && <span role="status" className="text-[color:var(--status-success)]">{notice}</span>}</div>
       </header>

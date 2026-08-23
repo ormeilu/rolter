@@ -8,11 +8,13 @@ import {
   Clock3,
   FilePlus2,
   GitBranch,
+  Pencil,
   Plus,
   RotateCcw,
   Trash2,
 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,6 +33,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   createPromptTemplate,
   createPromptTemplateVersion,
+  deletePromptTemplate,
   fetchPromptTemplateScopes,
   fetchPromptTemplates,
   fetchPromptTemplateVersions,
@@ -39,6 +42,7 @@ import {
   publishPromptTemplateVersion,
   rollbackPromptTemplateVersion,
   setPromptTemplateScopes,
+  updatePromptTemplate,
   type PromptTemplateDecorator,
   type PromptTemplateRow,
   type PromptTemplateScopeInput,
@@ -106,11 +110,14 @@ function draftProblem(draft: Draft): string | undefined {
 export default function PromptRepository() {
   const scope = useScope();
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const [selectedId, setSelectedId] = React.useState<string>();
   const [selectedVersion, setSelectedVersion] = React.useState<number>();
   const [draft, setDraft] = React.useState<Draft>(() => copyDraft());
   const [samples, setSamples] = React.useState<Record<string, string>>({});
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [renameOpen, setRenameOpen] = React.useState(false);
+  const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [rollbackVersion, setRollbackVersion] = React.useState<number>();
   const [notice, setNotice] = React.useState<string>();
 
@@ -231,6 +238,37 @@ export default function PromptRepository() {
     },
   });
 
+  const rename = useMutation({
+    mutationFn: (input: { name?: string; description?: string }) =>
+      updatePromptTemplate(selectedId as string, input),
+    onSuccess: (template) => {
+      queryClient.setQueryData<PromptTemplateRow[]>(
+        ["prompt-templates", scope.orgId],
+        (current = []) => current.map((item) => (item.id === template.id ? template : item)),
+      );
+      setRenameOpen(false);
+      setNotice(t("pages.promptRepo.renamed"));
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: () => deletePromptTemplate(selectedId as string),
+    onSuccess: async () => {
+      const removedId = selectedId;
+      // drop the selection before the list refetches so the workbench never
+      // renders against a template the control plane no longer has
+      setSelectedId(undefined);
+      setSelectedVersion(undefined);
+      setDeleteOpen(false);
+      setNotice(undefined);
+      queryClient.setQueryData<PromptTemplateRow[]>(
+        ["prompt-templates", scope.orgId],
+        (current = []) => current.filter((item) => item.id !== removedId),
+      );
+      await queryClient.invalidateQueries({ queryKey: ["prompt-templates", scope.orgId] });
+    },
+  });
+
   const publish = useMutation({
     mutationFn: (version: number) => publishPromptTemplateVersion(selectedId as string, version),
     onSuccess: (template) => {
@@ -308,6 +346,8 @@ export default function PromptRepository() {
             onSamplesChange={setSamples}
             onSave={() => saveDraft.mutate()}
             onPublish={(version) => publish.mutate(version)}
+            onRename={() => setRenameOpen(true)}
+            onDelete={() => setDeleteOpen(true)}
           />
         )}
 
@@ -338,6 +378,22 @@ export default function PromptRepository() {
         error={rollback.error as Error | null}
         onClose={() => setRollbackVersion(undefined)}
         onConfirm={() => rollbackVersion && rollback.mutate(rollbackVersion)}
+      />
+      <RenameTemplateDialog
+        open={renameOpen && !!selected}
+        template={selected}
+        pending={rename.isPending}
+        error={rename.error as Error | null}
+        onOpenChange={setRenameOpen}
+        onSubmit={(input) => rename.mutate(input)}
+      />
+      <DeleteTemplateDialog
+        open={deleteOpen && !!selected}
+        template={selected}
+        pending={remove.isPending}
+        error={remove.error as Error | null}
+        onOpenChange={setDeleteOpen}
+        onConfirm={() => remove.mutate()}
       />
     </div>
   );
@@ -426,6 +482,8 @@ function PromptWorkbench({
   onSamplesChange,
   onSave,
   onPublish,
+  onRename,
+  onDelete,
 }: {
   template: PromptTemplateRow;
   baseVersion?: PromptTemplateVersionRow;
@@ -442,7 +500,10 @@ function PromptWorkbench({
   onSamplesChange: (samples: Record<string, string>) => void;
   onSave: () => void;
   onPublish: (version: number) => void;
+  onRename: () => void;
+  onDelete: () => void;
 }) {
+  const { t } = useTranslation();
   const problem = draftProblem(draft);
   const selectedPublished = baseVersion?.version === template.published_version;
   return (
@@ -464,6 +525,12 @@ function PromptWorkbench({
             )}
             <Button disabled={pending || !!problem} onClick={onSave}>
               <FilePlus2 className="h-4 w-4" /> {pending ? "Saving…" : "Save as new draft"}
+            </Button>
+            <Button variant="ghost" aria-label={t("pages.promptRepo.renameAction", { name: template.name })} onClick={onRename}>
+              <Pencil className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" aria-label={t("pages.promptRepo.deleteAction", { name: template.name })} onClick={onDelete}>
+              <Trash2 className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -645,6 +712,27 @@ function CreateTemplateDialog({ open, pending, error, onOpenChange, onSubmit }: 
   const [description, setDescription] = React.useState("");
   React.useEffect(() => { if (!open) { setName(""); setSlug(""); setDescription(""); } }, [open]);
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogHeader><DialogTitle>Create prompt template</DialogTitle><DialogDescription>The slug is a stable identity. Content is added as an immutable version next.</DialogDescription></DialogHeader><form className="space-y-3" onSubmit={(event) => { event.preventDefault(); onSubmit({ name: name.trim(), ...(slug.trim() ? { slug: slug.trim() } : {}), ...(description.trim() ? { description: description.trim() } : {}) }); }}><label className="block text-xs font-medium">Name<Input className="mt-1" autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Support concierge" /></label><label className="block text-xs font-medium">Slug <span className="font-normal text-muted-foreground">optional</span><Input className="mt-1" value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="support-concierge" /></label><label className="block text-xs font-medium">Description <span className="font-normal text-muted-foreground">optional</span><Textarea className="mt-1" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label>{error && <p role="alert" className="text-xs text-[color:var(--status-danger)]">{error.message}</p>}<DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={pending || !name.trim()}>{pending ? "Creating…" : "Create template"}</Button></DialogFooter></form></Dialog>;
+}
+
+function RenameTemplateDialog({ open, template, pending, error, onOpenChange, onSubmit }: { open: boolean; template?: PromptTemplateRow; pending: boolean; error: Error | null; onOpenChange: (open: boolean) => void; onSubmit: (input: { name?: string; description?: string }) => void }) {
+  const [name, setName] = React.useState("");
+  const [description, setDescription] = React.useState("");
+  const { t } = useTranslation();
+  React.useEffect(() => { if (open && template) { setName(template.name); setDescription(template.description ?? ""); } }, [open, template]);
+  const trimmed = name.trim();
+  // the slug is the stable identity and stays put, so only these two move
+  const unchanged = trimmed === template?.name && description.trim() === (template?.description ?? "");
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogHeader><DialogTitle>{t("pages.promptRepo.renameTitle")}</DialogTitle><DialogDescription>{t("pages.promptRepo.renameDescription", { slug: template?.slug ?? "" })}</DialogDescription></DialogHeader><form className="space-y-3" onSubmit={(event) => { event.preventDefault(); onSubmit({ name: trimmed, description: description.trim() }); }}><label className="block text-xs font-medium">{t("pages.promptRepo.fieldName")}<Input className="mt-1" autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label className="block text-xs font-medium">{t("pages.promptRepo.fieldDescription")} <span className="font-normal text-muted-foreground">{t("pages.promptRepo.fieldOptional")}</span><Textarea className="mt-1" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label>{error && <p role="alert" className="text-xs text-[color:var(--status-danger)]">{error.message}</p>}<DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{t("pages.promptRepo.cancel")}</Button><Button type="submit" disabled={pending || !trimmed || unchanged}>{pending ? t("pages.promptRepo.renameSaving") : t("pages.promptRepo.renameSubmit")}</Button></DialogFooter></form></Dialog>;
+}
+
+function DeleteTemplateDialog({ open, template, pending, error, onOpenChange, onConfirm }: { open: boolean; template?: PromptTemplateRow; pending: boolean; error: Error | null; onOpenChange: (open: boolean) => void; onConfirm: () => void }) {
+  const { t } = useTranslation();
+  const [confirmation, setConfirmation] = React.useState("");
+  React.useEffect(() => { if (!open) setConfirmation(""); }, [open]);
+  // deleting takes every immutable version with it, so make the operator
+  // retype the slug rather than let one stray click drop live prompt content
+  const matches = confirmation.trim() === template?.slug;
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogHeader><DialogTitle>{t("pages.promptRepo.deleteTitle", { name: template?.name ?? "" })}</DialogTitle><DialogDescription>{template?.published_version ? t("pages.promptRepo.deleteLive", { version: template.published_version }) : t("pages.promptRepo.deleteUnpublished")} {t("pages.promptRepo.deleteConsequence")}</DialogDescription></DialogHeader><label className="block text-xs font-medium">{t("pages.promptRepo.deleteConfirmLabel", { slug: template?.slug ?? "" })}<Input className="mt-1" autoFocus value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={template?.slug} /></label>{error && <p role="alert" className="mt-2 text-xs text-[color:var(--status-danger)]">{error.message}</p>}<DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>{t("pages.promptRepo.cancel")}</Button><Button variant="destructive" disabled={pending || !matches} onClick={onConfirm}><Trash2 className="h-4 w-4" />{pending ? t("pages.promptRepo.deleting") : t("pages.promptRepo.deleteSubmit")}</Button></DialogFooter></Dialog>;
 }
 
 function RollbackDialog({ version, publishedVersion, pending, error, onClose, onConfirm }: { version?: number; publishedVersion?: number | null; pending: boolean; error: Error | null; onClose: () => void; onConfirm: () => void }) {

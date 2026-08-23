@@ -32,6 +32,8 @@ Select a saved version and publish it to make it resolve by the skill's slug. To
 
 Retiring a skill stops callers from resolving it without deleting its metadata or version history. Reactivate it from **Settings** when it should be available again.
 
+To remove a skill for good, use **Delete** in the skill header. Deleting drops every version and access rule with it, so the dialog asks you to type the skill's slug back before it will proceed. Prefer retiring when you only need callers to stop resolving the skill — retirement is reversible, deletion is not.
+
 <Note>
   Organization skills require the PostgreSQL-backed control plane. Publication, rollback, and retirement bump the reload-free configuration snapshot consumed by gateways.
 </Note>
