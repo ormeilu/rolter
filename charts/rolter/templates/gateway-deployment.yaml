@@ -48,8 +48,11 @@ spec:
             - name: config
               mountPath: /etc/rolter
               readOnly: true
+          # /readyz reports not-ready while the instance is draining, so a
+          # drained gateway leaves the Service instead of being killed;
+          # /healthz stays a pure liveness signal (#1081)
           readinessProbe:
-            httpGet: {path: /healthz, port: http}
+            httpGet: {path: /readyz, port: http}
             initialDelaySeconds: 2
           livenessProbe:
             httpGet: {path: /healthz, port: http}

@@ -1,20 +1,22 @@
 ---
 title: "Health and Metrics Endpoints for the Rolter Gateway"
 sidebarTitle: "Health & Metrics"
-description: "Use GET /healthz for liveness probes and GET /metrics for Prometheus scraping to integrate Rolter into your monitoring and orchestration stack."
+description: "Use GET /healthz for liveness probes, GET /readyz for readiness probes, and GET /metrics for Prometheus scraping to integrate Rolter into your monitoring and orchestration stack."
 ---
 
-Rolter exposes two operational endpoints that require no authentication and are designed to be scraped or probed directly by your infrastructure tooling. Use `/healthz` for container orchestration liveness checks and `/metrics` for Prometheus scraping.
+Rolter exposes three operational endpoints that require no authentication and are designed to be scraped or probed directly by your infrastructure tooling. Use `/healthz` for liveness checks, `/readyz` for readiness checks, and `/metrics` for Prometheus scraping.
 
 ## GET /healthz
 
-The liveness endpoint returns `200 OK` with the body `ok` when the gateway process is running and its HTTP server is accepting connections. No authentication is required.
+The liveness endpoint returns `200 OK` with the body `ok` when the process is running and its HTTP server is accepting connections. No authentication is required.
+
+It checks **no dependency** — not PostgreSQL, not Redis, not ClickHouse, not an upstream provider. That is deliberate: a failing liveness probe restarts the pod, so nothing outside the process may be able to trigger a restart.
 
 Use this endpoint for:
 
-- **Kubernetes** `livenessProbe` and `readinessProbe` configuration
+- **Kubernetes** `livenessProbe` and `startupProbe` configuration
 - **Docker** `HEALTHCHECK` instructions
-- **Load balancer** health checks in front of multiple gateway instances
+- **Load balancer** liveness checks in front of multiple gateway instances
 
 ```bash
 curl http://localhost:4000/healthz
@@ -30,6 +32,57 @@ livenessProbe:
   initialDelaySeconds: 5
   periodSeconds: 10
 ```
+
+## GET /readyz
+
+The readiness endpoint answers a different question: can *this* instance serve traffic right now? A failing readiness probe removes the pod from the Service and nothing more, so unlike `/healthz` it is free to check dependencies.
+
+<Tabs>
+  <Tab title="Gateway">
+    Returns `200 OK` normally, and `503 Service Unavailable` with the body `draining` once the instance has been drained from the dashboard's cluster screen. A drained gateway therefore leaves the Service and finishes its in-flight requests instead of being killed mid-request.
+
+    ```bash
+    curl -i http://localhost:4000/readyz
+    # → 200 OK
+    # → ok
+    ```
+  </Tab>
+  <Tab title="Control plane">
+    Returns a JSON body naming each check, with `200` when ready and `503` otherwise:
+
+    ```bash
+    curl -s http://localhost:4001/readyz
+    ```
+
+    ```json
+    {
+      "status": "ready",
+      "checks": { "database": "ok", "migrations": "ok", "kek": "ok" }
+    }
+    ```
+
+    | Check | Ready when |
+    | --- | --- |
+    | `database` | The PostgreSQL pool hands out a connection within 2 seconds |
+    | `migrations` | Every migration embedded in this binary is applied to the database |
+    | `kek` | `ROLTER_KEK` parses when it is set (reported `not configured` when unset, which is not a failure) |
+
+    Redis and ClickHouse are **not** checked. The control plane serves configuration without either, so their absence is degraded, not unready — removing every control pod from the Service because analytics is down would be a strictly worse outage.
+  </Tab>
+</Tabs>
+
+```yaml Kubernetes readiness probe
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 4000
+  initialDelaySeconds: 3
+  periodSeconds: 5
+```
+
+<Warning>
+  Do not point both probes at the same path. If a single endpoint answers as soon as the server binds, Kubernetes routes traffic at a control plane that has not migrated yet. If it instead checks PostgreSQL, a database blip fails *liveness* and restarts every control pod at once, turning a recoverable dependency outage into a restart storm.
+</Warning>
 
 ## GET /metrics
 

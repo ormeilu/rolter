@@ -16,6 +16,7 @@
 - [SCIM provisioning](architecture/scim-provisioning.md)
 - [Security](architecture/security.md)
 - [LDAP authentication](architecture/ldap.md)
+- [Health & readiness](architecture/health-and-readiness.md)
 - [Observability](architecture/observability.md)
 - [Performance](architecture/performance.md)
 

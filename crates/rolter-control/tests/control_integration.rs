@@ -86,6 +86,67 @@ macro_rules! skip_without_db {
     };
 }
 
+/// `/readyz` is a real readiness signal, not an alias for `/healthz` (#1081):
+/// it reports not-ready against a database whose migrations have not run, and
+/// ready once they have. `/healthz` answers `200` throughout — it is liveness,
+/// and must never depend on the database, or a database outage would restart
+/// every control pod instead of draining it.
+#[tokio::test]
+async fn readyz_waits_for_migrations_while_healthz_stays_up() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let client = reqwest::Client::new();
+
+    let addr = serve(rolter_control::test_app_unmigrated(pool.clone())).await;
+    let not_ready = client
+        .get(format!("http://{addr}/readyz"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        not_ready.status(),
+        503,
+        "unmigrated database must not be ready"
+    );
+    let body: Value = not_ready.json().await.unwrap();
+    assert_eq!(body["status"], "not_ready");
+    assert_eq!(
+        body["checks"]["database"], "ok",
+        "the pool itself is reachable"
+    );
+    assert!(
+        body["checks"]["migrations"]
+            .as_str()
+            .unwrap()
+            .contains("pending"),
+        "migrations should be the failing check, got {body}"
+    );
+
+    // liveness does not consult the database, so it is up even here
+    let health = client
+        .get(format!("http://{addr}/healthz"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        health.status(),
+        200,
+        "healthz must not depend on the database"
+    );
+
+    // the same pool, once migrated, is ready
+    let migrated = serve(rolter_control::test_app(pool).await.expect("build app")).await;
+    let ready = client
+        .get(format!("http://{migrated}/readyz"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ready.status(), 200);
+    let body: Value = ready.json().await.unwrap();
+    assert_eq!(body["status"], "ready");
+    assert_eq!(body["checks"]["migrations"], "ok");
+}
+
 #[tokio::test]
 async fn ping_and_healthz_respond() {
     skip_without_db!();

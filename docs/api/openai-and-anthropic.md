@@ -32,7 +32,8 @@ When no virtual keys are configured the gateway runs open (useful for local dev)
 | GET | `/openapi.json` | OpenAPI 3.1 description of this request surface (self-contained, no external assets) |
 | GET | `/docs` | interactive Scalar API reference (assets embedded in the binary — works air-gapped) |
 | GET | `/` | service-info landing (version + links to docs/openapi/health) |
-| GET | `/healthz` | liveness |
+| GET | `/healthz` | liveness — process is up, no dependency checks |
+| GET | `/readyz` | readiness — `503` while draining (see [Health & readiness](../architecture/health-and-readiness.md)) |
 | GET | `/metrics` | Prometheus exposition |
 
 ## Realtime WebSocket
