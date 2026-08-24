@@ -38,14 +38,52 @@ jobs:
           GH_TOKEN: ${{ secrets.ADD_TO_PROJECT_PAT }}
           ITEM_ID: ${{ steps.add.outputs.itemId }}
           PROJECT_ID: PVT_kwDOEjWga84Bdezc
-          STATUS_FIELD: PVTSSF_lADOEjWga84BdezczhYACo4
-          STATUS_TODO: f75ad846
-          PRIORITY_FIELD: PVTSSF_lADOEjWga84BdezczhYAQGI
-          PRIORITY_MEDIUM: 82100b74
         run: |
           set -euo pipefail
-          # $-prefixed names in the query are graphql variables, not shell vars
+
+          # field and option ids are resolved by *name* rather than pinned.
+          # pinning them is what broke this: the board's "Todo" option id
+          # changed and every issue and PR then failed with "The single select
+          # option Id does not belong to the field", landing in the untracked
+          # no-status column — the exact outcome this job exists to prevent
+          # (#1096). names are stable; generated ids are not.
+          #
+          # shellcheck disable=SC2016
+          FIELDS=$(gh api graphql -f query='
+            query($project:ID!){
+              node(id:$project){
+                ... on ProjectV2 {
+                  fields(first:50){
+                    nodes {
+                      ... on ProjectV2SingleSelectField {
+                        id name options { id name }
+                      }
+                    }
+                  }
+                }
+              }
+            }' -f project="$PROJECT_ID")
+
+          # $-prefixed names in the mutation are graphql variables, not shell vars
           set_field() {
+            local field_name=$1 option_name=$2 field_id option_id
+            field_id=$(jq -r --arg f "$field_name" \
+              '.data.node.fields.nodes[] | select(.name == $f) | .id' <<<"$FIELDS")
+            option_id=$(jq -r --arg f "$field_name" --arg o "$option_name" \
+              '.data.node.fields.nodes[] | select(.name == $f)
+               | .options[] | select(.name == $o) | .id' <<<"$FIELDS")
+
+            # fail loudly and specifically: a silently skipped seed is how this
+            # went unnoticed, and "which field, which value" is the whole answer
+            if [ -z "$field_id" ] || [ "$field_id" = "null" ]; then
+              echo "::error::project board has no single-select field named '$field_name'"
+              exit 1
+            fi
+            if [ -z "$option_id" ] || [ "$option_id" = "null" ]; then
+              echo "::error::field '$field_name' has no option named '$option_name'"
+              exit 1
+            fi
+
             # shellcheck disable=SC2016
             gh api graphql -f query='
               mutation($project:ID!,$item:ID!,$field:ID!,$opt:String!){
@@ -54,7 +92,7 @@ jobs:
                   value:{singleSelectOptionId:$opt}
                 }){ projectV2Item { id } }
               }' -f project="$PROJECT_ID" -f item="$ITEM_ID" \
-                 -f field="$1" -f opt="$2"
+                 -f field="$field_id" -f opt="$option_id"
           }
-          set_field "$STATUS_FIELD" "$STATUS_TODO"
-          set_field "$PRIORITY_FIELD" "$PRIORITY_MEDIUM"
+          set_field Status Todo
+          set_field Priority Medium
