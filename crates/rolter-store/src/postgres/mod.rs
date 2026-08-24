@@ -51,6 +51,32 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
         .map_err(|err| Error::Store(err.to_string()))
 }
 
+/// Embedded migration versions the database has not applied successfully.
+///
+/// Used by the control plane's readiness probe: a pod whose database is behind
+/// the binary it runs cannot serve `/internal/snapshot` or the CRUD API
+/// correctly, so it must not be marked ready. A missing `_sqlx_migrations`
+/// table — a database nothing has ever migrated — reports every version as
+/// pending rather than erroring, which is the same answer for the caller.
+pub async fn pending_migrations(pool: &PgPool) -> Result<Vec<i64>> {
+    let migrator = sqlx::migrate!("./migrations");
+    let applied: Vec<i64> =
+        match sqlx::query_scalar::<_, i64>("select version from _sqlx_migrations where success")
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => rows,
+            // 42P01 is undefined_table: nothing has migrated this database yet
+            Err(sqlx::Error::Database(err)) if err.code().as_deref() == Some("42P01") => Vec::new(),
+            Err(err) => return Err(store_err(err)),
+        };
+    Ok(migrator
+        .iter()
+        .map(|m| m.version)
+        .filter(|version| !applied.contains(version))
+        .collect())
+}
+
 /// Test-only helpers for building isolated, migrated pools. Every test gets its
 /// own schema pinned via `search_path`, so plain `cargo test` (which runs tests
 /// as threads in one process — e.g. the coverage job) never races on a shared

@@ -559,6 +559,106 @@ fn load_index(ui_dir: &std::path::Path, config: &ui_config::UiRuntimeConfig) -> 
     }
 }
 
+/// How long the readiness probe waits for a pooled connection before calling
+/// the database unreachable. Deliberately shorter than a typical probe
+/// `timeoutSeconds`, so an exhausted pool answers `503` instead of hanging
+/// until kubelet gives up and reports a timeout that looks like a dead process.
+#[cfg(feature = "postgres")]
+const READY_DB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Readiness: can this process actually serve control-plane traffic?
+///
+/// Distinct from `/healthz`, which answers only "is the process alive". The
+/// two questions have opposite failure handling, which is why they are two
+/// endpoints (#1081):
+///
+/// - a failing **readiness** probe takes the pod out of the Service, so a pod
+///   that cannot reach its database stops receiving dashboard and
+///   `/internal/snapshot` traffic while it recovers
+/// - a failing **liveness** probe *kills* the pod, so it must never depend on
+///   Postgres — a database blip would otherwise restart every control pod at
+///   once and turn a recoverable dependency outage into a restart storm
+///
+/// Ready requires: the Postgres pool hands out a connection, every embedded
+/// migration is applied, and the KEK parses when `ROLTER_KEK` is set. Redis and
+/// ClickHouse are deliberately *not* checked — the control plane serves
+/// configuration without either, so their absence is degraded, not unready.
+///
+/// Without a database (`--config` only, no `--database-url`) there is nothing
+/// to wait on and the answer is always ready.
+async fn readyz(State(state): State<ControlState>) -> Response {
+    let mut checks = serde_json::Map::new();
+    #[allow(unused_mut)]
+    let mut ready = true;
+
+    #[cfg(feature = "postgres")]
+    if let Some(pool) = state.pool.as_ref() {
+        match tokio::time::timeout(READY_DB_TIMEOUT, pool.acquire()).await {
+            Ok(Ok(_conn)) => {
+                checks.insert("database".into(), json!("ok"));
+                match rolter_store::postgres::pending_migrations(pool).await {
+                    Ok(pending) if pending.is_empty() => {
+                        checks.insert("migrations".into(), json!("ok"));
+                    }
+                    Ok(pending) => {
+                        ready = false;
+                        checks.insert(
+                            "migrations".into(),
+                            json!(format!("{} pending", pending.len())),
+                        );
+                    }
+                    Err(err) => {
+                        ready = false;
+                        checks.insert("migrations".into(), json!(err.to_string()));
+                    }
+                }
+            }
+            Ok(Err(err)) => {
+                ready = false;
+                checks.insert("database".into(), json!(err.to_string()));
+                checks.insert("migrations".into(), json!("unknown"));
+            }
+            Err(_) => {
+                ready = false;
+                checks.insert("database".into(), json!("acquire timed out"));
+                checks.insert("migrations".into(), json!("unknown"));
+            }
+        }
+        // a KEK that is set but unusable seals nothing and decrypts nothing, so
+        // a pod holding one cannot serve credentials on /internal/snapshot
+        checks.insert(
+            "kek".into(),
+            match std::env::var(rolter_store::postgres::crypto::KEK_ENV) {
+                Ok(secret) if secret.trim().is_empty() => {
+                    ready = false;
+                    json!("set but empty")
+                }
+                Ok(_) => json!("ok"),
+                Err(_) => json!("not configured"),
+            },
+        );
+    } else {
+        checks.insert("database".into(), json!("not configured"));
+    }
+
+    #[cfg(not(feature = "postgres"))]
+    {
+        let _ = &state;
+        checks.insert("database".into(), json!("not configured"));
+    }
+
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    let body = json!({
+        "status": if ready { "ready" } else { "not_ready" },
+        "checks": Value::Object(checks),
+    });
+    (status, Json(body)).into_response()
+}
+
 /// Assemble the control-plane API router (no SPA fallback) with `state` applied.
 /// The CRUD routes are only mounted when a postgres pool is present.
 /// `mount_internal` controls whether `/internal/*` is served on this router at
@@ -568,7 +668,10 @@ fn load_index(ui_dir: &std::path::Path, config: &ui_config::UiRuntimeConfig) -> 
 fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
     #[allow(unused_mut)]
     let mut api = Router::new()
+        // liveness: the process is up and the runtime is not wedged. No
+        // dependency checks live here on purpose — see `readyz`
         .route("/healthz", get(|| async { "ok" }))
+        .route("/readyz", get(readyz))
         .route(
             "/api/v1/ping",
             get(|| async { Json(json!({"pong": true})) }),
@@ -725,9 +828,21 @@ pub async fn test_app_with_admin_token(
     admin_token: Option<String>,
 ) -> anyhow::Result<Router> {
     rolter_store::postgres::run_migrations(&pool).await?;
+    Ok(build_app_with(test_state(pool, admin_token), true))
+}
+
+/// [`test_app`] with the migrations deliberately *not* run, for exercising
+/// `/readyz` against a database whose schema is behind the binary (#1081).
+#[cfg(feature = "postgres")]
+pub fn test_app_unmigrated(pool: sqlx::PgPool) -> Router {
+    build_app_with(test_state(pool, None), true)
+}
+
+#[cfg(feature = "postgres")]
+fn test_state(pool: sqlx::PgPool, admin_token: Option<String>) -> ControlState {
     let store: Arc<dyn ConfigStore> =
         Arc::new(rolter_store::PostgresConfigStore::new(pool.clone()));
-    let state = ControlState {
+    ControlState {
         store,
         config_owned: Arc::new(ConfigOwned::default()),
         redis: None,
@@ -741,8 +856,7 @@ pub async fn test_app_with_admin_token(
         cors: Arc::default(),
         metrics: Default::default(),
         pool: Some(pool),
-    };
-    Ok(build_app_with(state, true))
+    }
 }
 
 /// Build the config store: postgres-backed when `--database-url` is set

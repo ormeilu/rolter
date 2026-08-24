@@ -85,13 +85,16 @@ Work through these steps before sending production traffic to your gateway:
     </Tip>
   </Step>
   <Step title="Configure health probes">
-    Point your load balancer or container orchestrator's liveness and readiness probes at the gateway's health endpoint:
+    Both binaries serve two endpoints that answer two different questions. Wire each to its own probe — never point both probes at the same path.
 
     ```text
-    GET /healthz  →  port 4000
+    GET /healthz  →  liveness   (process is up; checks no dependency)
+    GET /readyz   →  readiness  (this instance can actually serve right now)
     ```
 
-    A `200 OK` response indicates the gateway process is up and ready to serve traffic. Configure both liveness and readiness probes to this endpoint to give your orchestrator accurate signal for routing and restart decisions.
+    A failing **liveness** probe restarts the pod, so `/healthz` deliberately checks nothing outside the process — otherwise a PostgreSQL blip would restart your whole control-plane deployment instead of draining it. A failing **readiness** probe only removes the pod from the Service.
+
+    On the gateway, `/readyz` returns `503` while the instance is draining. On the control plane, it returns `503` until the PostgreSQL pool hands out a connection, every migration is applied, and `ROLTER_KEK` parses when set; Redis and ClickHouse are treated as degraded, not unready.
 
     ```yaml
     # Example Kubernetes probe config
@@ -103,11 +106,23 @@ Work through these steps before sending production traffic to your gateway:
       periodSeconds: 10
     readinessProbe:
       httpGet:
-        path: /healthz
+        path: /readyz
         port: 4000
       initialDelaySeconds: 3
       periodSeconds: 5
+    # control plane only: hold liveness off while first-boot migrations run
+    # against a cold database
+    startupProbe:
+      httpGet:
+        path: /healthz
+        port: 4001
+      periodSeconds: 5
+      failureThreshold: 60
     ```
+
+    <Note>
+      The bundled Helm chart already wires all three probes this way. Alert on `/readyz` staying down past a database failover, and on `/healthz` flapping.
+    </Note>
   </Step>
   <Step title="Back up PostgreSQL regularly">
     PostgreSQL is the single source of truth for all Rolter configuration — providers, routes, virtual keys, RBAC policies, and budgets. Schedule regular automated backups using `pg_dump` or your cloud provider's managed backup tooling. Test restore procedures before you need them.
