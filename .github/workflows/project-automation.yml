@@ -40,8 +40,8 @@ jobs:
           PROJECT_ID: PVT_kwDOEjWga84Bdezc
           STATUS_FIELD: PVTSSF_lADOEjWga84BdezczhYACo4
           STATUS_TODO: f75ad846
-          PRIORITY_FIELD: PVTSSF_lADOEjWga84BdezczhYAQGI
-          PRIORITY_MEDIUM: 82100b74
+          # PRIORITY_FIELD: PVTSSF_lADOEjWga84BdezczhYAQGI
+          # PRIORITY_MEDIUM: 82100b74
         run: |
           set -euo pipefail
           # $-prefixed names in the query are graphql variables, not shell vars
@@ -57,4 +57,3 @@ jobs:
                  -f field="$1" -f opt="$2"
           }
           set_field "$STATUS_FIELD" "$STATUS_TODO"
-          set_field "$PRIORITY_FIELD" "$PRIORITY_MEDIUM"
