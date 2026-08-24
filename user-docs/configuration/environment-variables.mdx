@@ -33,6 +33,29 @@ These variables control the control-plane process (`rolter-control`), which mana
 | `ROLTER_UI_DIR` | Filesystem path to the built UI assets served by the control plane. |
 | `ROLTER_KEK` | AES-256-GCM master key used to encrypt provider credentials at rest in PostgreSQL. |
 | `DATABASE_URL` | PostgreSQL connection string, e.g. `postgres://user:pass@localhost:5432/rolter`. |
+| `ROLTER_DB_MAX_CONNECTIONS` | Ceiling on open PostgreSQL connections. Default `10`. |
+| `ROLTER_DB_MIN_CONNECTIONS` | Connections kept open while idle. Default `0`. |
+| `ROLTER_DB_ACQUIRE_TIMEOUT_SECS` | How long a request waits for a free connection before failing. Default `30`. |
+| `ROLTER_DB_IDLE_TIMEOUT_SECS` | Close a connection idle for longer than this. `0` means never. Default `600`. |
+| `ROLTER_DB_MAX_LIFETIME_SECS` | Retire a connection older than this regardless of use. `0` disables. Default `1800`. |
+
+### Sizing the connection pool
+
+One pool serves **everything** the control plane does: `/internal/snapshot` — which every gateway in your fleet polls — plus the whole dashboard CRUD surface, SCIM, SSO, MCP, and the RBAC guard's per-request membership lookups. Left too small, that budget silently becomes an acquire-timeout queue.
+
+Size `ROLTER_DB_MAX_CONNECTIONS` against your **database's** `max_connections`, not against gateway count:
+
+```text
+ROLTER_DB_MAX_CONNECTIONS × (control replicas)  <  PostgreSQL max_connections − headroom
+```
+
+Leave headroom for migrations, backups, and any other client of the same database. Gateway count is a weak input here — snapshot polls are short and answer `304 Not Modified` most of the time, so a large fleet does not need a proportionally large pool.
+
+<Tip>
+  Raise the ceiling when all three of these hold at once: `rolter_db_pool_acquire_ms` shows waits, `rolter_db_pool_idle` sits at zero, and `rolter_db_pool_connections` is pinned to `rolter_db_pool_max`. That combination means the ceiling is the bottleneck. Acquire waits *without* a pinned pool mean the database itself is slow, and a bigger pool will make that worse.
+</Tip>
+
+Keep `ROLTER_DB_ACQUIRE_TIMEOUT_SECS` bounded. It is what turns pool exhaustion into a fast, attributable error instead of an opaque stall that looks like a database outage.
 
 <Warning>
   `ROLTER_KEK` is the most sensitive secret in your Rolter deployment. Any party who holds this key can decrypt every stored provider credential. Generate a strong value before first run and store it in a secrets manager:
