@@ -351,6 +351,24 @@ impl ProjectRepo<'_> {
             .ok_or_else(|| Error::NotFound(format!("project {id}")))
     }
 
+    /// The owning team of each of `ids`, in one query.
+    ///
+    /// Replaces a per-id [`Self::get`] on the authorization path, where the
+    /// caller holds a user's project memberships and needs only which team each
+    /// belongs to. Unknown ids are simply absent from the result rather than an
+    /// error: the caller is asking which of these are in scope, and a project
+    /// that no longer exists is not (#1048).
+    pub async fn team_ids_for(&self, ids: &[Uuid]) -> Result<Vec<(Uuid, Uuid)>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        sqlx::query_as("select id, team_id from projects where id = any($1)")
+            .bind(ids)
+            .fetch_all(self.0)
+            .await
+            .map_err(store_err)
+    }
+
     pub async fn create(&self, team_id: Uuid, name: &str) -> Result<Project> {
         sqlx::query_as(
             "insert into projects (team_id, name) values ($1, $2)
