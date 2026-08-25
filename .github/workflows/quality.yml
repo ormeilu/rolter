@@ -86,7 +86,7 @@ jobs:
           toolchain: stable
       - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2.86.5
         with:
           tool: nextest
       - name: nextest (workspace, all features)
@@ -108,7 +108,7 @@ jobs:
           toolchain: stable
       - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2.86.5
         with:
           tool: cargo-hack
       - name: cargo hack (each feature)
@@ -142,7 +142,7 @@ jobs:
         with:
           persist-credentials: false
       - name: cargo-deny (advisories, bans, licenses, sources)
-        uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
+        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2.86.5
         with:
           tool: cargo-deny@0.20.2
       - name: cargo deny check
@@ -519,7 +519,7 @@ jobs:
           components: llvm-tools-preview
       - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2.86.5
         with:
           tool: cargo-llvm-cov
       - name: cargo llvm-cov
@@ -549,7 +549,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2.86.5
         with:
           tool: taplo
       - name: taplo fmt --check
