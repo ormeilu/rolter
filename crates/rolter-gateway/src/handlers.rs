@@ -533,11 +533,7 @@ fn tenant_scope(vk: Option<&KeyMeta>) -> String {
 }
 
 fn provider_key_fingerprint(key: &str) -> String {
-    let mut fingerprint = String::with_capacity(64);
-    for byte in Sha256::digest(key.as_bytes()) {
-        let _ = write!(fingerprint, "{byte:02x}");
-    }
-    fingerprint
+    rolter_auth::hex::encode(&Sha256::digest(key.as_bytes()))
 }
 
 pub async fn messages(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
