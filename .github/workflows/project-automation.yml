@@ -54,7 +54,7 @@ jobs:
                   value:{singleSelectOptionId:$opt}
                 }){ projectV2Item { id } }
               }' -f project="$PROJECT_ID" -f item="$ITEM_ID" \
-                 -f field="$1" -f opt="$2"
+                 -f field="$1" -f opt="$2" || true
           }
           set_field "$STATUS_FIELD" "$STATUS_TODO"
           set_field "$PRIORITY_FIELD" "$PRIORITY_MEDIUM"
