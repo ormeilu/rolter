@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
@@ -242,9 +242,6 @@ export default function ProviderGroups() {
               });
             }}
           >
-            {removeGroup.isPending && (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            )}
             Delete
           </Button>
         </DialogFooter>
