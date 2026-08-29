@@ -112,7 +112,7 @@ fn validate_header_name(name: &str) -> ApiResult<String> {
 fn validate_settings(body: &UpdateClientSettings) -> ApiResult<()> {
     if let Some(url) = body.public_base_url.as_deref() {
         let url = url.trim();
-        if !url.is_empty() && !(url.starts_with("http://") || url.starts_with("https://")) {
+        if !(url.is_empty() || url.starts_with("http://") || url.starts_with("https://")) {
             return Err(invalid("public_base_url must be an http(s) URL"));
         }
         if url.len() > 2_048 {

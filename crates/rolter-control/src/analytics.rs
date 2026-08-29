@@ -91,13 +91,15 @@ impl ClickHouseClient {
     // only reachable via the postgres-gated mcp_logs router
     #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
     pub(crate) async fn insert_mcp_tool_call(&self, event: &Value) -> anyhow::Result<()> {
+        // [BOLT] Use `to_vec` instead of `to_string` since reqwest::body directly accepts `Vec<u8>`.
+        // This avoids unnecessary UTF-8 validation/allocation for the intermediate String.
         let response = self
             .client
             .post(format!(
                 "{}/?query=INSERT%20INTO%20mcp_tool_call_logs%20FORMAT%20JSONEachRow",
                 self.base
             ))
-            .body(serde_json::to_string(event)?)
+            .body(serde_json::to_vec(event)?)
             .send()
             .await?;
         if response.status().is_success() {
@@ -120,10 +122,16 @@ impl ClickHouseClient {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut body = String::new();
+        // [BOLT] Pre-allocate Vec based on heuristic for JSONEachRow bulk insert. Stream
+        // directly to the byte buffer with `to_writer` to avoid multiple String allocations.
+        let mut body = Vec::with_capacity(rows.len() * 128);
         for row in rows {
-            body.push_str(&serde_json::to_string(row)?);
-            body.push('\n');
+            let start_len = body.len();
+            if let Err(e) = serde_json::to_writer(&mut body, row) {
+                body.truncate(start_len);
+                return Err(e.into());
+            }
+            body.push(b'\n');
         }
         let response = self
             .client
