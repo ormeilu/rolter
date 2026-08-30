@@ -190,6 +190,7 @@ export function NavSidebar({
         {collapsible && !collapsed && (
           <button
             title={t("shell.collapseSidebar")}
+            aria-label={t("shell.collapseSidebar")}
             onClick={() => setCollapsed(true)}
             className="ml-auto rounded-md p-1 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
@@ -226,6 +227,7 @@ export function NavSidebar({
             <button
               onClick={() => setQuery("")}
               title={t("common.clearSearch")}
+              aria-label={t("common.clearSearch")}
               className="-my-1 -mr-1 rounded p-1 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               <X className="h-3.5 w-3.5" />
