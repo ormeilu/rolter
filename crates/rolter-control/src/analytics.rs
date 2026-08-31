@@ -97,7 +97,7 @@ impl ClickHouseClient {
                 "{}/?query=INSERT%20INTO%20mcp_tool_call_logs%20FORMAT%20JSONEachRow",
                 self.base
             ))
-            .body(serde_json::to_string(event)?)
+            .body(serde_json::to_vec(event)?)
             .send()
             .await?;
         if response.status().is_success() {
@@ -120,10 +120,15 @@ impl ClickHouseClient {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut body = String::new();
+        // PERFORMANCE: Pre-allocate a byte buffer for batch serialization
+        let mut body = Vec::with_capacity(rows.len() * 128);
         for row in rows {
-            body.push_str(&serde_json::to_string(row)?);
-            body.push('\n');
+            let start_len = body.len();
+            if let Err(err) = serde_json::to_writer(&mut body, row) {
+                body.truncate(start_len);
+                anyhow::bail!(err);
+            }
+            body.push(b'\n');
         }
         let response = self
             .client
