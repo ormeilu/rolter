@@ -110,3 +110,22 @@ export const RejectsInvalidConfiguration: Story = {
     await expect(within(dialog).getByRole("alert")).toHaveTextContent("Configuration must be a JSON object.");
   },
 };
+
+// a toggle that never settles: the plugin being switched must be the only one
+// whose controls go dead, not every row on the screen (#1128)
+export const KeepsOtherRowsInteractiveWhileOneToggles: Story = {
+  render: () => <Harness fetchStub={async (input, init) => {
+    const scoped = scopeResponse(String(input));
+    if (scoped) return scoped;
+    return init?.method === "PUT" ? new Promise<Response>(() => {}) : json(PLUGINS);
+  }} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const toggled = await canvas.findByRole("switch", { name: "Enable PII redaction" });
+    const untouched = await canvas.findByRole("switch", { name: "Enable Response audit" });
+    await userEvent.click(toggled);
+    await waitFor(() => expect(toggled).toBeDisabled());
+    await expect(untouched).toBeEnabled();
+    await expect(canvas.getAllByRole("button", { name: "Delete" })[1]).toBeEnabled();
+  },
+};
