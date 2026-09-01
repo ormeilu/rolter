@@ -168,7 +168,7 @@ fn control_args(args: &EasyUpArgs, database_url: Option<String>) -> rolter_contr
 }
 
 /// Read a numeric setting from the environment, falling back to the same
-/// default `rolter control` declares. An unparseable value falls back rather
+/// default `rolter control` declares. An unparsable value falls back rather
 /// than failing: `easy-up` is the zero-config entry point, and a typo in an
 /// exported variable should not stop it from booting.
 #[cfg(feature = "postgres")]
@@ -378,7 +378,7 @@ mod tests {
 
     #[cfg(feature = "postgres")]
     #[test]
-    fn env_or_falls_back_on_absent_and_unparseable_values() {
+    fn env_or_falls_back_on_absent_and_unparsable_values() {
         // keys unique to this test so nothing else in the binary can race it
         let absent = "ROLTER_TEST_EASY_UP_ABSENT";
         let bad = "ROLTER_TEST_EASY_UP_BAD";
