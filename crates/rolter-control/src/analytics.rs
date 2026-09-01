@@ -91,13 +91,15 @@ impl ClickHouseClient {
     // only reachable via the postgres-gated mcp_logs router
     #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
     pub(crate) async fn insert_mcp_tool_call(&self, event: &Value) -> anyhow::Result<()> {
+        let mut body = Vec::with_capacity(512);
+        serde_json::to_writer(&mut body, event)?;
         let response = self
             .client
             .post(format!(
                 "{}/?query=INSERT%20INTO%20mcp_tool_call_logs%20FORMAT%20JSONEachRow",
                 self.base
             ))
-            .body(serde_json::to_string(event)?)
+            .body(body)
             .send()
             .await?;
         if response.status().is_success() {
@@ -120,10 +122,12 @@ impl ClickHouseClient {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut body = String::new();
+        let mut body = Vec::with_capacity(rows.len() * 256);
         for row in rows {
-            body.push_str(&serde_json::to_string(row)?);
-            body.push('\n');
+            if let Err(e) = serde_json::to_writer(&mut body, row) {
+                return Err(e.into());
+            }
+            body.push(b'\n');
         }
         let response = self
             .client
