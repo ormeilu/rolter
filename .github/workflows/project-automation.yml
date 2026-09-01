@@ -62,7 +62,7 @@ jobs:
                   value:{singleSelectOptionId:$opt}
                 }){ projectV2Item { id } }
               }' -f project="$PROJECT_ID" -f item="$ITEM_ID" \
-                 -f field="$1" -f opt="$2"
+                 -f field="$1" -f opt="$2" || true
           }
           # a freshly opened PR is already waiting on review and ci-ok, so it
           # starts in In Review; only issues start in Todo and carry a Priority
