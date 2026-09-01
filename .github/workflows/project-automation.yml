@@ -56,5 +56,5 @@ jobs:
               }' -f project="$PROJECT_ID" -f item="$ITEM_ID" \
                  -f field="$1" -f opt="$2"
           }
-          set_field "$STATUS_FIELD" "$STATUS_TODO"
-          set_field "$PRIORITY_FIELD" "$PRIORITY_MEDIUM"
+          set_field "$STATUS_FIELD" "$STATUS_TODO" || echo "::warning::Failed to set STATUS_FIELD to $STATUS_TODO"
+          set_field "$PRIORITY_FIELD" "$PRIORITY_MEDIUM" || echo "::warning::Failed to set PRIORITY_FIELD to $PRIORITY_MEDIUM"
