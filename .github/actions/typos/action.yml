@@ -1,0 +1,74 @@
+name: "typos (cached)"
+description: >-
+  Run the typos spell checker from a cached release binary, so a 503 from the
+  release host cannot fail a run that already has the tool (#964).
+
+inputs:
+  version:
+    description: "typos version to install"
+    required: false
+    default: "1.50.0"
+  config:
+    description: "path to the typos config file"
+    required: false
+    default: ".github/config/typos.toml"
+  files:
+    description: "paths to check"
+    required: false
+    default: "."
+
+runs:
+  using: "composite"
+  steps:
+    - name: resolve target
+      id: resolve
+      shell: bash
+      env:
+        TYPOS_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        case "$RUNNER_ARCH" in
+          X64)   target="x86_64-unknown-linux-musl" ;;
+          ARM64) target="aarch64-unknown-linux-musl" ;;
+          *) echo "unsupported architecture: $RUNNER_ARCH" >&2; exit 1 ;;
+        esac
+        echo "target=${target}" >>"$GITHUB_OUTPUT"
+        echo "dir=${HOME}/.cache/typos/${TYPOS_VERSION}-${target}" >>"$GITHUB_OUTPUT"
+
+    - name: restore typos from cache
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.resolve.outputs.dir }}
+        key: typos-${{ inputs.version }}-${{ runner.os }}-${{ steps.resolve.outputs.target }}
+
+    - name: download typos
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        TYPOS_VERSION: ${{ inputs.version }}
+        TYPOS_TARGET: ${{ steps.resolve.outputs.target }}
+        TYPOS_INSTALL_DIR: ${{ steps.resolve.outputs.dir }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$TYPOS_INSTALL_DIR"
+        url="https://github.com/crate-ci/typos/releases/download/v${TYPOS_VERSION}/typos-v${TYPOS_VERSION}-${TYPOS_TARGET}.tar.gz"
+        archive="${RUNNER_TEMP}/typos.tar.gz"
+        curl --fail-with-body --show-error --location \
+             --retry 5 --retry-all-errors \
+             --output "${archive}" \
+             "${url}"
+        tar -xzf "${archive}" -C "$TYPOS_INSTALL_DIR" ./typos
+        rm -f "${archive}"
+
+    - name: typos
+      shell: bash
+      env:
+        TYPOS_CONFIG: ${{ inputs.config }}
+        TYPOS_FILES: ${{ inputs.files }}
+        TYPOS_INSTALL_DIR: ${{ steps.resolve.outputs.dir }}
+      run: |
+        set -euo pipefail
+        "${TYPOS_INSTALL_DIR}/typos" --version
+        # shellcheck disable=SC2086 # files is a caller-supplied path list
+        "${TYPOS_INSTALL_DIR}/typos" --config "${TYPOS_CONFIG}" ${TYPOS_FILES}
