@@ -25,7 +25,7 @@ route per strategy worth looking at, and the whole session traced into SigNoz.
 Three shapes, named the way each of them names things:
 
 - **`:18001`** — OpenAI's model names (`gpt-4o`, `o3-mini`), added as an `openai` provider
-- **`:18002`** — OpenRouter's `vendor/model` names, added as `openai_compatible` rather than `openrouter` (see #925)
+- **`:18002`** — OpenRouter's `vendor/model` names, declared `kind = "openrouter"` with `allow_custom_api_base = true` so the dialect itself is exercised locally (#925)
 - **`:18003-18015`** — a self-hosted vLLM/TEI fleet, one model per instance, roughly half behind a key
 
 Three of them exist to make failure legible: `vllm-a100-03` is ~4x slower than
