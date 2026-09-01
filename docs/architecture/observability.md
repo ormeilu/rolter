@@ -234,6 +234,29 @@ reconstructed from a counter after the fact.
 | `rolter_snapshot_build_ms` | ms | `outcome` (`ok` / `not_modified` / `error`) |
 | `rolter_snapshot_payload_bytes` | By | `outcome` |
 | `rolter_control_request_ms` | ms | `http.route`, `http.request.method`, `http.response.status_class` |
+| `rolter_db_pool_acquire_ms` | ms | `outcome` (`ok` / `timeout`) |
+
+And the connection pool, as observable gauges (#1052):
+
+| Metric | Meaning |
+|---|---|
+| `rolter_db_pool_connections` | connections the pool holds open |
+| `rolter_db_pool_idle` | how many of those are free right now |
+| `rolter_db_pool_max` | the configured ceiling |
+
+One pool serves `/internal/snapshot`, the whole CRUD surface and every RBAC
+membership lookup, so a ceiling that is too low presents as "the control plane
+got slow" with nothing to attribute it to. The three gauges together are what
+separate the two cases: **pool-bound** is `connections == max` while `idle` is
+zero *and* `rolter_db_pool_acquire_ms` shows waits; acquire waits without a
+pinned pool mean the database itself is slow, and raising the ceiling there
+makes it worse.
+
+`rolter_db_pool_acquire_ms` is sampled on a 15-second timer rather than
+instrumented per call. Wrapping every `acquire()` would mean touching every
+repository method to answer a question that is a distribution over time, not a
+per-request fact. The probe takes one connection and drops it: if that is
+disruptive, the pool is already far too small, and that is the finding.
 
 Boundaries are deliberately not the gateway's. A gateway request is dominated by
 an upstream model call and is interesting out to tens of seconds; a snapshot

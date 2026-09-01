@@ -31,13 +31,87 @@ fn store_err(err: sqlx::Error) -> Error {
     Error::Store(err.to_string())
 }
 
-/// Connect to Postgres with a small pool sized for the control plane.
+/// Connection-pool budget for the control plane's Postgres pool.
+///
+/// One pool serves everything the control plane does: `/internal/snapshot`,
+/// which every gateway in the fleet polls, the whole dashboard CRUD surface,
+/// SCIM, SSO, MCP and the RBAC guard's per-request membership lookups. Under
+/// fan-out a fixed ceiling turns into an acquire-timeout queue with no lever to
+/// pull, which is why every field here is configurable (#1052).
+///
+/// [`Default`] reproduces the previously hardcoded budget exactly, so an
+/// existing deployment that configures nothing is unaffected.
+#[derive(Debug, Clone, Copy)]
+pub struct PoolConfig {
+    /// upper bound on open connections. Sized against Postgres `max_connections`
+    /// divided across every control replica, not against gateway count
+    pub max_connections: u32,
+    /// connections kept open while idle. Above zero, first-request latency
+    /// after a quiet period skips the connect handshake
+    pub min_connections: u32,
+    /// how long a caller waits for a free connection before failing. Bounded
+    /// so pool exhaustion surfaces as a fast, attributable error instead of an
+    /// opaque stall
+    pub acquire_timeout: std::time::Duration,
+    /// close a connection idle for longer than this. `None` keeps idle
+    /// connections forever
+    pub idle_timeout: Option<std::time::Duration>,
+    /// retire a connection older than this regardless of use, so a pool cannot
+    /// pin itself to a database instance across a failover. `None` disables
+    pub max_lifetime: Option<std::time::Duration>,
+}
+
+impl Default for PoolConfig {
+    fn default() -> Self {
+        Self {
+            // the historical hardcoded value
+            max_connections: 10,
+            min_connections: 0,
+            acquire_timeout: std::time::Duration::from_secs(30),
+            idle_timeout: Some(std::time::Duration::from_secs(600)),
+            max_lifetime: Some(std::time::Duration::from_secs(1800)),
+        }
+    }
+}
+
+/// Connect to Postgres with the default pool budget.
 pub async fn connect(database_url: &str) -> Result<PgPool> {
-    PgPoolOptions::new()
-        .max_connections(10)
-        .connect(database_url)
-        .await
-        .map_err(store_err)
+    connect_with(database_url, PoolConfig::default()).await
+}
+
+/// Connect to Postgres with an explicit pool budget. See [`PoolConfig`].
+pub async fn connect_with(database_url: &str, config: PoolConfig) -> Result<PgPool> {
+    let mut options = PgPoolOptions::new()
+        .max_connections(config.max_connections)
+        .min_connections(config.min_connections)
+        .acquire_timeout(config.acquire_timeout);
+    // sqlx takes `Option` here, but spelling it out keeps "unset means never
+    // expire" explicit rather than implied by a missing builder call
+    options = options.idle_timeout(config.idle_timeout);
+    options = options.max_lifetime(config.max_lifetime);
+    options.connect(database_url).await.map_err(store_err)
+}
+
+/// A point-in-time reading of a pool's occupancy, for the metrics exporter.
+///
+/// `connections` counts every connection the pool holds open and `idle` how
+/// many of those are free right now; `connections - idle` is therefore what is
+/// checked out. When `connections` sits at `max` while `idle` is zero, callers
+/// are queueing on `acquire_timeout` and the ceiling is the bottleneck.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PoolStats {
+    pub connections: u64,
+    pub idle: u64,
+    pub max: u64,
+}
+
+/// Sample `pool` for the metrics exporter. Cheap: reads atomics, no query.
+pub fn pool_stats(pool: &PgPool) -> PoolStats {
+    PoolStats {
+        connections: u64::from(pool.size()),
+        idle: pool.num_idle() as u64,
+        max: u64::from(pool.options().get_max_connections()),
+    }
 }
 
 /// Run pending migrations against `pool`. The migration set lives in this

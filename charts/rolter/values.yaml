@@ -85,6 +85,34 @@ control:
       # 5 minutes for first-boot migrations against a cold database before
       # liveness takes over
       failureThreshold: 60
+  # PostgreSQL connection pool (#1052). One pool serves everything the control
+  # plane does: /internal/snapshot (polled by every gateway in the fleet), the
+  # whole dashboard CRUD surface, SCIM, SSO, MCP, and the RBAC guard's
+  # per-request membership lookups.
+  #
+  # Sizing: `maxConnections * control.replicaCount` must stay comfortably under
+  # the database's own `max_connections`, leaving headroom for migrations,
+  # backups and any other client. Size it against *that* budget, not against
+  # gateway count — snapshot polls are short and answer 304 most of the time.
+  #
+  # Raise it when `rolter_db_pool_acquire_ms` shows waits while
+  # `rolter_db_pool_idle` sits at zero and `rolter_db_pool_connections` is
+  # pinned to `rolter_db_pool_max`. That combination, and only that, means the
+  # ceiling is the bottleneck rather than the database being slow.
+  #
+  # The values below are what rolter used before any of this was configurable.
+  pool:
+    maxConnections: 10
+    minConnections: 0
+    # bounded on purpose: pool exhaustion should surface as a fast,
+    # attributable error rather than an opaque stall that looks like a slow
+    # database
+    acquireTimeoutSeconds: 30
+    # 0 on either of these means "never expire"
+    idleTimeoutSeconds: 600
+    # retire connections so the pool cannot pin itself to one database instance
+    # across a failover
+    maxLifetimeSeconds: 1800
   extraEnv: []
 
 config:

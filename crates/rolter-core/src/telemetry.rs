@@ -429,6 +429,7 @@ struct ControlHistogramSet {
     snapshot_duration: opentelemetry::metrics::Histogram<u64>,
     snapshot_bytes: opentelemetry::metrics::Histogram<u64>,
     crud_duration: opentelemetry::metrics::Histogram<u64>,
+    pool_acquire: opentelemetry::metrics::Histogram<u64>,
 }
 
 impl ControlHistograms {
@@ -474,6 +475,24 @@ impl ControlHistograms {
         let _ = (route, method, status, duration_ms);
     }
 
+    /// Record how long one connection acquire waited on the pool.
+    ///
+    /// Sampled on a timer rather than instrumented per call: wrapping every
+    /// `acquire()` in the control plane would mean touching every repository
+    /// method, and the question this answers — "are callers queueing on the
+    /// pool ceiling" — is a distribution over time, not a per-request fact.
+    /// `outcome` is `ok` or `timeout`, so an exhausted pool is visible as a
+    /// count and not only as a tail latency (#1052).
+    pub fn record_pool_acquire(&self, outcome: &'static str, duration_ms: u64) {
+        #[cfg(feature = "otlp")]
+        if let Some(inner) = &self.inner {
+            let attrs = [opentelemetry::KeyValue::new("outcome", outcome)];
+            inner.pool_acquire.record(duration_ms, &attrs);
+            return;
+        }
+        let _ = (outcome, duration_ms);
+    }
+
     /// Whether anything is actually being recorded.
     #[must_use]
     pub fn is_active(&self) -> bool {
@@ -505,6 +524,37 @@ fn status_class(status: u16) -> &'static str {
 /// no OTLP endpoint is configured.
 #[must_use]
 pub fn install_control_metrics() -> Option<MetricsGuard> {
+    install_control_metrics_with_pool(None)
+}
+
+/// A reading of the database connection pool, sampled at collection time.
+///
+/// `connections` is every connection the pool holds open and `idle` how many
+/// of those are free; `connections - idle` is what is checked out. A pool
+/// sitting at `max` with `idle` at zero means callers are queueing on the
+/// acquire timeout and the ceiling is the bottleneck (#1052).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PoolGauges {
+    pub connections: u64,
+    pub idle: u64,
+    pub max: u64,
+}
+
+/// Reads the live pool occupancy. Called on the exporter's interval, never on
+/// a request path, so it must be cheap and must not query the database.
+pub type PoolSampler = std::sync::Arc<dyn Fn() -> PoolGauges + Send + Sync>;
+
+/// [`install_control_metrics`] plus observable gauges for the Postgres pool.
+///
+/// The pool is one fixed budget shared by `/internal/snapshot`, the dashboard
+/// CRUD surface and every RBAC membership lookup. Without these series, "the
+/// control plane got slow under fan-out" and "the pool ceiling is too low" look
+/// identical from outside, and the operator has nothing to size the ceiling
+/// against (#1052).
+#[must_use]
+pub fn install_control_metrics_with_pool(pool: Option<PoolSampler>) -> Option<MetricsGuard> {
+    #[cfg(not(feature = "otlp"))]
+    let _ = pool;
     #[cfg(feature = "otlp")]
     {
         let provider = otlp::try_build_meter_provider()?;
@@ -517,6 +567,35 @@ pub fn install_control_metrics() -> Option<MetricsGuard> {
         // answered none of those questions either
         process::install(&meter);
         runtime::install(&meter);
+
+        // observable, so the SDK reads the pool on its export interval rather
+        // than anything on the request path maintaining a counter
+        if let Some(sample) = pool {
+            for (name, help, pick) in [
+                (
+                    "rolter_db_pool_connections",
+                    "postgres connections the control plane holds open",
+                    (|g: PoolGauges| g.connections) as fn(PoolGauges) -> u64,
+                ),
+                (
+                    "rolter_db_pool_idle",
+                    "postgres connections currently free in the pool",
+                    |g: PoolGauges| g.idle,
+                ),
+                (
+                    "rolter_db_pool_max",
+                    "configured ceiling on postgres connections",
+                    |g: PoolGauges| g.max,
+                ),
+            ] {
+                let sample = sample.clone();
+                meter
+                    .u64_observable_gauge(name)
+                    .with_description(help)
+                    .with_callback(move |obs| obs.observe(pick(sample()), &[]))
+                    .build();
+            }
+        }
 
         let control = ControlHistograms {
             inner: Some(std::sync::Arc::new(ControlHistogramSet {
@@ -535,6 +614,14 @@ pub fn install_control_metrics() -> Option<MetricsGuard> {
                 crud_duration: meter
                     .u64_histogram("rolter_control_request_ms")
                     .with_description("control-plane API request latency, in milliseconds")
+                    .with_unit("ms")
+                    .with_boundaries(CONTROL_LATENCY_BUCKETS_MS.to_vec())
+                    .build(),
+                pool_acquire: meter
+                    .u64_histogram("rolter_db_pool_acquire_ms")
+                    .with_description(
+                        "time to acquire a postgres connection from the pool, in milliseconds",
+                    )
                     .with_unit("ms")
                     .with_boundaries(CONTROL_LATENCY_BUCKETS_MS.to_vec())
                     .build(),
