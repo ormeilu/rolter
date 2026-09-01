@@ -50,6 +50,12 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
         state.log.usage_recorders().queued() as u64,
         std::sync::atomic::Ordering::Relaxed,
     );
+    // same reasoning for in-flight load: it is a live number the balancer reads
+    // continuously, and the scrape is the only place that needs it summed
+    state.metrics.inflight_requests.store(
+        state.loads.total_in_flight(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let mut body = state.metrics.render();
     // scraped upstream engine series (#850), one label set per provider
     state.upstream_metrics.render(&mut body);
@@ -1562,6 +1568,28 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
     cache_stage.record("hit", false);
     drop(cache_stage);
 
+    // from here the handler is waiting on an upstream that may take minutes. if
+    // the caller hangs up in that window axum drops this future and the request
+    // would vanish with no row at all, so an armed guard owns the row until a
+    // path that logs it takes over (#1083)
+    let mut cancel = crate::cancel::CancelGuard::new(
+        state.log.clone(),
+        started,
+        RequestLog {
+            request_id: request_id.clone(),
+            trace_id: trace_id.clone(),
+            virtual_key_id: vk_id.clone(),
+            org_id: org_id.clone(),
+            team_id: team_id.clone(),
+            project_id: project_id.clone(),
+            business_unit_id: business_unit_id.clone(),
+            customer_id: customer_id.clone(),
+            model: model.clone(),
+            stream: stream as u8,
+            sample_rate: snap.logging.sample_rate,
+            ..Default::default()
+        },
+    );
     // pick a target and forward, retrying transient failures on a fresh target
     // (exponential backoff + jitter). retries happen before any body bytes reach
     // the client, so a partial response is never duplicated. a route with
@@ -1859,6 +1887,10 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
     };
 
     let capture_payloads = payload_capture_enabled(&snap.logging.payload_capture, &model, &vk_id);
+    // from here every arm answers the caller: the streamed path hands the row
+    // to `UsageLoggingStream` (which marks it if the client then leaves), the
+    // error arm logs its own, and "no target selected" has never logged one
+    cancel.disarm();
     match outcome {
         // token counts, latency and ttft are filled by the stream wrapper once
         // the body has been fully forwarded to the client
@@ -2260,6 +2292,26 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
+    // an upload can sit upstream for a long time, and the caller can leave in
+    // that window exactly as on the chat path (#1083)
+    let mut cancel = crate::cancel::CancelGuard::new(
+        state.log.clone(),
+        started,
+        RequestLog {
+            request_id: request_id.clone(),
+            trace_id: trace_id.clone(),
+            virtual_key_id: vk_id.clone(),
+            org_id: org_id.clone(),
+            team_id: team_id.clone(),
+            project_id: project_id.clone(),
+            business_unit_id: business_unit_id.clone(),
+            customer_id: customer_id.clone(),
+            model: model.clone(),
+            sample_rate: snap.logging.sample_rate,
+            ..Default::default()
+        },
+    );
+
     let retry = &snap.retry;
     let cooldown = &snap.cooldown;
     let cd_enabled = cooldown.enabled();
@@ -2415,6 +2467,9 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
     }
 
     let capture_payloads = payload_capture_enabled(&snap.logging.payload_capture, &model, &vk_id);
+    // as on the chat path: from here every arm answers the caller and logs its
+    // own row, so the guard must not add a phantom disconnect on top
+    cancel.disarm();
     match outcome {
         Some((response, status, is_sse)) => {
             let log = RequestLog {

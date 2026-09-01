@@ -465,6 +465,16 @@ fn u32_field(value: &Value, key: &str) -> Option<u32> {
 
 pub type CompletionObserver = Box<dyn FnOnce(&[u8]) + Send>;
 
+/// Status recorded for a request whose client went away before the response
+/// finished. 499 is nginx's `client closed request`; it is not a real HTTP
+/// status, which is the point — no status was ever sent to anyone. Using it
+/// keeps a cancelled request distinguishable from the 200 it would otherwise be
+/// logged as, without adding a column (#1083).
+pub const CLIENT_DISCONNECT_STATUS: u16 = 499;
+
+/// `error` text on a cancelled request's log row.
+pub const CLIENT_DISCONNECT_ERROR: &str = "client disconnected";
+
 /// Response body stream that forwards each chunk to the client unchanged while
 /// buffering the whole body, then on end-of-stream parses token usage, stamps
 /// latency/ttft and emits the completed [`RequestLog`] exactly once.
@@ -491,6 +501,11 @@ pub struct UsageLoggingStream {
     /// upstream span held open so `gen_ai.usage.*` can be recorded once the
     /// body has been consumed (#808)
     genai_span: Option<tracing::Span>,
+    /// set when the upstream stream ran to its end. Left false when the stream
+    /// is dropped early, which for a response body means the client hung up
+    /// mid-answer — the tokens are still billed, so the row is kept and marked
+    /// rather than discarded (#1083)
+    completed: bool,
 }
 
 impl UsageLoggingStream {
@@ -522,6 +537,7 @@ impl UsageLoggingStream {
             pending: Some(log),
             completion_observer: None,
             genai_span: None,
+            completed: false,
         }
     }
 
@@ -546,6 +562,20 @@ impl UsageLoggingStream {
         let Some(mut log) = self.pending.take() else {
             return;
         };
+        // the client hung up before the body ended. everything generated so far
+        // was still produced (and billed) upstream, so the row keeps its tokens
+        // and cost and is marked instead of dropped — abandoned spend has to be
+        // countable, not invisible (#1083)
+        if !self.completed {
+            log.status = CLIENT_DISCONNECT_STATUS;
+            if log.error.is_empty() {
+                log.error = CLIENT_DISCONNECT_ERROR.to_string();
+            }
+            self.sink
+                .metrics()
+                .client_disconnects_total
+                .fetch_add(1, Relaxed);
+        }
         let usage = parse_usage(self.is_sse, &self.buf);
         // the conventions want token counts on the inference span, and this is
         // the first moment they are known (#808)
@@ -638,6 +668,7 @@ impl Stream for UsageLoggingStream {
             }
             Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err))),
             Poll::Ready(None) => {
+                self.completed = true;
                 self.finalize();
                 Poll::Ready(None)
             }
@@ -648,7 +679,8 @@ impl Stream for UsageLoggingStream {
 
 impl Drop for UsageLoggingStream {
     // if the client disconnects mid-stream the stream is dropped without a final
-    // None poll; still emit what we have so the request is not lost
+    // None poll; still emit what we have, marked as a disconnect, so the request
+    // is neither lost nor logged as if it had been delivered
     fn drop(&mut self) {
         self.finalize();
     }
@@ -739,6 +771,12 @@ impl LogSink {
     /// The usage-recording sink, for the response path and for metrics.
     pub fn usage_recorders(&self) -> &crate::usage_recording::UsageRecorderSink {
         &self.usage_recorders
+    }
+
+    /// The metrics registry this sink reports into. A disabled sink still has
+    /// one, so counters stay correct with logging switched off.
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
     }
 
     /// Build a sink and spawn the background batch writer targeting the
@@ -1265,6 +1303,77 @@ data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\
         // give the writer a moment to record the success
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(metrics.logs_written_total.load(Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn a_client_that_leaves_mid_stream_is_marked_and_keeps_its_tokens() {
+        use futures_util::StreamExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 16384];
+            let n = sock.read(&mut buf).await.unwrap();
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+
+        let metrics = Arc::new(Metrics::default());
+        let sink = LogSink::spawn(
+            format!("http://{addr}"),
+            10,
+            Duration::from_millis(50),
+            100,
+            metrics.clone(),
+        );
+
+        // two frames of a streamed answer: the usage frame the provider sends
+        // before the caller gives up, then a frame that is never read
+        let frames = vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from_static(
+                b"data: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":6,\"total_tokens\":10}}\n\n",
+            )),
+            Ok(Bytes::from_static(b"data: [DONE]\n\n")),
+        ];
+        let mut wrapped = UsageLoggingStream::new(
+            Box::pin(futures_util::stream::iter(frames)),
+            true,
+            Instant::now(),
+            sink,
+            None,
+            RequestLog {
+                request_id: "req-abandoned".to_string(),
+                model: "gpt-4o".to_string(),
+                status: 200,
+                stream: 1,
+                ..Default::default()
+            },
+            None,
+            None,
+            None,
+        );
+
+        // the client reads one frame and hangs up: axum drops the body stream
+        let _ = wrapped.next().await.unwrap().unwrap();
+        drop(wrapped);
+
+        let req = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("server timed out")
+            .unwrap();
+        // the row survives, marked as a disconnect rather than as the 200 it
+        // was on its way to being
+        assert!(req.contains("\"request_id\":\"req-abandoned\""), "{req}");
+        assert!(req.contains("\"status\":499"), "{req}");
+        assert!(req.contains("client disconnected"), "{req}");
+        // and it keeps what the provider already generated — that spend
+        // happened whether or not anyone read it
+        assert!(req.contains("\"total_tokens\":10"), "{req}");
+        assert_eq!(metrics.client_disconnects_total.load(Relaxed), 1);
     }
 
     #[tokio::test]
