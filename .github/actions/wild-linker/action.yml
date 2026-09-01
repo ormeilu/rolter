@@ -1,0 +1,82 @@
+name: "wild linker (cached)"
+description: >-
+  Install the wild linker and point cargo at it, restoring the binary from the
+  actions cache so a transient release-download failure cannot fail a build that
+  already has the tool (#964).
+
+inputs:
+  wild-version:
+    description: "wild version to install"
+    required: false
+    default: "0.10.0"
+  download-retries:
+    description: "curl --retry count used only on a cache miss"
+    required: false
+    default: "5"
+
+runs:
+  using: "composite"
+  steps:
+    - name: resolve target arch
+      if: runner.os == 'Linux'
+      id: resolve
+      shell: bash
+      env:
+        WILD_VERSION: ${{ inputs.wild-version }}
+      run: |
+        set -euo pipefail
+        case "$RUNNER_ARCH" in
+          X64)   target_arch="x86_64" ;;
+          ARM64) target_arch="aarch64" ;;
+          *) echo "unsupported architecture: $RUNNER_ARCH" >&2; exit 1 ;;
+        esac
+        echo "arch=${target_arch}" >>"$GITHUB_OUTPUT"
+        echo "dir=${HOME}/.cache/wild-linker/${WILD_VERSION}-${target_arch}" >>"$GITHUB_OUTPUT"
+
+    # keyed on version + arch, so the cache is only ever restored for the exact
+    # binary this workflow pins; a hit skips the network entirely
+    - name: restore wild from cache
+      if: runner.os == 'Linux'
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.resolve.outputs.dir }}
+        key: wild-${{ inputs.wild-version }}-${{ runner.os }}-${{ steps.resolve.outputs.arch }}
+
+    - name: download wild
+      if: runner.os == 'Linux' && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        WILD_VERSION: ${{ inputs.wild-version }}
+        WILD_RETRIES: ${{ inputs.download-retries }}
+        WILD_TARGET_ARCH: ${{ steps.resolve.outputs.arch }}
+        WILD_INSTALL_DIR: ${{ steps.resolve.outputs.dir }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$WILD_INSTALL_DIR"
+        url="https://github.com/wild-linker/wild/releases/download/${WILD_VERSION}/wild-linker-${WILD_VERSION}-${WILD_TARGET_ARCH}-unknown-linux-gnu.tar.gz"
+        archive="${RUNNER_TEMP}/wild.tar.gz"
+        curl --fail-with-body --show-error --location \
+             --retry "${WILD_RETRIES}" --retry-all-errors \
+             --output "${archive}" \
+             "${url}"
+        tar -xzf "${archive}" -C "$WILD_INSTALL_DIR" --strip-components=1
+        rm -f "${archive}"
+
+    - name: point cargo at wild
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        WILD_TARGET_ARCH: ${{ steps.resolve.outputs.arch }}
+        WILD_INSTALL_DIR: ${{ steps.resolve.outputs.dir }}
+      run: |
+        set -euo pipefail
+        test -x "${WILD_INSTALL_DIR}/wild"
+        mkdir -p "$HOME/.cargo"
+        for libc in gnu musl; do
+          target="target.${WILD_TARGET_ARCH}-unknown-linux-${libc}"
+          if ! grep -q "${target}" "$HOME/.cargo/config.toml" 2>/dev/null; then
+            printf '# added by the rolter wild-linker action\n[%s]\nlinker = "clang"\nrustflags = ["-Clink-arg=--ld-path=%s/wild"]\n\n' \
+              "${target}" "${WILD_INSTALL_DIR}" >>"$HOME/.cargo/config.toml"
+          fi
+        done

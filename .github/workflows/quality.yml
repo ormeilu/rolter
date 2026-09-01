@@ -22,10 +22,10 @@ on:
 permissions:
   contents: read
 
-# faster linking on the linux runner; writes ~/.cargo/config.toml to use the
-# wild linker for *-unknown-linux-{gnu,musl}. pinned to the 0.9.0 commit sha.
-env:
-  WILD_ACTION_SHA: 0bbbfa5df4380cab8e63cb8505a1ce65e1d10203
+# faster linking on the linux runner: ./.github/actions/wild-linker restores the
+# wild binary from the actions cache and writes ~/.cargo/config.toml to use it
+# for *-unknown-linux-{gnu,musl}. only the jobs that actually link install it —
+# clippy, cargo hack and rustdoc emit metadata and never invoke the linker.
 
 jobs:
   # ── rust: format + lint ─────────────────────────────────────────────────────
@@ -40,7 +40,6 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: fmt
         run: cargo fmt --all --check
@@ -84,7 +83,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: stable
-      - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
+      - uses: ./.github/actions/wild-linker
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
         with:
@@ -106,7 +105,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: stable
-      - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
         with:
@@ -128,7 +126,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: stable
-      - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: cargo doc
         run: cargo doc --workspace --no-deps --all-features
@@ -279,7 +276,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       - name: zizmor
-        run: uvx zizmor@1.26.1 --min-severity=medium --persona=regular .github/workflows/
+        run: uvx zizmor@1.26.1 --min-severity=medium --persona=regular .github/workflows/ .github/actions/
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -380,7 +377,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: stable
-      - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
+      - uses: ./.github/actions/wild-linker
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: build gateway
         run: cargo build -p rolter-gateway
@@ -448,7 +445,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: stable
-      - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
+      - uses: ./.github/actions/wild-linker
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: cargo package (verifies each crate in isolation)
         run: cargo package --workspace --locked
@@ -462,8 +459,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: crate-ci/typos@4d9c206a77c041268485162b8e2579ad7a5cb9a3 # v1.50.0
+      - uses: ./.github/actions/typos
         with:
+          version: "1.50.0"
           config: .github/config/typos.toml
 
   # ── unused dependencies ─────────────────────────────────────────────────────
@@ -517,7 +515,7 @@ jobs:
         with:
           toolchain: stable
           components: llvm-tools-preview
-      - uses: wild-linker/action@dc926c45399e1842cf81e604f52bdf0ad86a0c09 # v0.10.0
+      - uses: ./.github/actions/wild-linker
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
         with:
