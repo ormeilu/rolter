@@ -18,6 +18,7 @@ pub mod breaker;
 mod budgets;
 mod cache;
 mod cache_telemetry;
+mod cancel;
 #[doc(hidden)]
 pub mod cooldowns;
 mod error;

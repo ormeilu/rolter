@@ -176,6 +176,16 @@ pub struct Metrics {
     pub plugin_transforms_total: AtomicU64,
     /// webhook plugin calls that failed transport (timeout/connect/non-2xx)
     pub plugin_errors_total: AtomicU64,
+    /// in-flight requests across every target, sampled at scrape time. A value
+    /// that never returns to zero on an idle gateway means a request exited
+    /// without releasing its slot (#1083)
+    pub inflight_requests: AtomicU64,
+    /// requests whose client went away before the response finished — a
+    /// browser tab closed, a `ctrl-c` in an agent CLI, a proxy timeout. Not an
+    /// error: it is ordinary traffic for an agent gateway, and the reason it is
+    /// counted is that the tokens generated before the caller vanished were
+    /// still billed (#1083)
+    pub client_disconnects_total: AtomicU64,
     /// requests rejected because their selected provider's queue was full
     pub provider_queue_rejections_total: AtomicU64,
     /// requests that timed out waiting for a provider queue slot
@@ -575,6 +585,18 @@ impl Metrics {
                 name: "rolter_provider_queue_rejections_total",
                 help: "requests rejected because a provider queue was full or unavailable",
                 value: self.provider_queue_rejections_total.load(Relaxed),
+            },
+            Scalar {
+                kind: "gauge",
+                name: "rolter_inflight_requests",
+                help: "requests currently in flight to upstream providers",
+                value: self.inflight_requests.load(Relaxed),
+            },
+            Scalar {
+                kind: "counter",
+                name: "rolter_client_disconnects_total",
+                help: "requests whose client disconnected before the response completed",
+                value: self.client_disconnects_total.load(Relaxed),
             },
             Scalar {
                 kind: "counter",

@@ -80,6 +80,21 @@ impl LoadTracker {
             .collect()
     }
 
+    /// Every in-flight request this gateway is currently holding, summed
+    /// across targets.
+    ///
+    /// Sampled at scrape time rather than mirrored into a counter on the
+    /// request path. It exists because a leaked slot — a request that exits
+    /// without dropping its [`LoadGuard`] — is otherwise invisible until the
+    /// gateway is saturated and the balancer's load view has quietly been wrong
+    /// for hours (#1083).
+    pub fn total_in_flight(&self) -> u64 {
+        let Some(inner) = &self.inner else {
+            return 0;
+        };
+        inner.lock().values().sum()
+    }
+
     /// Smoothed latency (ms) for targets `0..n` of `model`, route-order
     /// aligned; `0.0` for a target with no successful sample yet.
     pub fn latency_snapshot(&self, model: &str, n: usize) -> Vec<f64> {

@@ -41,6 +41,22 @@ metrics_path = "/internal/metrics"
     Total number of requests proxied by the gateway since startup. Use this as your primary throughput signal — `rate(rolter_requests_total[1m])` gives you requests per second.
   </Accordion>
 
+  <Accordion title="rolter_client_disconnects_total">
+    **Type:** Counter
+
+    Requests whose caller went away before the response finished — a closed browser tab, a client-side timeout, a pod rollout. These are logged with status `499` (nginx's *client closed request*) and are deliberately never retried onto another provider, so they cost you one upstream attempt, not two.
+
+    A rising rate almost always means client timeouts are tighter than your upstream latency rather than anything being broken in the gateway. Compare `rate(rolter_client_disconnects_total[5m])` against the p95 of `rolter_request_latency_ms`.
+  </Accordion>
+
+  <Accordion title="rolter_inflight_requests">
+    **Type:** Gauge
+
+    Requests currently in flight to upstream providers, summed across targets and sampled when you scrape.
+
+    On an idle gateway this reads `0`. A floor that never comes back to zero means requests are exiting without releasing their slot, which quietly biases every load-aware routing decision — alert on `min_over_time(rolter_inflight_requests[15m]) > 0` for a gateway that does have quiet periods.
+  </Accordion>
+
   <Accordion title="rolter_upstream_errors_total">
     **Type:** Counter
 
