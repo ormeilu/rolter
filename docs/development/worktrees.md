@@ -81,10 +81,12 @@ Use an explicit parent branch as the base:
 wt switch --create feat/124-dependent-change --base feat/123-foundation
 ```
 
-The child pull request targets the parent branch. After the parent merges,
-fetch `origin/master`, rebase the child in its own worktree, validate it, and
-push with `--force-with-lease`. Do not run repository-wide branch synchronizers
-across active worktrees.
+The child pull request targets the parent branch, which makes the pair a stack:
+see [Merge dependent work](#merge-dependent-work) before merging either end of
+it. After the parent merges, fetch `origin/master`, rebase the child in its own
+worktree, validate it, and push with `--force-with-lease`. Do not retarget the
+child yourself — a stack refuses the base change — and do not run
+repository-wide branch synchronizers across active worktrees.
 
 ## Inspect the agent fleet
 
@@ -117,6 +119,39 @@ Do not use `wt merge`, `wt step commit`, `wt step squash`, or `wt step push` for
 Rolter delivery. Merge through GitHub only after hosted `ci-ok`, review, and
 acceptance-criteria verification. Worktrunk hooks are convenience automation,
 not a security boundary, and `--no-hooks` can bypass them.
+
+## Merge dependent work
+
+Stacked pull requests are enabled on this repository. A chain of dependent
+branches merges bottom-up, and two of the habits that work for a standalone PR
+destroy a stack.
+
+`gh pr merge` refuses a stacked PR outright:
+
+> This pull request is part of a stack and must be merged using the
+> asynchronous merge REST API.
+
+The endpoint that works is a `PUT` on `merge-async`. `POST .../merge-async`,
+`POST .../async-merge` and `POST .../merges` all return 404:
+
+```bash
+gh api -X PUT repos/rolter-ai/rolter/pulls/<n>/merge-async -f merge_method=squash
+```
+
+Never pass `--delete-branch` to a merge whose branch is the base of another open
+pull request. Deleting the base branch makes GitHub close the child, and that
+close cannot be undone: `gh pr reopen` and `gh pr edit --base master` both fail,
+leaving a new pull request with the same commits as the only way forward. Delete
+the branch after the whole stack has merged, or let `wt remove` do it.
+
+Retargeting the child first is not a mitigation any more. GitHub answers
+`Cannot change the base branch because the pull request is part of a stack`.
+Merge the parent through `merge-async` instead: GitHub then retargets the child
+onto `master` by itself, but only on that path.
+
+So the order for a stack is: merge the bottom PR with `merge-async` and no
+`--delete-branch`, let GitHub retarget its child, confirm hosted `ci-ok` on the
+child against its new base, and repeat upward.
 
 ## Remove completed work
 
