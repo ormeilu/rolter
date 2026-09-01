@@ -368,6 +368,21 @@ fn report(findings: &[Finding], strict: bool) -> (String, bool) {
     (out, errors > 0 || (strict && warnings > 0))
 }
 
+/// Report every provider that opted out of its kind's host pin.
+///
+/// A hosted provider kind names one operator, so pinning its `api_base` is what
+/// stops a config edit from pointing a vendor credential somewhere else. The
+/// opt-out is legitimate — an egress proxy, a compatible endpoint, a local fake
+/// for testing the dialect — but it should never be invisible, so it is a
+/// warning here: `--strict` fails on it, a normal run reports it and continues.
+fn custom_api_base_findings(config: &rolter_core::GatewayConfig) -> Vec<Finding> {
+    config
+        .custom_api_base_advisories()
+        .into_iter()
+        .map(|detail| Finding::warn("provider opts out of its host pin", detail))
+        .collect()
+}
+
 pub async fn run(args: CheckArgs) -> anyhow::Result<()> {
     let mut findings = run_checks(&ProcessEnv);
 
@@ -377,11 +392,12 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<()> {
 
     // the config file is optional: a fully DB-backed deployment has none
     if let Some(path) = args.config.as_deref() {
-        if let Err(error) = rolter_core::GatewayConfig::load(std::path::Path::new(path)) {
-            findings.push(Finding::error(
+        match rolter_core::GatewayConfig::load(std::path::Path::new(path)) {
+            Ok(config) => findings.extend(custom_api_base_findings(&config)),
+            Err(error) => findings.push(Finding::error(
                 format!("config file {path} is not usable"),
                 error.to_string(),
-            ));
+            )),
         }
     }
 
@@ -440,6 +456,56 @@ mod tests {
         let (text, failed) = report(&findings, true);
         assert!(!failed);
         assert!(text.contains("all pre-boot checks passed"));
+    }
+
+    #[test]
+    fn a_host_pin_opt_out_warns_without_blocking_the_boot() {
+        let config = rolter_core::GatewayConfig::from_toml_str(
+            r#"
+            [[providers]]
+            name = "openrouter-edge"
+            kind = "openrouter"
+            api_base = "http://127.0.0.1:18002"
+            api_key_env = "OPENROUTER_API_KEY"
+            allow_custom_api_base = true
+
+            [[routes]]
+            model = "router-chat"
+            [[routes.targets]]
+            provider = "openrouter-edge"
+            "#,
+        )
+        .unwrap();
+
+        let findings = custom_api_base_findings(&config);
+        assert_eq!(titles(&findings), vec!["provider opts out of its host pin"]);
+        assert!(findings.iter().all(|finding| !finding.fatal));
+
+        // reported, and survivable — until --strict, which is the point of it
+        let (text, failed) = report(&findings, false);
+        assert!(!failed, "{text}");
+        assert!(text.contains("openrouter-edge"), "{text}");
+        assert!(report(&findings, true).1, "--strict has to fail on it");
+    }
+
+    #[test]
+    fn a_pinned_provider_leaves_the_check_silent() {
+        let config = rolter_core::GatewayConfig::from_toml_str(
+            r#"
+            [[providers]]
+            name = "openrouter"
+            kind = "openrouter"
+            api_base = "https://openrouter.ai/api/v1"
+            api_key_env = "OPENROUTER_API_KEY"
+
+            [[routes]]
+            model = "router-chat"
+            [[routes.targets]]
+            provider = "openrouter"
+            "#,
+        )
+        .unwrap();
+        assert!(custom_api_base_findings(&config).is_empty());
     }
 
     #[test]

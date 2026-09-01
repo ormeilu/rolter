@@ -36,6 +36,43 @@ When no virtual keys are configured the gateway runs open (useful for local dev)
 | GET | `/readyz` | readiness — `503` while draining (see [Health & readiness](../architecture/health-and-readiness.md)) |
 | GET | `/metrics` | Prometheus exposition |
 
+## Request header forwarding
+
+By default the gateway forwards trace context and nothing else. An operator can
+name additional client headers to forward with the `forwarded_headers`
+allowlist in the client policy.
+
+**`anthropic-*` headers are the exception: they forward by prefix, not by
+allowlist entry** (#1013). Any inbound header whose name begins with
+`anthropic-` is passed unchanged to an Anthropic-dialect upstream, whether or
+not anyone has heard of it.
+
+This is not a convenience. Anthropic extends its protocol *through headers*: a
+capability pairs an `anthropic-beta` value with body fields, and the pair
+travels together. An allowlist is a closed list against a vendor that ships new
+capabilities as new header values, so every new beta would silently break until
+an operator added it by name — and the failure is not a graceful downgrade.
+Stripping the header while the body passes produces a hard `400`
+(`Extra inputs are not permitted`), while capabilities like extended context go
+silently unavailable because the upstream never sees the request for them.
+
+Two rules bound it:
+
+- The match requires the separator (`anthropic-`), so a header merely starting
+  with those letters is not in the namespace.
+- These headers only reach a provider that speaks the dialect. They are
+  collected before the balancer picks a target, so the proxy drops them again
+  for an upstream that has no use for them.
+
+### `anthropic-version`
+
+The client's value wins when it sends one; the configured
+`compatibility.anthropic_version` is the fallback. That pin exists for
+*translated* requests — an OpenAI-dialect call rewritten to Anthropic, where no
+client version exists — and that is still exactly what it does. Overriding a
+version a native client did state would silently change the protocol it asked
+for. Exactly one value is sent either way.
+
 ## Realtime WebSocket
 
 Connect with the usual gateway bearer key and the public route model as a query parameter:

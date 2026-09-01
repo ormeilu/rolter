@@ -378,14 +378,28 @@ pub(crate) async fn effective_role(
     chain: ScopeChain,
 ) -> ApiResult<Option<Role>> {
     let memberships = MembershipRepo(pool(state)).list_for_user(user.id).await?;
-    let from_memberships = resolve_role(&memberships, chain.org, chain.team, chain.project);
     let grants = AccessProfileRepo(pool(state))
         .effective_grants_for_user(user.id)
         .await?;
-    Ok(best_role(
-        from_memberships,
-        custom_base_role(&grants, chain),
-    ))
+    Ok(effective_role_from(&memberships, &grants, chain))
+}
+
+/// [`effective_role`] over data the caller already holds.
+///
+/// Split out so a caller that has already fetched a user's memberships and
+/// grants does not re-fetch them. `policy_allows` did exactly that — it loaded
+/// memberships, then called `effective_role`, which loaded the identical set
+/// again and threw the first away (#1048). Keeping the decision itself in one
+/// pure function is what makes the two entry points impossible to drift apart.
+pub(crate) fn effective_role_from(
+    memberships: &[Membership],
+    grants: &[EffectiveGrant],
+    chain: ScopeChain,
+) -> Option<Role> {
+    best_role(
+        resolve_role(memberships, chain.org, chain.team, chain.project),
+        custom_base_role(grants, chain),
+    )
 }
 
 /// The higher of two optional roles.
@@ -427,10 +441,17 @@ pub(crate) async fn policy_allows(
         Principal::Superadmin => return Ok(true),
         Principal::User(user) => user,
     };
+    // one fetch each, reused for both the role decision and the team scan. This
+    // used to load memberships, then call `effective_role`, which loaded the
+    // identical set again and discarded the first (#1048)
     let memberships = MembershipRepo(pool(state)).list_for_user(user.id).await?;
     // a custom role a profile confers at the org counts here too, so an
     // operator can widen resource visibility without minting a membership
-    let Some(effective_role) = effective_role(state, user, ScopeChain::org(org_id)).await? else {
+    let grants = AccessProfileRepo(pool(state))
+        .effective_grants_for_user(user.id)
+        .await?;
+    let Some(effective_role) = effective_role_from(&memberships, &grants, ScopeChain::org(org_id))
+    else {
         return Ok(false);
     };
     let Some(required_role) = parse_role(minimum_role) else {
@@ -442,21 +463,23 @@ pub(crate) async fn policy_allows(
     if effective_role == Role::Admin || allowed_team_ids.is_empty() {
         return Ok(true);
     }
-    for membership in &memberships {
-        if membership
-            .team_id
-            .is_some_and(|id| allowed_team_ids.contains(&id))
-        {
-            return Ok(true);
-        }
-        if let Some(project_id) = membership.project_id {
-            let project = ProjectRepo(pool(state)).get(project_id).await?;
-            if allowed_team_ids.contains(&project.team_id) {
-                return Ok(true);
-            }
-        }
+    // a direct team membership answers without touching `projects` at all
+    if memberships
+        .iter()
+        .any(|m| m.team_id.is_some_and(|id| allowed_team_ids.contains(&id)))
+    {
+        return Ok(true);
     }
-    Ok(false)
+    // otherwise resolve every project membership's team in one query rather
+    // than one `ProjectRepo::get` per membership
+    let project_ids: Vec<Uuid> = memberships.iter().filter_map(|m| m.project_id).collect();
+    if project_ids.is_empty() {
+        return Ok(false);
+    }
+    let team_ids = ProjectRepo(pool(state)).team_ids_for(&project_ids).await?;
+    Ok(team_ids
+        .iter()
+        .any(|(_, team_id)| allowed_team_ids.contains(team_id)))
 }
 
 /// Require `principal` to be a superadmin. Used for global resources with no

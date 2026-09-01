@@ -82,6 +82,18 @@ copy that drifts.
 - name: ROLTER_DATABASE_URL
   value: {{ .Values.env.databaseUrl | quote }}
 {{- end }}
+{{- with .Values.control.pool }}
+- name: ROLTER_DB_MAX_CONNECTIONS
+  value: {{ .maxConnections | quote }}
+- name: ROLTER_DB_MIN_CONNECTIONS
+  value: {{ .minConnections | quote }}
+- name: ROLTER_DB_ACQUIRE_TIMEOUT_SECS
+  value: {{ .acquireTimeoutSeconds | quote }}
+- name: ROLTER_DB_IDLE_TIMEOUT_SECS
+  value: {{ .idleTimeoutSeconds | quote }}
+- name: ROLTER_DB_MAX_LIFETIME_SECS
+  value: {{ .maxLifetimeSeconds | quote }}
+{{- end }}
 {{- if .Values.env.redisUrl }}
 - name: ROLTER_REDIS_URL
   value: {{ .Values.env.redisUrl | quote }}

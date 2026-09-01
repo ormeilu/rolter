@@ -1150,6 +1150,21 @@ export function createPromptTemplate(
   );
 }
 
+export function updatePromptTemplate(
+  templateId: string,
+  input: { name?: string; description?: string },
+): Promise<PromptTemplateRow> {
+  return sendJson<PromptTemplateRow>(
+    "PUT",
+    `/api/v1/prompt-templates/${templateId}`,
+    input,
+  );
+}
+
+export function deletePromptTemplate(templateId: string): Promise<void> {
+  return sendJson<void>("DELETE", `/api/v1/prompt-templates/${templateId}`);
+}
+
 export function fetchPromptTemplateVersions(
   templateId: string,
 ): Promise<PromptTemplateVersionRow[]> {
@@ -1273,6 +1288,10 @@ export function updateSkill(
   input: UpdateSkillInput,
 ): Promise<SkillRow> {
   return sendJson<SkillRow>("PUT", `/api/v1/skills/${id}`, input);
+}
+
+export function deleteSkill(id: string): Promise<void> {
+  return sendJson<void>("DELETE", `/api/v1/skills/${id}`);
 }
 
 export function fetchSkillVersions(id: string): Promise<SkillVersionRow[]> {

@@ -26,6 +26,18 @@ Trace-context headers (`traceparent`, `tracestate`, `b3`) propagate whether or n
 
 Some headers can never be forwarded, because forwarding them would hand a caller the gateway's own credentials or corrupt the upstream request: `authorization`, `x-api-key`, `api-key`, `host`, `content-length`, `content-type`, `transfer-encoding`, `connection` and `cookie`. Listing one is rejected.
 
+### `anthropic-*` headers forward by prefix
+
+Every inbound header beginning with `anthropic-` is forwarded to an Anthropic-dialect upstream **unchanged, without an allowlist entry** — including values Rolter has never seen.
+
+Anthropic extends its protocol through headers: a capability pairs an `anthropic-beta` value with body fields, and the pair travels together. A closed allowlist against a vendor that ships new capabilities *as new header values* means every new beta breaks until someone adds it by name, and it does not fail gracefully — stripping the header while the body passes returns a hard `400` (`Extra inputs are not permitted`), while capabilities such as extended context simply never take effect.
+
+<Note>
+  The match requires the separator, so a header merely starting with those letters (`anthropicfoo`) is not in the namespace. These headers are also dropped again for a provider that does not speak the Anthropic dialect, so an OpenAI-shaped upstream never receives them.
+</Note>
+
+`anthropic-version` is the one value Rolter resolves rather than copies: the client's wins when it sends one, and the deployment's configured `anthropic_version` is the fallback for requests translated from the OpenAI dialect, where the client stated none. Exactly one value is sent.
+
 ---
 
 ## Injected upstream headers

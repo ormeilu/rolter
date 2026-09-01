@@ -15,7 +15,7 @@ type Story = StoryObj<typeof meta>;
 export const OneProblem: Story = {
   args: {
     problems: [
-      "provider 'openrouter-edge' omitted from the snapshot: openrouter provider 'openrouter-edge' api_base must be https://openrouter.ai/api/v1",
+      "provider 'openrouter-edge' omitted from the snapshot: openrouter provider 'openrouter-edge' api_base must be https://openrouter.ai/api/v1 unless the provider sets allow_custom_api_base = true",
     ],
   },
   play: async ({ canvas }) => {
@@ -31,7 +31,7 @@ export const OneProblem: Story = {
 export const SeveralProblems: Story = {
   args: {
     problems: [
-      "provider 'openrouter-edge' omitted from the snapshot: openrouter provider 'openrouter-edge' api_base must be https://openrouter.ai/api/v1",
+      "provider 'openrouter-edge' omitted from the snapshot: openrouter provider 'openrouter-edge' api_base must be https://openrouter.ai/api/v1 unless the provider sets allow_custom_api_base = true",
       "route 'gpt-4o-mini' omitted from the snapshot: it has no target that references a known provider with a positive weight",
     ],
   },

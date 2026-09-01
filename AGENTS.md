@@ -41,6 +41,7 @@ rolter is a high-performance OpenAI/Anthropic-compatible AI gateway and load bal
 - Create independent issue work from current `origin/master`: `git fetch origin master`, then `wt switch --create <type>/<issue-number>-<short-description> --base origin/master`.
 - Give every agent exactly one branch and worktree. This applies equally to Codex, Claude, Z.ai, Warp, and other agents; never encode an agent name in the branch.
 - For dependent work, create the child with `--base <parent-branch>` and target the child PR at that parent. Rebase in dependency order after the parent merges.
+- Merging a stack is not a normal merge; see the stacked-PR rules under "Commit & PR conventions" before touching one. Never pass `--delete-branch` to a merge whose branch is the base of another PR — GitHub closes that child irrecoverably.
 - Use `wt list --full` before assigning, publishing, or cleaning work. Treat activity markers as advisory and inspect Git state directly.
 - Worktrunk is the lifecycle layer only. Commit and push with standard Git, publish and merge with `gh`/GitHub, and keep hosted `ci-ok` authoritative.
 - Do not use `wt merge`, `wt step commit`, `wt step squash`, or `wt step push`. Do not use `--force` or `--force-delete` in automated cleanup.
@@ -164,6 +165,36 @@ docs(architecture): document reload-free config propagation
 
 Commit hygiene is enforced by `commitlint` (PR titles) and the `conventional-pre-commit` hook in `prek.toml`.
 
+### Merging a stacked PR
+
+GitHub's stacked pull requests are enabled on this repository, and they change
+how a chain of dependent PRs must be merged. Both rules below cost a PR when
+they are broken, and the loss is silent and irreversible.
+
+- **`gh pr merge` does not work on a stacked PR.** Both the GraphQL path and
+  `PUT /repos/{owner}/{repo}/pulls/{n}/merge` refuse with *"This pull request is
+  part of a stack and must be merged using the asynchronous merge REST API."*
+  The endpoint the message means is a `PUT`, not a `POST`, and it is
+  `merge-async` — `POST .../merge-async`, `POST .../async-merge` and
+  `POST .../merges` all 404:
+
+  ```bash
+  gh api -X PUT repos/rolter-ai/rolter/pulls/<n>/merge-async -f merge_method=squash
+  ```
+
+- **Never pass `--delete-branch` when the PR has a child stacked on it.**
+  Deleting the base branch of an open PR makes GitHub close that child, and the
+  closed PR cannot be recovered: `gh pr reopen` and `gh pr edit --base master`
+  both fail, so the only way forward is a brand-new PR with the same commits
+  (this is how #1056 was lost and had to be reopened as #1059). Delete the
+  branch only after every PR stacked on it has merged.
+
+- **Do not retarget a stacked child before merging its parent.** GitHub refuses
+  with *"Cannot change the base branch because the pull request is part of a
+  stack."* Merging the parent through `merge-async` auto-retargets the child
+  onto `master`, so merge parents first, bottom of the stack upward, and let
+  GitHub move the children.
+
 ## Scope discipline: file an issue for everything you find
 
 Keeping a PR focused only works if the things you leave out survive. **Every
@@ -182,13 +213,20 @@ implementation suggests.
   tracked. (`gh project item-list` truncates, so confirm membership through the
   GraphQL `projectItems` field rather than by grepping the list.)
 - Fill in **every** board field, not just the title and body — an issue missing
-  its fields is invisible to the milestone audit and to any roll-up by size:
+  its fields is invisible to the milestone audit and to any roll-up by size.
+  The board conventions, including what each Status and milestone means, are in
+  [`docs/development/issue-tracking.md`](docs/development/issue-tracking.md):
   - **Priority** — `Urgent` / `High` / `Medium` / `Low`. Set it explicitly;
     unprioritized is a decision, not a default.
   - **Effort** — `XS` (< 1h), `S` (a few hours), `M` (~1 day), `L` (2-3 days),
     `XL` (a week+). Size from the scope the issue actually states — a migration
     and its `bump_config_version()` trigger, i18n fan-out across every catalog,
     or a "research this first" section all cost more than the title suggests.
+  - **Area** — where the work lands: `gateway`, `control`, `ui`, `proxy`,
+    `balancer`, `store`, `auth`, `core`, `docs`, `ci`, `infra`, or
+    `cross-cutting`. One value, the dominant one; the same vocabulary as the
+    Conventional Commit scopes above. `cross-cutting` is for epics and research
+    spikes with no centre, not for anything that touches two files.
   - **Labels** — match the existing conventions (`bug`, `enhancement`,
     `tech-debt`, plus the area labels such as `ui-dashboard`, `providers-api`).
   - **Milestone** — always assign one. Propose a new milestone if none fits

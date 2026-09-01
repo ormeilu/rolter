@@ -26,6 +26,35 @@ provider = "openrouter"
 model = "anthropic/claude-sonnet-4"
 ```
 
+## Pointing at something other than openrouter.ai
+
+An `openrouter` provider's `api_base` is pinned to `https://openrouter.ai/api/v1`.
+The kind names one operator and the key belongs to that operator, so the pin is
+what stops an edited base URL from sending a live OpenRouter key to another
+host.
+
+When the endpoint genuinely is somewhere else — a corporate egress proxy or
+internal gateway in front of OpenRouter, an endpoint that re-implements the
+API, or a local fake used to exercise the dialect — opt out explicitly:
+
+```toml
+[[providers]]
+name = "openrouter-via-proxy"
+kind = "openrouter"
+api_base = "https://llm-egress.corp.example/openrouter/v1"
+api_key_env = "OPENROUTER_API_KEY"
+allow_custom_api_base = true
+```
+
+The opt-out relaxes the host pin and nothing else: the key must still come from
+`api_key_env`. `rolter check` reports every provider that sets it, and
+`rolter check --strict` fails on it, so the redirection stays visible in a
+review rather than becoming a copied default. See
+[ADR-0029](../adr/2026-09-02-hosted-provider-host-pin-opt-out.md).
+
+Providers stored in the control-plane database cannot opt out yet; the pin
+applies to them unconditionally.
+
 The public rolter model (`router-chat`) is rewritten only to the target model
 override. OpenRouter identifiers such as `anthropic/claude-sonnet-4`, including
 their provider prefix and optional variants, are otherwise forwarded verbatim.

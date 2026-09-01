@@ -381,6 +381,7 @@ impl Forwarder {
                 provider,
                 api_key,
                 &compatibility,
+                passthrough_headers,
             );
             if provider.kind == ProviderKind::Openrouter {
                 if let Ok(referer) = std::env::var("OPENROUTER_HTTP_REFERER") {
@@ -393,9 +394,7 @@ impl Forwarder {
             for (name, value) in injected.iter() {
                 req = req.header(name.as_str(), value.as_str());
             }
-            for (name, value) in passthrough_headers {
-                req = req.header(*name, *value);
-            }
+            req = apply_passthrough(req, provider, passthrough_headers);
             req.body(body.clone())
         })
         .await
@@ -435,13 +434,12 @@ impl Forwarder {
                 provider,
                 api_key,
                 &compatibility,
+                passthrough_headers,
             );
             for (name, value) in injected.iter() {
                 req = req.header(name.as_str(), value.as_str());
             }
-            for (name, value) in passthrough_headers {
-                req = req.header(*name, *value);
-            }
+            req = apply_passthrough(req, provider, passthrough_headers);
             req.body(body.clone())
         })
         .await
@@ -468,13 +466,12 @@ impl Forwarder {
                 provider,
                 api_key,
                 &compatibility,
+                passthrough_headers,
             );
             for (name, value) in injected.iter() {
                 req = req.header(name.as_str(), value.as_str());
             }
-            for (name, value) in passthrough_headers {
-                req = req.header(*name, *value);
-            }
+            req = apply_passthrough(req, provider, passthrough_headers);
             req
         })
         .await
@@ -542,23 +539,84 @@ fn apply_provider_auth(
     provider: &ProviderConfig,
     api_key: Option<&str>,
 ) -> RequestBuilder {
-    apply_provider_auth_with(request, provider, api_key, &CompatibilityConfig::default())
+    apply_provider_auth_with(
+        request,
+        provider,
+        api_key,
+        &CompatibilityConfig::default(),
+        &[],
+    )
+}
+
+/// Whether `kind` speaks the Anthropic wire protocol, and should therefore
+/// receive the caller's `anthropic-*` headers unchanged.
+fn speaks_anthropic(kind: ProviderKind) -> bool {
+    kind == ProviderKind::Anthropic
+}
+
+/// Case-insensitive lookup in a passthrough header list. HTTP header names are
+/// case-insensitive and these arrive from a client, so a `Anthropic-Version`
+/// must be found exactly as `anthropic-version` is.
+fn passthrough_value<'a>(headers: &[(&'a str, &'a str)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(header, _)| header.eq_ignore_ascii_case(name))
+        .map(|(_, value)| *value)
+}
+
+/// Apply the caller's passthrough headers to an outbound request.
+///
+/// Two rules beyond copying:
+///
+/// - `anthropic-*` headers only reach a provider that speaks that dialect.
+///   They are collected by prefix at the gateway without knowing which target
+///   will be picked, so an OpenAI-shaped upstream is spared a namespace that
+///   means nothing to it.
+/// - `anthropic-version` is skipped here because [`apply_provider_auth_with`]
+///   has already resolved it. Copying it again would *append*, and the upstream
+///   would see two values comma-joined into one invalid version string.
+fn apply_passthrough(
+    mut request: RequestBuilder,
+    provider: &ProviderConfig,
+    passthrough_headers: &[(&str, &str)],
+) -> RequestBuilder {
+    let anthropic = speaks_anthropic(provider.kind);
+    for (name, value) in passthrough_headers {
+        if name.eq_ignore_ascii_case("anthropic-version") {
+            continue;
+        }
+        if !anthropic && name.to_ascii_lowercase().starts_with("anthropic-") {
+            continue;
+        }
+        request = request.header(*name, *value);
+    }
+    request
 }
 
 /// Auth headers for `provider`, applying the deployment's compatibility policy
 /// where a header is version-pinned (Anthropic's `anthropic-version`, #546).
+///
+/// The client's own `anthropic-version` wins when it sent one. #546 pinned the
+/// header so that *translated* requests — an OpenAI-dialect call rewritten to
+/// Anthropic, where no client version exists — have a defined version, and that
+/// remains exactly what the configured value does. Overriding a version the
+/// client did state was never the goal, and it silently changes the protocol a
+/// native Anthropic client asked for (#1013).
 fn apply_provider_auth_with(
     mut request: RequestBuilder,
     provider: &ProviderConfig,
     api_key: Option<&str>,
     compat: &CompatibilityConfig,
+    passthrough_headers: &[(&str, &str)],
 ) -> RequestBuilder {
     match provider.kind {
         ProviderKind::Anthropic => {
             if let Some(key) = api_key {
                 request = request.header("x-api-key", key);
             }
-            request.header("anthropic-version", compat.anthropic_version.clone())
+            let version = passthrough_value(passthrough_headers, "anthropic-version")
+                .unwrap_or(compat.anthropic_version.as_str());
+            request.header("anthropic-version", version)
         }
         ProviderKind::AzureOpenai => {
             if let Some(key) = api_key {
@@ -794,6 +852,7 @@ mod tests {
             status_page_url: None,
             role_profile: None,
             model_role_profiles: Default::default(),
+            allow_custom_api_base: false,
         }
     }
 
@@ -994,6 +1053,7 @@ mod tests {
             status_page_url: None,
             role_profile: None,
             model_role_profiles: Default::default(),
+            allow_custom_api_base: false,
         };
         let err = fwd
             .forward_json(
@@ -1071,6 +1131,7 @@ mod tests {
             &provider,
             Some("sk-anthropic"),
             &compat,
+            &[],
         )
         .build()
         .unwrap();
@@ -1081,6 +1142,113 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some("2024-10-22")
         );
+    }
+
+    /// #546 pinned `anthropic-version` so a *translated* request — an OpenAI
+    /// call rewritten to Anthropic, where the client stated no version — has a
+    /// defined one. A native client that did state a version must keep it:
+    /// overriding it silently changes the protocol it asked for (#1013).
+    #[test]
+    fn the_clients_anthropic_version_wins_over_the_configured_pin() {
+        let provider = provider(ProviderKind::Anthropic, "https://example.com".to_string());
+        let compat = CompatibilityConfig {
+            anthropic_version: "2023-06-01".to_string(),
+            default_max_tokens: 1024,
+        };
+        let request = apply_provider_auth_with(
+            Client::new().post("https://example.com/v1/messages"),
+            &provider,
+            Some("sk-anthropic"),
+            &compat,
+            &[("anthropic-version", "2024-10-22")],
+        )
+        .build()
+        .unwrap();
+
+        let values: Vec<&str> = request
+            .headers()
+            .get_all("anthropic-version")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        // exactly one: appending the client's on top of the pin would reach the
+        // upstream comma-joined into a single invalid version string
+        assert_eq!(values, vec!["2024-10-22"]);
+    }
+
+    /// The capability lives in the header/body pair, so the header must arrive
+    /// whatever it says — this asserts the open list, not a known set.
+    #[test]
+    fn an_unknown_anthropic_beta_reaches_an_anthropic_upstream_intact() {
+        let provider = provider(ProviderKind::Anthropic, "https://example.com".to_string());
+        let request = apply_passthrough(
+            Client::new().post("https://example.com/v1/messages"),
+            &provider,
+            &[("anthropic-beta", "not-a-capability-anyone-has-shipped-yet")],
+        )
+        .build()
+        .unwrap();
+        assert_eq!(
+            request
+                .headers()
+                .get("anthropic-beta")
+                .and_then(|v| v.to_str().ok()),
+            Some("not-a-capability-anyone-has-shipped-yet")
+        );
+    }
+
+    /// The gateway collects `anthropic-*` by prefix before it knows which
+    /// target the balancer will pick, so an OpenAI-shaped upstream is spared a
+    /// namespace that means nothing to it.
+    #[test]
+    fn anthropic_headers_do_not_leak_to_a_non_anthropic_upstream() {
+        let provider = provider(ProviderKind::Openai, "https://api.openai.com".to_string());
+        let request = apply_passthrough(
+            Client::new().post("https://api.openai.com/v1/chat/completions"),
+            &provider,
+            &[
+                ("anthropic-beta", "context-management-2025-06-27"),
+                ("traceparent", "00-1111-2222-01"),
+            ],
+        )
+        .build()
+        .unwrap();
+        assert!(request.headers().get("anthropic-beta").is_none());
+        // everything else still passes: this drops one namespace, not the list
+        assert!(request.headers().get("traceparent").is_some());
+    }
+
+    /// Header names are case-insensitive on the wire, and these come from a
+    /// client, so the version must be recognised however it was cased.
+    #[test]
+    fn a_differently_cased_anthropic_version_is_still_recognised() {
+        let provider = provider(ProviderKind::Anthropic, "https://example.com".to_string());
+        let compat = CompatibilityConfig {
+            anthropic_version: "2023-06-01".to_string(),
+            default_max_tokens: 1024,
+        };
+        let passthrough = [("Anthropic-Version", "2024-10-22")];
+        let request = apply_passthrough(
+            apply_provider_auth_with(
+                Client::new().post("https://example.com/v1/messages"),
+                &provider,
+                Some("sk-anthropic"),
+                &compat,
+                &passthrough,
+            ),
+            &provider,
+            &passthrough,
+        )
+        .build()
+        .unwrap();
+
+        let values: Vec<&str> = request
+            .headers()
+            .get_all("anthropic-version")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        assert_eq!(values, vec!["2024-10-22"]);
     }
 
     #[test]

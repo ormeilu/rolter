@@ -92,6 +92,7 @@ fn config_for(model: &str, providers: Vec<(&str, SocketAddr)>) -> GatewayConfig 
             status_page_url: None,
             role_profile: None,
             model_role_profiles: Default::default(),
+            allow_custom_api_base: false,
         });
     }
     config.routes.push(ModelRoute {
@@ -320,6 +321,7 @@ async fn models_endpoint_lists_route_ids_and_provider_slug_model_ids() {
         status_page_url: None,
         role_profile: None,
         model_role_profiles: Default::default(),
+        allow_custom_api_base: false,
     });
     config.routes.push(ModelRoute {
         model: "chat".to_string(),
@@ -406,6 +408,7 @@ async fn provider_slug_model_pins_provider_and_rewrites_upstream_model() {
         status_page_url: None,
         role_profile: None,
         model_role_profiles: Default::default(),
+        allow_custom_api_base: false,
     });
     let gw = serve_gateway(&config).await;
 
@@ -2018,6 +2021,7 @@ async fn variant_routing_fails_over_to_next_variant() {
             status_page_url: None,
             role_profile: None,
             model_role_profiles: Default::default(),
+            allow_custom_api_base: false,
         });
     }
     let mk_variant = |name: &str, provider: &str, weight: u32| Variant {

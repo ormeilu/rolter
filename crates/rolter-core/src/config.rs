@@ -788,6 +788,22 @@ pub struct ProviderConfig {
     /// templates that explicitly support `developer`.
     #[serde(default)]
     pub model_role_profiles: HashMap<String, RoleProfile>,
+    /// Opt out of the host pin a hosted provider kind carries by default, so
+    /// this provider may point at any `api_base`.
+    ///
+    /// The pin exists because a hosted kind names one operator: an
+    /// `openrouter` provider whose `api_base` could be edited would send an
+    /// OpenRouter key to whatever host the edit named. Setting this makes that
+    /// redirection a deliberate, reviewable line in the configuration rather
+    /// than something a config edit can do silently, and `rolter check` warns
+    /// on every provider that sets it. The `api_key_env` rule is not relaxed:
+    /// the credential still cannot be inlined in the config or the database.
+    ///
+    /// Set it for an egress proxy in front of the vendor, an
+    /// endpoint that re-implements the vendor's surface, or a local fake used
+    /// to exercise the dialect. See ADR-0029.
+    #[serde(default)]
+    pub allow_custom_api_base: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2613,6 +2629,28 @@ impl GatewayConfig {
         }
     }
 
+    /// Advisory notes about providers that opted out of their kind's host pin
+    /// with `allow_custom_api_base`.
+    ///
+    /// The opt-out is legitimate — an egress proxy, a vendor-compatible
+    /// endpoint, a local fake used to exercise the dialect — but it removes the
+    /// guard that stops a config edit from redirecting a hosted vendor's key to
+    /// another host, so `rolter check` reports every provider that sets it. It
+    /// is never fatal: nothing here blocks a boot.
+    pub fn custom_api_base_advisories(&self) -> Vec<String> {
+        self.providers
+            .iter()
+            .filter(|provider| provider.allow_custom_api_base)
+            .map(|provider| {
+                format!(
+                    "provider '{}' ({:?}) sets allow_custom_api_base and points at {}, \
+                     so its key travels to a host rolter cannot vouch for",
+                    provider.name, provider.kind, provider.api_base
+                )
+            })
+            .collect()
+    }
+
     /// Find a provider by name.
     pub fn resolve_provider(&self, name: &str) -> Option<&ProviderConfig> {
         self.providers.iter().find(|p| p.name == name)
@@ -2775,9 +2813,12 @@ impl GatewayConfig {
                     provider.name
                 ));
             }
-            if provider.api_base.trim_end_matches('/') != "https://openrouter.ai/api/v1" {
+            if !provider.allow_custom_api_base
+                && provider.api_base.trim_end_matches('/') != "https://openrouter.ai/api/v1"
+            {
                 problems.push(format!(
-                    "openrouter provider '{}' api_base must be https://openrouter.ai/api/v1",
+                    "openrouter provider '{}' api_base must be https://openrouter.ai/api/v1 \
+                     unless the provider sets allow_custom_api_base = true",
                     provider.name
                 ));
             }
@@ -3608,6 +3649,7 @@ mod tests {
             status_page_url: None,
             role_profile: None,
             model_role_profiles: HashMap::new(),
+            allow_custom_api_base: false,
         }
     }
 
@@ -4143,6 +4185,75 @@ mod tests {
             .unwrap_err()
             .iter()
             .any(|problem| problem.contains("api_base must be")));
+    }
+
+    #[test]
+    fn openrouter_may_point_elsewhere_only_with_an_explicit_opt_out() {
+        let raw = r#"
+            [[providers]]
+            name = "openrouter-edge"
+            kind = "openrouter"
+            api_base = "http://127.0.0.1:18002"
+            api_key_env = "OPENROUTER_API_KEY"
+            allow_custom_api_base = true
+
+            [[routes]]
+            model = "router-chat"
+            [[routes.targets]]
+            provider = "openrouter-edge"
+        "#;
+        let mut cfg = GatewayConfig::from_toml_str(raw).unwrap();
+        assert!(cfg.providers[0].allow_custom_api_base);
+        assert!(cfg.validate().is_ok(), "{:?}", cfg.validate());
+
+        // the opt-out is reported, so a reviewer sees the redirected key
+        let advisories = cfg.custom_api_base_advisories();
+        assert_eq!(advisories.len(), 1, "{advisories:?}");
+        assert!(advisories[0].contains("openrouter-edge"), "{advisories:?}");
+        assert!(advisories[0].contains("127.0.0.1:18002"), "{advisories:?}");
+
+        // it relaxes the host pin and nothing else: the key must still come
+        // from the environment, which is what stops the exfiltration path
+        cfg.providers[0].api_key = Some("sk-inline".to_string());
+        let problems = cfg.validate().unwrap_err();
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("must source its key from api_key_env")),
+            "{problems:?}"
+        );
+
+        // and without the opt-out the same api_base is still refused
+        cfg.providers[0].api_key = None;
+        cfg.providers[0].allow_custom_api_base = false;
+        let problems = cfg.validate().unwrap_err();
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("allow_custom_api_base")),
+            "the error has to name the way out: {problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_pinned_provider_raises_no_advisory() {
+        let cfg = GatewayConfig::from_toml_str(
+            r#"
+            [[providers]]
+            name = "openrouter"
+            kind = "openrouter"
+            api_base = "https://openrouter.ai/api/v1"
+            api_key_env = "OPENROUTER_API_KEY"
+
+            [[routes]]
+            model = "router-chat"
+            [[routes.targets]]
+            provider = "openrouter"
+        "#,
+        )
+        .unwrap();
+        assert!(cfg.validate().is_ok());
+        assert!(cfg.custom_api_base_advisories().is_empty());
     }
 
     #[test]

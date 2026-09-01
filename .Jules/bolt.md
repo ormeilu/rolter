@@ -43,3 +43,7 @@ To solve this, we can pre-collect all the keys required into a `Vec<String>`, pe
 ## 2026-08-04 - Hex encoding allocations via format!
 **Learning:** Avoid using `format!("{b:02x}")` within an iterator map (e.g. `bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()`) for hex-encoding byte arrays. This invokes the expensive formatting macro machinery and allocates a tiny string for every single byte before joining them, causing a significant CPU and allocation bottleneck, especially when generating frequent items like credentials, session tokens, or hashes.
 **Action:** Use a specialized hex encoding function that pre-allocates a `String::with_capacity(bytes.len() * 2)` and uses a static lookup table (`b"0123456789abcdef"`) to directly map bit-shifts into characters via `String::push`.
+
+## 2026-08-16 - Preserving Error Semantics During Serialization Optimization
+**Learning:** When refactoring serialization code (like switching from `serde_json::to_string` to `to_writer` to avoid `String` allocations), it is crucial to preserve existing error handling behavior. If the original code propagates errors (e.g., using `?`), the optimized version must also propagate them rather than silently truncating buffers and continuing. Swallowing errors causes functional regressions like silent data loss.
+**Action:** When using `to_writer` on a `Vec<u8>` for optimization, use the `?` operator if the original code did, rather than matching on `Ok`/`Err` unless specifically implementing partial failure fallback (like in `rolter-gateway`'s log sink).

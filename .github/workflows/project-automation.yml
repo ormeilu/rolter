@@ -1,8 +1,14 @@
 name: project-automation
 
 # adds every new issue and PR to the rolter-ai project board (#1) and seeds a
-# default Status (Todo) and Priority (Medium) so items land triaged instead of
-# in the untracked "no status" column.
+# default Status so items land triaged instead of in the untracked "no status"
+# column: issues get Todo plus Priority Medium, PRs get In Review because an
+# open PR is by definition waiting on review or on ci-ok.
+#
+# the single-select option ids below are NOT stable: replacing a field's option
+# list through updateProjectV2Field mints new ids and clears the field on every
+# existing item. if the Status options are ever edited, re-read the ids with
+# `gh project field-list 1 --owner rolter-ai --format json` and update them here.
 #
 # org Projects v2 are not reachable with the default GITHUB_TOKEN, so this uses
 # a fine-grained PAT stored as the secret ADD_TO_PROJECT_PAT (org: projects
@@ -39,11 +45,13 @@ jobs:
           ITEM_ID: ${{ steps.add.outputs.itemId }}
           PROJECT_ID: PVT_kwDOEjWga84Bdezc
           STATUS_FIELD: PVTSSF_lADOEjWga84BdezczhYACo4
-          STATUS_TODO: f75ad846
+          STATUS_TODO: 3ced4ae9
+          STATUS_IN_REVIEW: bb32d414
           PRIORITY_FIELD: PVTSSF_lADOEjWga84BdezczhYAQGI
           PRIORITY_MEDIUM: 82100b74
+          IS_PR: ${{ github.event_name == 'pull_request_target' }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # $-prefixed names in the query are graphql variables, not shell vars
           set_field() {
             # shellcheck disable=SC2016
@@ -54,7 +62,13 @@ jobs:
                   value:{singleSelectOptionId:$opt}
                 }){ projectV2Item { id } }
               }' -f project="$PROJECT_ID" -f item="$ITEM_ID" \
-                 -f field="$1" -f opt="$2"
+                 -f field="$1" -f opt="$2" || echo "::warning::project board: failed to set field $1"
           }
-          set_field "$STATUS_FIELD" "$STATUS_TODO" || echo "::warning::Failed to set STATUS_FIELD to $STATUS_TODO"
-          set_field "$PRIORITY_FIELD" "$PRIORITY_MEDIUM" || echo "::warning::Failed to set PRIORITY_FIELD to $PRIORITY_MEDIUM"
+          # a freshly opened PR is already waiting on review and ci-ok, so it
+          # starts in In Review; only issues start in Todo and carry a Priority
+          if [ "$IS_PR" = "true" ]; then
+            set_field "$STATUS_FIELD" "$STATUS_IN_REVIEW"
+          else
+            set_field "$STATUS_FIELD" "$STATUS_TODO"
+            set_field "$PRIORITY_FIELD" "$PRIORITY_MEDIUM"
+          fi

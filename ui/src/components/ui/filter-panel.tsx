@@ -201,6 +201,7 @@ export function FilterPanel({
         {onHide && (
           <button
             title={t("common.hideFilters")}
+            aria-label={t("common.hideFilters")}
             onClick={onHide}
             className="rounded-md p-1 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >

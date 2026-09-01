@@ -152,7 +152,31 @@ fn control_args(args: &EasyUpArgs, database_url: Option<String>) -> rolter_contr
         internal_token: None,
         internal_addr: None,
         allow_open_mode: args.allow_open_mode,
+        // same reason as the tracing endpoint above: clap's `env =` never runs
+        // for hand-built args, so the pool settings are read here too (#1052)
+        #[cfg(feature = "postgres")]
+        db_max_connections: env_or("ROLTER_DB_MAX_CONNECTIONS", 10),
+        #[cfg(feature = "postgres")]
+        db_min_connections: env_or("ROLTER_DB_MIN_CONNECTIONS", 0),
+        #[cfg(feature = "postgres")]
+        db_acquire_timeout_secs: env_or("ROLTER_DB_ACQUIRE_TIMEOUT_SECS", 30),
+        #[cfg(feature = "postgres")]
+        db_idle_timeout_secs: env_or("ROLTER_DB_IDLE_TIMEOUT_SECS", 600),
+        #[cfg(feature = "postgres")]
+        db_max_lifetime_secs: env_or("ROLTER_DB_MAX_LIFETIME_SECS", 1800),
     }
+}
+
+/// Read a numeric setting from the environment, falling back to the same
+/// default `rolter control` declares. An unparsable value falls back rather
+/// than failing: `easy-up` is the zero-config entry point, and a typo in an
+/// exported variable should not stop it from booting.
+#[cfg(feature = "postgres")]
+fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.trim().parse().ok())
+        .unwrap_or(default)
 }
 
 /// Run `easy-up` to completion: bootstrap config, optionally migrate+seed the
@@ -350,5 +374,53 @@ mod tests {
         assert!(control_args(&args, None).allow_open_mode);
         args.allow_open_mode = false;
         assert!(!control_args(&args, None).allow_open_mode);
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn env_or_falls_back_on_absent_and_unparsable_values() {
+        // keys unique to this test so nothing else in the binary can race it
+        let absent = "ROLTER_TEST_EASY_UP_ABSENT";
+        let bad = "ROLTER_TEST_EASY_UP_BAD";
+        let good = "ROLTER_TEST_EASY_UP_GOOD";
+        std::env::remove_var(absent);
+        std::env::set_var(bad, "not-a-number");
+        std::env::set_var(good, "  42  ");
+
+        assert_eq!(env_or(absent, 10u32), 10);
+        // a typo must not stop the zero-config entry point from booting
+        assert_eq!(env_or(bad, 10u32), 10);
+        assert_eq!(env_or(good, 10u32), 42, "surrounding whitespace is trimmed");
+
+        std::env::remove_var(bad);
+        std::env::remove_var(good);
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn control_args_reads_the_pool_settings_from_the_environment() {
+        // `easy-up` hand-builds Args, so clap's `env =` never runs for them and
+        // an unwired field is silently ignored rather than failing to compile
+        // once a default exists. this is the #805 failure mode, for #1052.
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct Cli {
+            #[command(flatten)]
+            easy_up: EasyUpArgs,
+        }
+
+        let key = "ROLTER_DB_MAX_CONNECTIONS";
+        std::env::set_var(key, "37");
+        let cli = Cli::parse_from(["rolter"]);
+        let built = control_args(&cli.easy_up, None);
+        std::env::remove_var(key);
+
+        assert_eq!(built.db_max_connections, 37);
+        // the untouched ones still carry the same defaults `rolter control` declares
+        assert_eq!(built.db_min_connections, 0);
+        assert_eq!(built.db_acquire_timeout_secs, 30);
+        assert_eq!(built.db_idle_timeout_secs, 600);
+        assert_eq!(built.db_max_lifetime_secs, 1800);
     }
 }

@@ -147,6 +147,36 @@ pub struct Args {
     #[cfg(feature = "postgres")]
     #[arg(long, env = "ROLTER_DATABASE_URL")]
     pub database_url: Option<String>,
+    /// upper bound on open postgres connections. One pool serves everything:
+    /// `/internal/snapshot` (polled by every gateway in the fleet), the whole
+    /// dashboard CRUD surface, SCIM, SSO, MCP and the RBAC guard's per-request
+    /// membership lookups. Size it against the database's own
+    /// `max_connections` divided across control replicas — not against gateway
+    /// count, since snapshot polls are short (#1052)
+    #[cfg(feature = "postgres")]
+    #[arg(long, env = "ROLTER_DB_MAX_CONNECTIONS", default_value_t = 10)]
+    pub db_max_connections: u32,
+    /// connections kept open while idle. Above zero, the first request after a
+    /// quiet period skips the connect handshake
+    #[cfg(feature = "postgres")]
+    #[arg(long, env = "ROLTER_DB_MIN_CONNECTIONS", default_value_t = 0)]
+    pub db_min_connections: u32,
+    /// how long a request waits for a free connection before failing. Bounded
+    /// on purpose: pool exhaustion should surface as a fast, attributable
+    /// error rather than an opaque stall that looks like a slow database
+    #[cfg(feature = "postgres")]
+    #[arg(long, env = "ROLTER_DB_ACQUIRE_TIMEOUT_SECS", default_value_t = 30)]
+    pub db_acquire_timeout_secs: u64,
+    /// close a connection idle for longer than this; `0` keeps idle
+    /// connections forever
+    #[cfg(feature = "postgres")]
+    #[arg(long, env = "ROLTER_DB_IDLE_TIMEOUT_SECS", default_value_t = 600)]
+    pub db_idle_timeout_secs: u64,
+    /// retire a connection older than this regardless of use, so a pool cannot
+    /// pin itself to one database instance across a failover; `0` disables
+    #[cfg(feature = "postgres")]
+    #[arg(long, env = "ROLTER_DB_MAX_LIFETIME_SECS", default_value_t = 1800)]
+    pub db_max_lifetime_secs: u64,
     /// redis connection url; when set, config-version bumps are published on
     /// the `rolter.config` channel so gateways refetch immediately instead of
     /// waiting for their poll interval
@@ -351,15 +381,42 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     // latency is what makes a slow dashboard write attributable, and neither
     // was measured (#845). `None` — and no cost — without an OTLP endpoint;
     // held for the lifetime of `run` so metrics flush on shutdown
-    let metrics_guard = rolter_core::telemetry::install_control_metrics();
+    //
+    // the store is built first so the pool gauges can be registered against a
+    // pool that already exists; an observable instrument installed later would
+    // miss the interval it was installed in (#1052)
+    #[allow(unused_variables)]
+    let (store, pool) = build_store(&args, bootstrap).await?;
+    #[cfg(feature = "postgres")]
+    let pool_sampler: Option<rolter_core::telemetry::PoolSampler> = pool.clone().map(|pool| {
+        Arc::new(move || {
+            let stats = rolter_store::postgres::pool_stats(&pool);
+            rolter_core::telemetry::PoolGauges {
+                connections: stats.connections,
+                idle: stats.idle,
+                max: stats.max,
+            }
+        }) as rolter_core::telemetry::PoolSampler
+    });
+    #[cfg(not(feature = "postgres"))]
+    let pool_sampler: Option<rolter_core::telemetry::PoolSampler> = None;
+    let metrics_guard = rolter_core::telemetry::install_control_metrics_with_pool(pool_sampler);
     let metrics = metrics_guard
         .as_ref()
         .map(rolter_core::telemetry::MetricsGuard::control_histograms)
         .unwrap_or_default();
     let _metrics_guard = metrics_guard;
 
-    #[allow(unused_variables)]
-    let (store, pool) = build_store(&args, bootstrap).await?;
+    // acquire wait is what an operator actually feels when the ceiling is too
+    // low, and the gauges alone cannot show it. Sampled on a timer rather than
+    // per call so nothing is added to the request path
+    #[cfg(feature = "postgres")]
+    if let Some(pool) = pool.clone() {
+        if metrics.is_active() {
+            let metrics = metrics.clone();
+            tokio::spawn(async move { sample_pool_acquire(pool, metrics).await });
+        }
+    }
     let http = reqwest::Client::new();
     let gateway_url = Arc::new(args.gateway_url.trim_end_matches('/').to_string());
     tracing::info!(gateway_url = %gateway_url, "proxying /gw/* to the gateway");
@@ -865,13 +922,89 @@ fn test_state(pool: sqlx::PgPool, admin_token: Option<String>) -> ControlState {
 /// in-memory store seeded from the bootstrap toml. Also returns the raw pool
 /// (postgres builds only), which the CRUD API needs for direct repository
 /// access.
+/// How often the acquire-wait probe takes a sample. Long enough that the probe
+/// itself is not measurable load, short enough to catch a saturation episode
+/// that lasts a minute.
+#[cfg(feature = "postgres")]
+const POOL_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Periodically time one `acquire()` and record it, so pool saturation shows up
+/// as a latency distribution an operator can alert on (#1052).
+///
+/// It takes a connection and drops it immediately. That costs one slot for the
+/// duration of the acquire, which is exactly the cost of the thing being
+/// measured: if taking a single connection every 15s is disruptive, the pool
+/// is already far too small and that is the finding.
+#[cfg(feature = "postgres")]
+async fn sample_pool_acquire(
+    pool: sqlx::PgPool,
+    metrics: rolter_core::telemetry::ControlHistograms,
+) {
+    let mut ticker = tokio::time::interval(POOL_PROBE_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+        let started = std::time::Instant::now();
+        let outcome = match pool.acquire().await {
+            Ok(_conn) => "ok",
+            // the only expected error here is the acquire timeout, which is the
+            // saturation signal itself rather than a fault to log per tick
+            Err(_) => "timeout",
+        };
+        metrics.record_pool_acquire(outcome, started.elapsed().as_millis() as u64);
+    }
+}
+
+/// Translate the pool flags into a [`rolter_store::postgres::PoolConfig`].
+///
+/// A zero timeout means "never" for the two expiry knobs and is passed through
+/// as `None`; a zero `max_connections` or `acquire_timeout` is rejected at
+/// startup instead of producing a pool that can never hand out a connection —
+/// that failure would otherwise appear much later as every request timing out,
+/// which reads like a database outage rather than a typo.
+#[cfg(feature = "postgres")]
+fn pool_config_from(args: &Args) -> anyhow::Result<rolter_store::postgres::PoolConfig> {
+    use std::time::Duration;
+
+    anyhow::ensure!(
+        args.db_max_connections > 0,
+        "ROLTER_DB_MAX_CONNECTIONS must be at least 1"
+    );
+    anyhow::ensure!(
+        args.db_acquire_timeout_secs > 0,
+        "ROLTER_DB_ACQUIRE_TIMEOUT_SECS must be at least 1"
+    );
+    anyhow::ensure!(
+        args.db_min_connections <= args.db_max_connections,
+        "ROLTER_DB_MIN_CONNECTIONS ({}) exceeds ROLTER_DB_MAX_CONNECTIONS ({})",
+        args.db_min_connections,
+        args.db_max_connections
+    );
+
+    let optional = |secs: u64| (secs > 0).then(|| Duration::from_secs(secs));
+    Ok(rolter_store::postgres::PoolConfig {
+        max_connections: args.db_max_connections,
+        min_connections: args.db_min_connections,
+        acquire_timeout: Duration::from_secs(args.db_acquire_timeout_secs),
+        idle_timeout: optional(args.db_idle_timeout_secs),
+        max_lifetime: optional(args.db_max_lifetime_secs),
+    })
+}
+
 #[cfg(feature = "postgres")]
 async fn build_store(
     args: &Args,
     bootstrap: Option<GatewayConfig>,
 ) -> anyhow::Result<(Arc<dyn ConfigStore>, Option<sqlx::PgPool>)> {
     if let Some(database_url) = &args.database_url {
-        let pool = rolter_store::postgres::connect(database_url).await?;
+        let pool_config = pool_config_from(args)?;
+        tracing::info!(
+            max_connections = pool_config.max_connections,
+            min_connections = pool_config.min_connections,
+            acquire_timeout_secs = pool_config.acquire_timeout.as_secs(),
+            "connecting to postgres"
+        );
+        let pool = rolter_store::postgres::connect_with(database_url, pool_config).await?;
         rolter_store::postgres::run_migrations(&pool).await?;
         if let Some(config) = bootstrap.as_ref() {
             // providers first: a models.default target or a provider_groups.default
@@ -1522,6 +1655,89 @@ async fn build_snapshot(
                 .into_response(),
             version,
         ),
+    }
+}
+
+#[cfg(all(test, feature = "postgres"))]
+mod pool_config_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Parse `Args` from a flag list, with the required-in-practice bits set.
+    /// `try_parse_from` so a bad value is a value to assert on, not a process
+    /// exit inside the test binary.
+    fn args(extra: &[&str]) -> Args {
+        let mut argv = vec!["rolter-control", "--database-url", "postgres://x/y"];
+        argv.extend_from_slice(extra);
+        Args::try_parse_from(argv).expect("parse args")
+    }
+
+    /// The whole point of the defaults: an existing deployment that configures
+    /// nothing keeps exactly the budget it had before this was configurable.
+    #[test]
+    fn defaults_reproduce_the_previously_hardcoded_budget() {
+        let config = pool_config_from(&args(&[])).expect("valid");
+        let hardcoded = rolter_store::postgres::PoolConfig::default();
+        assert_eq!(config.max_connections, 10);
+        assert_eq!(config.max_connections, hardcoded.max_connections);
+        assert_eq!(config.acquire_timeout, hardcoded.acquire_timeout);
+        assert_eq!(config.idle_timeout, hardcoded.idle_timeout);
+        assert_eq!(config.max_lifetime, hardcoded.max_lifetime);
+    }
+
+    #[test]
+    fn flags_override_every_knob() {
+        let config = pool_config_from(&args(&[
+            "--db-max-connections",
+            "50",
+            "--db-min-connections",
+            "5",
+            "--db-acquire-timeout-secs",
+            "3",
+            "--db-idle-timeout-secs",
+            "60",
+            "--db-max-lifetime-secs",
+            "120",
+        ]))
+        .expect("valid");
+        assert_eq!(config.max_connections, 50);
+        assert_eq!(config.min_connections, 5);
+        assert_eq!(config.acquire_timeout, Duration::from_secs(3));
+        assert_eq!(config.idle_timeout, Some(Duration::from_secs(60)));
+        assert_eq!(config.max_lifetime, Some(Duration::from_secs(120)));
+    }
+
+    /// Zero means "never expire" for the two expiry knobs — sqlx's own
+    /// encoding of it is `None`, and an operator should not have to know that.
+    #[test]
+    fn zero_expiry_means_never() {
+        let config = pool_config_from(&args(&[
+            "--db-idle-timeout-secs",
+            "0",
+            "--db-max-lifetime-secs",
+            "0",
+        ]))
+        .expect("valid");
+        assert_eq!(config.idle_timeout, None);
+        assert_eq!(config.max_lifetime, None);
+    }
+
+    /// A pool that can never hand out a connection must fail at startup, not
+    /// later as every request timing out — which reads like a database outage
+    /// rather than a typo in one env var.
+    #[test]
+    fn impossible_budgets_are_rejected_at_startup() {
+        for (flags, expected) in [
+            (vec!["--db-max-connections", "0"], "MAX_CONNECTIONS"),
+            (vec!["--db-acquire-timeout-secs", "0"], "ACQUIRE_TIMEOUT"),
+            (vec!["--db-min-connections", "11"], "MIN_CONNECTIONS"),
+        ] {
+            let err = pool_config_from(&args(&flags)).expect_err("should be rejected");
+            assert!(
+                err.to_string().contains(expected),
+                "error should name the offending variable, got: {err}"
+            );
+        }
     }
 }
 
@@ -2245,6 +2461,7 @@ mod tests {
             status_page_url: None,
             role_profile: None,
             model_role_profiles: Default::default(),
+            allow_custom_api_base: false,
         });
         let state = ControlState {
             store: Arc::new(InMemoryConfigStore::new(config)),

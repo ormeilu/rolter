@@ -41,6 +41,7 @@ fn config(addr: SocketAddr) -> GatewayConfig {
         status_page_url: None,
         role_profile: None,
         model_role_profiles: Default::default(),
+        allow_custom_api_base: false,
     });
     config.routes.push(ModelRoute {
         model: "local-chat".into(),

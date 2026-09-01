@@ -247,6 +247,7 @@ mod tests {
             status_page_url: None,
             role_profile: None,
             model_role_profiles: Default::default(),
+            allow_custom_api_base: false,
         }
     }
 
