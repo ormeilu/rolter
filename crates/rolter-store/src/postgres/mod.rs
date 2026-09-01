@@ -312,6 +312,10 @@ impl ProviderRow {
             status_page_url: None,
             role_profile: None,
             model_role_profiles: Default::default(),
+            // db-backed providers cannot opt out of the host pin yet: the
+            // column, the crud surface and the dashboard control are tracked
+            // separately, so a stored provider keeps the safe default
+            allow_custom_api_base: false,
         })
     }
 }

@@ -28,16 +28,17 @@ kind = "openai"
 api_base = "http://127.0.0.1:18001"
 api_key_env = "DOGFOOD_OPENAI_KEY"
 
-# Serves OpenRouter's `vendor/model` names, but declared `openai_compatible`
-# rather than `openrouter`: config validation pins an openrouter provider's
-# api_base to the literal `https://openrouter.ai/api/v1`, so the kind cannot be
-# pointed at a local endpoint at all. Tracked in #925 — until that is settled,
-# the OpenRouter *dialect* is not reachable from this fleet, only its naming.
+# Serves OpenRouter's `vendor/model` names and exercises the openrouter dialect
+# against a local endpoint. The kind is pinned to openrouter.ai by default so a
+# config edit cannot redirect a real key; `allow_custom_api_base` is the
+# deliberate opt-out from that pin (#925, ADR-0029), which is exactly what a
+# local fake needs. `rolter check` reports this provider, as intended.
 [[providers]]
 name = "openrouter-edge"
-kind = "openai_compatible"
+kind = "openrouter"
 api_base = "http://127.0.0.1:18002"
 api_key_env = "DOGFOOD_OPENROUTER_KEY"
+allow_custom_api_base = true
 
 # ── the self-hosted half ─────────────────────────────────────────────────────
 # one model per instance, like a real vllm deployment. roughly half sit behind

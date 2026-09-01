@@ -66,6 +66,7 @@ fn live_gateway(key: String, model: String) -> GatewayConfig {
         status_page_url: None,
         role_profile: None,
         model_role_profiles: Default::default(),
+        allow_custom_api_base: false,
     };
     let mut config = GatewayConfig::default();
     config.routes.push(ModelRoute {

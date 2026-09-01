@@ -53,6 +53,12 @@ name = "openrouter"
 kind = "openrouter"
 api_base = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
+# A hosted kind is pinned to its vendor's host, so a config edit cannot redirect
+# the key somewhere else. Set `allow_custom_api_base = true` when the endpoint
+# genuinely is elsewhere — an egress proxy in front of the vendor, a compatible
+# endpoint, or a local fake for testing. `rolter check` reports every provider
+# that sets it, and `--strict` fails on it. See ADR-0029.
+# allow_custom_api_base = true
 
 # OpenAI-compatible cloud-provider endpoints (uncomment the providers you use).
 # Azure uses `api-key`; Bedrock and Vertex use bearer tokens.

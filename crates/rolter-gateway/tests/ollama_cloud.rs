@@ -56,6 +56,7 @@ fn config(api_base: String, key_env: &str, upstream_model: &str) -> GatewayConfi
         status_page_url: None,
         role_profile: None,
         model_role_profiles: Default::default(),
+        allow_custom_api_base: false,
     });
     config.routes.push(ModelRoute {
         model: "cloud-model".into(),
