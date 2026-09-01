@@ -471,19 +471,20 @@ function LockButton({
   onToggle: () => void;
   disabled?: boolean;
 }) {
+  const label = locked
+    ? "Locked — clients can't override. Click to unlock."
+    : "Unlocked — clients can override. Click to lock.";
+
   return (
     <button
       type="button"
       disabled={disabled}
       onClick={onToggle}
       aria-pressed={locked}
-      title={
-        locked
-          ? "Locked — clients can't override. Click to unlock."
-          : "Unlocked — clients can override. Click to lock."
-      }
+      title={label}
+      aria-label={label}
       className={cn(
-        "flex h-8 w-8 flex-none items-center justify-center rounded-md border transition-colors duration-[120ms] disabled:cursor-not-allowed disabled:opacity-50",
+        "flex h-8 w-8 flex-none items-center justify-center rounded-md border transition-colors duration-[120ms] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         locked
           ? "border-[color:var(--red-500)] bg-[color:var(--red-tint)] text-[color:var(--red-500)]"
           : "border-[color:var(--border-subtle)] bg-transparent text-[color:var(--text-subtle)]",
