@@ -7,10 +7,10 @@
     "showPassword": "Show password",
     "hidePassword": "Hide password",
     "signIn": "Sign in",
-    "signingIn": "Signing in…",
+    "signingIn": "Signing in\u2026",
     "continueWith": "Continue with {{provider}}",
     "noMethod": "No login method is enabled for this deployment.",
-    "selfHosted": "Self-hosted · sessions are local to this deployment."
+    "selfHosted": "Self-hosted \u00b7 sessions are local to this deployment."
   },
   "common": {
     "cancel": "Cancel",
@@ -23,7 +23,7 @@
     "discardChanges": "Discard unsaved changes?",
     "filters": "Filters",
     "hideFilters": "Hide filters",
-    "search": "Search…",
+    "search": "Search\u2026",
     "viewDocs": "View docs"
   },
   "errors": {
@@ -36,7 +36,7 @@
       },
       "forbidden": {
         "title": "You do not have access to {{resource}}",
-        "body": "You are signed in, but your role does not permit reading this. Retrying will not help — ask an administrator to widen your role."
+        "body": "You are signed in, but your role does not permit reading this. Retrying will not help \u2014 ask an administrator to widen your role."
       },
       "openMode": {
         "title": "{{resource}} needs an admin token",
@@ -76,7 +76,7 @@
     "label": "Language",
     "change": "Change language",
     "en": "English",
-    "ru": "Русский"
+    "ru": "\u0420\u0443\u0441\u0441\u043a\u0438\u0439"
   },
   "modelSheet": {
     "currencyUnconvertible": "{{code}} has no conversion rate configured, so this price cannot be converted to {{base}} and will not reach spend or budgets. Add it to [currency.rates] in the bootstrap config, or price in {{base}}."
@@ -154,7 +154,7 @@
       "spendTitle": "Spend",
       "spendSub": "Hourly gateway spend, USD",
       "noRequestsWindow": "No requests in this window.",
-      "noSpendRecorded": "No spend recorded for this window. Requests were served, but none of them were priced — add pricing for the models in use to see cost here.",
+      "noSpendRecorded": "No spend recorded for this window. Requests were served, but none of them were priced \u2014 add pricing for the models in use to see cost here.",
       "trafficTitle": "Traffic share",
       "trafficSub": "Requests by model",
       "noTraffic": "No traffic yet.",
@@ -183,9 +183,9 @@
     "providers": {
       "search": "Search providers",
       "add": "+ Add provider",
-      "loading": "Loading…",
+      "loading": "Loading\u2026",
       "scopeBlocked": "Add/edit/delete is unavailable: {{error}}. Read-only view still works.",
-      "noOrg": "No org configured yet — pick or create one to manage providers.",
+      "noOrg": "No org configured yet \u2014 pick or create one to manage providers.",
       "colName": "Name",
       "colType": "Type",
       "colApiBase": "API base",
@@ -261,7 +261,7 @@
       "errorConfigObject": "Configuration must be a JSON object.",
       "errorNameEndpoint": "Name and an HTTP(S) endpoint are required.",
       "cancel": "Cancel",
-      "saving": "Saving…",
+      "saving": "Saving\u2026",
       "save": "Save configuration",
       "installConfirm": "Install plugin"
     },
@@ -272,11 +272,11 @@
       }
     },
     "pricing": {
-      "unconvertible": "Priced in {{code}}, which has no conversion rate — this model's spend is missing from {{base}} totals and budgets."
+      "unconvertible": "Priced in {{code}}, which has no conversion rate \u2014 this model's spend is missing from {{base}} totals and budgets."
     },
     "playground": {
       "groupRoutes": "Routes",
-      "modelsNeedKey": "Showing configured routes. Set a virtual key above to list what the gateway actually serves — provider-pinned and provider-group addresses only appear in the gateway's list.",
+      "modelsNeedKey": "Showing configured routes. Set a virtual key above to list what the gateway actually serves \u2014 provider-pinned and provider-group addresses only appear in the gateway's list.",
       "modelsUnreachable": "Could not read the gateway's model list with this key, so configured routes are shown instead. Provider-pinned and provider-group addresses are missing from this list."
     },
     "promptRepo": {
@@ -310,6 +310,9 @@
       "deleting": "Deleting…",
       "settings": "Settings",
       "cancel": "Cancel"
+    },
+    "tool-groups": {
+      "confirmDelete": "Are you sure you want to delete this tool group?"
     }
   },
   "playground": {
@@ -320,18 +323,18 @@
   "providerSheet": {
     "apiBase": {
       "doubled": "This base ends in /v1 and rolter appends /v1 itself, so requests would 404. Remove the trailing /v1.",
-      "excludesV1": "Leave off the version prefix — rolter appends /v1 itself for {{kind}}",
-      "includesV1": "Include the version prefix — {{kind}} expects it in the base, e.g. https://api.example.com/v1",
+      "excludesV1": "Leave off the version prefix \u2014 rolter appends /v1 itself for {{kind}}",
+      "includesV1": "Include the version prefix \u2014 {{kind}} expects it in the base, e.g. https://api.example.com/v1",
       "resolvesTo": "Requests resolve to"
     },
     "testConnection": "Test connection",
     "testFailed": "Could not reach this provider",
-    "testOk_one": "Reachable · {{count}} model · {{ms}} ms",
-    "testOk_other": "Reachable · {{count}} models · {{ms}} ms",
-    "testing": "Testing…"
+    "testOk_one": "Reachable \u00b7 {{count}} model \u00b7 {{ms}} ms",
+    "testOk_other": "Reachable \u00b7 {{count}} models \u00b7 {{ms}} ms",
+    "testing": "Testing\u2026"
   },
   "scope": {
-    "loading": "Loading scope…",
+    "loading": "Loading scope\u2026",
     "org": "Org",
     "team": "Team",
     "project": "Project",
@@ -360,7 +363,7 @@
   "screens": {
     "playground": {
       "title": "Playground",
-      "subtitle": "Prompt any routed model — chat, embeddings, image, audio, and realtime."
+      "subtitle": "Prompt any routed model \u2014 chat, embeddings, image, audio, and realtime."
     },
     "dashboard": {
       "title": "Dashboard",
@@ -436,7 +439,7 @@
     },
     "auth-sessions": {
       "title": "Auth Sessions",
-      "subtitle": "Token metadata for every MCP OAuth session — never the tokens themselves."
+      "subtitle": "Token metadata for every MCP OAuth session \u2014 never the tokens themselves."
     },
     "oauth-grants": {
       "title": "OAuth Grants",
@@ -582,22 +585,22 @@
     "githubRepo": "GitHub repository",
     "reportBug": "Report a bug",
     "role": "Admin",
-    "roleWithOrg": "Admin · {{org}}",
+    "roleWithOrg": "Admin \u00b7 {{org}}",
     "scope": "Scope",
     "accountAndKeys": "Account & API keys",
     "signOut": "Sign out",
     "gatewayHealthy": "gateway healthy",
     "refresh": "Refresh",
-    "refreshing": "Refreshing…",
+    "refreshing": "Refreshing\u2026",
     "refreshData": "Refresh data",
     "refreshingData": "Refreshing data",
     "openMode": {
       "title": "Control plane is unauthenticated.",
-      "body": "No admin token is set, so every request to this control plane is served as superadmin — anyone who can reach it can read keys and change providers, routing and budgets. Set ROLTER_ADMIN_TOKEN to close it."
+      "body": "No admin token is set, so every request to this control plane is served as superadmin \u2014 anyone who can reach it can read keys and change providers, routing and budgets. Set ROLTER_ADMIN_TOKEN to close it."
     }
   },
   "stub": {
-    "todo": "TODO — we'll come back to this screen"
+    "todo": "TODO \u2014 we'll come back to this screen"
   },
   "providers": {
     "unserved": {
@@ -608,7 +611,7 @@
   "account": {
     "openMode": {
       "title": "Self-service keys need a local account.",
-      "body": "This control plane is running in open mode with no admin token, so it has no user accounts — there is no \"you\" to mint a key for. Set ROLTER_ADMIN_TOKEN and create a local account to use this screen, or manage keys from the admin Virtual Keys screen instead."
+      "body": "This control plane is running in open mode with no admin token, so it has no user accounts \u2014 there is no \"you\" to mint a key for. Set ROLTER_ADMIN_TOKEN and create a local account to use this screen, or manage keys from the admin Virtual Keys screen instead."
     }
   }
 }

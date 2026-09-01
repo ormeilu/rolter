@@ -35,10 +35,22 @@ spec:
               containerPort: 4001
           env:
           env: {{- $controlEnv | nindent 12 }}
+          # /readyz checks the database and migrations; a failure only takes
+          # the pod out of the Service. /healthz is pure liveness and never
+          # touches Postgres, so a database blip cannot restart the fleet
           readinessProbe:
-            httpGet: {path: /healthz, port: http}
+            httpGet: {path: /readyz, port: http}
             initialDelaySeconds: 2
+            periodSeconds: {{ .Values.control.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.control.probes.readiness.failureThreshold }}
           livenessProbe:
             httpGet: {path: /healthz, port: http}
             initialDelaySeconds: 10
+          # first boot on a cold database runs every migration before the
+          # listener opens; liveness is held off until this succeeds so a slow
+          # migration is not mistaken for a wedged process
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: {{ .Values.control.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.control.probes.startup.failureThreshold }}
           resources: {{ toYaml .Values.control.resources | nindent 12 }}

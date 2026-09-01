@@ -182,13 +182,20 @@ implementation suggests.
   tracked. (`gh project item-list` truncates, so confirm membership through the
   GraphQL `projectItems` field rather than by grepping the list.)
 - Fill in **every** board field, not just the title and body — an issue missing
-  its fields is invisible to the milestone audit and to any roll-up by size:
+  its fields is invisible to the milestone audit and to any roll-up by size.
+  The board conventions, including what each Status and milestone means, are in
+  [`docs/development/issue-tracking.md`](docs/development/issue-tracking.md):
   - **Priority** — `Urgent` / `High` / `Medium` / `Low`. Set it explicitly;
     unprioritized is a decision, not a default.
   - **Effort** — `XS` (< 1h), `S` (a few hours), `M` (~1 day), `L` (2-3 days),
     `XL` (a week+). Size from the scope the issue actually states — a migration
     and its `bump_config_version()` trigger, i18n fan-out across every catalog,
     or a "research this first" section all cost more than the title suggests.
+  - **Area** — where the work lands: `gateway`, `control`, `ui`, `proxy`,
+    `balancer`, `store`, `auth`, `core`, `docs`, `ci`, `infra`, or
+    `cross-cutting`. One value, the dominant one; the same vocabulary as the
+    Conventional Commit scopes above. `cross-cutting` is for epics and research
+    spikes with no centre, not for anything that touches two files.
   - **Labels** — match the existing conventions (`bug`, `enhancement`,
     `tech-debt`, plus the area labels such as `ui-dashboard`, `providers-api`).
   - **Milestone** — always assign one. Propose a new milestone if none fits

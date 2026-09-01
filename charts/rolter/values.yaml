@@ -65,6 +65,26 @@ control:
       memory: 128Mi
     limits:
       memory: 512Mi
+  # kubernetes probes. The two endpoints answer different questions and are
+  # wired to different probes on purpose:
+  #   /healthz — liveness. The process is up and the runtime is not wedged. It
+  #     checks no dependency, so a Postgres outage can never restart the fleet.
+  #   /readyz  — readiness. The Postgres pool hands out a connection, every
+  #     embedded migration is applied, and ROLTER_KEK parses when it is set.
+  #     Redis and ClickHouse are degraded-not-unready. A failure removes the
+  #     pod from the Service and nothing more.
+  # Alert on /readyz staying down; alert on /healthz flapping.
+  probes:
+    readiness:
+      periodSeconds: 5
+      # ~30s of unreadiness before the pod leaves the Service, which rides out
+      # a brief database failover instead of draining the whole deployment
+      failureThreshold: 6
+    startup:
+      periodSeconds: 5
+      # 5 minutes for first-boot migrations against a cold database before
+      # liveness takes over
+      failureThreshold: 60
   extraEnv: []
 
 config:

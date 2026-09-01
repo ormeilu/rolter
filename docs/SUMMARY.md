@@ -16,6 +16,7 @@
 - [SCIM provisioning](architecture/scim-provisioning.md)
 - [Security](architecture/security.md)
 - [LDAP authentication](architecture/ldap.md)
+- [Health & readiness](architecture/health-and-readiness.md)
 - [Observability](architecture/observability.md)
 - [Performance](architecture/performance.md)
 
@@ -49,6 +50,7 @@
 - [Dashboard localization (i18n)](development/i18n.md)
 - [Dashboard error states](development/error-states.md)
 - [Commit conventions](development/commit-conventions.md)
+- [Issue tracking](development/issue-tracking.md)
 - [Packaging (uv / cargo / docker)](development/packaging.md)
 
 # Deployment

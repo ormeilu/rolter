@@ -86,6 +86,67 @@ macro_rules! skip_without_db {
     };
 }
 
+/// `/readyz` is a real readiness signal, not an alias for `/healthz` (#1081):
+/// it reports not-ready against a database whose migrations have not run, and
+/// ready once they have. `/healthz` answers `200` throughout — it is liveness,
+/// and must never depend on the database, or a database outage would restart
+/// every control pod instead of draining it.
+#[tokio::test]
+async fn readyz_waits_for_migrations_while_healthz_stays_up() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let client = reqwest::Client::new();
+
+    let addr = serve(rolter_control::test_app_unmigrated(pool.clone())).await;
+    let not_ready = client
+        .get(format!("http://{addr}/readyz"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        not_ready.status(),
+        503,
+        "unmigrated database must not be ready"
+    );
+    let body: Value = not_ready.json().await.unwrap();
+    assert_eq!(body["status"], "not_ready");
+    assert_eq!(
+        body["checks"]["database"], "ok",
+        "the pool itself is reachable"
+    );
+    assert!(
+        body["checks"]["migrations"]
+            .as_str()
+            .unwrap()
+            .contains("pending"),
+        "migrations should be the failing check, got {body}"
+    );
+
+    // liveness does not consult the database, so it is up even here
+    let health = client
+        .get(format!("http://{addr}/healthz"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        health.status(),
+        200,
+        "healthz must not depend on the database"
+    );
+
+    // the same pool, once migrated, is ready
+    let migrated = serve(rolter_control::test_app(pool).await.expect("build app")).await;
+    let ready = client
+        .get(format!("http://{migrated}/readyz"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ready.status(), 200);
+    let body: Value = ready.json().await.unwrap();
+    assert_eq!(body["status"], "ready");
+    assert_eq!(body["checks"]["migrations"], "ok");
+}
+
 #[tokio::test]
 async fn ping_and_healthz_respond() {
     skip_without_db!();
@@ -2160,6 +2221,161 @@ async fn seed_session(pool: &sqlx::PgPool, user_id: uuid::Uuid, suffix: &str) ->
     .await
     .unwrap();
     token
+}
+
+/// The batched project→team lookup must reach the same verdict the
+/// per-membership `ProjectRepo::get` loop did (#1048).
+///
+/// Covers the case the old loop was shaped for and the new query has to
+/// reproduce: a user whose only route to the resource is a *project*
+/// membership, holding several of them, where the qualifying one is not first.
+/// A user with just as many project memberships and none in an allowed team is
+/// still refused, so the batch is not simply answering "yes" on any row.
+#[tokio::test]
+async fn policy_allows_resolves_several_project_memberships_in_one_verdict() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("admintok".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    async fn post_as(client: &reqwest::Client, url: String, body: Value) -> Value {
+        let response = client
+            .post(url)
+            .bearer_auth("admintok")
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let json: Value = response.json().await.unwrap();
+        assert!(status.is_success(), "{status}: {json}");
+        json
+    }
+
+    let org = post_as(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Batched", "slug": "batched"}),
+    )
+    .await;
+    let org_id = org["id"].as_str().unwrap().to_string();
+    let org_uuid: uuid::Uuid = org_id.parse().unwrap();
+
+    // three teams, one of which the skill allows
+    let mut team_ids = Vec::new();
+    for name in ["Alpha", "Beta", "Gamma"] {
+        let team = post_as(
+            &client,
+            format!("{base}/api/v1/orgs/{org_id}/teams"),
+            json!({ "name": name }),
+        )
+        .await;
+        team_ids.push(team["id"].as_str().unwrap().parse::<uuid::Uuid>().unwrap());
+    }
+    // the allowed team is deliberately last, so a lookup that stopped at the
+    // first row would answer "denied" and fail this test
+    let allowed_team = team_ids[2];
+
+    // one project per team
+    let mut project_ids = Vec::new();
+    for (index, team) in team_ids.iter().enumerate() {
+        let project = post_as(
+            &client,
+            format!("{base}/api/v1/teams/{team}/projects"),
+            json!({ "name": format!("project-{index}") }),
+        )
+        .await;
+        project_ids.push(
+            project["id"]
+                .as_str()
+                .unwrap()
+                .parse::<uuid::Uuid>()
+                .unwrap(),
+        );
+    }
+
+    let skill = post_as(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/skills"),
+        json!({
+            "name": "batched-policy",
+            "allowed_team_ids": [allowed_team],
+            "minimum_role": "member"
+        }),
+    )
+    .await;
+    let skill_id = skill["id"].as_str().unwrap().to_string();
+    post_as(
+        &client,
+        format!("{base}/api/v1/skills/{skill_id}/versions"),
+        json!({"content": "content"}),
+    )
+    .await;
+
+    // reaches the skill only through the third project, and only after two
+    // project memberships that do not qualify
+    // team_id is left unset on purpose. A membership carrying both would be
+    // answered by the direct team check before the project lookup runs, so the
+    // batched query — the thing under test — would never execute
+    let allowed_user = seed_user(&pool, "batched-allowed@example.com", false).await;
+    seed_membership(&pool, allowed_user, Some(org_uuid), None, None, "member").await;
+    for project in &project_ids {
+        seed_membership(
+            &pool,
+            allowed_user,
+            Some(org_uuid),
+            None,
+            Some(*project),
+            "viewer",
+        )
+        .await;
+    }
+    let allowed_token = seed_session(&pool, allowed_user, "batched-allowed").await;
+
+    // just as many project memberships, none of them in the allowed team
+    let denied_user = seed_user(&pool, "batched-denied@example.com", false).await;
+    seed_membership(&pool, denied_user, Some(org_uuid), None, None, "member").await;
+    for project in &project_ids[..2] {
+        seed_membership(
+            &pool,
+            denied_user,
+            Some(org_uuid),
+            None,
+            Some(*project),
+            "viewer",
+        )
+        .await;
+    }
+    let denied_token = seed_session(&pool, denied_user, "batched-denied").await;
+
+    async fn skills_for(client: &reqwest::Client, base: &str, org: &str, token: &str) -> Value {
+        client
+            .get(format!("{base}/api/v1/orgs/{org}/skills"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+
+    let allowed = skills_for(&client, &base, &org_id, &allowed_token).await;
+    assert_eq!(
+        allowed.as_array().unwrap().len(),
+        1,
+        "a project membership in the allowed team must grant access: {allowed}"
+    );
+
+    let denied = skills_for(&client, &base, &org_id, &denied_token).await;
+    assert!(
+        denied.as_array().unwrap().is_empty(),
+        "project memberships outside the allowed team must not grant access: {denied}"
+    );
 }
 
 #[tokio::test]

@@ -341,7 +341,49 @@ pub fn outbound_headers(headers: &HeaderMap, forwarded: &[String]) -> Vec<(Strin
             out.push((name.clone(), value.to_string()));
         }
     }
+    collect_vendor_headers(headers, &mut out);
     out
+}
+
+/// Vendor header namespaces forwarded **by prefix**, on top of the operator's
+/// allowlist.
+///
+/// Anthropic extends its protocol through headers — a capability pairs an
+/// `anthropic-beta` value with body fields, and the pair travels together — and
+/// its gateway protocol reference says to pass `anthropic-*` request headers
+/// through unchanged. An allowlist cannot express that: it is a closed list
+/// against a vendor that ships new capabilities *as new header values*, so
+/// every new beta silently breaks until an operator adds it by name. Stripping
+/// the header while the body passes produces hard `400`s
+/// (`Extra inputs are not permitted`) rather than a graceful downgrade (#1013).
+///
+/// Match is on the `name-` prefix, never a bare `name`, so this can never widen
+/// to an unrelated header that merely starts with the same letters.
+const VENDOR_HEADER_PREFIXES: [&str; 1] = ["anthropic-"];
+
+/// Append every inbound header in a [`VENDOR_HEADER_PREFIXES`] namespace.
+///
+/// Skips names already present, so an operator who *also* listed one in
+/// `forwarded_headers` gets one copy rather than a duplicate the upstream would
+/// see as a comma-joined value. The proxy drops these again for a provider that
+/// does not speak the dialect, so nothing reaches an upstream that has no use
+/// for it.
+fn collect_vendor_headers(headers: &HeaderMap, out: &mut Vec<(String, String)>) {
+    for (name, value) in headers {
+        let name = name.as_str();
+        if !VENDOR_HEADER_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+        {
+            continue;
+        }
+        if out.iter().any(|(existing, _)| existing == name) {
+            continue;
+        }
+        if let Some(value) = value.to_str().ok().filter(|s| !s.is_empty()) {
+            out.push((name.to_string(), value.to_string()));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -625,6 +667,73 @@ mod tests {
     fn outbound_headers_with_an_empty_allowlist_is_just_trace_context() {
         let h = headers(&[("traceparent", "00-1111-2222-01"), ("x-tenant-id", "acme")]);
         assert_eq!(outbound_headers(&h, &[]).len(), 1);
+    }
+
+    /// The property that matters is the *open list*, not a fixed set: Anthropic
+    /// ships new capabilities as new `anthropic-beta` values, so a beta nobody
+    /// has heard of must still arrive intact with an empty allowlist (#1013).
+    #[test]
+    fn unknown_anthropic_headers_pass_through_without_an_allowlist_entry() {
+        let h = headers(&[
+            ("traceparent", "00-1111-2222-01"),
+            (
+                "anthropic-beta",
+                "some-capability-nobody-has-shipped-yet-2031-01-01",
+            ),
+            ("anthropic-version", "2099-12-31"),
+            ("anthropic-some-future-header", "whatever"),
+            ("x-not-anthropic", "dropped"),
+        ]);
+        let out = outbound_headers(&h, &[]);
+
+        let by_name: std::collections::HashMap<&str, &str> =
+            out.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert_eq!(
+            by_name.get("anthropic-beta"),
+            Some(&"some-capability-nobody-has-shipped-yet-2031-01-01")
+        );
+        assert_eq!(by_name.get("anthropic-version"), Some(&"2099-12-31"));
+        assert_eq!(
+            by_name.get("anthropic-some-future-header"),
+            Some(&"whatever")
+        );
+        assert!(
+            !by_name.contains_key("x-not-anthropic"),
+            "the prefix must not widen into an allow-everything: {out:?}"
+        );
+    }
+
+    /// A name merely *starting with* the letters is not in the namespace. The
+    /// match is on `anthropic-`, so `anthropicfoo` stays out.
+    #[test]
+    fn the_vendor_prefix_requires_the_separator() {
+        let h = headers(&[("anthropicfoo", "no"), ("anthropic-beta", "yes")]);
+        let out = outbound_headers(&h, &[]);
+        assert!(out.iter().any(|(k, _)| k == "anthropic-beta"));
+        assert!(!out.iter().any(|(k, _)| k == "anthropicfoo"));
+    }
+
+    /// An operator who also listed the header by name gets one copy, not two —
+    /// a duplicate would reach the upstream comma-joined into one value.
+    #[test]
+    fn an_allowlisted_anthropic_header_is_not_forwarded_twice() {
+        let h = headers(&[("anthropic-beta", "context-management-2025-06-27")]);
+        let out = outbound_headers(&h, &["anthropic-beta".to_string()]);
+        assert_eq!(
+            out.iter().filter(|(k, _)| k == "anthropic-beta").count(),
+            1,
+            "{out:?}"
+        );
+    }
+
+    /// Empty values are dropped, matching how the allowlist path already treats
+    /// them: an empty beta header states no capability.
+    #[test]
+    fn blank_anthropic_headers_are_dropped() {
+        let h = headers(&[("anthropic-beta", "")]);
+        assert!(!outbound_headers(&h, &[])
+            .iter()
+            .any(|(k, _)| k == "anthropic-beta"));
     }
 
     #[test]
