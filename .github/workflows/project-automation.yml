@@ -51,7 +51,7 @@ jobs:
           PRIORITY_MEDIUM: 82100b74
           IS_PR: ${{ github.event_name == 'pull_request_target' }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # $-prefixed names in the query are graphql variables, not shell vars
           set_field() {
             # shellcheck disable=SC2016
