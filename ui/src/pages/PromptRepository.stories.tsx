@@ -85,12 +85,13 @@ function json(body: unknown, status = 200) {
 
 function loadedStub(): FetchStub {
   let currentVersions = [...versions];
+  let deleted = false;
   return async (input, init) => {
     const url = String(input);
     if (url === "/api/v1/orgs") return json([{ id: ORG, name: "Northstar", slug: "northstar", created_at: "2026-01-01T00:00:00Z" }]);
     if (url.endsWith(`/orgs/${ORG}/teams`)) return json([{ id: TEAM, org_id: ORG, name: "Platform", created_at: "2026-01-01T00:00:00Z" }]);
     if (url.endsWith(`/teams/${TEAM}/projects`)) return json([{ id: PROJECT, team_id: TEAM, name: "Production", created_at: "2026-01-01T00:00:00Z" }]);
-    if (url.endsWith(`/orgs/${ORG}/prompt-templates`)) return json([template]);
+    if (url.endsWith(`/orgs/${ORG}/prompt-templates`)) return json(deleted ? [] : [template]);
     if (url.endsWith(`/projects/${PROJECT}/routes`)) return json([{ id: ROUTE, project_id: PROJECT, model: "support", strategy: "round_robin", enabled: true, params: {}, param_policy: {}, created_at: "2026-01-01T00:00:00Z" }]);
     if (url.endsWith(`/projects/${PROJECT}/virtual-keys`)) return json([{ id: KEY, project_id: PROJECT, key_hash: "hash", key_prefix: "rlt_prod", name: "Support app", models: ["support"], disabled: false, created_at: "2026-01-01T00:00:00Z" }]);
     if (url.endsWith(`/prompt-templates/${TEMPLATE}/versions`) && init?.method === "POST") {
@@ -103,6 +104,14 @@ function loadedStub(): FetchStub {
     if (url.includes(`/prompt-templates/${TEMPLATE}/versions/`) && url.endsWith("/scopes")) {
       if (init?.method === "PUT") return json(JSON.parse(String(init.body)).scopes);
       return json(url.includes("/2/") ? scopes : []);
+    }
+    if (url.endsWith(`/prompt-templates/${TEMPLATE}`) && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as { name?: string; description?: string };
+      return json({ ...template, ...body });
+    }
+    if (url.endsWith(`/prompt-templates/${TEMPLATE}`) && init?.method === "DELETE") {
+      deleted = true;
+      return new Response(null, { status: 204 });
     }
     if (url.endsWith(`/prompt-templates/${TEMPLATE}/publish`)) return json({ ...template, published_version: JSON.parse(String(init?.body)).version });
     if (url.endsWith(`/prompt-templates/${TEMPLATE}/rollback`)) return json({ ...template, published_version: JSON.parse(String(init?.body)).version });
@@ -173,5 +182,40 @@ export const ConfirmsRollback: Story = {
     const page = within(canvasElement.ownerDocument.body);
     await expect(page.getByRole("heading", { name: "Roll back to v1" })).toBeVisible();
     await expect(page.getByText(/changes the live version from v2/)).toBeVisible();
+  },
+};
+
+export const RenamesTemplateKeepingSlug: Story = {
+  render: () => <Harness fetchStub={loadedStub()} />,
+  play: async ({ canvas, canvasElement }) => {
+    await userEvent.click(await canvas.findByRole("button", { name: "Rename Support concierge" }));
+    const page = within(canvasElement.ownerDocument.body);
+    const dialog = within(await page.findByRole("dialog"));
+    await expect(dialog.getByRole("heading", { name: "Rename prompt template" })).toBeVisible();
+    // the slug is the stable identity: it is stated, never offered as a field
+    await expect(dialog.getByText(/support-concierge/)).toBeVisible();
+    const [name] = dialog.getAllByRole("textbox");
+    await userEvent.clear(name);
+    await userEvent.type(name, "Support desk");
+    await userEvent.click(dialog.getByRole("button", { name: "Save details" }));
+    await waitFor(() => expect(canvas.getByText("Template details updated.")).toBeVisible());
+  },
+};
+
+export const RequiresSlugToDeleteTemplate: Story = {
+  render: () => <Harness fetchStub={loadedStub()} />,
+  play: async ({ canvas, canvasElement }) => {
+    await userEvent.click(await canvas.findByRole("button", { name: "Delete Support concierge" }));
+    const page = within(canvasElement.ownerDocument.body);
+    const dialog = within(await page.findByRole("dialog"));
+    await expect(dialog.getByRole("heading", { name: "Delete Support concierge?" })).toBeVisible();
+    await expect(dialog.getByText(/v2 is live/)).toBeVisible();
+    const confirm = dialog.getByRole("button", { name: "Delete template" });
+    // the destructive action stays locked until the slug is typed back
+    await expect(confirm).toBeDisabled();
+    await userEvent.type(dialog.getByRole("textbox"), "support-concierge");
+    await waitFor(() => expect(confirm).toBeEnabled());
+    await userEvent.click(confirm);
+    await waitFor(() => expect(canvas.getByText("Start with a prompt template")).toBeVisible());
   },
 };

@@ -29,6 +29,12 @@ Scope assignment belongs to the version. Once a version is published, both its c
 
 To restore previous behavior, choose an older version and select **Roll back**. The older version becomes live again, while all newer versions remain visible in history.
 
+## Rename and delete
+
+**Rename** changes a template's name and description. The slug is the stable identity callers route through, so it never changes, and versions and scopes are left untouched.
+
+**Delete** removes the template together with every version, scope and sample it holds. If a version is live, traffic routed through the template starts failing as soon as it is gone, so the dialog asks you to type the template's slug back before it will proceed. There is no undo.
+
 <Note>
   Prompt templates are control-plane configuration. The control plane must use PostgreSQL, and the gateway must consume its configuration snapshot for published changes to reach traffic.
 </Note>

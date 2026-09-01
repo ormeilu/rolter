@@ -55,12 +55,13 @@ function json(body: unknown, status = 200) {
 function loadedStub(): FetchStub {
   let currentSkill = { ...skill };
   let currentVersions = [...versions];
+  let deleted = false;
   return async (input, init) => {
     const url = String(input);
     if (url === "/api/v1/orgs") return json([{ id: ORG, name: "Northstar", slug: "northstar", created_at: "2026-01-01T00:00:00Z" }]);
     if (url.endsWith(`/orgs/${ORG}/teams`)) return json([{ id: TEAM, org_id: ORG, name: "Platform", created_at: "2026-01-01T00:00:00Z" }]);
     if (url.endsWith(`/teams/${TEAM}/projects`)) return json([{ id: PROJECT, team_id: TEAM, name: "Production", created_at: "2026-01-01T00:00:00Z" }]);
-    if (url.endsWith(`/orgs/${ORG}/skills`)) return json([currentSkill]);
+    if (url.endsWith(`/orgs/${ORG}/skills`)) return json(deleted ? [] : [currentSkill]);
     if (url.endsWith(`/skills/${SKILL}/versions`) && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as Partial<SkillVersionRow>;
       const created: SkillVersionRow = { skill_id: SKILL, version: 3, content: body.content ?? null, content_ref: body.content_ref ?? null, metadata: body.metadata ?? {}, created_at: "2026-08-02T08:00:00Z" };
@@ -75,6 +76,10 @@ function loadedStub(): FetchStub {
     if (url.endsWith(`/skills/${SKILL}/rollback`)) {
       currentSkill = { ...currentSkill, published_version: JSON.parse(String(init?.body)).version };
       return json(currentSkill);
+    }
+    if (url.endsWith(`/skills/${SKILL}`) && init?.method === "DELETE") {
+      deleted = true;
+      return new Response(null, { status: 204 });
     }
     if (url.endsWith(`/skills/${SKILL}`) && init?.method === "PUT") {
       const body = JSON.parse(String(init.body));
@@ -166,5 +171,23 @@ export const ConfirmsRollback: Story = {
     const page = within(canvasElement.ownerDocument.body);
     await expect(page.getByRole("heading", { name: "Roll back to v1" })).toBeVisible();
     await expect(page.getByText(/changes the resolved version from v2/)).toBeVisible();
+  },
+};
+
+export const RequiresSlugToDeleteSkill: Story = {
+  render: () => <Harness fetchStub={loadedStub()} />,
+  play: async ({ canvas, canvasElement }) => {
+    await userEvent.click(await canvas.findByRole("button", { name: "Delete Incident coordinator" }));
+    const page = within(canvasElement.ownerDocument.body);
+    const dialog = within(await page.findByRole("dialog"));
+    await expect(dialog.getByRole("heading", { name: "Delete Incident coordinator?" })).toBeVisible();
+    // retiring is offered as the reversible alternative
+    await expect(dialog.getByText(/Retire it instead/)).toBeVisible();
+    const confirm = dialog.getByRole("button", { name: "Delete skill" });
+    await expect(confirm).toBeDisabled();
+    await userEvent.type(dialog.getByRole("textbox"), "incident-coordinator");
+    await waitFor(() => expect(confirm).toBeEnabled());
+    await userEvent.click(confirm);
+    await waitFor(() => expect(canvas.getByText("Share your first skill")).toBeVisible());
   },
 };
