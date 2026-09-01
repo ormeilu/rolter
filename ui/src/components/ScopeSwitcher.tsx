@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2 } from "lucide-react";
+import { Loader2, Plus, Trash2 } from "lucide-react";
 import * as React from "react";
 import { Trans, useTranslation } from "react-i18next";
 
@@ -292,6 +292,7 @@ function CreateScopeDialog({
           {t("common.cancel")}
         </Button>
         <Button disabled={!name.trim() || create.isPending} onClick={() => create.mutate()}>
+          {create.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {t("common.create")}
         </Button>
       </DialogFooter>
@@ -347,6 +348,7 @@ function DeleteScopeDialog({
           disabled={remove.isPending}
           onClick={() => remove.mutate()}
         >
+          {remove.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {t("common.delete")}
         </Button>
       </DialogFooter>
