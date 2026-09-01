@@ -33,7 +33,6 @@ spec:
           ports:
             - name: http
               containerPort: 4001
-          env:
           env: {{- $controlEnv | nindent 12 }}
           # /readyz checks the database and migrations; a failure only takes
           # the pod out of the Service. /healthz is pure liveness and never
