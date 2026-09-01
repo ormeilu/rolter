@@ -47,13 +47,12 @@ jobs:
           PROJECT_ID: PVT_kwDOEjWga84Bdezc
           IS_PR: ${{ github.event_name == 'pull_request_target' }}
         run: |
-          # $-prefixed names inside the single-quoted graphql queries and jq
-          # programs below are their variables, not the shell's
-          # shellcheck disable=SC2016
           set -euo pipefail
 
           # one query for every single-select field and its options, so the
-          # names below are resolved against whatever the board looks like today
+          # names below are resolved against whatever the board looks like today.
+          # $-prefixed names in the query are graphql variables, not shell vars
+          # shellcheck disable=SC2016
           FIELDS=$(gh api graphql -f query='
             query($project:ID!){
               node(id:$project){
@@ -89,6 +88,7 @@ jobs:
               exit 1
             fi
 
+            # shellcheck disable=SC2016
             gh api graphql -f query='
               mutation($project:ID!,$item:ID!,$field:ID!,$opt:String!){
                 updateProjectV2ItemFieldValue(input:{
