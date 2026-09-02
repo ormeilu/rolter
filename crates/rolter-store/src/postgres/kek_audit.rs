@@ -611,13 +611,16 @@ mod tests {
             crate::postgres::test_support::fresh_scoped_pool_named(&url).await;
         // a data-only dump: the target was migrated from scratch, which is what
         // the runbook says to do so a restore cannot resurrect an old schema
-        let dump = std::process::Command::new("pg_dump")
-            .arg(&url)
-            .arg("--data-only")
-            .arg("--schema")
-            .arg(&source_schema)
-            .output()
-            .expect("run pg_dump");
+        let mut dump = std::process::Command::new("pg_dump");
+        dump.arg(&url).arg("--data-only");
+        // only the three tables this drill is about. A whole-schema data dump
+        // would also carry `_sqlx_migrations`, whose rows the freshly migrated
+        // target already has — the restore would abort on a duplicate key and
+        // say nothing about KEKs
+        for table in ["orgs", "providers", "provider_keys"] {
+            dump.arg("--table").arg(format!("{source_schema}.{table}"));
+        }
+        let dump = dump.output().expect("run pg_dump");
         if !dump.status.success() {
             let stderr = String::from_utf8_lossy(&dump.stderr);
             // a client older than the server refuses outright. That is a
@@ -633,7 +636,16 @@ mod tests {
         // collide with anything else in the dump
         let sql = String::from_utf8(dump.stdout)
             .expect("dump is utf-8")
-            .replace(&format!("{source_schema}."), &format!("{target_schema}."));
+            .replace(&format!("{source_schema}."), &format!("{target_schema}."))
+            // pg_dump empties the search_path so its own object names are
+            // unambiguous. A real restore into a real database is unaffected,
+            // but these tables live in an isolated schema, and the
+            // bump_config_version() trigger they fire looks `config_version` up
+            // by bare name — point it at the target
+            .replace(
+                "set_config('search_path', '', false)",
+                &format!("set_config('search_path', '{target_schema}', false)"),
+            );
 
         let mut psql = std::process::Command::new("psql")
             .arg(&url)
