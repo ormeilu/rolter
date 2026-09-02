@@ -78,6 +78,7 @@
           {
             "group": "Access & Security",
             "pages": [
+              "security/which-key",
               "security/authentication",
               "security/rbac",
               "security/user-provisioning",

@@ -110,7 +110,7 @@ export const Empty: Story = {
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/haven't minted any keys yet/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/haven't minted a virtual key yet/i)).toBeInTheDocument();
   },
 };
 
@@ -164,7 +164,7 @@ export const MintsAKey: Story = {
     </Harness>
   ),
   play: async ({ canvasElement }) => {
-    await clickWhenEnabled(canvasElement, /generate key/i);
+    await clickWhenEnabled(canvasElement, /generate virtual key/i);
     const form = sheet();
     await userEvent.type(within(form).getByLabelText("Name (optional)"), "ci runner");
     await userEvent.click(within(form).getByRole("button", { name: "Mint" }));
@@ -216,7 +216,7 @@ export const AnUntouchedMintFormClosesWithoutPrompting: Story = {
     </Harness>
   ),
   play: async ({ canvasElement }) => {
-    await clickWhenEnabled(canvasElement, /generate key/i);
+    await clickWhenEnabled(canvasElement, /generate virtual key/i);
     await expectClosesWithoutPrompting();
   },
 };
@@ -228,7 +228,7 @@ export const AnEditedMintFormPromptsBeforeDiscarding: Story = {
     </Harness>
   ),
   play: async ({ canvasElement }) => {
-    await clickWhenEnabled(canvasElement, /generate key/i);
+    await clickWhenEnabled(canvasElement, /generate virtual key/i);
     const form = sheet();
     await userEvent.type(within(form).getByLabelText("Name (optional)"), "half typed");
 

@@ -1,0 +1,72 @@
+---
+title: "Which Key Do I Need? Virtual Keys, Provider Keys and the Admin Token"
+sidebarTitle: "Which key do I need?"
+description: "Rolter handles three different credentials that all get called an API key. This page names each one, says who holds it, and shows how to tell them apart."
+---
+
+Three different credentials pass through rolter, and every one of them is an
+"API key" to somebody. Sending the wrong one is the single most common
+first-run mistake, so this page names each one.
+
+## The three credentials
+
+| Credential | Looks like | Who holds it | Where it is set |
+| --- | --- | --- | --- |
+| **Virtual key** | `sk-rolter-…` | your applications and users | minted in the dashboard under **Governance → Virtual Keys**, or your own under **Settings → My Virtual Keys** |
+| **Provider key** | whatever the provider issues — `sk-ant-…`, `sk-proj-…`, `AIza…` | rolter itself | **Providers → provider → Provider key**, or a `ROLTER_*`/provider env var |
+| **Admin token** | opaque, operator-chosen | operators and automation | `ROLTER_ADMIN_TOKEN` on the control plane |
+
+### Virtual key
+
+The credential a client sends to the gateway:
+
+```bash
+curl https://gateway.example.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-rolter-…" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}'
+```
+
+A virtual key carries the budget, rate limit, model allow-list and cost
+attribution for the caller holding it. It is the only credential a client
+application should ever have. See [Virtual keys](/concepts/virtual-keys).
+
+### Provider key
+
+The credential a provider — OpenAI, Anthropic, Bedrock, your own vLLM — issued
+to *rolter*. It is configured once on the provider, sealed at rest, and used by
+the gateway when it forwards a request upstream. Clients never send it, never
+see it, and cannot retrieve it through the API. See
+[Providers](/configuration/providers).
+
+### Admin token
+
+The control plane's own credential, used for CRUD over providers, routes, keys
+and settings — the dashboard and any automation that configures rolter. It is
+not accepted by the gateway's `/v1/*` surface. See
+[Authentication](/security/authentication).
+
+## Telling them apart when something fails
+
+<Note>
+If the gateway answers `401` with a message naming a provider — *"this looks
+like an Anthropic provider key"* — you sent the credential rolter uses upstream
+instead of the one it issued to you. Mint a virtual key and send that.
+</Note>
+
+- **`401 invalid api key`** — the key is a rolter virtual key by shape, but it
+  is unknown, revoked, expired or belongs to a different deployment.
+- **`401 missing api key`** — no `Authorization` header reached the gateway.
+  Check for a proxy that strips it.
+- **`403`** — the virtual key is valid but is not allowed the model, route or
+  budget it asked for. That is a key configuration question, not a credential
+  mix-up.
+
+## Rules of thumb
+
+1. Anything a client holds is a **virtual key**, and it starts with
+   `sk-rolter-`.
+2. Anything that starts with a *provider's* prefix belongs on the **provider**,
+   not in a client.
+3. Anything that configures rolter rather than calls it uses the **admin
+   token**.

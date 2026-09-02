@@ -4,7 +4,7 @@ sidebarTitle: "Virtual Keys"
 description: "Understand how virtual keys authenticate clients, restrict model access, and support expiry and revocation — all without storing plaintext secrets."
 ---
 
-Virtual keys are the bearer tokens your applications present to Rolter's gateway. They let you issue separate credentials to different callers, scope each credential to specific models, and revoke or expire them independently — without ever rotating your upstream provider API keys. Rolter stores keys as cryptographic hashes, so even if your config is leaked, raw key material is never exposed.
+Virtual keys are the bearer tokens your applications present to Rolter's gateway — one of the three credentials in play, alongside provider keys and the admin token ([which key do I need?](/security/which-key)). They let you issue separate credentials to different callers, scope each credential to specific models, and revoke or expire them independently — without ever rotating your upstream provider API keys. Rolter stores keys as cryptographic hashes, so even if your config is leaked, raw key material is never exposed.
 
 ## How authentication works
 

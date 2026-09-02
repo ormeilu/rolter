@@ -704,6 +704,84 @@ fn is_queue_admission_error(message: &str) -> bool {
     queue_admission_message(message).is_some()
 }
 
+/// The upstream vendor a presented credential looks like, when it is plainly
+/// not one of ours.
+///
+/// rolter mints `sk-rolter-…`. Every prefix below belongs to a *provider*, and
+/// a caller who sends one has confused the two credentials this product has:
+/// the virtual key rolter gives **you** for the gateway, and the provider key a
+/// vendor gives **rolter** for the upstream. That mistake used to render as a
+/// bare `invalid api key`, indistinguishable from a revoked key or a typo, and
+/// it was the single most common confusion during dogfooding (#943).
+///
+/// Prefix matching only, on a credential the caller already holds, so this
+/// leaks nothing: it says something about the string that was sent, never about
+/// what is stored. Order matters — the longer, more specific prefixes are
+/// checked before the bare `sk-` fallback.
+fn provider_key_vendor(key: &str) -> Option<&'static str> {
+    // ours, so never a mistake
+    if key.starts_with(ROLTER_KEY_PREFIX) {
+        return None;
+    }
+    const VENDORS: &[(&str, &str)] = &[
+        ("sk-ant-", "Anthropic"),
+        ("sk-or-", "OpenRouter"),
+        ("sk-proj-", "OpenAI"),
+        ("AIza", "Google AI Studio"),
+        ("gsk_", "Groq"),
+        ("xai-", "xAI"),
+        ("fw_", "Fireworks"),
+        ("hf_", "Hugging Face"),
+        ("r8_", "Replicate"),
+        ("csk-", "Cerebras"),
+        ("nvapi-", "NVIDIA"),
+        ("pplx-", "Perplexity"),
+    ];
+    for (prefix, vendor) in VENDORS {
+        if key.starts_with(prefix) {
+            return Some(vendor);
+        }
+    }
+    // every remaining `sk-` is some openai-compatible vendor's key; naming the
+    // shape is still more useful than saying nothing
+    key.starts_with("sk-").then_some("provider")
+}
+
+/// The prefix every rolter virtual key carries, from
+/// `rolter_control::crud::generate_virtual_key`.
+const ROLTER_KEY_PREFIX: &str = "sk-rolter-";
+
+/// Sent when no credential arrived at all. Names the credential rather than
+/// saying "api key", which is the word the product uses for three different
+/// things (#943).
+const MISSING_KEY_MESSAGE: &str =
+    "missing api key: send a rolter virtual key as `Authorization: Bearer sk-rolter-…`";
+
+/// The rejection for a key that did not match, naming the mistake when the
+/// string is recognisably an upstream credential.
+fn invalid_key_message(key: &str) -> String {
+    match provider_key_vendor(key) {
+        Some("provider") => format!(
+            "invalid api key: this looks like a provider credential. the gateway expects a \
+             rolter virtual key ({ROLTER_KEY_PREFIX}…), minted on the dashboard's Virtual Keys \
+             screen; provider keys are configured on the provider and are never sent by clients"
+        ),
+        Some(vendor) => {
+            let article = if vendor.starts_with(['A', 'E', 'I', 'O', 'U']) {
+                "an"
+            } else {
+                "a"
+            };
+            format!(
+            "invalid api key: this looks like {article} {vendor} provider key. the gateway expects a \
+             rolter virtual key ({ROLTER_KEY_PREFIX}…), minted on the dashboard's Virtual Keys \
+             screen; provider keys are configured on the provider and are never sent by clients"
+            )
+        }
+        None => "invalid api key".to_string(),
+    }
+}
+
 /// Shared virtual-key auth check for every `/v1/*` handler. Returns the
 /// matched key (or `None` when no keys are configured, i.e. auth disabled).
 #[allow(clippy::result_large_err)]
@@ -718,7 +796,7 @@ pub(crate) fn authenticate(
         // yet), which must lock the data plane down rather than open it
         if snap.require_auth.unwrap_or(state.managed_auth) {
             state.metrics.auth_failures_total.fetch_add(1, Relaxed);
-            return Err(error_json(StatusCode::UNAUTHORIZED, "missing api key"));
+            return Err(error_json(StatusCode::UNAUTHORIZED, MISSING_KEY_MESSAGE));
         }
         return Ok(None);
     }
@@ -729,21 +807,21 @@ pub(crate) fn authenticate(
             let digest = rolter_auth::hash_key(&snap.pepper, &key);
             match snap.keys.get(&digest) {
                 Some(vk) if vk.is_active(Utc::now()) => Ok(Some(vk.clone())),
-                // matched but revoked or expired: do not distinguish from a
-                // missing key in the response
-                Some(_) => {
+                // matched but revoked or expired, and a key that matched
+                // nothing: both answer the same way, so a caller cannot probe
+                // which of the two happened
+                Some(_) | None => {
                     state.metrics.auth_failures_total.fetch_add(1, Relaxed);
-                    Err(error_json(StatusCode::UNAUTHORIZED, "invalid api key"))
-                }
-                None => {
-                    state.metrics.auth_failures_total.fetch_add(1, Relaxed);
-                    Err(error_json(StatusCode::UNAUTHORIZED, "invalid api key"))
+                    Err(error_json(
+                        StatusCode::UNAUTHORIZED,
+                        &invalid_key_message(&key),
+                    ))
                 }
             }
         }
         None => {
             state.metrics.auth_failures_total.fetch_add(1, Relaxed);
-            Err(error_json(StatusCode::UNAUTHORIZED, "missing api key"))
+            Err(error_json(StatusCode::UNAUTHORIZED, MISSING_KEY_MESSAGE))
         }
     }
 }
@@ -3660,6 +3738,51 @@ mod tests {
             cache: None,
         });
         config
+    }
+
+    #[test]
+    fn a_provider_key_is_named_rather_than_answered_with_a_bare_rejection() {
+        // the mistake this exists for: an operator pastes the credential a
+        // provider gave rolter into the client that should be holding the
+        // credential rolter gave them. both are "api keys" in the product's own
+        // vocabulary, and the old answer was an unhelpful `invalid api key`
+        for (key, vendor) in [
+            ("sk-ant-api03-abcdef", "Anthropic"),
+            ("sk-or-v1-abcdef", "OpenRouter"),
+            ("sk-proj-abcdef", "OpenAI"),
+            ("AIzaSyAbcdef", "Google AI Studio"),
+            ("gsk_abcdef", "Groq"),
+            ("xai-abcdef", "xAI"),
+            ("nvapi-abcdef", "NVIDIA"),
+        ] {
+            assert_eq!(provider_key_vendor(key), Some(vendor), "{key}");
+            let message = invalid_key_message(key);
+            assert!(message.contains(vendor), "{message}");
+            assert!(message.contains(ROLTER_KEY_PREFIX), "{message}");
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_openai_shaped_key_still_says_which_credential_is_wanted() {
+        let message = invalid_key_message("sk-somethingelse");
+        assert!(message.contains("provider credential"), "{message}");
+        assert!(message.contains(ROLTER_KEY_PREFIX), "{message}");
+    }
+
+    #[test]
+    fn our_own_key_shape_is_never_reported_as_a_provider_key() {
+        // a revoked, expired or mistyped rolter key is not this mistake, and
+        // telling its holder to go and find a virtual key would be nonsense
+        for key in [
+            "sk-rolter-deadbeef",
+            "sk-rolter-",
+            "rolter_sess_abcdef",
+            "some-opaque-token",
+            "",
+        ] {
+            assert_eq!(provider_key_vendor(key), None, "{key}");
+            assert_eq!(invalid_key_message(key), "invalid api key", "{key}");
+        }
     }
 
     async fn models_in_response(resp: Response) -> Vec<String> {

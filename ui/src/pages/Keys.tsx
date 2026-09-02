@@ -103,6 +103,11 @@ export default function Keys() {
 
   return (
     <PageBody>
+      {/* "api key" names three different credentials in this product; the
+          screen says which one it mints (#943) */}
+      <p className="text-sm text-muted-foreground">
+        {t("pages.virtualKeys.explainer")}
+      </p>
       <div className="flex items-center gap-3">
         <SearchInput
           placeholder="Search by name…"

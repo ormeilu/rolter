@@ -244,6 +244,33 @@ and in-process otherwise. That fallback is documented rather than hidden: with N
 replicas and no redis, an attacker gets N times the allowance, and the control
 plane says so at startup.
 
+## Three credentials, one word (#943)
+
+Three unrelated secrets pass through rolter, and each is an "API key" to
+someone. Keeping them apart is a security property, not a documentation
+nicety — a provider key pasted into a client is a credential leak that no
+budget, allow-list or audit row constrains.
+
+| Credential | Shape | Held by | Checked by |
+| --- | --- | --- | --- |
+| virtual key | `sk-rolter-<48 hex>` | client applications | the gateway, on `/v1/*` |
+| provider key | the provider's own shape | rolter | nothing — it is presented upstream |
+| admin token | operator-chosen | operators, automation | the control plane |
+
+The gateway therefore refuses a *provider-shaped* key with a message that names
+the mistake ("this looks like an Anthropic provider key…") rather than a bare
+`invalid api key`. `provider_key_vendor` in
+`crates/rolter-gateway/src/handlers.rs` does the shape match, and it never
+classifies our own `sk-rolter-` prefix: a revoked or mistyped virtual key is a
+different problem and gets the plain message. The hint is derived purely from
+the prefix — no lookup, no timing difference between a known and an unknown
+key, and the presented secret is never echoed back.
+
+The dashboard follows the same vocabulary: **Virtual Keys** and **My Virtual
+Keys** mint the client credential, the provider sheet says *Provider key*, and
+the Playground's key field says which one it wants. `user-docs/security/which-key`
+is the user-facing version of this table.
+
 ## Threat model (high level)
 
 - **Tenant isolation**: virtual keys are scoped to a project; model allow-lists prevent access to unconfigured models; cache keys are namespaced to avoid cross-tenant cache poisoning.

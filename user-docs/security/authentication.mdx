@@ -4,7 +4,7 @@ sidebarTitle: "Authentication"
 description: "Pass a virtual key in every request using the OpenAI or Anthropic header style; manage key access and expiry through virtual key properties."
 ---
 
-Every request that reaches Rolter must carry a virtual key — a gateway-scoped credential that controls which models a client can access and counts against any configured budgets or rate limits. Rolter accepts the same virtual keys in two header styles so it stays compatible with any OpenAI- or Anthropic-SDK-based client out of the box.
+Every request that reaches Rolter must carry a virtual key — a gateway-scoped credential that controls which models a client can access and counts against any configured budgets or rate limits. It is not the key your provider issued, and not the admin token: see [Which key do I need?](/security/which-key) if you are not sure which one you are holding. Rolter accepts the same virtual keys in two header styles so it stays compatible with any OpenAI- or Anthropic-SDK-based client out of the box.
 
 ## Header styles
 

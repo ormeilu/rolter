@@ -38,6 +38,7 @@ import {
   type MyUsageRow,
   type OwnedKeyRow,
 } from "@/lib/api";
+import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -92,10 +93,14 @@ export default function Account() {
 
   return (
     <PageBody>
+      {/* the screen sits under "Account" in a product that also has provider
+          keys and an admin token; say which credential this one is (#943) */}
+      <p className="text-sm text-muted-foreground">
+        {t("account.keys.explainer")}
+      </p>
       <div className="flex items-center gap-3">
         <span className="text-sm text-muted-foreground">
-          {keys.data?.length ?? 0} keys · programmatic access to the gateway,
-          yours to rotate or revoke
+          {t("account.keys.summary", { count: keys.data?.length ?? 0 })}
         </span>
         <Button
           className="ml-auto"
@@ -105,18 +110,18 @@ export default function Account() {
           // later (#942)
           disabled={!scope.projectId || selfServiceUnavailable}
           title={
-            scope.projectId
-              ? undefined
-              : "select a project in the sidebar to mint a key"
+            scope.projectId ? undefined : t("account.keys.selectProject")
           }
         >
           <Plus className="h-4 w-4" />
-          Generate key
+          {t("account.keys.generate")}
         </Button>
       </div>
 
       {keys.isLoading && (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <p className="text-sm text-muted-foreground">
+          {t("account.keys.loading")}
+        </p>
       )}
       {/* open mode is not a failed request, it is a screen this deployment
           cannot serve at all — saying so beats a red line about loading (#942) */}
@@ -130,8 +135,7 @@ export default function Account() {
       )}
       {!keys.isLoading && keys.data?.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          You haven't minted any keys yet. Create one to start calling the
-          gateway.
+          {t("account.keys.empty")}
         </p>
       )}
 
@@ -171,10 +175,10 @@ export default function Account() {
         onOpenChange={(open) => !open && setDeleteTarget(null)}
       >
         <DialogHeader>
-          <DialogTitle>Delete key</DialogTitle>
+          <DialogTitle>{t("account.keys.delete.title")}</DialogTitle>
           <DialogDescription>
-            <span className="font-mono">{deleteTarget?.key_prefix}…</span> will
-            stop authenticating immediately. This cannot be undone.
+            <span className="font-mono">{deleteTarget?.key_prefix}…</span>{" "}
+            {t("account.keys.delete.body")}
           </DialogDescription>
         </DialogHeader>
         {removeKey.isError && (
@@ -184,7 +188,7 @@ export default function Account() {
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-            Cancel
+            {t("account.keys.delete.cancel")}
           </Button>
           <Button
             variant="destructive"
@@ -196,7 +200,7 @@ export default function Account() {
               });
             }}
           >
-            Delete
+            {t("account.keys.delete.confirm")}
           </Button>
         </DialogFooter>
       </Dialog>
@@ -222,6 +226,8 @@ function KeyCard({
   onRotated: (m: MintedKey) => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation();
+  const format = useFormat();
   const rotate = useMutation({
     mutationFn: () => rotateMyKey(keyRow.id),
     onSuccess: onRotated,
@@ -231,9 +237,13 @@ function KeyCard({
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center justify-between gap-2">
-          <span className="truncate">{keyRow.name ?? "unnamed key"}</span>
+          <span className="truncate">
+            {keyRow.name ?? t("account.keys.card.unnamed")}
+          </span>
           <Badge tone={keyRow.disabled ? "danger" : "success"}>
-            {keyRow.disabled ? "disabled" : "active"}
+            {keyRow.disabled
+              ? t("account.keys.card.disabled")
+              : t("account.keys.card.active")}
           </Badge>
         </CardTitle>
         <CardDescription className="font-mono">
@@ -248,19 +258,21 @@ function KeyCard({
           {keyRow.models.length ? (
             keyRow.models.map((m) => <Tag key={m}>{m}</Tag>)
           ) : (
-            <Badge tone="neutral">all models</Badge>
+            <Badge tone="neutral">{t("account.keys.card.allModels")}</Badge>
           )}
         </div>
         <div className="text-xs text-muted-foreground">
           {usageUnavailable ? (
-            <span>usage: analytics not configured</span>
+            <span>{t("account.keys.card.usageUnavailable")}</span>
           ) : usage ? (
             <span>
-              {Number(usage.requests).toLocaleString()} req · $
-              {Number(usage.cost_usd).toFixed(4)} (7d)
+              {t("account.keys.card.usage", {
+                requests: format.number(Number(usage.requests)),
+                cost: format.currency(Number(usage.cost_usd)),
+              })}
             </span>
           ) : (
-            <span>no usage in the last 7 days</span>
+            <span>{t("account.keys.card.noUsage")}</span>
           )}
         </div>
         <div className="flex items-center justify-end gap-2">
@@ -269,12 +281,17 @@ function KeyCard({
             variant="outline"
             disabled={rotate.isPending}
             onClick={() => rotate.mutate()}
-            title="Rotate: issue a new secret and disable this one"
+            title={t("account.keys.card.rotateHint")}
           >
             <RotateCw className="h-3.5 w-3.5" />
-            Rotate
+            {t("account.keys.card.rotate")}
           </Button>
-          <Button size="sm" variant="destructive" onClick={onDelete}>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={onDelete}
+            title={t("account.keys.card.deleteHint")}
+          >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -296,6 +313,7 @@ function MintKeyDialog({
   projectLabel?: string;
   onMinted: (m: MintedKey) => void;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = React.useState("");
   const [modelsText, setModelsText] = React.useState("");
 
@@ -325,31 +343,33 @@ function MintKeyDialog({
     <EditorSheet
       open={open}
       onOpenChange={onOpenChange}
-      title="New key"
-      subtitle={`Personal key in ${projectLabel ?? "the current project"} — shown once, right after creation`}
+      title={t("account.keys.mint.title")}
+      subtitle={t("account.keys.mint.subtitle", {
+        project: projectLabel ?? t("account.keys.mint.currentProject"),
+      })}
       dirty={Boolean(name || modelsText)}
       errorMessage={mint.isError ? (mint.error as Error).message : undefined}
-      saveLabel="Mint"
+      saveLabel={t("account.keys.mint.save")}
       canSave
       saving={mint.isPending}
       onSave={() => mint.mutate()}
     >
       <div className="space-y-3">
-        <Field label="Name (optional)">
+        <Field label={t("account.keys.mint.name")}>
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="my laptop"
+            placeholder={t("account.keys.mint.namePlaceholder")}
           />
         </Field>
         <Field
-          label="Model allow-list (optional)"
-          hint="comma-separated public model names; empty allows all models"
+          label={t("account.keys.mint.models")}
+          hint={t("account.keys.mint.modelsHint")}
         >
           <Input
             value={modelsText}
             onChange={(e) => setModelsText(e.target.value)}
-            placeholder="gpt-4o, claude-sonnet"
+            placeholder={t("account.keys.mint.modelsPlaceholder")}
           />
         </Field>
       </div>
@@ -365,6 +385,7 @@ function RevealedKeyDialog({
   minted: MintedKey | null;
   onOpenChange: (open: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = React.useState(false);
 
   React.useEffect(() => {
@@ -384,10 +405,9 @@ function RevealedKeyDialog({
   return (
     <Dialog open={!!minted} onOpenChange={onOpenChange}>
       <DialogHeader>
-        <DialogTitle>Key ready</DialogTitle>
+        <DialogTitle>{t("account.keys.revealed.title")}</DialogTitle>
         <DialogDescription>
-          This is the only time the plaintext key is shown. Copy it now — it
-          can't be retrieved again.
+          {t("account.keys.revealed.body")}
         </DialogDescription>
       </DialogHeader>
       <div className="space-y-2 rounded-md border border-dashed border-border bg-muted p-3">
@@ -403,7 +423,9 @@ function RevealedKeyDialog({
         </div>
       </div>
       <DialogFooter>
-        <Button onClick={() => onOpenChange(false)}>Done</Button>
+        <Button onClick={() => onOpenChange(false)}>
+          {t("account.keys.revealed.done")}
+        </Button>
       </DialogFooter>
     </Dialog>
   );

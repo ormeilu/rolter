@@ -179,8 +179,8 @@ export default function Security() {
         onChange={(v) => set({ enforceVk: v })}
       />
       <ToggleCard
-        title="Allow Direct API Keys"
-        desc="When enabled, callers can pass a provider API key directly in the Authorization header, bypassing the registered key pool."
+        title="Allow direct provider keys"
+        desc="When enabled, callers may send a provider key (the credential a provider issued, not a rolter virtual key) in the Authorization header, bypassing the registered key pool."
         checked={form.allowDirect}
         onChange={(v) => set({ allowDirect: v })}
       />

@@ -177,6 +177,7 @@ function ModelSourceNotice({ source }: { source: ModelSource }) {
 
 /* ---------------- virtual key bar ---------------- */
 function KeyBar() {
+  const { t } = useTranslation();
   const [key, setKey] = React.useState(getPlaygroundKey());
   const [saved, setSaved] = React.useState(false);
   const save = () => {
@@ -185,19 +186,28 @@ function KeyBar() {
     setTimeout(() => setSaved(false), 1400);
   };
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] px-3 py-2">
-      <span className="text-xs font-medium text-muted-foreground">Virtual key</span>
-      <Input
-        value={key}
-        onChange={(e) => setKey(e.target.value)}
-        placeholder="rolter-… (Bearer key the gateway authenticates)"
-        className="h-8 flex-1 font-mono text-xs"
-        type="password"
-        spellCheck={false}
-      />
-      <Button size="sm" variant="outline" onClick={save}>
-        {saved ? "Saved ✓" : "Save"}
-      </Button>
+    <div className="rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] px-3 py-2">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-medium text-muted-foreground">
+          {t("playground.key.label")}
+        </span>
+        <Input
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder={t("playground.key.placeholder")}
+          className="h-8 flex-1 font-mono text-xs"
+          type="password"
+          spellCheck={false}
+        />
+        <Button size="sm" variant="outline" onClick={save}>
+          {saved ? t("playground.key.saved") : t("playground.key.save")}
+        </Button>
+      </div>
+      {/* three different credentials in this product answer to "api key";
+          say which one this field wants (#943) */}
+      <p className="mt-1.5 text-[0.6875rem] leading-snug text-[color:var(--text-subtle)]">
+        {t("playground.key.hint")}
+      </p>
     </div>
   );
 }
