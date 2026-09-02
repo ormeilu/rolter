@@ -72,6 +72,91 @@ jobs:
             -- charts/rolter/Chart.yaml
           git push origin "$branch"
 
+  # ── make the release PR gateable ────────────────────────────────────────────
+  # `ci-ok` is the only required status check on master, and only ci.yml reports
+  # it. release-plz pushes the release branch and opens its PR with the repo
+  # GITHUB_TOKEN, and GitHub suppresses downstream events for token-created refs
+  # and PRs, so ci.yml never ran on a release PR: the required context was never
+  # reported, the PR sat at BLOCKED, and every release shipped through an admin
+  # bypass (#1025). that is the same suppression that cost us the wheels in #903,
+  # and the fix is the same one — `workflow_dispatch` always creates a run, even
+  # from the GITHUB_TOKEN, and its check-runs attach to the head commit of the
+  # ref, which is the release PR's head.
+  #
+  # this runs after release-plz-pr so it picks up the head the `sync chart
+  # appVersion` step leaves behind, and it looks the branch up from the open PRs
+  # rather than from the action's `prs` output: that output is only populated on
+  # the run that *creates* the PR, while the branch is force-pushed on every
+  # later master commit and needs re-gating each time.
+  dispatch-release-pr-ci:
+    name: dispatch release pr ci
+    needs: release-plz-pr
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # workflow_dispatch ci.yml; nothing else is needed
+      pull-requests: read # find the open release PR
+    steps:
+      - name: dispatch ci.yml against the release branch
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # release-plz names the branch after the base it releases from
+          # (`release-plz-<base>`); match on the prefix so a config change to the
+          # suffix does not silently stop gating releases
+          branch="$(gh api "repos/$REPO/pulls?state=open&per_page=100" \
+            -q '[.[] | select(.head.ref | startswith("release-plz-")) | .head.ref] | .[0] // ""')"
+          if [ -z "$branch" ]; then
+            echo "no open release PR on this push; nothing to gate"
+            echo "branch=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # seconds since epoch, used to distinguish our run from older ones
+          started="$(date -u +%s)"
+          gh workflow run ci.yml --repo "$REPO" --ref "$branch"
+          echo "dispatched ci.yml for $branch"
+          {
+            echo "branch=$branch"
+            echo "started=$started"
+          } >> "$GITHUB_OUTPUT"
+
+      # a dispatch that silently produced no run would leave the release PR
+      # exactly as blocked as before, and this job green — so confirm it landed
+      - name: confirm the ci run started
+        if: steps.dispatch.outputs.branch != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ steps.dispatch.outputs.branch }}
+          STARTED: ${{ steps.dispatch.outputs.started }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 20); do
+            # the query must live in the path: `gh api` silently switches to POST
+            # as soon as any -f/-F parameter is set, which 404s this GET-only
+            # endpoint (#1026). `|| true` keeps a transient api error inside the
+            # loop rather than failing the job on one bad response.
+            runs="$(gh api \
+              "repos/$REPO/actions/workflows/ci.yml/runs?event=workflow_dispatch&branch=$BRANCH&per_page=20" \
+              -q ".workflow_runs[] | select((.created_at | fromdateiso8601) >= ($STARTED - 120)) | .html_url" \
+              || true)"
+            if [ -n "$runs" ]; then
+              echo "ci run(s) gating $BRANCH:"; echo "$runs"
+              {
+                echo "### release pr ci dispatched"
+                echo
+                echo "branch: \`$BRANCH\`"
+                while IFS= read -r url; do echo "- $url"; done <<< "$runs"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::dispatched ci.yml for $BRANCH but no workflow run appeared within 5m"
+          exit 1
+
   # on merge of the release PR: publishes every workspace member to crates.io
   # in dependency order (`publish = true` in .github/config/release-plz.toml, using
   # CARGO_REGISTRY_TOKEN), tags `v{version}` and creates the github release.

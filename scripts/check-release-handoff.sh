@@ -3,6 +3,7 @@
 # accident because neither has a test behind it:
 #
 #   release-plz.yml  --workflow_dispatch-->  release.yml  --> wheels/pypi/ghcr
+#   release-plz.yml  --workflow_dispatch-->  ci.yml      --> ci-ok on the release pr
 #
 # release-plz tags with the repo GITHUB_TOKEN, and GitHub suppresses downstream
 # events for token-created refs, so release.yml's `push: tags` trigger never
@@ -16,6 +17,7 @@ set -euo pipefail
 
 plz=".github/workflows/release-plz.yml"
 rel=".github/workflows/release.yml"
+ci=".github/workflows/ci.yml"
 fail=0
 
 require() {
@@ -34,9 +36,9 @@ forbid() {
     fi
 }
 
-for f in "$plz" "$rel"; do
+for f in "$plz" "$rel" "$ci"; do
     if [[ ! -f "$f" ]]; then
-        echo "error: $f is missing; the release pipeline needs both halves" >&2
+        echo "error: $f is missing; the release pipeline needs every one of them" >&2
         exit 1
     fi
 done
@@ -73,6 +75,24 @@ forbid "$plz" "the run-confirmation query must be in the path; -f makes gh api P
     '^ *-f event=workflow_dispatch'
 require "$plz" "the handoff must confirm a release run actually started" \
     'actions/workflows/release\.yml/runs\?event=workflow_dispatch'
+
+# ── gating the release pr ───────────────────────────────────────────────────
+# the same suppression hides the release *pr* from ci.yml: `ci-ok` is the only
+# required check on master and nothing ever reported it there, so every release
+# merged through an admin bypass (#1025). drop this dispatch and releases go
+# back to needing one, quietly.
+require "$plz" "no 'dispatch-release-pr-ci' job — the release pr will never get ci-ok" \
+    '^  dispatch-release-pr-ci:'
+require "$plz" "the release-pr gate no longer dispatches ci.yml" \
+    'gh workflow run ci\.yml'
+require "$plz" "the release-pr gate must run after release-plz-pr" \
+    'needs: release-plz-pr'
+require "$plz" "the release-pr gate must confirm a ci run actually started" \
+    'actions/workflows/ci\.yml/runs\?event=workflow_dispatch'
+require "$ci" "ci.yml dropped its workflow_dispatch trigger; the release pr cannot be gated" \
+    '^  workflow_dispatch:'
+require "$ci" "ci.yml must still aggregate everything into the ci-ok check" \
+    '^  ci-ok:'
 
 # ── the receiving end ───────────────────────────────────────────────────────
 require "$rel" "release.yml dropped its workflow_dispatch trigger" \
@@ -137,7 +157,8 @@ if [[ "$fail" -ne 0 ]]; then
 
 the release handoff is broken. see docs/development/packaging.md ("Release
 pipeline"); a release that loses this wiring publishes a github release and
-crates.io but never a pypi wheel, and nothing goes red.
+crates.io but never a pypi wheel, or leaves the release pr unable to reach a
+green ci-ok — and nothing goes red.
 EOF
     exit 1
 fi

@@ -7,6 +7,16 @@ on:
   # new commit; the full `quality` gate skips that event (see its `if:` below)
   pull_request:
     types: [opened, synchronize, reopened, edited]
+  # the release PR is opened by release-plz with the repo `GITHUB_TOKEN`, and
+  # GitHub suppresses downstream events for token-created refs and PRs — so
+  # neither `push` nor `pull_request` ever fires for it and `ci-ok`, the one
+  # required status check, is never reported. every release therefore needed an
+  # admin bypass to merge (#1025). `workflow_dispatch` is the documented
+  # exception: it always creates a run, even from the `GITHUB_TOKEN`, and the
+  # check-runs it produces attach to the head commit of the ref it runs on,
+  # which is the release PR's head. `release-plz.yml` dispatches it — see
+  # `dispatch-release-pr-ci` there.
+  workflow_dispatch:
 
 # commit-driven runs supersede each other, but an `edited` run must not: it
 # skips `quality` (see below) on the assumption the gate already ran for this
@@ -121,8 +131,8 @@ jobs:
 
   # single aggregating gate for branch protection. mark ONLY `ci-ok` as a
   # required status check on master; it turns green only when the quality
-  # workflow, pr-title and codeql all succeed (a skipped pr-title on push is
-  # fine). adding/removing jobs then never requires touching branch protection
+  # workflow, pr-title and codeql all succeed (a skipped pr-title is fine on a
+  # push build and on the `workflow_dispatch` run that gates the release PR). adding/removing jobs then never requires touching branch protection
   # settings. see ROL-124.
   ci-ok:
     name: ci-ok
@@ -137,7 +147,8 @@ jobs:
           echo "pr-title: ${{ needs.pr-title.result }}"
           echo "codeql:   ${{ needs.codeql.result }}"
           echo "action:   ${GITHUB_EVENT_ACTION}"
-          # quality and codeql must succeed; pr-title may be skipped (push builds)
+          # quality and codeql must succeed; pr-title may be skipped (push and
+          # workflow_dispatch builds)
           # but must not have failed. on a title-only `edited` event the heavy
           # gate and codeql are intentionally skipped (they already ran on this
           # commit), so skipped is acceptable there and only pr-title re-runs
