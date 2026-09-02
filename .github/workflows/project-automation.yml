@@ -5,10 +5,11 @@ name: project-automation
 # column: issues get Todo plus Priority Medium, PRs get In Review because an
 # open PR is by definition waiting on review or on ci-ok.
 #
-# the single-select option ids below are NOT stable: replacing a field's option
-# list through updateProjectV2Field mints new ids and clears the field on every
-# existing item. if the Status options are ever edited, re-read the ids with
-# `gh project field-list 1 --owner rolter-ai --format json` and update them here.
+# field and option ids are resolved by *name* at run time, never pinned:
+# replacing a field's option list through updateProjectV2Field mints new ids, and
+# a pinned id then makes every seed fail while items land in the untracked
+# "no status" column — the exact outcome this job exists to prevent (#1093,
+# #1096). names survive that edit; generated ids do not.
 #
 # org Projects v2 are not reachable with the default GITHUB_TOKEN, so this uses
 # a fine-grained PAT stored as the secret ADD_TO_PROJECT_PAT (org: projects
@@ -18,8 +19,8 @@ on:
   issues:
     types: [opened]
   # pull_request_target is required so PRs from forks can read the org PAT; this
-  # workflow never checks out PR head and passes only static field IDs to run:,
-  # so the usual injection risk does not apply.
+  # workflow never checks out PR head and passes only the project id and literal
+  # field names to run:, so the usual injection risk does not apply.
   pull_request_target: # zizmor: ignore[dangerous-triggers]
     types: [opened]
 
@@ -44,16 +45,49 @@ jobs:
           GH_TOKEN: ${{ secrets.ADD_TO_PROJECT_PAT }}
           ITEM_ID: ${{ steps.add.outputs.itemId }}
           PROJECT_ID: PVT_kwDOEjWga84Bdezc
-          STATUS_FIELD: PVTSSF_lADOEjWga84BdezczhYACo4
-          STATUS_TODO: 3ced4ae9
-          STATUS_IN_REVIEW: bb32d414
-          PRIORITY_FIELD: PVTSSF_lADOEjWga84BdezczhYAQGI
-          PRIORITY_MEDIUM: 82100b74
           IS_PR: ${{ github.event_name == 'pull_request_target' }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
+
+          # one query for every single-select field and its options, so the
+          # names below are resolved against whatever the board looks like today.
           # $-prefixed names in the query are graphql variables, not shell vars
+          # shellcheck disable=SC2016
+          FIELDS=$(gh api graphql -f query='
+            query($project:ID!){
+              node(id:$project){
+                ... on ProjectV2 {
+                  fields(first:50){
+                    nodes {
+                      ... on ProjectV2SingleSelectField {
+                        id name options { id name }
+                      }
+                    }
+                  }
+                }
+              }
+            }' -f project="$PROJECT_ID")
+
           set_field() {
+            field_name=$1
+            option_name=$2
+            field_id=$(jq -r --arg f "$field_name" \
+              '.data.node.fields.nodes[] | select(.name == $f) | .id' <<<"$FIELDS")
+            option_id=$(jq -r --arg f "$field_name" --arg o "$option_name" \
+              '.data.node.fields.nodes[] | select(.name == $f)
+               | .options[] | select(.name == $o) | .id' <<<"$FIELDS")
+
+            # fail loudly and name what could not be resolved: a silently
+            # skipped seed is exactly how the last drift went unnoticed
+            if [ -z "$field_id" ] || [ "$field_id" = "null" ]; then
+              echo "::error::project board has no single-select field named '$field_name'"
+              exit 1
+            fi
+            if [ -z "$option_id" ] || [ "$option_id" = "null" ]; then
+              echo "::error::board field '$field_name' has no option named '$option_name'"
+              exit 1
+            fi
+
             # shellcheck disable=SC2016
             gh api graphql -f query='
               mutation($project:ID!,$item:ID!,$field:ID!,$opt:String!){
@@ -62,13 +96,13 @@ jobs:
                   value:{singleSelectOptionId:$opt}
                 }){ projectV2Item { id } }
               }' -f project="$PROJECT_ID" -f item="$ITEM_ID" \
-                 -f field="$1" -f opt="$2" || echo "::warning::project board: failed to set field $1"
+                 -f field="$field_id" -f opt="$option_id"
           }
           # a freshly opened PR is already waiting on review and ci-ok, so it
           # starts in In Review; only issues start in Todo and carry a Priority
           if [ "$IS_PR" = "true" ]; then
-            set_field "$STATUS_FIELD" "$STATUS_IN_REVIEW"
+            set_field Status "In Review"
           else
-            set_field "$STATUS_FIELD" "$STATUS_TODO"
-            set_field "$PRIORITY_FIELD" "$PRIORITY_MEDIUM"
+            set_field Status Todo
+            set_field Priority Medium
           fi

@@ -107,9 +107,14 @@ an issue before that task is reported done — see the scope-discipline section 
 
 Projects v2 option ids are **not stable**. `updateProjectV2Field` replaces a
 field's option list rather than patching it: every option is minted a fresh id
-and the field is cleared on every existing item in the project. The ids pinned
-in `project-automation.yml` stop resolving at the same moment, so newly opened
-issues land with no status at all.
+and the field is cleared on every existing item in the project.
+
+`project-automation.yml` no longer pins any of those ids — it resolves both the
+field and the option by **name** on every run and fails with an `::error::`
+naming what it could not find (#1096). So an edit that keeps the option *names*
+needs nothing from you here; only a rename does, and it announces itself the
+next time an issue is opened rather than silently dropping items into the
+untracked "no status" column.
 
 Before touching the options:
 
@@ -126,9 +131,9 @@ Before touching the options:
 
 2. pass the **complete** option list to `updateProjectV2Field`, including the
    ones you are keeping
-3. re-read the new ids with
-   `gh project field-list 1 --owner rolter-ai --format json`
-4. restore the snapshot with `updateProjectV2ItemFieldValue`, in batches of
+3. restore the snapshot with `updateProjectV2ItemFieldValue`, in batches of
    about five mutations per request — larger batches hit
    `Resource limits for this query exceeded`
-5. update the ids in `project-automation.yml` in the same change
+4. if you **renamed** an option, update the name in `project-automation.yml`
+   (`set_field Status Todo`, `set_field Priority Medium`) in the same change;
+   ids need no attention
