@@ -328,4 +328,8 @@ is the user-facing version of this table.
 
 - Always set a strong `ROLTER_KEK` (e.g. `openssl rand -hex 32`) and rotate provider keys periodically.
 - Run the control plane on a private network; expose only the gateway publicly.
-- Back up Postgres; treat the master key as the most sensitive secret.
+- Back up Postgres; treat the master key as the most sensitive secret. It is
+  not in the dump, so a database backup without it restores into a store
+  nothing can read — `rolter kek verify` catches that at restore time, and
+  [the runbook](../deployment/backup-and-restore.md) covers backup, restore
+  and rotation.

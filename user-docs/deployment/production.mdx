@@ -59,7 +59,7 @@ Work through these steps before sending production traffic to your gateway:
     openssl rand -hex 32
     ```
 
-    Inject it into both the gateway and control plane containers as the `ROLTER_KEK` environment variable. Back it up securely — losing this key means losing access to all stored provider credentials.
+    Inject it into both the gateway and control plane containers as the `ROLTER_KEK` environment variable. Back it up securely — losing this key means losing access to all stored provider credentials, and a database dump does not contain it. See [Backup, restore and KEK rotation](/deployment/backup-and-restore).
   </Step>
   <Step title="Supply all credentials via environment variables">
     Never write API keys or passwords inline in `rolter.toml` or into container images. Instead:
@@ -167,7 +167,8 @@ Here is a consolidated view of every secret and credential the stack requires:
 
 | Variable | Used by | Notes |
 | --- | --- | --- |
-| `ROLTER_KEK` | gateway, control | 32-byte hex; AES-256-GCM KEK — never rotate without a migration plan |
+| `ROLTER_KEK` | gateway, control | 32-byte hex; AES-256-GCM KEK. Rotate with `rolter kek rotate` — see [Backup & restore](/deployment/backup-and-restore) |
+| `ROLTER_KEK_OLD` | `rolter kek rotate` only | the KEK being rotated away from; never set on a running process |
 | `DATABASE_URL` | control | Postgres connection string, e.g. `postgres://user:pass@host:5432/rolter` |
 | `REDIS_URL` | gateway, control | e.g. `redis://host:6379` |
 | `CLICKHOUSE_URL` | gateway, control | e.g. `http://host:8123` |
