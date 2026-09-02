@@ -51,6 +51,52 @@ Behaviour:
 - `x-request-id` is exposed via `Access-Control-Expose-Headers`, so a browser
   can read the correlation id the API already echoes.
 
+## Gateway ingress policy (#1162)
+
+The rest of `security_settings` — the part that is not CORS — reaches the
+gateway through `/internal/snapshot` as `GatewayConfig::security`
+(`rolter_core::SecurityPolicyConfig`), loaded by
+`PostgresConfigStore::load_security_policy`. The table's own trigger bumps
+`config_version`, so an edit propagates on the next poll like any other config
+change, with no restart.
+
+Only the **policy** columns are selected. The dashboard credential ciphertext
+and nonce are not named by the query at all — the migration promised snapshots
+would never carry them, and a query that cannot see a column cannot leak it.
+
+| Setting | Effect on the gateway |
+| --- | --- |
+| `virtual_key_required` | an unauthenticated request is refused even where the gateway holds no keys |
+| `required_headers` | a request missing any name/value pair is refused at ingress, before routing and before auth |
+| `auth_bypass_routes` | the named paths answer without a key |
+
+Load-bearing properties, each with a test that fails if it stops holding:
+
+- **Every rule can only close, never open** — except `auth_bypass_routes`,
+  which an operator writes out path by path. The default for the whole struct
+  is "no extra rules", so a store that cannot be read leaves the deployment
+  where it was rather than opening one that was closing.
+- **`server.require_auth` in the config file still wins, in both directions.**
+  A file is a deliberate local override by whoever runs the process, who may
+  not be the person holding the dashboard.
+- **Bypass matching is exact.** `/v1/models` does not open
+  `/v1/models/gpt-4o`, and `validate_bypass_route` already refuses wildcards
+  and non-`/v1` paths at write time. The MCP surface passes a literal `/mcp`
+  into `authenticate` rather than its real path, so no bypass entry can ever
+  name it.
+- **`/healthz` and `/readyz` are exempt from `required_headers`.** A probe is
+  the deployment's own traffic; filtering it takes the gateway down rather than
+  protecting it.
+- **A refusal names the header and never its value.** An operator may well have
+  put a shared secret in a required header, and echoing it would hand it to the
+  one caller who did not know it.
+
+`allow_direct_provider_keys` is **gone from the API and the dashboard.** The
+gateway has no direct-provider-key passthrough, so the column controlled
+nothing; the store now pins it to its default. A toggle that reads like a
+security control and does nothing is worse than an absent one, because it
+converts into a false belief during exactly the review where it matters.
+
 ## Egress policy (SSRF)
 
 A provider's `api_base` decides where the gateway sends traffic, so an admin

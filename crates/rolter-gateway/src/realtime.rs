@@ -71,7 +71,7 @@ pub async fn realtime(
 ) -> Response {
     state.metrics.requests_total.fetch_add(1, Relaxed);
     let snap = state.snapshot.load();
-    let virtual_key = match authenticate(&state, &snap, &headers) {
+    let virtual_key = match authenticate(&state, &snap, &headers, "/v1/realtime") {
         Ok(key) => key,
         Err(response) => return response,
     };

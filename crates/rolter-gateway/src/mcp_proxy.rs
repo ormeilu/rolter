@@ -66,7 +66,10 @@ async fn proxy(
     body: Bytes,
 ) -> Response {
     let snapshot = state.snapshot.load();
-    let key = match crate::handlers::authenticate(&state, &snapshot, &headers) {
+    // "/mcp", not the real request path: auth bypass routes are validated to
+    // start with "/v1/", so the MCP surface can never be named by one, and
+    // handing the real path in would only invite that to change quietly
+    let key = match crate::handlers::authenticate(&state, &snapshot, &headers, "/mcp") {
         Ok(Some(key)) => key,
         Ok(None) => {
             return error(

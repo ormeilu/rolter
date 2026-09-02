@@ -4311,7 +4311,7 @@ impl AdaptiveRoutingTelemetryRepo<'_> {
 impl SecuritySettingsRepo<'_> {
     pub async fn get(&self) -> Result<SecuritySettings> {
         sqlx::query_as(
-            "select virtual_key_required, allow_direct_provider_keys, allowed_origins, allowed_headers, \
+            "select virtual_key_required, allowed_origins, allowed_headers, \
                     required_headers, auth_bypass_routes, dashboard_auth_enabled, dashboard_credential_ref, \
                     dashboard_credential_ciphertext is not null as dashboard_secret_configured, updated_at \
              from security_settings where id = true",
@@ -4321,11 +4321,14 @@ impl SecuritySettingsRepo<'_> {
         .map_err(store_err)
     }
 
+    /// `allow_direct_provider_keys` is pinned to `false` in the statement
+    /// rather than taken as an argument: the gateway has no
+    /// direct-provider-key passthrough, so the column never controlled
+    /// anything and is no longer offered by the API (#1162).
     #[allow(clippy::too_many_arguments)]
     pub async fn update(
         &self,
         virtual_key_required: bool,
-        allow_direct_provider_keys: bool,
         allowed_origins: &[String],
         allowed_headers: &[String],
         required_headers: serde_json::Value,
@@ -4340,18 +4343,18 @@ impl SecuritySettingsRepo<'_> {
         };
         sqlx::query_as(
             "update security_settings set \
-                virtual_key_required = $1, allow_direct_provider_keys = $2, allowed_origins = $3, \
-                allowed_headers = $4, required_headers = $5, auth_bypass_routes = $6, \
-                dashboard_auth_enabled = $7, dashboard_credential_ref = $8, \
-                dashboard_credential_ciphertext = coalesce($9, dashboard_credential_ciphertext), \
-                dashboard_credential_nonce = coalesce($10, dashboard_credential_nonce), updated_at = now() \
+                virtual_key_required = $1, allowed_origins = $2, \
+                allowed_headers = $3, required_headers = $4, auth_bypass_routes = $5, \
+                dashboard_auth_enabled = $6, dashboard_credential_ref = $7, \
+                dashboard_credential_ciphertext = coalesce($8, dashboard_credential_ciphertext), \
+                dashboard_credential_nonce = coalesce($9, dashboard_credential_nonce), \
+                allow_direct_provider_keys = false, updated_at = now() \
              where id = true \
-             returning virtual_key_required, allow_direct_provider_keys, allowed_origins, allowed_headers, \
+             returning virtual_key_required, allowed_origins, allowed_headers, \
                        required_headers, auth_bypass_routes, dashboard_auth_enabled, dashboard_credential_ref, \
                        dashboard_credential_ciphertext is not null as dashboard_secret_configured, updated_at",
         )
         .bind(virtual_key_required)
-        .bind(allow_direct_provider_keys)
         .bind(allowed_origins)
         .bind(allowed_headers)
         .bind(required_headers)

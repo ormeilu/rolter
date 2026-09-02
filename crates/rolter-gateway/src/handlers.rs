@@ -149,7 +149,7 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
 /// the models the caller's virtual key is allowed to see.
 pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let snap = state.snapshot.load();
-    let vk = match authenticate(&state, &snap, &headers) {
+    let vk = match authenticate(&state, &snap, &headers, "/v1/models") {
         Ok(vk) => vk,
         Err(resp) => return resp,
     };
@@ -392,7 +392,7 @@ async fn response_lifecycle(
 ) -> Response {
     state.metrics.requests_total.fetch_add(1, Relaxed);
     let snap = state.snapshot.load();
-    let vk = match authenticate(&state, &snap, &headers) {
+    let vk = match authenticate(&state, &snap, &headers, uri.path()) {
         Ok(vk) => vk,
         Err(resp) => return resp,
     };
@@ -518,11 +518,12 @@ fn response_not_found() -> Response {
 pub async fn unsupported_response_lifecycle(
     State(state): State<AppState>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(_response_id): Path<String>,
 ) -> Response {
     state.metrics.requests_total.fetch_add(1, Relaxed);
     let snap = state.snapshot.load();
-    if let Err(resp) = authenticate(&state, &snap, &headers) {
+    if let Err(resp) = authenticate(&state, &snap, &headers, uri.path()) {
         return resp;
     }
     crate::error::ApiError::new(
@@ -608,6 +609,47 @@ pub async fn map_payload_too_large(
         .into_response();
     }
     resp
+}
+
+/// Enforce the deployment's required ingress headers (#1162).
+///
+/// This runs ahead of routing and ahead of authentication, because that is
+/// what the setting means: a request that does not carry the operator's mesh
+/// identity header, WAF marker or tenant tag never reaches the data plane at
+/// all. Health and readiness are exempt — a probe is the deployment's own
+/// traffic, and locking the orchestrator out of `/healthz` would take the
+/// gateway down rather than protect it.
+///
+/// The refusal names the header and never its expected value: an operator may
+/// well have put a shared secret there, and echoing it back would hand it to
+/// exactly the caller who did not know it.
+pub async fn enforce_required_headers(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let snap = state.snapshot.load();
+    if !snap.security.required_headers.is_empty() && !is_probe_path(req.uri().path()) {
+        let headers = req.headers();
+        let missing = snap.security.missing_required_header(|name| {
+            headers.get(name).and_then(|value| value.to_str().ok())
+        });
+        if let Some(name) = missing {
+            state.metrics.auth_failures_total.fetch_add(1, Relaxed);
+            return crate::error::ApiError::new(
+                StatusCode::FORBIDDEN,
+                format!("request is missing the required header `{name}`"),
+            )
+            .with_code("required_header_missing")
+            .into_response();
+        }
+    }
+    next.run(req).await
+}
+
+/// Paths the deployment itself calls: never subject to the ingress filter.
+fn is_probe_path(path: &str) -> bool {
+    matches!(path, "/healthz" | "/readyz")
 }
 
 fn extract_key(headers: &HeaderMap) -> Option<String> {
@@ -789,12 +831,28 @@ pub(crate) fn authenticate(
     state: &AppState,
     snap: &Snapshot,
     headers: &HeaderMap,
+    path: &str,
 ) -> Result<Option<KeyMeta>, Response> {
+    // an operator-named unauthenticated path (#1162). exact match only, and
+    // checked before anything else, because the point of the list is that
+    // these paths answer without a key at all — a health integration or a
+    // model catalogue a sidecar reads. no key is looked up, so nothing is
+    // attributed to one either
+    if snap.security.bypasses_auth(path) {
+        return Ok(None);
+    }
     if snap.keys.is_empty() {
         // an empty key set is only "auth disabled" for unmanaged local dev.
         // on a managed gateway it means every key was revoked (or none exists
         // yet), which must lock the data plane down rather than open it
-        if snap.require_auth.unwrap_or(state.managed_auth) {
+        // the config file wins in either direction when it says anything:
+        // it is a deliberate local override of a database the operator may
+        // not even have. otherwise the Security screen's toggle decides,
+        // falling back to what the deployment mode implies
+        let required = snap
+            .require_auth
+            .unwrap_or(snap.security.virtual_key_required || state.managed_auth);
+        if required {
             state.metrics.auth_failures_total.fetch_add(1, Relaxed);
             return Err(error_json(StatusCode::UNAUTHORIZED, MISSING_KEY_MESSAGE));
         }
@@ -857,7 +915,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         // `!Send`. a held span still parents to the request span and still times
         // the stage from creation to drop
         let _stage = crate::trace::stage_span!("auth");
-        match authenticate(&state, &snap, &headers) {
+        match authenticate(&state, &snap, &headers, path) {
             Ok(vk) => vk,
             Err(resp) => return resp,
         }
@@ -2248,7 +2306,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
 
     let snap = state.snapshot.load();
 
-    let vk = match authenticate(&state, &snap, &headers) {
+    let vk = match authenticate(&state, &snap, &headers, path) {
         Ok(vk) => vk,
         Err(resp) => return resp,
     };
@@ -3843,6 +3901,69 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
+    // #1162: the Security screen's "enforce virtual keys on inference" toggle
+    // was stored, rendered, and read by nothing. these four tests are the
+    // reason it cannot go back to being decorative.
+    #[tokio::test]
+    async fn the_security_screen_can_close_an_unmanaged_gateway() {
+        let mut config = GatewayConfig::default();
+        config.security.virtual_key_required = true;
+        let state = AppState::new(&config);
+        let resp = list_models(State(state), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_config_file_still_overrides_the_security_screen_in_both_directions() {
+        // the file is a deliberate local override of a database the operator
+        // running this process may not even be able to reach
+        let mut config = GatewayConfig::default();
+        config.security.virtual_key_required = true;
+        config.server.require_auth = Some(false);
+        let state = AppState::new(&config);
+        let resp = list_models(State(state), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let mut config = GatewayConfig::default();
+        config.security.virtual_key_required = false;
+        config.server.require_auth = Some(true);
+        let state = AppState::new(&config);
+        let resp = list_models(State(state), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_bypass_route_is_matched_exactly_and_never_by_prefix() {
+        let mut config = config_with_keys();
+        config.security.auth_bypass_routes = vec!["/v1/models".to_string()];
+        let state = AppState::new(&config);
+        // named: served with no key at all, and nothing attributed to one
+        let resp = list_models(State(state.clone()), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // a longer path that merely starts with the named one is not bypassed
+        let snap = state.snapshot.load();
+        assert!(snap.security.bypasses_auth("/v1/models"));
+        assert!(!snap.security.bypasses_auth("/v1/models/gpt-4o"));
+        assert!(!snap.security.bypasses_auth("/v1/chat/completions"));
+        assert!(authenticate(&state, &snap, &HeaderMap::new(), "/v1/chat/completions").is_err());
+    }
+
+    #[test]
+    fn a_required_header_must_match_its_value_not_merely_be_present() {
+        let mut policy = rolter_core::SecurityPolicyConfig::default();
+        policy
+            .required_headers
+            .insert("x-mesh-id".to_string(), "edge".to_string());
+
+        assert_eq!(policy.missing_required_header(|_| None), Some("x-mesh-id"));
+        assert_eq!(
+            policy.missing_required_header(|_| Some("elsewhere")),
+            Some("x-mesh-id")
+        );
+        assert_eq!(policy.missing_required_header(|_| Some("edge")), None);
+    }
+
     #[tokio::test]
     async fn require_auth_config_denies_an_empty_key_set_even_unmanaged() {
         let mut config = GatewayConfig::default();
@@ -3914,6 +4035,7 @@ mod tests {
         let resp = unsupported_response_lifecycle(
             State(state),
             HeaderMap::new(),
+            OriginalUri("/v1/responses/resp_other_tenant/compact".parse().unwrap()),
             Path("resp_other_tenant".to_string()),
         )
         .await;

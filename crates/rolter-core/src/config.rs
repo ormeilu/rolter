@@ -100,6 +100,10 @@ pub struct GatewayConfig {
     /// header handling on the upstream leg and the base URL advertised to clients
     #[serde(default)]
     pub client: ClientConfig,
+    /// deployment-wide ingress policy owned by the control plane's Security
+    /// screen (#1162); empty for a file-configured gateway
+    #[serde(default)]
+    pub security: SecurityPolicyConfig,
     /// inference parameters filled in when a client omits them
     #[serde(default)]
     pub model_defaults: ModelDefaultsConfig,
@@ -1946,6 +1950,54 @@ impl Default for ClientConfig {
             injected_headers: BTreeMap::new(),
             request_id_header: default_request_id_header(),
         }
+    }
+}
+
+/// Deployment-wide ingress policy, owned by the control plane's Security
+/// screen and carried to every gateway in the snapshot (#1162).
+///
+/// Everything here is a *refusal* rule: each field can only make the gateway
+/// reject a request it would otherwise have served, or — for
+/// [`Self::auth_bypass_routes`] — serve a path the operator explicitly named.
+/// That is deliberate. A policy row that fails to load leaves the default,
+/// which is "no extra rules", so a store outage never silently opens a
+/// deployment it was closing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecurityPolicyConfig {
+    /// refuse an unauthenticated request even where the gateway holds no keys
+    /// at all. `server.require_auth` in the config file still wins, in either
+    /// direction: a file is a deliberate local override of the database
+    #[serde(default)]
+    pub virtual_key_required: bool,
+    /// lowercase header name -> exact value every request must carry. A
+    /// request missing one, or carrying a different value, is refused before
+    /// authentication — this is an ingress filter (a mesh identity header, a
+    /// WAF marker), not an authorization decision
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub required_headers: BTreeMap<String, String>,
+    /// exact `/v1/...` paths served without authentication. Exact match only:
+    /// no prefixes and no wildcards, so a bypass can never widen by accident
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auth_bypass_routes: Vec<String>,
+}
+
+impl SecurityPolicyConfig {
+    /// Whether `path` was explicitly named as unauthenticated.
+    pub fn bypasses_auth(&self, path: &str) -> bool {
+        self.auth_bypass_routes.iter().any(|route| route == path)
+    }
+
+    /// The first required header this request does not satisfy, if any.
+    /// Returns the header name so the refusal can name it — the *value* is
+    /// never echoed, since an operator may well have put a shared secret there.
+    pub fn missing_required_header<'a, F>(&'a self, get: F) -> Option<&'a str>
+    where
+        F: Fn(&str) -> Option<&'a str>,
+    {
+        self.required_headers
+            .iter()
+            .find(|(name, expected)| get(name).is_none_or(|actual| actual != expected.as_str()))
+            .map(|(name, _)| name.as_str())
     }
 }
 

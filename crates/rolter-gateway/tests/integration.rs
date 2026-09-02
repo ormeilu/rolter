@@ -3443,3 +3443,112 @@ async fn unpriced_block_never_reaches_the_upstream() {
         "the upstream must not be called for traffic the budget cannot account for"
     );
 }
+
+/// #1162: every one of these settings was stored by the control plane,
+/// rendered by the dashboard, and read by nothing. An operator who switched
+/// one on was told, by the product, that the gateway now behaved differently.
+/// It did not. These tests fail if that regresses — each asserts the *changed*
+/// behaviour, and each also asserts the unset default, so a rule that is
+/// simply always-on would not pass either.
+#[tokio::test]
+async fn a_required_header_is_enforced_at_ingress_and_names_only_itself() {
+    let mut config = GatewayConfig::default();
+    config
+        .security
+        .required_headers
+        .insert("x-mesh-id".to_string(), "edge-42".to_string());
+    let addr = serve_gateway(&config).await;
+    let client = reqwest::Client::new();
+
+    let missing = client
+        .get(format!("http://{addr}/v1/models"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 403);
+    let body: Value = missing.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "required_header_missing");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("x-mesh-id"), "{message}");
+    // the expected value may well be a shared secret; it is never echoed
+    assert!(!message.contains("edge-42"), "{message}");
+
+    // present but wrong is the same refusal as absent
+    let wrong = client
+        .get(format!("http://{addr}/v1/models"))
+        .header("x-mesh-id", "somewhere-else")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), 403);
+
+    let ok = client
+        .get(format!("http://{addr}/v1/models"))
+        .header("x-mesh-id", "edge-42")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200);
+
+    // a probe is the deployment's own traffic: locking the orchestrator out of
+    // /healthz would take the gateway down rather than protect it
+    let probe = client
+        .get(format!("http://{addr}/healthz"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(probe.status(), 200);
+}
+
+#[tokio::test]
+async fn an_ingress_filter_is_absent_until_the_operator_sets_one() {
+    let addr = serve_gateway(&GatewayConfig::default()).await;
+    let resp = reqwest::get(format!("http://{addr}/v1/models"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn enforcing_virtual_keys_closes_a_gateway_that_holds_no_keys() {
+    let mut config = GatewayConfig::default();
+    config.security.virtual_key_required = true;
+    let addr = serve_gateway(&config).await;
+    let closed = reqwest::get(format!("http://{addr}/v1/models"))
+        .await
+        .unwrap();
+    assert_eq!(closed.status(), 401);
+
+    // and the same deployment with the toggle off answers — so the test is
+    // measuring the toggle, not the absence of keys
+    let addr = serve_gateway(&GatewayConfig::default()).await;
+    let open = reqwest::get(format!("http://{addr}/v1/models"))
+        .await
+        .unwrap();
+    assert_eq!(open.status(), 200);
+}
+
+#[tokio::test]
+async fn a_bypass_route_opens_exactly_the_path_it_names() {
+    let mut config = GatewayConfig::default();
+    config.security.virtual_key_required = true;
+    config.security.auth_bypass_routes = vec!["/v1/models".to_string()];
+    let addr = serve_gateway(&config).await;
+    let client = reqwest::Client::new();
+
+    let bypassed = client
+        .get(format!("http://{addr}/v1/models"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bypassed.status(), 200);
+
+    // everything else still needs a key
+    let guarded = client
+        .post(format!("http://{addr}/v1/chat/completions"))
+        .json(&json!({"model": "fake-llm", "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(guarded.status(), 401);
+}

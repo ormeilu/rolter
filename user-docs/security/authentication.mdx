@@ -114,6 +114,45 @@ curl http://localhost:4000/v1/chat/completions \
   Use a stable, opaque identifier like a user-and-thread composite key. Rolter hashes the value to select a target — it is never forwarded to the upstream provider.
 </Tip>
 
+## Deployment-wide ingress policy
+
+**Settings → Security** carries three rules that every gateway in the fleet
+picks up on its next config poll — no restart, no redeploy.
+
+<AccordionGroup>
+  <Accordion title="Enforce virtual keys on inference">
+    Refuses an unauthenticated request even on a gateway that holds no virtual
+    keys at all. Without it, a deployment that has had every key revoked — or
+    that has not minted its first one — decides based on how it was started.
+    Turn it on and the answer is always `401`.
+
+    A `require_auth` line in a gateway's own config file still wins, in either
+    direction. That is deliberate: the file belongs to whoever runs the
+    process, who may not be the person holding the dashboard.
+  </Accordion>
+
+  <Accordion title="Required headers">
+    Name/value pairs every request must carry — a service-mesh identity header,
+    a WAF marker, a tenant tag. A request missing one, or carrying a different
+    value, is refused with `403 required_header_missing` before routing and
+    before authentication.
+
+    The refusal names the header but never the expected value, so a shared
+    secret can safely be one. `/healthz` and `/readyz` are exempt: a probe is
+    your own deployment's traffic, and filtering it takes the gateway down
+    rather than protecting it.
+  </Accordion>
+
+  <Accordion title="Auth bypass routes">
+    Exact `/v1/...` paths served without a key — typically `/v1/models` for a
+    sidecar that reads the catalogue. Matching is exact: listing `/v1/models`
+    does not open `/v1/models/gpt-4o`, and wildcards are rejected when you save.
+
+    Nothing is attributed to a key on a bypassed path, because no key was
+    presented. Budgets and per-key rate limits do not apply there.
+  </Accordion>
+</AccordionGroup>
+
 ## Error responses
 
 Rolter returns standard HTTP error codes for authentication and authorisation failures.
