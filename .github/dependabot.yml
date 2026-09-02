@@ -12,7 +12,17 @@ updates:
         update-types: [minor, patch]
     open-pull-requests-limit: 5
 
-  - package-ecosystem: npm # covers the bun-managed ui workspace
+  # the ui workspace is bun-managed, and dependabot speaks bun directly since
+  # bun >= 1.1.39. it used to run here as the npm ecosystem against a
+  # package-lock.json kept solely for dependabot's benefit — which moved
+  # package.json without ever writing bun.lock, so every merged bump left
+  # master's lockfile stale and reded every other open PR (#1137).
+  #
+  # the trade: the bun ecosystem does version updates but not security updates.
+  # dependabot *alerts* still fire on ui dependencies; what is lost is the
+  # automatic security PR, which has to be raised by hand until bun security
+  # updates ship. tracked in #1148.
+  - package-ecosystem: bun
     directory: /ui
     schedule:
       interval: weekly
