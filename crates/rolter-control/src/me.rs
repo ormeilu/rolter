@@ -13,6 +13,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -64,12 +65,70 @@ async fn list_my_keys(
 
 #[derive(Deserialize)]
 struct MintKey {
-    name: Option<String>,
+    /// required, 1..=`MAX_KEY_NAME_LEN` characters after trimming. the plaintext
+    /// is shown exactly once, so a key that arrives unnamed can never be told
+    /// apart from its siblings again (#945)
+    name: String,
     #[serde(default)]
     models: Vec<String>,
+    /// upstream providers this key may reach; empty permits every provider on
+    /// an allowed route
+    #[serde(default)]
+    providers: Vec<String>,
     /// per-key response-cache override; omit/null to inherit the route decision
     #[serde(default)]
     cache: Option<bool>,
+    /// how long the key lives, in days. `None` mints a key that never expires,
+    /// which the dashboard only sends for an explicit "never" choice — it is
+    /// not what omitting the field in a form produces
+    #[serde(default)]
+    expires_in_days: Option<u32>,
+}
+
+/// longest a virtual key name may be; long enough for "prod checkout service
+/// — eu" and short enough to render in a card without wrapping twice
+pub(crate) const MAX_KEY_NAME_LEN: usize = 64;
+/// widest TTL the mint path accepts, in days (~5 years). past this a caller is
+/// asking for an immortal key without saying so
+pub(crate) const MAX_KEY_TTL_DAYS: u32 = 1826;
+
+/// `Error::Config` is what the control plane's error mapping renders as a 400
+fn bad_request(message: &str) -> ApiError {
+    ApiError::Core(rolter_core::Error::Config(message.to_string()))
+}
+
+/// Validate a mint request's name and turn its day count into an instant.
+///
+/// The server computes `expires_at` rather than accepting one, so a client with
+/// a wrong clock cannot mint a key that outlives what the operator chose.
+pub(crate) fn validated_name_and_expiry(
+    name: &str,
+    expires_in_days: Option<u32>,
+) -> Result<(String, Option<DateTime<Utc>>), ApiError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(bad_request("virtual key name is required"));
+    }
+    if name.chars().count() > MAX_KEY_NAME_LEN {
+        return Err(bad_request(&format!(
+            "virtual key name must be at most {MAX_KEY_NAME_LEN} characters"
+        )));
+    }
+    let expires_at = match expires_in_days {
+        None => None,
+        Some(0) => {
+            return Err(bad_request(
+                "expires_in_days must be at least 1; omit it for a key that never expires",
+            ));
+        }
+        Some(d) if d > MAX_KEY_TTL_DAYS => {
+            return Err(bad_request(&format!(
+                "expires_in_days must be at most {MAX_KEY_TTL_DAYS}"
+            )));
+        }
+        Some(d) => Some(Utc::now() + chrono::Duration::days(i64::from(d))),
+    };
+    Ok((name.to_string(), expires_at))
 }
 
 /// mint a key the caller owns, in a project they belong to. requires `member`
@@ -84,17 +143,20 @@ async fn mint_my_key(
     let principal = Principal::User(current.user.clone());
     authorize(&state, &principal, chain, cap!("my_virtual_key", Create)).await?;
 
+    let (name, expires_at) = validated_name_and_expiry(&body.name, body.expires_in_days)?;
+
     let (key, key_hash, key_prefix) = generate_virtual_key(&key_pepper());
     let row = VirtualKeyRepo(pool(&state))
         .create(
             project_id,
             &key_hash,
             &key_prefix,
-            body.name.as_deref(),
+            Some(name.as_str()),
             &body.models,
-            &[],
+            &body.providers,
             body.cache,
             Some(current.user.id),
+            expires_at,
         )
         .await?;
     publish_config_change(&state).await?;
@@ -131,6 +193,9 @@ async fn rotate_my_key(
             &old.providers,
             old.cache_enabled,
             Some(current.user.id),
+            // a rotation replaces a secret, it does not renew a decision: the
+            // fresh key expires exactly when the one it replaces would have
+            old.expires_at,
         )
         .await?;
     VirtualKeyRepo(pool(&state)).set_disabled(id, true).await?;
@@ -196,4 +261,55 @@ async fn my_usage(
          group by virtual_key_id format JSON"
     );
     run(ch.query(&sql, &window_params(&q)).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_key_cannot_be_minted_without_a_name() {
+        // the plaintext is shown once; an unnamed key is unattributable the
+        // moment there is a second one (#945)
+        for blank in ["", "   ", "\t\n"] {
+            let err = validated_name_and_expiry(blank, Some(30)).unwrap_err();
+            assert!(format!("{err:?}").contains("name is required"), "{err:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_is_trimmed_and_bounded() {
+        let (name, _) = validated_name_and_expiry("  prod checkout  ", Some(30)).unwrap();
+        assert_eq!(name, "prod checkout");
+        // the bound counts characters, not bytes, so a cyrillic name of the
+        // same visible length is not rejected where a latin one passes
+        let long = "я".repeat(MAX_KEY_NAME_LEN);
+        assert!(validated_name_and_expiry(&long, Some(30)).is_ok());
+        let too_long = "я".repeat(MAX_KEY_NAME_LEN + 1);
+        assert!(validated_name_and_expiry(&too_long, Some(30)).is_err());
+    }
+
+    #[test]
+    fn a_ttl_becomes_an_instant_the_server_computed() {
+        let before = Utc::now();
+        let (_, expires) = validated_name_and_expiry("k", Some(30)).unwrap();
+        let expires = expires.expect("30 days is not 'never'");
+        // the server derives the instant, so a client with a wrong clock cannot
+        // mint a key that outlives what the operator chose
+        assert!(expires > before + chrono::Duration::days(29));
+        assert!(expires < Utc::now() + chrono::Duration::days(31));
+    }
+
+    #[test]
+    fn never_expires_is_a_choice_and_zero_days_is_a_mistake() {
+        // omitting the field is the only way to ask for an immortal key, and it
+        // is what the dashboard sends only for an explicit "never"
+        assert_eq!(validated_name_and_expiry("k", None).unwrap().1, None);
+        // `0` reads like "no expiry" but would mean "already expired"; refusing
+        // it keeps that ambiguity from minting a dead or immortal key
+        let err = validated_name_and_expiry("k", Some(0)).unwrap_err();
+        assert!(format!("{err:?}").contains("at least 1"), "{err:?}");
+        assert!(validated_name_and_expiry("k", Some(MAX_KEY_TTL_DAYS)).is_ok());
+        assert!(validated_name_and_expiry("k", Some(MAX_KEY_TTL_DAYS + 1)).is_err());
+    }
 }

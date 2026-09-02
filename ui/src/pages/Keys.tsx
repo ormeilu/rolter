@@ -3,6 +3,17 @@ import { Check, Copy, Plus, Trash2, Key, Loader2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import {
+  DEFAULT_KEY_TTL_DAYS,
+  KeyExpiryField,
+  KeyModelsField,
+  KeyNameField,
+  KeyReachSummary,
+  keyNameProblem,
+  parseModels,
+  ttlToDays,
+} from "@/components/KeyMintFields";
+
 import { LoadError } from "@/components/LoadError";
 import { CopyButton } from "@/components/CopyButton";
 import { EditorSheet } from "@/components/EditorSheet";
@@ -18,7 +29,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tag } from "@/components/ui/tag";
@@ -284,9 +294,11 @@ function AddKeyDialog({
   projectId: string;
   onCreated: (key: CreatedVirtualKey) => void;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = React.useState("");
   const [modelsText, setModelsText] = React.useState("");
   const [cache, setCache] = React.useState<"inherit" | "off" | "on">("inherit");
+  const [ttl, setTtl] = React.useState(String(DEFAULT_KEY_TTL_DAYS));
 
   // names the form, never its contents — this dialog mints a credential
   const ux = useFormTelemetry("virtual-key-create", open);
@@ -296,18 +308,19 @@ function AddKeyDialog({
       setName("");
       setModelsText("");
       setCache("inherit");
+      setTtl(String(DEFAULT_KEY_TTL_DAYS));
     }
   }, [open]);
+
+  const models = React.useMemo(() => parseModels(modelsText), [modelsText]);
 
   const create = useMutation({
     mutationFn: () =>
       createVirtualKey(projectId, {
-        name: name || undefined,
-        models: modelsText
-          .split(",")
-          .map((m) => m.trim())
-          .filter(Boolean),
+        name: name.trim(),
+        models,
         cache: parseCacheMode(cache),
+        expires_in_days: ttlToDays(ttl),
       }),
     onSuccess: (key) => {
       ux.saved();
@@ -328,7 +341,7 @@ function AddKeyDialog({
       // the sheet footer has no room for a spinner, so pending state reads
       // from the label instead
       saveLabel={create.isPending ? "Creating…" : "Create"}
-      canSave
+      canSave={keyNameProblem(name) === null}
       saving={create.isPending}
       onSave={() => {
         ux.submitted();
@@ -336,13 +349,8 @@ function AddKeyDialog({
       }}
     >
       <div className="space-y-3">
-        <Field label="Name (optional)">
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="backend service"
-          />
-        </Field>
+        <KeyNameField value={name} onChange={setName} />
+        <KeyExpiryField value={ttl} onChange={setTtl} />
         <Field
           label="Response cache"
           hint="Inherit uses the route setting; the deployment-wide cache switch still applies."
@@ -353,16 +361,12 @@ function AddKeyDialog({
             <option value="on">On</option>
           </Select>
         </Field>
-        <Field
-          label="Model allow-list (optional)"
-          hint="comma-separated public model names; empty allows all models"
-        >
-          <Input
-            value={modelsText}
-            onChange={(e) => setModelsText(e.target.value)}
-            placeholder="gpt-4o, claude-sonnet"
-          />
-        </Field>
+        <KeyModelsField value={modelsText} onChange={setModelsText} />
+        <KeyReachSummary
+          project={t("keyMint.reach.thisProject")}
+          models={models}
+          ttl={ttl}
+        />
       </div>
     </EditorSheet>
   );

@@ -111,7 +111,7 @@ export const CreatesAKey: Story = {
   play: async ({ canvasElement }) => {
     await clickWhenEnabled(canvasElement, /add virtual key/i);
     const form = sheet();
-    await userEvent.type(within(form).getByLabelText("Name (optional)"), "ci runner");
+    await userEvent.type(within(form).getByLabelText("Name"), "ci runner");
     await userEvent.click(within(form).getByRole("button", { name: "Create" }));
     // the plaintext key is shown exactly once, right after creation — losing
     // that dialog means the caller never gets their secret
@@ -147,18 +147,40 @@ export const KeepsADirtyDraftWhenDiscardIsDeclined: Story = {
   play: async ({ canvasElement }) => {
     await clickWhenEnabled(canvasElement, /add virtual key/i);
     const form = sheet();
-    await userEvent.type(within(form).getByLabelText("Name (optional)"), "half typed");
+    await userEvent.type(within(form).getByLabelText("Name"), "half typed");
 
     await withConfirm(false, async () => {
       await userEvent.click(within(form).getByRole("button", { name: "Cancel" }));
       // declining the discard keeps the sheet — and the typing — alive
       await expect(within(document.body).getByRole("dialog")).toBeInTheDocument();
-      await expect(within(form).getByLabelText("Name (optional)")).toHaveValue("half typed");
+      await expect(within(form).getByLabelText("Name")).toHaveValue("half typed");
     });
 
     await withConfirm(true, async () => {
       await userEvent.click(within(form).getByRole("button", { name: "Cancel" }));
       await expectSheetClosed();
     });
+  },
+};
+
+/**
+ * #945 applies to the admin screen too. A rule enforced only on the
+ * self-service panel is a rule with a way around it.
+ */
+export const AdminCreateAlsoRequiresANameAndAnExpiry: Story = {
+  render: () => (
+    <Harness fetchStub={scoped(async () => json(KEYS))}>
+      <Keys />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await clickWhenEnabled(canvasElement, /add virtual key/i);
+    const form = sheet();
+    await expect(within(form).getByRole("button", { name: "Create" })).toBeDisabled();
+    await userEvent.type(within(form).getByLabelText("Name"), "backend service");
+    await expect(within(form).getByRole("button", { name: "Create" })).toBeEnabled();
+    // the finite default is the same one the self-service sheet offers
+    await expect(within(form).getByLabelText("Expires")).toHaveValue("30");
+    await expect(within(form).getByText(/^Until /)).toBeInTheDocument();
   },
 };

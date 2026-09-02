@@ -79,6 +79,51 @@ You have two non-destructive ways to stop a key from working:
   </Card>
 </CardGroup>
 
+### Minting a key from the dashboard
+
+The **My Virtual Keys** screen mints keys for you, and it asks for two things
+the config file leaves optional:
+
+<AccordionGroup>
+  <Accordion title="A name is required">
+    The plaintext secret is shown exactly once, immediately after creation. A
+    key that arrives unnamed can never be identified again except by its prefix
+    and creation time — so the dashboard will not mint one, and neither will
+    the API: `POST /api/v1/me/projects/{project_id}/virtual-keys` rejects a
+    blank or whitespace-only `name` with a 400. Names are trimmed and capped at
+    64 characters.
+  </Accordion>
+
+  <Accordion title="An expiry is chosen, not skipped">
+    The picker offers 7, 30, 60 and 90 days and **defaults to 30**. "Never
+    expires" is still there — it is a legitimate choice for a key you have
+    other controls over — but it is a deliberate pick that renders a warning,
+    not what you get by leaving a field alone.
+
+    The API takes `expires_in_days`, not an instant: the server computes
+    `expires_at` from it, so a client with a wrong clock cannot mint a key that
+    outlives what you chose. Omitting the field is the only way to ask for a
+    key that never expires. `0` is refused — it reads like "no expiry" but
+    would mean "already expired".
+  </Accordion>
+
+  <Accordion title="Rotation keeps the original deadline">
+    Rotating a key replaces its secret; it does not renew the decision. The
+    fresh key expires exactly when the one it replaces would have.
+  </Accordion>
+</AccordionGroup>
+
+Before you press the button the sheet states the key's **effective reach** —
+which project it belongs to, whether it is limited to specific models or can
+route to every model the project can reach, and the date it stops working. The
+secret is shown once, so that is the last moment the question "did I just mint
+something narrow, or something that can spend money against every provider?"
+has a cheap answer.
+
+Expiry is enforced by the gateway, not merely recorded: an expired key is
+refused at the data plane with a 401 that does not say which key it was or when
+it lapsed.
+
 ---
 
 ## Session affinity with `x-session-id`

@@ -3,6 +3,16 @@ import { Check, Copy, Plus, RotateCw, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import {
+  DEFAULT_KEY_TTL_DAYS,
+  KeyExpiryField,
+  KeyModelsField,
+  KeyNameField,
+  KeyReachSummary,
+  keyNameProblem,
+  parseModels,
+  ttlToDays,
+} from "@/components/KeyMintFields";
 import { LoadError } from "@/components/LoadError";
 import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
@@ -23,8 +33,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
 import {
   AnalyticsUnavailableError,
@@ -316,22 +324,25 @@ function MintKeyDialog({
   const { t } = useTranslation();
   const [name, setName] = React.useState("");
   const [modelsText, setModelsText] = React.useState("");
+  const [ttl, setTtl] = React.useState(String(DEFAULT_KEY_TTL_DAYS));
 
   React.useEffect(() => {
     if (open) {
       setName("");
       setModelsText("");
+      setTtl(String(DEFAULT_KEY_TTL_DAYS));
     }
   }, [open]);
+
+  const models = React.useMemo(() => parseModels(modelsText), [modelsText]);
+  const project = projectLabel ?? t("account.keys.mint.currentProject");
 
   const mint = useMutation({
     mutationFn: () =>
       mintMyKey(projectId, {
-        name: name || undefined,
-        models: modelsText
-          .split(",")
-          .map((m) => m.trim())
-          .filter(Boolean),
+        name: name.trim(),
+        models,
+        expires_in_days: ttlToDays(ttl),
       }),
     onSuccess: (m) => {
       onOpenChange(false);
@@ -344,34 +355,19 @@ function MintKeyDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={t("account.keys.mint.title")}
-      subtitle={t("account.keys.mint.subtitle", {
-        project: projectLabel ?? t("account.keys.mint.currentProject"),
-      })}
+      subtitle={t("account.keys.mint.subtitle", { project })}
       dirty={Boolean(name || modelsText)}
       errorMessage={mint.isError ? (mint.error as Error).message : undefined}
       saveLabel={t("account.keys.mint.save")}
-      canSave
+      canSave={keyNameProblem(name) === null}
       saving={mint.isPending}
       onSave={() => mint.mutate()}
     >
       <div className="space-y-3">
-        <Field label={t("account.keys.mint.name")}>
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={t("account.keys.mint.namePlaceholder")}
-          />
-        </Field>
-        <Field
-          label={t("account.keys.mint.models")}
-          hint={t("account.keys.mint.modelsHint")}
-        >
-          <Input
-            value={modelsText}
-            onChange={(e) => setModelsText(e.target.value)}
-            placeholder={t("account.keys.mint.modelsPlaceholder")}
-          />
-        </Field>
+        <KeyNameField value={name} onChange={setName} />
+        <KeyExpiryField value={ttl} onChange={setTtl} />
+        <KeyModelsField value={modelsText} onChange={setModelsText} />
+        <KeyReachSummary project={project} models={models} ttl={ttl} />
       </div>
     </EditorSheet>
   );

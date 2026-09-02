@@ -6688,3 +6688,111 @@ async fn security_policy_reaches_the_snapshot_without_the_dashboard_secret() {
         "config_version did not move"
     );
 }
+
+/// #945: naming and expiry are the two choices the mint path used to let a
+/// caller skip. Both are now decided at creation, and both are decided by the
+/// server — the client sends a day count, not an instant.
+#[tokio::test]
+async fn a_minted_key_must_be_named_and_carries_the_ttl_the_caller_chose() {
+    skip_without_db!();
+    let addr = serve(fresh_app().await).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    async fn post(client: &reqwest::Client, url: String, body: Value) -> Value {
+        let resp = client.post(&url).json(&body).send().await.unwrap();
+        let status = resp.status();
+        let json: Value = resp.json().await.unwrap();
+        assert!(status.is_success(), "POST {url} failed ({status}): {json}");
+        json
+    }
+
+    let org = post(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Acme", "slug": "acme-945"}),
+    )
+    .await;
+    let org_id = org["id"].as_str().expect("org id");
+    let team = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/teams"),
+        json!({"name": "Platform"}),
+    )
+    .await;
+    let team_id = team["id"].as_str().expect("team id");
+    let project = post(
+        &client,
+        format!("{base}/api/v1/teams/{team_id}/projects"),
+        json!({"name": "Gateway"}),
+    )
+    .await;
+    let project_id = project["id"].as_str().expect("project id");
+    let keys_url = format!("{base}/api/v1/projects/{project_id}/virtual-keys");
+
+    // a blank name is refused, and so is one that is only whitespace: the
+    // plaintext is shown once, so an unnamed key is unattributable forever
+    for name in [json!(""), json!("   ")] {
+        let rejected = client
+            .post(&keys_url)
+            .json(&json!({"name": name}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), 400, "name {name} should be refused");
+        let body: Value = rejected.json().await.unwrap();
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("name is required"),
+            "{body}"
+        );
+    }
+
+    // omitting the field entirely is a 422 from serde, not a silently unnamed
+    // key: the field is no longer `Option`
+    let missing = client
+        .post(&keys_url)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert!(missing.status().is_client_error(), "{}", missing.status());
+
+    // a day count becomes an instant the server computed
+    let before = chrono::Utc::now();
+    let minted = post(
+        &client,
+        keys_url.clone(),
+        json!({"name": "  billing  ", "expires_in_days": 30}),
+    )
+    .await;
+    assert_eq!(minted["name"], "billing", "the name is stored trimmed");
+    let expires: chrono::DateTime<chrono::Utc> = minted["expires_at"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a key minted with a ttl must carry one: {minted}"))
+        .parse()
+        .unwrap();
+    assert!(expires > before + chrono::Duration::days(29));
+    assert!(expires < before + chrono::Duration::days(31));
+
+    // "never" is still reachable, but only by omitting the field — which is
+    // what the dashboard sends for an explicit choice, never for an untouched
+    // control
+    let immortal = post(&client, keys_url.clone(), json!({"name": "build box"})).await;
+    assert!(
+        immortal["expires_at"].is_null(),
+        "omitting the ttl must mint a key that never expires: {immortal}"
+    );
+
+    // a ttl of zero reads like "no expiry" but would mean "already expired";
+    // refusing it keeps that ambiguity out of the store
+    let zero = client
+        .post(&keys_url)
+        .json(&json!({"name": "zero", "expires_in_days": 0}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(zero.status(), 400);
+}

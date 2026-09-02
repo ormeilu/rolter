@@ -3498,3 +3498,52 @@ async fn a_bypass_route_opens_exactly_the_path_it_names() {
         .unwrap();
     assert_eq!(guarded.status(), 401);
 }
+
+#[tokio::test]
+async fn an_expired_virtual_key_is_refused_at_the_gateway() {
+    // #945 gives the mint path a TTL. `KeyMeta::is_valid` already knew how to
+    // reject an expired key, but nothing asserted it at the HTTP surface —
+    // "expiry is enforced, not merely stored" needs a test that presents one
+    let config = GatewayConfig {
+        virtual_keys: vec![
+            VirtualKeyConfig {
+                key: "sk-rolter-expired".to_string(),
+                name: Some("yesterday's key".to_string()),
+                expires_at: Some(chrono::Utc::now() - chrono::Duration::hours(1)),
+                ..Default::default()
+            },
+            VirtualKeyConfig {
+                key: "sk-rolter-live".to_string(),
+                name: Some("still good".to_string()),
+                expires_at: Some(chrono::Utc::now() + chrono::Duration::days(30)),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let gw = serve_gateway(&config).await;
+    let client = reqwest::Client::new();
+
+    let call = |key: &'static str| {
+        let client = client.clone();
+        async move {
+            client
+                .post(format!("http://{gw}/v1/chat/completions"))
+                .bearer_auth(key)
+                .json(&json!({"model": "fake-llm", "messages": [{"role":"user","content":"hi"}]}))
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    let expired = call("sk-rolter-expired").await;
+    assert_eq!(expired.status(), 401);
+    let body = expired.text().await.unwrap();
+    // the rejection must not leak which key it was or when it lapsed
+    assert!(!body.contains("yesterday"), "{body}");
+
+    // a key with a future expiry is untouched: the check is the instant, not
+    // the mere presence of a TTL
+    assert_eq!(call("sk-rolter-live").await.status(), 200);
+}

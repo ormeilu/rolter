@@ -7,6 +7,7 @@ Two distinct auth surfaces:
 Clients call `/v1/*` with a **virtual key** (`Authorization: Bearer <key>` or `x-api-key`). The gateway:
 
 - looks the key up in the current snapshot
+- checks the key is neither disabled nor past its `expires_at`
 - checks the key's model allow-list (empty = all)
 - (roadmap) enforces budgets and RPM/TPM limits for the key's scope chain
 
@@ -22,6 +23,27 @@ than an accidental opening of the whole data plane.
 
 A gateway running from a static bootstrap config with no keys stays keyless, so
 local `fake-llm` development needs no setup.
+
+### Key lifetime (#945)
+
+`virtual_keys.expires_at` has always been read by the data plane —
+`KeyMeta::is_valid` refuses a key at or after that instant — but until #945 the
+mint path never wrote a value, so every key created through the dashboard or
+the API was immortal. The mint request now carries `expires_in_days` and the
+**control plane** turns it into an instant, rather than accepting one from the
+caller: a client with a wrong clock cannot mint a key that outlives what the
+operator chose. Omitting the field is the only way to ask for a key that never
+expires, and `0` is refused because it reads as "no expiry" while meaning
+"already expired".
+
+The same request requires a non-blank `name`. The plaintext secret is returned
+exactly once, so an unnamed key cannot be told apart from its siblings
+afterwards; the rule is enforced in the API, not only in the form, and applies
+equally to the admin (`/api/v1/projects/{id}/virtual-keys`) and self-service
+(`/api/v1/me/projects/{id}/virtual-keys`) paths.
+
+Rotation replaces a secret without renewing the decision: the fresh key inherits
+the old one's `expires_at`.
 
 Override either default with `server.require_auth`:
 
