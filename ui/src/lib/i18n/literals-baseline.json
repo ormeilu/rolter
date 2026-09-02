@@ -85,6 +85,9 @@
   "src/components/ui/dialog.tsx": [
     "Close"
   ],
+  "src/components/ui/info-hint.tsx": [
+    "More info"
+  ],
   "src/components/ui/line-chart.tsx": [
     "time series chart"
   ],
@@ -124,12 +127,16 @@
     "usage: analytics not configured"
   ],
   "src/pages/AdaptiveDashboard.tsx": [
+    "Adaptive routes",
+    "Blend active",
     "Blend score",
     "Cost / Mtok",
     "In flight",
     "Latency",
     "Loading adaptive routing telemetry",
     "No fresh adaptive routing telemetry",
+    "Observed picks",
+    "Reporting gateways",
     "Samples",
     "Upstream"
   ],
@@ -394,6 +401,7 @@
     "Choose an organization",
     "Create group",
     "Declare the endpoint and exact tool names exposed through the organization registry.",
+    "Default transport",
     "Delete",
     "Deleting this server also removes every OAuth grant and token session attached to it. This cannot be undone.",
     "Description",
@@ -401,6 +409,7 @@
     "MCP configuration unavailable",
     "Name",
     "No MCP servers registered",
+    "No tool groups",
     "No tools declared",
     "Register server",
     "Tools",
@@ -490,33 +499,6 @@
     "Save",
     "defaults to input price"
   ],
-  "src/pages/PromptRepository.tsx": [
-    "Add a decorator to see the rendered prompt.",
-    "Assignment scopes",
-    "Create a named template, then add variables, ordered decorators, and its first deployment scope.",
-    "Create template",
-    "Decorators",
-    "Default",
-    "Empty decorator",
-    "Mode",
-    "Name",
-    "No saved versions",
-    "No templates yet",
-    "No variables. This template renders the same content for every request.",
-    "Prepend",
-    "Preview",
-    "Prompt repository unavailable",
-    "Rendered prompt preview",
-    "Start with a prompt template",
-    "System",
-    "Templates",
-    "Try again",
-    "Unpublished",
-    "Variables",
-    "Version history",
-    "You are assisting {{ customer_name }}…",
-    "caller messages"
-  ],
   "src/pages/ProviderGroups.tsx": [
     "Address",
     "Copy address prefix",
@@ -550,27 +532,6 @@
     "Required Headers",
     "X-Stainless-Timeout",
     "X-Tenant-ID: acme, X-Custom-Header: value"
-  ],
-  "src/pages/SkillsRepository.tsx": [
-    "Artifact reference",
-    "Content reference",
-    "Content source",
-    "Create an org skill, define who can resolve it, then save inline content or a credential-free artifact reference.",
-    "Create skill",
-    "Fields containing secret, password, token, or API key names are rejected by the control plane.",
-    "Inline SKILL.md",
-    "Metadata JSON",
-    "Name",
-    "No skills yet",
-    "Org skills",
-    "Retired",
-    "Share your first skill",
-    "Skill content source",
-    "Skill versions unavailable",
-    "Skills repository unavailable",
-    "Try again",
-    "Version history",
-    "Version metadata"
   ],
   "src/pages/Teams.tsx": [
     "Create",

@@ -7,10 +7,10 @@
     "showPassword": "Show password",
     "hidePassword": "Hide password",
     "signIn": "Sign in",
-    "signingIn": "Signing in\u2026",
+    "signingIn": "Signing in…",
     "continueWith": "Continue with {{provider}}",
     "noMethod": "No login method is enabled for this deployment.",
-    "selfHosted": "Self-hosted \u00b7 sessions are local to this deployment."
+    "selfHosted": "Self-hosted · sessions are local to this deployment."
   },
   "common": {
     "cancel": "Cancel",
@@ -23,7 +23,7 @@
     "discardChanges": "Discard unsaved changes?",
     "filters": "Filters",
     "hideFilters": "Hide filters",
-    "search": "Search\u2026",
+    "search": "Search…",
     "viewDocs": "View docs"
   },
   "errors": {
@@ -36,7 +36,7 @@
       },
       "forbidden": {
         "title": "You do not have access to {{resource}}",
-        "body": "You are signed in, but your role does not permit reading this. Retrying will not help \u2014 ask an administrator to widen your role."
+        "body": "You are signed in, but your role does not permit reading this. Retrying will not help — ask an administrator to widen your role."
       },
       "openMode": {
         "title": "{{resource}} needs an admin token",
@@ -76,7 +76,7 @@
     "label": "Language",
     "change": "Change language",
     "en": "English",
-    "ru": "\u0420\u0443\u0441\u0441\u043a\u0438\u0439"
+    "ru": "Русский"
   },
   "modelSheet": {
     "currencyUnconvertible": "{{code}} has no conversion rate configured, so this price cannot be converted to {{base}} and will not reach spend or budgets. Add it to [currency.rates] in the bootstrap config, or price in {{base}}."
@@ -154,7 +154,7 @@
       "spendTitle": "Spend",
       "spendSub": "Hourly gateway spend, USD",
       "noRequestsWindow": "No requests in this window.",
-      "noSpendRecorded": "No spend recorded for this window. Requests were served, but none of them were priced \u2014 add pricing for the models in use to see cost here.",
+      "noSpendRecorded": "No spend recorded for this window. Requests were served, but none of them were priced — add pricing for the models in use to see cost here.",
       "trafficTitle": "Traffic share",
       "trafficSub": "Requests by model",
       "noTraffic": "No traffic yet.",
@@ -183,9 +183,9 @@
     "providers": {
       "search": "Search providers",
       "add": "+ Add provider",
-      "loading": "Loading\u2026",
+      "loading": "Loading…",
       "scopeBlocked": "Add/edit/delete is unavailable: {{error}}. Read-only view still works.",
-      "noOrg": "No org configured yet \u2014 pick or create one to manage providers.",
+      "noOrg": "No org configured yet — pick or create one to manage providers.",
       "colName": "Name",
       "colType": "Type",
       "colApiBase": "API base",
@@ -261,7 +261,7 @@
       "errorConfigObject": "Configuration must be a JSON object.",
       "errorNameEndpoint": "Name and an HTTP(S) endpoint are required.",
       "cancel": "Cancel",
-      "saving": "Saving\u2026",
+      "saving": "Saving…",
       "save": "Save configuration",
       "installConfirm": "Install plugin"
     },
@@ -272,11 +272,11 @@
       }
     },
     "pricing": {
-      "unconvertible": "Priced in {{code}}, which has no conversion rate \u2014 this model's spend is missing from {{base}} totals and budgets."
+      "unconvertible": "Priced in {{code}}, which has no conversion rate — this model's spend is missing from {{base}} totals and budgets."
     },
     "playground": {
       "groupRoutes": "Routes",
-      "modelsNeedKey": "Showing configured routes. Set a virtual key above to list what the gateway actually serves \u2014 provider-pinned and provider-group addresses only appear in the gateway's list.",
+      "modelsNeedKey": "Showing configured routes. Set a virtual key above to list what the gateway actually serves — provider-pinned and provider-group addresses only appear in the gateway's list.",
       "modelsUnreachable": "Could not read the gateway's model list with this key, so configured routes are shown instead. Provider-pinned and provider-group addresses are missing from this list."
     },
     "promptRepo": {
@@ -297,7 +297,105 @@
       "fieldName": "Name",
       "fieldDescription": "Description",
       "fieldOptional": "optional",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "created": "Template created. Add its first immutable draft.",
+      "draftSaved": "Draft v{{version}} saved. Its content and scopes are now immutable.",
+      "draftSavedScopeError": "Draft v{{version}} was saved, but its scopes were not: {{error}}",
+      "publishedNotice": "v{{version}} is now live.",
+      "rolledBack": "Rolled back: v{{version}} is live again.",
+      "problemNoDecorator": "Add at least one decorator.",
+      "problemInvalidName": "“{{name}}” is not a valid variable name.",
+      "problemUnnamed": "unnamed",
+      "problemDuplicate": "Variable “{{name}}” is duplicated.",
+      "problemRequiredDefault": "Required variable “{{name}}” cannot also have a default.",
+      "problemEmptyDecorator": "Every decorator needs content.",
+      "problemUndeclared": "Decorator references undeclared variable “{{name}}”.",
+      "unavailableTitle": "Prompt repository unavailable",
+      "tryAgain": "Try again",
+      "emptyTitle": "Start with a prompt template",
+      "emptyDescription": "Create a named template, then add variables, ordered decorators, and its first deployment scope.",
+      "createTemplate": "Create template",
+      "templates": "Templates",
+      "inThisOrg_one": "{{count}} in this org",
+      "inThisOrg_other": "{{count}} in this org",
+      "noTemplates": "No templates yet",
+      "draftBadge": "draft",
+      "unpublished": "Unpublished",
+      "liveBadge": "v{{version}} live",
+      "noDescription": "No description yet.",
+      "publishVersion": "Publish v{{version}}",
+      "saving": "Saving…",
+      "saveNewDraft": "Save as new draft",
+      "editingFrom": "editing from immutable v{{version}}",
+      "inputsEyebrow": "Inputs",
+      "variablesTitle": "Variables",
+      "variablesDescription": "Declare placeholders used as {{sample}} inside decorators.",
+      "addVariable": "Add variable",
+      "noVariables": "No variables. This template renders the same content for every request.",
+      "fieldMode": "Mode",
+      "fieldDefault": "Default",
+      "variableNameAria": "Variable {{index}} name",
+      "variableModeAria": "Variable {{index}} mode",
+      "variableDefaultAria": "Variable {{index}} default",
+      "removeVariableAria": "Remove variable {{name}}",
+      "modeRequired": "Required",
+      "modeHasDefault": "Has default",
+      "defaultNotAvailable": "Not available",
+      "defaultFallback": "Fallback value",
+      "compositionEyebrow": "Composition",
+      "decoratorsTitle": "Decorators",
+      "decoratorsDescription": "Build ordered messages around the caller's original conversation.",
+      "addDecorator": "Add decorator",
+      "decoratorRoleAria": "Decorator {{index}} role",
+      "decoratorPositionAria": "Decorator {{index}} position",
+      "decoratorContentAria": "Decorator {{index}} content",
+      "moveDecoratorUpAria": "Move decorator {{index}} up",
+      "moveDecoratorDownAria": "Move decorator {{index}} down",
+      "removeDecoratorAria": "Remove decorator {{index}}",
+      "roleSystem": "System",
+      "roleAssistant": "Assistant",
+      "roleUser": "User",
+      "positionPrepend": "Prepend",
+      "positionAppend": "Append",
+      "decoratorPlaceholder": "You are assisting {{sample}}…",
+      "deploymentEyebrow": "Deployment",
+      "scopesTitle": "Assignment scopes",
+      "scopesDescription": "Choose where this exact version can be resolved. Empty means it is not assigned.",
+      "scopeOrg": "Current organization",
+      "scopeOrgDetail": "All projects in this org",
+      "scopeProject": "Current project",
+      "scopeProjectDetail": "Every route in this project",
+      "scopeRouteDetail": "Route",
+      "scopeVirtualKeyDetail": "Virtual key",
+      "liveRenderEyebrow": "Live render",
+      "previewTitle": "Preview",
+      "previewDescription": "Sample values stay in your browser and are never saved.",
+      "unnamedVariable": "Unnamed variable",
+      "requiredMark": "required",
+      "sampleValueAria": "Sample value for {{name}}",
+      "unnamedVariableLower": "unnamed variable",
+      "samplePlaceholderDefault": "Default: {{value}}",
+      "samplePlaceholder": "Sample value",
+      "missingSamples": "Add sample values for {{names}} to complete the preview.",
+      "renderedPreviewAria": "Rendered prompt preview",
+      "addDecoratorHint": "Add a decorator to see the rendered prompt.",
+      "callerMessages": "caller messages",
+      "emptyDecorator": "Empty decorator",
+      "versionHistory": "Version history",
+      "versionHistoryHint": "Saved versions cannot be edited.",
+      "noSavedVersions": "No saved versions",
+      "published": "Published",
+      "immutable": "Immutable",
+      "versionCounts": "{{variables}} variables · {{decorators}} decorators",
+      "rollbackTo": "Roll back to v{{version}}",
+      "createTitle": "Create prompt template",
+      "createDescription": "The slug is a stable identity. Content is added as an immutable version next.",
+      "fieldSlug": "Slug",
+      "namePlaceholder": "Support concierge",
+      "creating": "Creating…",
+      "rollbackDescription": "This changes the live version from v{{from}} to immutable v{{to}}. The newer versions remain in history.",
+      "keepLive": "Keep v{{version}} live",
+      "rollingBack": "Rolling back…"
     },
     "skillsRepo": {
       "deleteAction": "Delete {{name}}",
@@ -309,7 +407,87 @@
       "deleteSubmit": "Delete skill",
       "deleting": "Deleting…",
       "settings": "Settings",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "created": "Skill created. Add its first immutable version.",
+      "versionSaved": "Version v{{version}} saved. Its content and metadata are now immutable.",
+      "publishedNotice": "v{{version}} is now the resolved version.",
+      "rolledBack": "Rolled back: v{{version}} resolves again.",
+      "retiredNotice": "Skill retired. It no longer resolves for callers.",
+      "settingsUpdated": "Skill settings updated.",
+      "metadataNotObject": "Metadata must be a JSON object.",
+      "metadataInvalid": "Metadata is not valid JSON.",
+      "inlineRequired": "Inline SKILL.md content is required.",
+      "refRequired": "A content reference is required.",
+      "refScheme": "Use an https, git+https, oci, or s3 reference.",
+      "refCredentials": "References cannot contain embedded credentials.",
+      "unavailableTitle": "Skills repository unavailable",
+      "tryAgain": "Try again",
+      "emptyTitle": "Share your first skill",
+      "emptyDescription": "Create an org skill, define who can resolve it, then save inline content or a credential-free artifact reference.",
+      "createSkill": "Create skill",
+      "versionsUnavailable": "Skill versions unavailable",
+      "orgSkills": "Org skills",
+      "visibleCount_one": "{{count}} visible to you",
+      "visibleCount_other": "{{count}} visible to you",
+      "noSkills": "No skills yet",
+      "retired": "Retired",
+      "draftBadge": "draft",
+      "unpublished": "Unpublished",
+      "liveBadge": "v{{version}} live",
+      "noDescription": "No description yet.",
+      "publishVersion": "Publish v{{version}}",
+      "saving": "Saving…",
+      "saveNewVersion": "Save new version",
+      "minimumRoleMeta": "minimum role: {{role}}",
+      "teamsCount_one": "{{count}} team",
+      "teamsCount_other": "{{count}} teams",
+      "allOrgTeams": "all org teams",
+      "editingFrom": "editing from immutable v{{version}}",
+      "artifactEyebrow": "Artifact",
+      "contentSourceTitle": "Content source",
+      "contentSourceDescription": "Store a complete SKILL.md inline or point to an immutable artifact without credentials.",
+      "sourceRadioGroup": "Skill content source",
+      "inlineTitle": "Inline SKILL.md",
+      "inlineDescription": "Version the instructions in Rolter",
+      "referenceTitle": "Artifact reference",
+      "referenceDescription": "HTTPS, Git, OCI, or S3",
+      "skillMdContent": "SKILL.md content",
+      "contentReference": "Content reference",
+      "contentRefHint": "Pin a digest or commit where the scheme supports it. Embedded credentials are rejected.",
+      "manifestEyebrow": "Manifest",
+      "versionMetadataTitle": "Version metadata",
+      "versionMetadataDescription": "Optional non-secret JSON for runtime requirements, capabilities, or provenance.",
+      "metadataJson": "Metadata JSON",
+      "secretFieldsRejected": "Fields containing secret, password, token, or API key names are rejected by the control plane.",
+      "versionHistory": "Version history",
+      "versionHistoryHint": "Content and metadata never change.",
+      "noSavedVersions": "No saved versions",
+      "published": "Published",
+      "immutable": "Immutable",
+      "artifactReferenceMeta": "artifact reference",
+      "inlineContentMeta": "inline content",
+      "rollbackTo": "Roll back to v{{version}}",
+      "fieldName": "Name",
+      "fieldSlug": "Slug",
+      "fieldOptional": "optional",
+      "fieldDescription": "Description",
+      "fieldMinimumRole": "Minimum role",
+      "roleViewer": "Viewer",
+      "roleMember": "Member",
+      "roleAdmin": "Admin",
+      "allowedTeams": "Allowed teams",
+      "allowedTeamsHint": "No selection shares the skill with every team in the organization.",
+      "retireLabel": "Retire this skill",
+      "retireHint": "Callers can no longer resolve it. Versions remain in history.",
+      "createTitle": "Create organization skill",
+      "createDescription": "Define its identity and access policy. Content is saved as a separate immutable version.",
+      "creating": "Creating…",
+      "settingsTitle": "Skill settings",
+      "settingsDescription": "Change the human-facing metadata and who can resolve this skill. The slug and versions stay immutable.",
+      "saveSettings": "Save settings",
+      "rollbackDescription": "This changes the resolved version from v{{from}} to immutable v{{to}}. Newer versions remain in history.",
+      "keepLive": "Keep v{{version}} live",
+      "rollingBack": "Rolling back…"
     },
     "tool-groups": {
       "confirmDelete": "Are you sure you want to delete this tool group?"
@@ -323,18 +501,18 @@
   "providerSheet": {
     "apiBase": {
       "doubled": "This base ends in /v1 and rolter appends /v1 itself, so requests would 404. Remove the trailing /v1.",
-      "excludesV1": "Leave off the version prefix \u2014 rolter appends /v1 itself for {{kind}}",
-      "includesV1": "Include the version prefix \u2014 {{kind}} expects it in the base, e.g. https://api.example.com/v1",
+      "excludesV1": "Leave off the version prefix — rolter appends /v1 itself for {{kind}}",
+      "includesV1": "Include the version prefix — {{kind}} expects it in the base, e.g. https://api.example.com/v1",
       "resolvesTo": "Requests resolve to"
     },
     "testConnection": "Test connection",
     "testFailed": "Could not reach this provider",
-    "testOk_one": "Reachable \u00b7 {{count}} model \u00b7 {{ms}} ms",
-    "testOk_other": "Reachable \u00b7 {{count}} models \u00b7 {{ms}} ms",
-    "testing": "Testing\u2026"
+    "testOk_one": "Reachable · {{count}} model · {{ms}} ms",
+    "testOk_other": "Reachable · {{count}} models · {{ms}} ms",
+    "testing": "Testing…"
   },
   "scope": {
-    "loading": "Loading scope\u2026",
+    "loading": "Loading scope…",
     "org": "Org",
     "team": "Team",
     "project": "Project",
@@ -363,7 +541,7 @@
   "screens": {
     "playground": {
       "title": "Playground",
-      "subtitle": "Prompt any routed model \u2014 chat, embeddings, image, audio, and realtime."
+      "subtitle": "Prompt any routed model — chat, embeddings, image, audio, and realtime."
     },
     "dashboard": {
       "title": "Dashboard",
@@ -439,7 +617,7 @@
     },
     "auth-sessions": {
       "title": "Auth Sessions",
-      "subtitle": "Token metadata for every MCP OAuth session \u2014 never the tokens themselves."
+      "subtitle": "Token metadata for every MCP OAuth session — never the tokens themselves."
     },
     "oauth-grants": {
       "title": "OAuth Grants",
@@ -585,22 +763,22 @@
     "githubRepo": "GitHub repository",
     "reportBug": "Report a bug",
     "role": "Admin",
-    "roleWithOrg": "Admin \u00b7 {{org}}",
+    "roleWithOrg": "Admin · {{org}}",
     "scope": "Scope",
     "accountAndKeys": "Account & API keys",
     "signOut": "Sign out",
     "gatewayHealthy": "gateway healthy",
     "refresh": "Refresh",
-    "refreshing": "Refreshing\u2026",
+    "refreshing": "Refreshing…",
     "refreshData": "Refresh data",
     "refreshingData": "Refreshing data",
     "openMode": {
       "title": "Control plane is unauthenticated.",
-      "body": "No admin token is set, so every request to this control plane is served as superadmin \u2014 anyone who can reach it can read keys and change providers, routing and budgets. Set ROLTER_ADMIN_TOKEN to close it."
+      "body": "No admin token is set, so every request to this control plane is served as superadmin — anyone who can reach it can read keys and change providers, routing and budgets. Set ROLTER_ADMIN_TOKEN to close it."
     }
   },
   "stub": {
-    "todo": "TODO \u2014 we'll come back to this screen"
+    "todo": "TODO — we'll come back to this screen"
   },
   "providers": {
     "unserved": {
@@ -611,7 +789,7 @@
   "account": {
     "openMode": {
       "title": "Self-service keys need a local account.",
-      "body": "This control plane is running in open mode with no admin token, so it has no user accounts \u2014 there is no \"you\" to mint a key for. Set ROLTER_ADMIN_TOKEN and create a local account to use this screen, or manage keys from the admin Virtual Keys screen instead."
+      "body": "This control plane is running in open mode with no admin token, so it has no user accounts — there is no \"you\" to mint a key for. Set ROLTER_ADMIN_TOKEN and create a local account to use this screen, or manage keys from the admin Virtual Keys screen instead."
     }
   }
 }
