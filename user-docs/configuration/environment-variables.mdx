@@ -38,6 +38,14 @@ These variables control the control-plane process (`rolter-control`), which mana
 | `ROLTER_DB_ACQUIRE_TIMEOUT_SECS` | How long a request waits for a free connection before failing. Default `30`. |
 | `ROLTER_DB_IDLE_TIMEOUT_SECS` | Close a connection idle for longer than this. `0` means never. Default `600`. |
 | `ROLTER_DB_MAX_LIFETIME_SECS` | Retire a connection older than this regardless of use. `0` disables. Default `1800`. |
+| `ROLTER_LOGIN_MAX_FAILURES` | Failed sign-ins one account tolerates before it locks. Default `5`. |
+| `ROLTER_LOGIN_IP_MAX_FAILURES` | Failed sign-ins one client address tolerates across every account it tries. Default `50`. |
+| `ROLTER_LOGIN_FAILURE_WINDOW_SECS` | How long a failure counter survives without a new failure. Default `900`. |
+| `ROLTER_LOGIN_LOCK_SECS` | The first lock once the budget is spent; each further failure doubles it. Default `60`. |
+| `ROLTER_LOGIN_MAX_LOCK_SECS` | Ceiling on that doubling, so a lock is always a bounded outage. Default `900`. |
+| `ROLTER_LOGIN_MAX_DELAY_MS` | Ceiling on the delay added to a rejected sign-in. Default `2000`. |
+| `ROLTER_LOGIN_TRUST_FORWARDED_FOR` | Count failures against the `X-Forwarded-For` client instead of the socket peer. Default off. |
+| `ROLTER_LOGIN_THROTTLE_DISABLED` | Turn failed-login throttling off entirely. Default off. |
 
 ### Sizing the connection pool
 
@@ -56,6 +64,29 @@ Leave headroom for migrations, backups, and any other client of the same databas
 </Tip>
 
 Keep `ROLTER_DB_ACQUIRE_TIMEOUT_SECS` bounded. It is what turns pool exhaustion into a fast, attributable error instead of an opaque stall that looks like a database outage.
+
+### Throttling failed sign-ins
+
+`POST /api/v1/auth/login` is an unauthenticated endpoint that runs an argon2id verification for every request. That cost is what makes password guessing expensive — and it is also what makes an unthrottled login endpoint a cheap way to saturate the control plane's CPU. Rolter therefore counts rejected sign-ins and refuses further ones **before** any password work happens.
+
+Two counters run independently:
+
+- **Per account.** `ROLTER_LOGIN_MAX_FAILURES` rejected attempts inside `ROLTER_LOGIN_FAILURE_WINDOW_SECS` lock the account for `ROLTER_LOGIN_LOCK_SECS`. Each further failure doubles the lock, up to `ROLTER_LOGIN_MAX_LOCK_SECS`.
+- **Per client address.** `ROLTER_LOGIN_IP_MAX_FAILURES` covers spraying one guess across many accounts, which a per-account counter never catches. The budget is higher because one office egress address is a whole floor of legitimate typos.
+
+Before the lock engages, each rejected attempt is answered a little more slowly than the last, up to `ROLTER_LOGIN_MAX_DELAY_MS`. A locked attempt is answered `429` with a `Retry-After` header, so a client waits rather than polling.
+
+Every counter is keyed on the *submitted* address, never on an account that was found, so throttling reveals nothing about which addresses are registered. Failed attempts, engaged locks and sign-ins that follow one are written to the audit log, and `rolter_control_login_attempts` counts them by outcome so a credential-stuffing run is visible on your dashboards.
+
+<Note>
+  **Locks always expire on their own.** A lock is a timer, not a flag an administrator has to clear — a lock somebody else can *set* would be a way to shut a colleague out of their own account. The worst an attacker achieves is a bounded outage capped by `ROLTER_LOGIN_MAX_LOCK_SECS`.
+</Note>
+
+**Where the counters live.** With `ROLTER_REDIS_URL` set, they live in Redis and every control-plane replica counts against the same budget. Without it they are process-local, which is correct for a single-node deployment: with N replicas and no Redis, each replica holds its own budget, so an attacker effectively gets N times the allowance. The control plane logs which mode it is in at startup.
+
+<Warning>
+  Behind a reverse proxy, every request reaches Rolter from the proxy's address, so the per-address budget becomes a *shared* one. Either raise `ROLTER_LOGIN_IP_MAX_FAILURES` or set `ROLTER_LOGIN_TRUST_FORWARDED_FOR=1` — but only set it if every request really does arrive through a proxy that overwrites `X-Forwarded-For`. An unverified forwarded header hands an attacker an unlimited supply of budgets *and* the ability to spend somebody else's. The per-account counter is unaffected either way.
+</Warning>
 
 <Warning>
   `ROLTER_KEK` is the most sensitive secret in your Rolter deployment. Any party who holds this key can decrypt every stored provider credential. Generate a strong value before first run and store it in a secrets manager:

@@ -201,10 +201,53 @@ Consequences that fall out of that choice:
 
 A response-leg failure never fails the request even under `fail_closed`: the upstream call already happened and was already billed, so refusing to deliver would spend the caller's money and return nothing. The counter records it.
 
+## Failed-login throttling (#1079)
+
+`POST /api/v1/auth/login` is unauthenticated and runs one argon2id verification
+per request. That cost is deliberate against guessing and accidental against
+denial of service: an attacker who does not care about the password can saturate
+the control plane by posting junk credentials. `crates/rolter-control/src/login_throttle.rs`
+counts rejected attempts and refuses further ones **before** the password is
+verified, which is what closes the CPU half rather than only the guessing half.
+
+Four properties are load-bearing:
+
+- **The counters key on the submitted address, never on a row that was found.**
+  An unregistered address is counted, delayed and locked exactly like a real
+  one, so the throttle does not undo the constant-cost verification in
+  `LocalIdentityProvider::resolve` by becoming an enumeration oracle.
+- **A lock is a clock, not a state.** It is a TTL nobody clears by hand. A lock
+  an attacker could *set* would be a denial-of-service primitive against the
+  operator — anyone who knows an email address could park the account. The worst
+  case here is a bounded outage capped by `--login-max-lock-secs`.
+- **Two independent subjects.** The account budget stops guessing one password;
+  the client-address budget stops spraying one guess across many accounts, which
+  a per-account counter never sees. `X-Forwarded-For` names the client only when
+  `--login-trust-forwarded-for` is set, because an unverified forwarded header
+  hands out unlimited budgets *and* lets one client spend another's.
+- **A backend outage degrades to absent, not to locked.** A redis error counts
+  as zero failures. The alternative — treating an unreachable counter as a
+  reason to refuse — would turn one redis blip into a fleet-wide lockout.
+
+The same guard covers the invitation preview/accept endpoints, which are the
+same primitive with a different token.
+
+Rejected attempts, engaged locks and sign-ins that follow a lock are written to
+`audit_log`, and `rolter_control_login_attempts` counts them by outcome
+(`success`, `invalid`, `throttled`, `locked`, `error`) with no account or address
+label. The audit write is spawned rather than awaited: resolving the org an
+entry belongs to costs a query that only exists when the account does, and
+awaiting it would make a registered address measurably slower to reject.
+
+Counters live in redis when one is configured, so every replica shares a budget,
+and in-process otherwise. That fallback is documented rather than hidden: with N
+replicas and no redis, an attacker gets N times the allowance, and the control
+plane says so at startup.
+
 ## Threat model (high level)
 
 - **Tenant isolation**: virtual keys are scoped to a project; model allow-lists prevent access to unconfigured models; cache keys are namespaced to avoid cross-tenant cache poisoning.
-- **Abuse**: RPM/TPM rate limits and budgets bound spend and load (roadmap enforcement).
+- **Abuse**: RPM/TPM rate limits and budgets bound spend and load (roadmap enforcement); failed control-plane sign-ins are throttled per account and per client address (see above).
 - **AuthZ**: control-plane mutations are RBAC-checked and recorded in `audit_log`.
 - **Supply chain**: `cargo deny`/advisory scanning in CI is a roadmap item.
 

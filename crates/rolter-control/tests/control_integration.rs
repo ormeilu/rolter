@@ -2127,6 +2127,131 @@ async fn login_me_logout_round_trip() {
     assert_eq!(after_logout.status(), 401);
 }
 
+/// Failed logins are throttled, audited and per-account (#1079).
+///
+/// Before this, `POST /api/v1/auth/login` answered an unlimited number of
+/// guesses and each one bought a full argon2 verification, so the endpoint was
+/// both a guessing oracle and a cheap CPU-exhaustion vector. The properties
+/// worth pinning are that the lock engages, that it says how long it lasts,
+/// that it is scoped to the account rather than the deployment, and that a
+/// correct password clears the counter.
+#[tokio::test]
+async fn failed_logins_are_throttled_per_account_and_audited() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app(pool.clone()).await.unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    use argon2::password_hash::rand_core::OsRng;
+    use argon2::password_hash::{PasswordHasher, SaltString};
+    let hash_for = |password: &str| {
+        let salt = SaltString::generate(&mut OsRng);
+        argon2::Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .unwrap()
+            .to_string()
+    };
+    for email in ["target@example.com", "bystander@example.com"] {
+        sqlx::query(
+            "insert into users (email, password_hash, is_superadmin) values ($1, $2, true)",
+        )
+        .bind(email)
+        .bind(hash_for("correct horse battery staple"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let guess = |email: &'static str| {
+        let client = client.clone();
+        let base = base.clone();
+        async move {
+            client
+                .post(format!("{base}/api/v1/auth/login"))
+                .json(&json!({"email": email, "password": "wrong"}))
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    // the default budget is five failures; every one of them is an ordinary 401
+    for _ in 0..5 {
+        assert_eq!(guess("target@example.com").await.status(), 401);
+    }
+
+    // the sixth is refused before any password work happens, and says for how long
+    let locked = guess("target@example.com").await;
+    assert_eq!(locked.status(), 429);
+    let retry_after: u64 = locked
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .expect("a lock states how long it lasts")
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        retry_after > 0,
+        "retry-after must never invite an instant retry"
+    );
+
+    // the lock belongs to the account, not to the deployment: locking one
+    // account must not lock everybody out, which would turn the throttle into
+    // the denial-of-service it exists to prevent
+    assert_eq!(guess("bystander@example.com").await.status(), 401);
+    let ok = client
+        .post(format!("{base}/api/v1/auth/login"))
+        .json(&json!({
+            "email": "bystander@example.com",
+            "password": "correct horse battery staple"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200);
+
+    // and a correct password clears the counter it had started
+    for _ in 0..5 {
+        assert_eq!(guess("bystander@example.com").await.status(), 401);
+    }
+    assert_eq!(guess("bystander@example.com").await.status(), 429);
+
+    // the attempts are on the record. the write is spawned off the response
+    // path — resolving the org an entry belongs to only costs a query when the
+    // account exists, and awaiting that would make a registered address
+    // measurably slower to reject than an unregistered one — so poll for it
+    let mut actions: Vec<String> = Vec::new();
+    for _ in 0..40 {
+        actions = sqlx::query_scalar(
+            "select action from audit_log where action like 'auth.login%' order by at",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        if actions.iter().any(|a| a == "auth.login_locked")
+            && actions.iter().any(|a| a == "auth.login_throttled")
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        actions.iter().any(|a| a == "auth.login_failed"),
+        "every rejected guess is recorded: {actions:?}"
+    );
+    assert!(
+        actions.iter().any(|a| a == "auth.login_locked"),
+        "the attempt that engaged the lock says so: {actions:?}"
+    );
+    assert!(
+        actions.iter().any(|a| a == "auth.login_throttled"),
+        "an attempt refused by the lock is recorded too: {actions:?}"
+    );
+}
+
 /// An expired session row is rejected even though the token digest matches,
 /// proving `find_active_by_hash`'s `expires_at > now()` bound is doing its job.
 #[tokio::test]

@@ -2840,6 +2840,7 @@ dependencies = [
  "jsonwebtoken",
  "ldap3",
  "p256",
+ "parking_lot",
  "rand 0.10.2",
  "redis",
  "reqwest 0.12.28",

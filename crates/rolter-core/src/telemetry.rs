@@ -430,6 +430,7 @@ struct ControlHistogramSet {
     snapshot_bytes: opentelemetry::metrics::Histogram<u64>,
     crud_duration: opentelemetry::metrics::Histogram<u64>,
     pool_acquire: opentelemetry::metrics::Histogram<u64>,
+    login_outcome: opentelemetry::metrics::Counter<u64>,
 }
 
 impl ControlHistograms {
@@ -491,6 +492,25 @@ impl ControlHistograms {
             return;
         }
         let _ = (outcome, duration_ms);
+    }
+
+    /// Record one resolved login attempt on the control plane.
+    ///
+    /// A counter rather than a histogram: the question is "is someone running a
+    /// credential-stuffing run against this deployment", which is a rate, not a
+    /// distribution. `outcome` is a closed set — `success`, `invalid`,
+    /// `throttled`, `locked` — and carries no account or address label, since
+    /// either would be unbounded cardinality *and* would put the identity an
+    /// attacker is guessing into the metrics pipeline (#1079).
+    pub fn record_login(&self, outcome: &'static str) {
+        #[cfg(feature = "otlp")]
+        if let Some(inner) = &self.inner {
+            inner
+                .login_outcome
+                .add(1, &[opentelemetry::KeyValue::new("outcome", outcome)]);
+            return;
+        }
+        let _ = outcome;
     }
 
     /// Whether anything is actually being recorded.
@@ -624,6 +644,13 @@ pub fn install_control_metrics_with_pool(pool: Option<PoolSampler>) -> Option<Me
                     )
                     .with_unit("ms")
                     .with_boundaries(CONTROL_LATENCY_BUCKETS_MS.to_vec())
+                    .build(),
+                login_outcome: meter
+                    .u64_counter("rolter_control_login_attempts")
+                    .with_description(
+                        "resolved control-plane login attempts, by outcome \
+                         (success, invalid, throttled, locked)",
+                    )
                     .build(),
             })),
         };

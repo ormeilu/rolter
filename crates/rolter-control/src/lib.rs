@@ -44,6 +44,7 @@ mod invitations;
 pub mod ldap;
 #[cfg(feature = "postgres")]
 mod logging_settings;
+mod login_throttle;
 #[cfg(feature = "postgres")]
 mod mcp_logs;
 #[cfg(feature = "postgres")]
@@ -182,6 +183,46 @@ pub struct Args {
     /// waiting for their poll interval
     #[arg(long, env = "ROLTER_REDIS_URL")]
     pub redis_url: Option<String>,
+    /// turn failed-login throttling off. Only for a deployment that fronts the
+    /// control plane with its own rate limiter; without it
+    /// `POST /api/v1/auth/login` answers unlimited password guesses and each
+    /// one buys a full argon2 verification (#1079)
+    #[arg(long, env = "ROLTER_LOGIN_THROTTLE_DISABLED", default_value_t = false)]
+    pub login_throttle_disabled: bool,
+    /// failed logins one account tolerates inside the window before it is
+    /// locked for a while
+    #[arg(long, env = "ROLTER_LOGIN_MAX_FAILURES", default_value_t = 5)]
+    pub login_max_failures: u32,
+    /// failed logins one client address tolerates inside the window, across
+    /// every account it tries. Higher than the per-account budget on purpose:
+    /// one office egress address is a whole floor of legitimate typos
+    #[arg(long, env = "ROLTER_LOGIN_IP_MAX_FAILURES", default_value_t = 50)]
+    pub login_ip_max_failures: u32,
+    /// how long a failure counter survives without a new failure
+    #[arg(long, env = "ROLTER_LOGIN_FAILURE_WINDOW_SECS", default_value_t = 900)]
+    pub login_failure_window_secs: u64,
+    /// the first lock once the budget is spent; each further failure doubles it
+    #[arg(long, env = "ROLTER_LOGIN_LOCK_SECS", default_value_t = 60)]
+    pub login_lock_secs: u64,
+    /// ceiling on that doubling, so a lock is always a bounded outage and never
+    /// a state an attacker can park an account in
+    #[arg(long, env = "ROLTER_LOGIN_MAX_LOCK_SECS", default_value_t = 900)]
+    pub login_max_lock_secs: u64,
+    /// ceiling on the deliberate delay added to a rejected login, in
+    /// milliseconds. Bounded so a guessing run cannot pin connections open
+    #[arg(long, env = "ROLTER_LOGIN_MAX_DELAY_MS", default_value_t = 2000)]
+    pub login_max_delay_ms: u64,
+    /// count failed logins against the `X-Forwarded-For` client rather than the
+    /// socket peer. Off by default: an unverified forwarded header hands an
+    /// attacker unlimited budgets *and* the ability to spend someone else's, so
+    /// turn this on only when every request reaches rolter through a proxy that
+    /// rewrites the header
+    #[arg(
+        long,
+        env = "ROLTER_LOGIN_TRUST_FORWARDED_FOR",
+        default_value_t = false
+    )]
+    pub login_trust_forwarded_for: bool,
     /// clickhouse http url; when set, the dashboard usage/cost analytics
     /// endpoints (`/api/v1/analytics/*`) query the `request_logs` table
     #[arg(long, env = "CLICKHOUSE_URL")]
@@ -300,6 +341,15 @@ struct ControlState {
     /// OTLP histograms for snapshot generation and API latency (#845). Inert,
     /// and free, on every deployment without an OTLP endpoint
     metrics: rolter_core::telemetry::ControlHistograms,
+    /// failed-login counters guarding the password endpoints (#1079). Shared
+    /// across replicas through redis when one is configured, process-local
+    /// otherwise; a default value counts nothing
+    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
+    login_throttle: login_throttle::LoginThrottle,
+    /// whether `X-Forwarded-For` may name the client the throttle counts
+    /// against; see [`login_throttle::ClientAddr`]
+    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
+    trust_forwarded_for: bool,
 }
 
 /// Run the control plane to completion. The caller owns argument parsing and
@@ -418,6 +468,44 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         }
     }
     let http = reqwest::Client::new();
+
+    // the throttle shares redis with config pub/sub when there is one, so every
+    // replica counts against the same budget. without redis it is process-local
+    // — correct for the single-node deployment rolter is usually run as, and a
+    // multiplied budget on a fleet, which is why that case says so out loud
+    let login_throttle = if args.login_throttle_disabled {
+        tracing::warn!(
+            "failed-login throttling is disabled; /api/v1/auth/login will answer \
+             unlimited password guesses"
+        );
+        login_throttle::LoginThrottle::disabled()
+    } else {
+        if redis.is_none() {
+            tracing::info!(
+                "failed-login counters are process-local (no --redis-url); with more \
+                 than one control-plane replica each holds its own budget"
+            );
+        }
+        login_throttle::LoginThrottle::new(
+            login_throttle::ThrottleConfig {
+                account_max_failures: args.login_max_failures,
+                address_max_failures: args.login_ip_max_failures,
+                window: std::time::Duration::from_secs(args.login_failure_window_secs),
+                base_lock: std::time::Duration::from_secs(args.login_lock_secs),
+                max_lock: std::time::Duration::from_secs(args.login_max_lock_secs),
+                max_delay: std::time::Duration::from_millis(args.login_max_delay_ms),
+                ..Default::default()
+            },
+            // same deployment secret the session tokens use, read directly
+            // rather than through `auth::session_pepper` so the throttle stays
+            // available in a build without the postgres feature. it only ever
+            // salts the counter keys, so two deployments sharing one redis do
+            // not share each other's lockouts
+            std::env::var("ROLTER_SESSION_PEPPER").unwrap_or_default(),
+            redis.clone(),
+        )
+    };
+
     let gateway_url = Arc::new(args.gateway_url.trim_end_matches('/').to_string());
     tracing::info!(gateway_url = %gateway_url, "proxying /gw/* to the gateway");
     #[cfg(feature = "postgres")]
@@ -434,6 +522,8 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         gateway_url,
         cors: Arc::default(),
         metrics: metrics.clone(),
+        login_throttle: login_throttle.clone(),
+        trust_forwarded_for: args.login_trust_forwarded_for,
         pool: pool.clone(),
     };
     #[cfg(not(feature = "postgres"))]
@@ -450,6 +540,8 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         gateway_url,
         cors: Arc::default(),
         metrics: metrics.clone(),
+        login_throttle: login_throttle.clone(),
+        trust_forwarded_for: args.login_trust_forwarded_for,
     };
 
     // converge the clickhouse ttl with the stored retention policy. spawned
@@ -506,6 +598,10 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
 
     tracing::info!(%addr, ui_dir = %args.ui_dir.display(), "rolter-control listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    // connect info carries the socket peer address into the request, which is
+    // the only client identity the failed-login throttle can trust (#1079)
+    let app = app.into_make_service_with_connect_info::<SocketAddr>();
 
     let Some(internal_addr) = args.internal_addr else {
         axum::serve(listener, app).await?;
@@ -912,6 +1008,10 @@ fn test_state(pool: sqlx::PgPool, admin_token: Option<String>) -> ControlState {
         gateway_url: Arc::new("http://localhost:4000".to_string()),
         cors: Arc::default(),
         metrics: Default::default(),
+        // real, with production defaults: the wiring is part of what these
+        // tests cover, and no test signs in wrongly five times by accident
+        login_throttle: login_throttle::LoginThrottle::new(Default::default(), String::new(), None),
+        trust_forwarded_for: false,
         pool: Some(pool),
     }
 }
@@ -2000,6 +2100,8 @@ mod tests {
             gateway_url: Arc::new("http://localhost:4000".to_string()),
             cors: Arc::default(),
             metrics: Default::default(),
+            login_throttle: Default::default(),
+            trust_forwarded_for: false,
             #[cfg(feature = "postgres")]
             pool: None,
         }

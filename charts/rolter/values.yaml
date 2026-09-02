@@ -113,6 +113,21 @@ control:
     # retire connections so the pool cannot pin itself to one database instance
     # across a failover
     maxLifetimeSeconds: 1800
+  # failed sign-ins are counted per account and per client address, and refused
+  # before any argon2 work happens (#1079). counters are shared across replicas
+  # through `env.redisUrl`; without it each replica holds its own budget, so a
+  # multi-replica install wants redis set
+  login:
+    maxFailures: 5
+    ipMaxFailures: 50
+    failureWindowSeconds: 900
+    # the first lock; each further failure doubles it, up to maxLockSeconds
+    lockSeconds: 60
+    maxLockSeconds: 900
+    # only turn this on when every request arrives through a proxy that
+    # overwrites X-Forwarded-For: an unverified header hands an attacker
+    # unlimited budgets and the ability to spend somebody else's
+    trustForwardedFor: false
   extraEnv: []
 
 config:
