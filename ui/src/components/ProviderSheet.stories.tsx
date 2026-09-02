@@ -157,6 +157,38 @@ export const RejectedCredential: Story = {
   },
 };
 
+// the third outcome (#980): the host answered 2xx, but with something that is
+// not a model catalogue. rendering that in the same red as a refused connection
+// is accurate and useless — it is the URL or the service behind it that is
+// wrong, not the network (#1034)
+export const AnsweredButNotACatalogue: Story = {
+  render: () => (
+    <Harness
+      fetchStub={stub(async () =>
+        json(
+          result({
+            reachable: false,
+            probed_url: "https://gw.example.com/v1/v1/models",
+            status: 200,
+            models_found: null,
+            error:
+              "200: https://gw.example.com/v1/v1/models answered, but not with a model list. Something other than the provider's API is serving that URL — check api_base for a duplicated path segment, a catch-all route or a login portal.",
+          }),
+        ),
+      )}
+    />
+  ),
+  play: async () => {
+    const canvas = screen();
+    await press();
+    const status = await waitFor(() => canvas.getByRole("status"));
+    // the heading says what happened, rather than flattening to "test failed"
+    await expect(status).toHaveTextContent(/answered, but not with a model list/i);
+    await expect(status).not.toHaveTextContent(/could not reach this provider/i);
+    await expect(canvas.getByText(/duplicated path segment/)).toBeVisible();
+  },
+};
+
 export const Unreachable: Story = {
   render: () => (
     <Harness

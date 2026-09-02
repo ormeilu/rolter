@@ -506,6 +506,7 @@
       "resolvesTo": "Requests resolve to"
     },
     "testConnection": "Test connection",
+    "testAnswered": "Answered, but not with a model list",
     "testFailed": "Could not reach this provider",
     "testOk_one": "Reachable · {{count}} model · {{ms}} ms",
     "testOk_other": "Reachable · {{count}} models · {{ms}} ms",
