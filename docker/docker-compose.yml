@@ -52,8 +52,13 @@ services:
       ROLTER_CONFIG: /app/rolter.toml
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # the gateway writes the request, usage and cost rows the control plane's
+      # analytics screens read back. it was missing here, so the local stack
+      # served traffic into empty dashboards (#929)
+      CLICKHOUSE_URL: http://clickhouse:8123
     depends_on:
       - redis
+      - clickhouse
 
   control:
     build:

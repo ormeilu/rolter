@@ -203,7 +203,7 @@ export default function Dashboard() {
               <Skeleton height={220} />
             ) : spendPoints.length === 0 ? (
               <p className="py-16 text-center text-sm text-muted-foreground">
-                {t("pages.dashboard.noRequestsWindow")}
+                {t("analytics.noRowsYet")}
               </p>
             ) : !anySpend ? (
               // requests were served but nothing was priced. drawing a flat
@@ -221,7 +221,7 @@ export default function Dashboard() {
                 formatValue={(v) => money(v)}
                 emptyState={
                   <p className="text-sm text-muted-foreground">
-                    {t("pages.dashboard.noRequestsWindow")}
+                    {t("analytics.noRowsYet")}
                   </p>
                 }
               />

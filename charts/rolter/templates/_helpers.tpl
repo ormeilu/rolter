@@ -134,6 +134,13 @@ The gateway's environment, for the same reason.
 - name: REDIS_URL
   value: {{ .Values.env.redisUrl | quote }}
 {{- end }}
+{{- /* the gateway writes the usage rows the dashboard reads, so both
+       deployments need this one value; without it the analytics screens are
+       empty however much traffic is served (#929) */}}
+{{- if .Values.env.clickhouseUrl }}
+- name: CLICKHOUSE_URL
+  value: {{ .Values.env.clickhouseUrl | quote }}
+{{- end }}
 {{- with .Values.secretEnv }}
 {{ toYaml . }}
 {{- end }}

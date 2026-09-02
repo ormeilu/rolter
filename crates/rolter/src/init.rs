@@ -73,6 +73,13 @@ pub struct InitArgs {
     #[arg(long)]
     pub redis_url: Option<String>,
 
+    /// clickhouse HTTP URL to write into the environment. Both the gateway and
+    /// the control plane read this one variable — the gateway writes usage rows
+    /// there, the dashboard reads them back — so leaving it out is what makes
+    /// the analytics screens empty forever (#929)
+    #[arg(long)]
+    pub clickhouse_url: Option<String>,
+
     /// print the generated environment to stdout instead of writing it, for
     /// piping into a secret manager rather than leaving secrets on disk
     #[arg(long)]
@@ -148,8 +155,17 @@ fn render_env(args: &InitArgs, secrets: &Secrets) -> String {
         args.database_url.as_deref().unwrap_or("")
     ));
     out.push_str(&format!(
-        "ROLTER_REDIS_URL={}\n\n",
+        "ROLTER_REDIS_URL={}\n",
         args.redis_url.as_deref().unwrap_or("")
+    ));
+    out.push_str(
+        "# read by both processes: the gateway writes request, usage and cost rows here\n\
+         # and the dashboard reads them back. leave it empty and the Usage, Costs and Logs\n\
+         # screens stay empty however much traffic is served.\n",
+    );
+    out.push_str(&format!(
+        "CLICKHOUSE_URL={}\n\n",
+        args.clickhouse_url.as_deref().unwrap_or("")
     ));
 
     out.push_str("# listeners\n");
@@ -314,6 +330,7 @@ mod tests {
             profile,
             database_url: None,
             redis_url: None,
+            clickhouse_url: None,
             print: false,
             force: false,
             env_only: false,
@@ -473,6 +490,7 @@ mod tests {
         let mut a = args(Profile::Production);
         a.database_url = Some("postgres://user:pw@db:5432/rolter".to_string());
         a.redis_url = Some("redis://cache:6379".to_string());
+        a.clickhouse_url = Some("http://clickhouse:8123".to_string());
         let rendered = render_env(&a, &Secrets::generate());
 
         // parse it back the way a shell or container runtime would

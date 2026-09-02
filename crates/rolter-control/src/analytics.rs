@@ -30,6 +30,12 @@ impl ClickHouseClient {
         }
     }
 
+    /// The endpoint this client reads from. `/internal/snapshot` publishes it
+    /// so the fleet writes where the dashboard reads (#929).
+    pub(crate) fn base(&self) -> &str {
+        &self.base
+    }
+
     /// Run `sql` (which must end with `FORMAT JSON`) with the given ClickHouse
     /// `param_*` bindings and return the parsed `data` array.
     pub(crate) async fn query(

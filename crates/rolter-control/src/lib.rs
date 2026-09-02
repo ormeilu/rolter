@@ -1683,6 +1683,23 @@ async fn build_snapshot(
                     "omitted unservable entries from the config snapshot"
                 );
             }
+            // #929: the gateway learned where to write usage rows from its own
+            // bootstrap TOML while the dashboard read them from the control
+            // plane's `CLICKHOUSE_URL`, and nothing connected the two — so a
+            // fleet could log nowhere while the analytics screens queried a
+            // table nobody filled, with the snapshot itself carrying
+            // `"clickhouse_url": null`. The control plane's own destination is
+            // now what the fleet inherits. A gateway that names one in its
+            // bootstrap config keeps it: an explicit local decision still wins.
+            if config.logging.clickhouse_url.is_none() {
+                if let Some(url) = state
+                    .clickhouse
+                    .as_ref()
+                    .map(analytics::ClickHouseClient::base)
+                {
+                    config.logging.clickhouse_url = Some(url.to_string());
+                }
+            }
             // what survives here is structural: duplicate names, a bad
             // metrics_path, an unreadable CA bundle. Those genuinely cannot be
             // served — dropping one of two colliding rows would be a guess —
@@ -2481,6 +2498,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(on_internal.status(), 200);
+    }
+
+    /// #929: the gateway learned where to write usage rows from its own
+    /// bootstrap TOML while the dashboard read them from the control plane's
+    /// `CLICKHOUSE_URL`, and the snapshot carried `"clickhouse_url": null` —
+    /// so a fleet could log nowhere while the screens queried a table nobody
+    /// filled.
+    #[tokio::test]
+    async fn the_snapshot_publishes_where_the_fleet_should_log() {
+        let mut state = state_with_token(None);
+        state.clickhouse = Some(analytics::ClickHouseClient::new("http://clickhouse:8123/"));
+        let addr = serve(build_app_with_internal(state)).await;
+        let body: Value = reqwest::Client::new()
+            .get(format!("http://{addr}/internal/snapshot"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        // the trailing slash is normalised by the client, so what the fleet
+        // inherits is the same string the control plane itself queries
+        assert_eq!(
+            body["config"]["logging"]["clickhouse_url"],
+            "http://clickhouse:8123"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_control_plane_without_analytics_publishes_no_destination() {
+        // absent, not empty-string: a gateway must be able to tell "nobody told
+        // me" from "told me to log to nowhere"
+        let addr = serve(build_app_with_internal(state_with_token(None))).await;
+        let body: Value = reqwest::Client::new()
+            .get(format!("http://{addr}/internal/snapshot"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(
+            body["config"]["logging"]["clickhouse_url"].is_null(),
+            "{body}"
+        );
     }
 
     #[tokio::test]
