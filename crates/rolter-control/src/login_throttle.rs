@@ -718,7 +718,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unparseable_forwarded_header_falls_back_to_the_socket_peer() {
+    fn an_unparsable_forwarded_header_falls_back_to_the_socket_peer() {
         let peer: IpAddr = "203.0.113.7".parse().unwrap();
         let addr = ClientAddr(Some(peer));
         assert_eq!(addr.resolve(&headers("not-an-address"), true), Some(peer));
