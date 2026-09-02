@@ -59,7 +59,7 @@ One span per stage, so a slow request is attributable rather than merely slow:
 | `route.select` | `route`, `strategy`, `candidates` |
 | `cache.lookup` | `hit`, `kind` (`exact` / `semantic`) |
 | `queue.wait` | `provider` |
-| `upstream.request` | `attempt`, `gen_ai.system`, `gen_ai.request.model`, `http.response.status_code` |
+| `upstream.request` | `attempt`, `gen_ai.system`, `gen_ai.request.model`, `gen_ai.response.id`, `http.response.status_code` (embeddings also carry `gen_ai.request.encoding_formats` and `gen_ai.embeddings.dimension.count`) |
 | `translate.request` | — |
 | `guardrails.post` | — |
 

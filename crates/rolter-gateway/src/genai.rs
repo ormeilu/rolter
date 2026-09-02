@@ -82,6 +82,25 @@ pub(crate) const OUTPUT_TYPE: &str = "gen_ai.output.type";
 pub(crate) const USAGE_INPUT_TOKENS: &str = "gen_ai.usage.input_tokens";
 /// `gen_ai.usage.output_tokens` — recommended.
 pub(crate) const USAGE_OUTPUT_TOKENS: &str = "gen_ai.usage.output_tokens";
+/// `gen_ai.response.id` — **Recommended**; the provider's own id for the call.
+///
+/// This is the join key between a rolter span and the provider's record of the
+/// same request. Without it a provider-side support ticket is a description of
+/// a call rather than a reference to one, and the provider cannot find it.
+pub(crate) const RESPONSE_ID: &str = "gen_ai.response.id";
+/// `gen_ai.embeddings.dimension.count` — the width of the vectors returned.
+///
+/// Embeddings spans otherwise say nothing about the vectors at all: the
+/// operation name and the token counts are identical whether the provider
+/// returned 384 dimensions or 3072, and dimensionality is what an index has to
+/// agree with.
+pub(crate) const EMBEDDINGS_DIMENSION_COUNT: &str = "gen_ai.embeddings.dimension.count";
+/// `gen_ai.request.encoding_formats` — how the caller asked for the vectors.
+///
+/// Spec'd as an array; `tracing` has no array field type, so the values are
+/// joined the same way `RESPONSE_FINISH_REASONS` is (#835). Low cardinality by
+/// construction — the wire values are `float` and `base64`.
+pub(crate) const REQUEST_ENCODING_FORMATS: &str = "gen_ai.request.encoding_formats";
 /// `error.type` — conditionally required on failure.
 pub(crate) const ERROR_TYPE: &str = "error.type";
 
@@ -155,6 +174,27 @@ pub(crate) fn span_name(operation: &Operation, model: &str) -> String {
     format!("{} {model}", operation.name)
 }
 
+/// The `gen_ai.request.encoding_formats` value for an embeddings request.
+///
+/// OpenAI's `encoding_format` is a single string; the convention's attribute is
+/// a list, and other dialects may send one. Both shapes are read, and anything
+/// else yields `None` rather than a stringified blob — an attribute nobody can
+/// group by is worse than an absent one.
+pub(crate) fn encoding_formats(request: &serde_json::Value) -> Option<String> {
+    let value = request.get("encoding_format")?;
+    if let Some(one) = value.as_str() {
+        return (!one.is_empty()).then(|| one.to_string());
+    }
+    let joined = value
+        .as_array()?
+        .iter()
+        .filter_map(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .collect::<Vec<_>>()
+        .join(",");
+    (!joined.is_empty()).then_some(joined)
+}
+
 /// The `error.type` value for a failed upstream attempt.
 ///
 /// The spec asks for "the low-cardinality class of error", so an HTTP failure
@@ -204,7 +244,43 @@ mod tests {
         assert_eq!(OUTPUT_TYPE, "gen_ai.output.type");
         assert_eq!(USAGE_INPUT_TOKENS, "gen_ai.usage.input_tokens");
         assert_eq!(USAGE_OUTPUT_TOKENS, "gen_ai.usage.output_tokens");
+        assert_eq!(RESPONSE_ID, "gen_ai.response.id");
+        assert_eq!(
+            EMBEDDINGS_DIMENSION_COUNT,
+            "gen_ai.embeddings.dimension.count"
+        );
+        assert_eq!(REQUEST_ENCODING_FORMATS, "gen_ai.request.encoding_formats");
         assert_eq!(ERROR_TYPE, "error.type");
+    }
+
+    #[test]
+    fn a_single_encoding_format_string_is_taken_as_written() {
+        let request = serde_json::json!({ "encoding_format": "base64" });
+        assert_eq!(encoding_formats(&request).as_deref(), Some("base64"));
+    }
+
+    /// The attribute is spec'd as a list and `tracing` has no array field type,
+    /// so a list arrives joined the same way finish reasons do.
+    #[test]
+    fn a_list_of_encoding_formats_is_joined() {
+        let request = serde_json::json!({ "encoding_format": ["float", "base64"] });
+        assert_eq!(encoding_formats(&request).as_deref(), Some("float,base64"));
+    }
+
+    /// An attribute nobody can group by is worse than an absent one, so a shape
+    /// that is neither a string nor a list of strings reports nothing rather
+    /// than a stringified blob.
+    #[test]
+    fn an_unusable_encoding_format_reports_nothing() {
+        for request in [
+            serde_json::json!({}),
+            serde_json::json!({ "encoding_format": "" }),
+            serde_json::json!({ "encoding_format": [] }),
+            serde_json::json!({ "encoding_format": 7 }),
+            serde_json::json!({ "encoding_format": { "kind": "float" } }),
+        ] {
+            assert_eq!(encoding_formats(&request), None, "{request}");
+        }
     }
 
     /// The two the spec marks *Required*. Their absence was total failure:
