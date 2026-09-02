@@ -59,6 +59,38 @@ export interface NavSidebarProps extends React.HTMLAttributes<HTMLElement> {
      receives the rail state so it can drop its label when collapsed. */
   footerExtra?: (collapsed: boolean) => React.ReactNode;
   version?: string;
+  /* when set, the right edge becomes a draggable, keyboard-operable splitter
+     and the rail's width is remembered per browser under `storageKey`. the
+     width is clamped to [NAV_MIN_WIDTH, NAV_MAX_WIDTH] on every path — drag,
+     keyboard and the value read back from storage — so a stale or hand-edited
+     entry cannot restore an unusable rail. */
+  resizable?: boolean;
+  storageKey?: string;
+}
+
+/** narrowest the rail may be dragged: still wide enough for icon + label */
+export const NAV_MIN_WIDTH = 180;
+/** widest: past this the rail competes with the content it navigates */
+export const NAV_MAX_WIDTH = 420;
+/** matches `--sidebar-width` in index.css */
+export const NAV_DEFAULT_WIDTH = 232;
+const NAV_WIDTH_STORAGE_KEY = "rolter.nav.width";
+/** one arrow press; shift multiplies it so a keyboard user is not stuck stepping */
+const NAV_KEY_STEP = 16;
+
+const clampWidth = (w: number) =>
+  Math.min(NAV_MAX_WIDTH, Math.max(NAV_MIN_WIDTH, Math.round(w)));
+
+function readStoredWidth(key: string): number | null {
+  // storage throws outright in some embedding contexts, and can hold anything
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? clampWidth(n) : null;
+  } catch {
+    return null;
+  }
 }
 
 const itemBase =
@@ -86,6 +118,8 @@ export function NavSidebar({
   footerLinks,
   footerExtra,
   version,
+  resizable,
+  storageKey = NAV_WIDTH_STORAGE_KEY,
   className,
   ...props
 }: NavSidebarProps) {
@@ -96,6 +130,70 @@ export function NavSidebar({
   const [open, setOpen] = React.useState<Record<string, boolean>>({});
   const [userOpen, setUserOpen] = React.useState(false);
   const userRef = React.useRef<HTMLDivElement>(null);
+  const navRef = React.useRef<HTMLElement>(null);
+  const [width, setWidth] = React.useState(NAV_DEFAULT_WIDTH);
+  const [dragging, setDragging] = React.useState(false);
+
+  // read the remembered width after mount rather than in the initializer: the
+  // first paint then matches what a server-rendered or storage-less browser
+  // draws, and the story harness gets a deterministic starting width
+  React.useEffect(() => {
+    if (!resizable) return;
+    const stored = readStoredWidth(storageKey);
+    if (stored !== null) setWidth(stored);
+  }, [resizable, storageKey]);
+
+  const commitWidth = React.useCallback(
+    (next: number) => {
+      const w = clampWidth(next);
+      setWidth(w);
+      try {
+        window.localStorage.setItem(storageKey, String(w));
+      } catch {
+        // a browser that refuses storage still resizes, it just forgets
+      }
+    },
+    [storageKey],
+  );
+
+  // the pointer leaves the 4px handle immediately on a fast drag, so the move
+  // and up listeners live on the document for the duration of the gesture
+  React.useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e: PointerEvent) => {
+      const left = navRef.current?.getBoundingClientRect().left ?? 0;
+      setWidth(clampWidth(e.clientX - left));
+    };
+    const onUp = () => setDragging(false);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+    return () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+    };
+  }, [dragging]);
+
+  // persist once the gesture ends, not on every pointermove
+  const wasDragging = React.useRef(false);
+  React.useEffect(() => {
+    if (wasDragging.current && !dragging) commitWidth(width);
+    wasDragging.current = dragging;
+  }, [dragging, width, commitWidth]);
+
+  const onHandleKeyDown = (e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? NAV_KEY_STEP * 4 : NAV_KEY_STEP;
+    if (e.key === "ArrowLeft") commitWidth(width - step);
+    else if (e.key === "ArrowRight") commitWidth(width + step);
+    else if (e.key === "Home") commitWidth(NAV_MIN_WIDTH);
+    else if (e.key === "End") commitWidth(NAV_MAX_WIDTH);
+    else if (e.key === "Enter" || e.key === " ") commitWidth(NAV_DEFAULT_WIDTH);
+    else return;
+    e.preventDefault();
+  };
+
+  const showHandle = Boolean(resizable) && !collapsed;
 
   React.useEffect(() => {
     if (!userOpen) return;
@@ -167,13 +265,42 @@ export function NavSidebar({
 
   return (
     <nav
+      ref={navRef}
+      style={showHandle ? { width } : undefined}
       className={cn(
-        "flex h-full flex-col gap-3 border-r border-[color:var(--border-subtle)] bg-[color:var(--surface-app)] px-2 py-3 transition-[width]",
+        "relative flex h-full flex-col gap-3 border-r border-[color:var(--border-subtle)] bg-[color:var(--surface-app)] px-2 py-3",
+        // the width transition would fight the pointer during a drag
+        !dragging && "transition-[width]",
         collapsed ? "w-[52px] items-stretch" : "w-[var(--sidebar-width)]",
         className,
       )}
       {...props}
     >
+      {showHandle && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("shell.resizeSidebar")}
+          aria-valuenow={width}
+          aria-valuemin={NAV_MIN_WIDTH}
+          aria-valuemax={NAV_MAX_WIDTH}
+          tabIndex={0}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDoubleClick={() => commitWidth(NAV_DEFAULT_WIDTH)}
+          onKeyDown={onHandleKeyDown}
+          className={cn(
+            "absolute inset-y-0 -right-1 z-30 w-2 cursor-col-resize focus-visible:outline-none",
+            // a 2px thread on the border line, painted only when the splitter
+            // is grabbed or focused so the idle rail stays quiet
+            "after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] after:-translate-x-1/2 after:bg-[color:var(--red-folk)] after:opacity-0 after:transition-opacity after:content-['']",
+            "hover:after:opacity-60 focus-visible:after:opacity-100",
+            dragging && "after:opacity-100",
+          )}
+        />
+      )}
       <div
         className={cn(
           "group relative flex items-center gap-2 px-2 py-1.5",

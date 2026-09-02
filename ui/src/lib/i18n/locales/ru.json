@@ -814,6 +814,7 @@
     "searchNav": "Поиск по навигации",
     "collapseSidebar": "Свернуть панель",
     "expandSidebar": "Развернуть панель",
+    "resizeSidebar": "Изменить ширину панели",
     "githubRepo": "Репозиторий на GitHub",
     "reportBug": "Сообщить об ошибке",
     "role": "Администратор",

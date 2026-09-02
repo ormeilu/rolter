@@ -278,6 +278,7 @@ export default function App() {
           onNavigate={(k) => navigate(`/${k}`)}
           searchable
           collapsible
+          resizable
           footerLinks={[
             {
               key: "github",
