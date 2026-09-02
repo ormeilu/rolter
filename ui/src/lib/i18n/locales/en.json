@@ -10,7 +10,16 @@
     "signingIn": "Signing in…",
     "continueWith": "Continue with {{provider}}",
     "noMethod": "No login method is enabled for this deployment.",
-    "selfHosted": "Self-hosted · sessions are local to this deployment."
+    "selfHosted": "Self-hosted · sessions are local to this deployment.",
+    "errors": {
+      "invalidCredentials": "That email and password do not match an account here.",
+      "passwordLoginDisabled": "Password sign-in is turned off for this organization. Use single sign-on below.",
+      "tooManyAttempts": "Too many failed attempts. Try again later.",
+      "tooManyAttempts_wait_one": "Too many failed attempts. Try again in {{count}} second.",
+      "tooManyAttempts_wait_other": "Too many failed attempts. Try again in {{count}} seconds.",
+      "unavailable": "The control plane could not be reached. Check that it is running and try again.",
+      "unexpected": "Sign-in failed: {{message}}"
+    }
   },
   "common": {
     "cancel": "Cancel",

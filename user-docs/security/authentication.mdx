@@ -135,3 +135,20 @@ Rolter returns standard HTTP error codes for authentication and authorisation fa
     Returned when the request or token rate for the key's scope chain has exceeded its per-minute cap. The response includes a `Retry-After` header indicating how many seconds to wait before retrying.
   </Accordion>
 </AccordionGroup>
+
+### Signing in to the dashboard
+
+`POST /api/v1/auth/login` refuses with a stable `code` the dashboard renders
+directly, so a failed sign-in says what went wrong instead of appearing to
+succeed:
+
+| Code | Status | What the sign-in screen shows |
+| --- | --- | --- |
+| `invalid_credentials` | 401 | that email and password do not match an account |
+| `password_login_disabled` | 403 | the organization requires single sign-on |
+| `too_many_attempts` | 429 | how long the lock lasts, read from `Retry-After` |
+
+The email-only gate — where the dashboard opens with no session at all — is
+reserved for an open-mode control plane running with no store, where the auth
+endpoints are not served. Anywhere else, a failed sign-in leaves you on the
+sign-in screen with the reason on it.

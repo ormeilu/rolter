@@ -6,6 +6,7 @@ import {
   AnalyticsUnavailableError,
   ApiError,
   isOpenModeNoSession,
+  login,
   apiBaseDoublesV1,
   resolveUpstreamUrl,
   isConvertible,
@@ -144,6 +145,42 @@ describe("api client", () => {
       );
       expect(isOpenModeNoSession(null)).toBe(false);
       expect(isOpenModeNoSession(undefined)).toBe(false);
+    });
+  });
+
+  // #1079 answers a locked account with 429 + Retry-After, and #1160 renders
+  // the wait. A header the client drops is a wait the user has to guess.
+  describe("Retry-After (via login)", () => {
+    const refusal = (headers: Record<string, string>) =>
+      new Response(
+        JSON.stringify({
+          error: { message: "too many", code: "too_many_attempts" },
+        }),
+        { status: 429, headers: { "Content-Type": "application/json", ...headers } },
+      );
+
+    it("carries the delay through as seconds", async () => {
+      fetchMock.mockResolvedValueOnce(refusal({ "Retry-After": "90" }));
+      const err = await login("a@b.co", "pw").catch((e) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err.code).toBe("too_many_attempts");
+      expect(err.retryAfterSeconds).toBe(90);
+    });
+
+    it("drops a header it cannot read rather than rendering NaN", async () => {
+      // the http-date form is legal and rolter never sends it; a screen that
+      // printed `NaN seconds` would be worse than one that says nothing
+      fetchMock.mockResolvedValueOnce(
+        refusal({ "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" }),
+      );
+      const err = await login("a@b.co", "pw").catch((e) => e);
+      expect(err.retryAfterSeconds).toBeUndefined();
+    });
+
+    it("is absent when the response carries no header", async () => {
+      fetchMock.mockResolvedValueOnce(refusal({}));
+      const err = await login("a@b.co", "pw").catch((e) => e);
+      expect(err.retryAfterSeconds).toBeUndefined();
     });
   });
 

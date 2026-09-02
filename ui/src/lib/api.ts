@@ -52,12 +52,24 @@ export class ApiError extends Error {
    * rather than on the message, which is free to be reworded and translated.
    */
   readonly code?: string;
+  /**
+   * Seconds the caller was told to wait, from the response's `Retry-After`
+   * header. Present on a `429` — a lock is a clock, and a screen that can read
+   * it does not have to make the user poll to find out (#1079).
+   */
+  readonly retryAfterSeconds?: number;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    retryAfterSeconds?: number,
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -83,17 +95,34 @@ async function getJson<T>(url: string): Promise<T> {
 /// extract the control api's `{"error": {"message": ..., "code": ...}}` body
 /// when present, falling back to the raw status text
 async function apiError(res: Response): Promise<ApiError> {
+  // only the delta-seconds form is sent by rolter. the http-date form is legal
+  // and unhandled, and an absent header reads as 0 through `Number` — both are
+  // dropped rather than rendered, since "retry in NaN seconds" and "retry in 0
+  // seconds" are each worse than saying nothing
+  const raw = res.headers.get("retry-after");
+  const seconds = raw === null ? Number.NaN : Number(raw);
+  const retryAfter = Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
   try {
     const body = (await res.json()) as {
       error?: { message?: string; code?: string };
     };
     if (body?.error?.message) {
-      return new ApiError(body.error.message, res.status, body.error.code);
+      return new ApiError(
+        body.error.message,
+        res.status,
+        body.error.code,
+        retryAfter,
+      );
     }
   } catch {
     // not json, fall through
   }
-  return new ApiError(`request failed: ${res.status}`, res.status);
+  return new ApiError(
+    `request failed: ${res.status}`,
+    res.status,
+    undefined,
+    retryAfter,
+  );
 }
 
 async function sendJson<T>(
