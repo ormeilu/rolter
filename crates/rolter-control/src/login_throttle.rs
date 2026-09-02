@@ -683,7 +683,9 @@ mod tests {
     fn a_subject_key_never_carries_the_identity_in_the_clear() {
         let subject = Subject::account("pepper", "ada@example.com");
         let key = subject.key("fail");
-        assert!(!key.contains("ada"), "{key}");
+        // deliberately not printed on failure: the value under test is derived
+        // from a real identity, and a panic message is a log line
+        assert!(!key.contains("ada"));
         assert!(key.starts_with("rolter:login:fail:account:"));
         // and the same address normalises to one counter
         assert_eq!(subject, Subject::account("pepper", "  Ada@Example.COM "));
