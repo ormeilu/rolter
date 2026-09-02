@@ -860,18 +860,38 @@
         "title": "New virtual key",
         "subtitle": "Personal virtual key in {{project}} — shown once, right after creation",
         "currentProject": "the current project",
-        "save": "Mint",
-        "name": "Name (optional)",
-        "namePlaceholder": "my laptop",
-        "models": "Model allow-list (optional)",
-        "modelsHint": "comma-separated public model names; empty allows all models",
-        "modelsPlaceholder": "gpt-4o, claude-sonnet"
+        "save": "Mint"
       },
       "revealed": {
         "title": "Virtual key ready",
         "body": "This is the only time the plaintext key is shown. Copy it now — it can't be retrieved again.",
         "done": "Done"
       }
+    }
+  },
+  "keyMint": {
+    "name": "Name",
+    "namePlaceholder": "my laptop",
+    "models": "Model allow-list (optional)",
+    "modelsHint": "comma-separated public model names; empty allows all models",
+    "modelsPlaceholder": "gpt-4o, claude-sonnet",
+    "nameHint": "required — the secret is shown once, so this is how you will recognise the key later",
+    "nameTooLong": "At most {{max}} characters",
+    "expiry": "Expires",
+    "expiryHint": "the key stops authenticating on this date; rotate or mint a new one before then",
+    "expiryNever": "Never expires",
+    "expiryNeverWarning": "This key will work until someone revokes it. Prefer a finite lifetime for anything that reaches a paid provider.",
+    "expiryDays_one": "In {{count}} day",
+    "expiryDays_other": "In {{count}} days",
+    "reach": {
+      "title": "What this key will be able to reach",
+      "project": "Project {{project}}",
+      "allModels": "Every model this project can route to",
+      "someModels_one": "One model: {{models}}",
+      "someModels_other": "{{count}} models: {{models}}",
+      "until": "Until {{date}}",
+      "never": "Forever, until revoked",
+      "thisProject": "this project"
     }
   }
 }

@@ -1069,9 +1069,12 @@ export interface CreatedVirtualKey extends VirtualKeyRow {
 }
 
 export interface CreateVirtualKeyInput {
-  name?: string;
+  /** required — see MintKeyInput; the same rule applies on the admin path */
+  name: string;
   models?: string[];
   cache?: boolean | null;
+  /** key lifetime in days; omitted means "never expires" */
+  expires_in_days?: number;
 }
 
 export function fetchVirtualKeys(projectId: string): Promise<VirtualKeyRow[]> {
@@ -1793,9 +1796,15 @@ export interface MintedKey extends VirtualKeyRow {
 }
 
 export interface MintKeyInput {
-  name?: string;
+  /** required: the plaintext is shown once, so an unnamed key is
+   *  unattributable forever after (#945). the server rejects a blank one */
+  name: string;
   models?: string[];
+  providers?: string[];
   cache?: boolean | null;
+  /** key lifetime in days. omitted means "never expires" — a choice the
+   *  operator makes deliberately, never the result of leaving a field alone */
+  expires_in_days?: number;
 }
 
 export interface MyUsageRow {

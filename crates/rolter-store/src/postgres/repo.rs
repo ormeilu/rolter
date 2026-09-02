@@ -3065,10 +3065,13 @@ impl VirtualKeyRepo<'_> {
         providers: &[String],
         cache_enabled: Option<bool>,
         created_by: Option<Uuid>,
+        // when the key stops working; `None` mints an immortal key, which the
+        // callers only pass for a deliberate "never expires" choice (#945)
+        expires_at: Option<DateTime<Utc>>,
     ) -> Result<VirtualKey> {
         sqlx::query_as(
-            "insert into virtual_keys (project_id, key_hash, key_prefix, name, models, providers, cache_enabled, created_by)
-             values ($1, $2, $3, $4, $5, $6, $7, $8)
+            "insert into virtual_keys (project_id, key_hash, key_prefix, name, models, providers, cache_enabled, created_by, expires_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              returning id, project_id, key_hash, key_prefix, name, models, providers, disabled, expires_at, cache_enabled, created_by, business_unit_id, customer_id, created_at",
         )
         .bind(project_id)
@@ -3079,6 +3082,7 @@ impl VirtualKeyRepo<'_> {
         .bind(providers)
         .bind(cache_enabled)
         .bind(created_by)
+        .bind(expires_at)
         .fetch_one(self.0)
         .await
         .map_err(store_err)
@@ -5234,11 +5238,15 @@ mod tests {
                 &[],
                 None,
                 None,
+                Some(Utc::now() + Duration::days(30)),
             )
             .await
             .unwrap();
         // defaults to inherit-the-route (NULL) on create
         assert_eq!(vk.cache_enabled, None);
+        // the ttl the caller chose reaches the column the gateway reads, so a
+        // minted key is not immortal by construction (#945)
+        assert!(vk.expires_at.is_some());
         assert_eq!(
             keys.find_by_hash("hash123").await.unwrap().map(|k| k.id),
             Some(vk.id)

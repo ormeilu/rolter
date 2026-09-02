@@ -3452,7 +3452,10 @@ async fn list_virtual_keys(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CreateVirtualKey {
-    name: Option<String>,
+    /// required, and the same rule the self-service mint path applies: the
+    /// plaintext is shown once, so an unnamed key is unattributable forever
+    /// after (#945)
+    name: String,
     #[serde(default)]
     models: Vec<String>,
     /// upstream providers this key may reach; an empty list permits every
@@ -3463,6 +3466,10 @@ struct CreateVirtualKey {
     /// false to bypass, true to cache even on a route that didn't opt in
     #[serde(default)]
     cache: Option<bool>,
+    /// key lifetime in days; `None` mints a key that never expires, which the
+    /// dashboard only sends for an explicit choice
+    #[serde(default)]
+    expires_in_days: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -3502,17 +3509,20 @@ async fn create_virtual_key(
     let chain = ScopeChain::from_project(pool(&state), project_id).await?;
     let org_id = chain.org;
     authorize(&state, &principal, chain, cap!("virtual_key", Create)).await?;
+    let (name, expires_at) =
+        crate::me::validated_name_and_expiry(&body.name, body.expires_in_days)?;
     let (key, key_hash, key_prefix) = generate_virtual_key(&key_pepper());
     let row = VirtualKeyRepo(pool(&state))
         .create(
             project_id,
             &key_hash,
             &key_prefix,
-            body.name.as_deref(),
+            Some(name.as_str()),
             &body.models,
             &body.providers,
             body.cache,
             None,
+            expires_at,
         )
         .await?;
     publish_config_change(&state).await?;

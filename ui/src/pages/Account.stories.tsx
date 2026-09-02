@@ -166,7 +166,7 @@ export const MintsAKey: Story = {
   play: async ({ canvasElement }) => {
     await clickWhenEnabled(canvasElement, /generate virtual key/i);
     const form = sheet();
-    await userEvent.type(within(form).getByLabelText("Name (optional)"), "ci runner");
+    await userEvent.type(within(form).getByLabelText("Name"), "ci runner");
     await userEvent.click(within(form).getByRole("button", { name: "Mint" }));
     // the plaintext is shown exactly once, right here; losing this dialog means
     // the user never gets the secret they just created
@@ -238,5 +238,102 @@ export const AnEditedMintFormPromptsBeforeDiscarding: Story = {
       await expect(within(document.body).getByRole("dialog")).toBeInTheDocument();
       await expect(within(form).getByLabelText("Name (optional)")).toHaveValue("half typed");
     });
+  },
+};
+
+/**
+ * The mint sheet's whole point after #945 is that the two insecure choices are
+ * no longer the ones you get by doing nothing: the key must be named, and it
+ * expires in 30 days unless you say otherwise.
+ */
+export const MintRequiresANameAndDefaultsToAFiniteLife: Story = {
+  render: () => (
+    <Harness fetchStub={scoped(async () => json(KEYS))}>
+      <Account />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await clickWhenEnabled(canvasElement, /generate virtual key/i);
+    const form = sheet();
+    // nothing typed: minting is refused before a round trip is spent
+    await expect(within(form).getByRole("button", { name: "Mint" })).toBeDisabled();
+    // whitespace is not a name either
+    await userEvent.type(within(form).getByLabelText("Name"), "   ");
+    await expect(within(form).getByRole("button", { name: "Mint" })).toBeDisabled();
+    await userEvent.type(within(form).getByLabelText("Name"), "ci runner");
+    await expect(within(form).getByRole("button", { name: "Mint" })).toBeEnabled();
+
+    // the default expiry is finite, and the reach panel says so in a date
+    await expect(within(form).getByLabelText("Expires")).toHaveValue("30");
+    await expect(
+      within(form).getByText(/every model this project can route to/i),
+    ).toBeInTheDocument();
+    await expect(within(form).getByText(/^Until /)).toBeInTheDocument();
+  },
+};
+
+/**
+ * "Never expires" stays available — it is a legitimate choice for a key an
+ * operator has other controls over — but it has to be picked, and picking it
+ * says what it costs.
+ */
+export const NeverExpiringIsADeliberateChoice: Story = {
+  render: () => (
+    <Harness
+      fetchStub={scoped(async (_input, init) => {
+        if (init?.method === "POST") {
+          // the body is what the assertion is really about: no TTL at all,
+          // rather than a zero or an empty string the server would reject
+          const body = JSON.parse(String(init.body));
+          if (body.expires_in_days !== undefined) return json({ error: { message: "sent a ttl" } }, 400);
+          if (!body.name) return json({ error: { message: "sent no name" } }, 400);
+          return json(MINTED, 201);
+        }
+        return json(KEYS);
+      })}
+    >
+      <Account />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await clickWhenEnabled(canvasElement, /generate virtual key/i);
+    const form = sheet();
+    await userEvent.type(within(form).getByLabelText("Name"), "build box");
+    await userEvent.selectOptions(within(form).getByLabelText("Expires"), "never");
+    await expect(within(form).getByText(/until someone revokes it/i)).toBeInTheDocument();
+    await expect(within(form).getByText(/forever, until revoked/i)).toBeInTheDocument();
+    await userEvent.click(within(form).getByRole("button", { name: "Mint" }));
+    await waitFor(() =>
+      expect(within(document.body).getByText(MINTED.key)).toBeInTheDocument(),
+    );
+  },
+};
+
+/**
+ * A server-side rejection has to land on the sheet rather than vanishing — the
+ * name rule is enforced in two places and the operator must see which one spoke.
+ */
+export const MintRejectionIsShownOnTheSheet: Story = {
+  render: () => (
+    <Harness
+      fetchStub={scoped(async (_input, init) => {
+        if (init?.method === "POST")
+          return json({ error: { message: "virtual key name is required" } }, 400);
+        return json(KEYS);
+      })}
+    >
+      <Account />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await clickWhenEnabled(canvasElement, /generate virtual key/i);
+    const form = sheet();
+    await userEvent.type(within(form).getByLabelText("Name"), "rejected");
+    await userEvent.click(within(form).getByRole("button", { name: "Mint" }));
+    await waitFor(() =>
+      expect(within(form).getByText(/virtual key name is required/i)).toBeInTheDocument(),
+    );
+    // and the sheet stays open, so the operator can fix it in place
+    await expect(within(form).getByLabelText("Name")).toBeInTheDocument();
   },
 };

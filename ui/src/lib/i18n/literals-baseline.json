@@ -281,19 +281,15 @@
     "Inherit route setting",
     "Key",
     "Key created",
-    "Model allow-list (optional)",
     "Models",
     "Name",
-    "Name (optional)",
     "No keys found",
     "Off",
     "Response cache",
     "Search by name…",
     "Status",
     "The plaintext key is shown once, right after creation — copy it then",
-    "all models",
-    "backend service",
-    "gpt-4o, claude-sonnet"
+    "all models"
   ],
   "src/pages/Limits.tsx": [
     "Add budget",

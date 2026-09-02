@@ -1372,7 +1372,11 @@ impl ParamPolicy {
 }
 
 /// A virtual api key that clients present to the gateway.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+///
+/// `Default` is a nameless, unscoped, non-expiring key with an empty secret —
+/// useful only as a fixture base (see #1150); nothing deserializes it, `key` is
+/// a required field.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct VirtualKeyConfig {
     pub key: String,
     #[serde(default)]
