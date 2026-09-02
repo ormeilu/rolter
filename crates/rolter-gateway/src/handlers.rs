@@ -1721,7 +1721,10 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                 gen_ai.request.model = %genai_model,
                 gen_ai.output.type = tracing::field::Empty,
                 gen_ai.response.model = tracing::field::Empty,
+                gen_ai.response.id = tracing::field::Empty,
                 gen_ai.response.finish_reasons = tracing::field::Empty,
+                gen_ai.request.encoding_formats = tracing::field::Empty,
+                gen_ai.embeddings.dimension.count = tracing::field::Empty,
                 gen_ai.usage.input_tokens = tracing::field::Empty,
                 gen_ai.usage.output_tokens = tracing::field::Empty,
                 error.type = tracing::field::Empty,
@@ -1736,6 +1739,14 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                 );
                 if let Some(output_type) = operation.output_type {
                     upstream_stage.record(crate::genai::OUTPUT_TYPE, output_type);
+                }
+                // how the caller asked for the vectors — a request-side
+                // attribute, so it is known now rather than at finalize (#846)
+                if operation.name == crate::genai::OP_EMBEDDINGS {
+                    if let Some(formats) = crate::genai::encoding_formats(&parsed) {
+                        upstream_stage
+                            .record(crate::genai::REQUEST_ENCODING_FORMATS, formats.as_str());
+                    }
                 }
             }
             let injected_ctx;

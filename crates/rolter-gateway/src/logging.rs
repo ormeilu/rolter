@@ -255,6 +255,63 @@ pub fn parse_response_model(is_sse: bool, buf: &[u8]) -> Option<String> {
     None
 }
 
+/// The provider's own id for the call, for `gen_ai.response.id` (#846).
+///
+/// This is the join key between a rolter span and the provider's record of the
+/// same request — the thing that makes a provider-side support ticket a
+/// reference rather than a description.
+///
+/// The dialects agree more than they usually do: OpenAI puts it at `id` on
+/// every response and every SSE chunk, and Anthropic puts it at `id` on the
+/// non-streaming message and at `message.id` inside the `message_start` event.
+/// Both are read from the one buffer `parse_usage` already walks.
+pub fn parse_response_id(is_sse: bool, buf: &[u8]) -> Option<String> {
+    fn id_of(value: &serde_json::Value) -> Option<String> {
+        value
+            .get("id")
+            .or_else(|| value.pointer("/message/id"))
+            .and_then(|id| id.as_str())
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+    }
+
+    if !is_sse {
+        return id_of(&serde_json::from_slice::<serde_json::Value>(buf).ok()?);
+    }
+    for line in buf.split(|&b| b == b'\n') {
+        let line = trim_ascii(line);
+        let Some(rest) = line.strip_prefix(b"data:") else {
+            continue;
+        };
+        let rest = trim_ascii(rest);
+        if rest == b"[DONE]" {
+            break;
+        }
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(rest) {
+            if let Some(id) = id_of(&value) {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
+/// The width of the vectors an embeddings response returned, for
+/// `gen_ai.embeddings.dimension.count` (#846).
+///
+/// Read from the first vector rather than declared anywhere: the request may
+/// not carry `dimensions` at all, and when it does the provider is free to
+/// ignore it — what the span should report is what actually came back.
+///
+/// `base64` encoding yields a string rather than an array, and there is no
+/// honest dimension count to give without decoding it, so that case reports
+/// nothing.
+pub fn parse_embedding_dimensions(buf: &[u8]) -> Option<u64> {
+    let value: serde_json::Value = serde_json::from_slice(buf).ok()?;
+    let len = value.pointer("/data/0/embedding")?.as_array()?.len();
+    (len > 0).then_some(len as u64)
+}
+
 /// Why the model stopped generating, for `gen_ai.response.finish_reasons`
 /// (#835).
 ///
@@ -587,6 +644,19 @@ impl UsageLoggingStream {
             // provider-side substitution all show up here and nowhere else
             if let Some(model) = parse_response_model(self.is_sse, &self.buf) {
                 span.record(crate::genai::RESPONSE_MODEL, model.as_str());
+            }
+            // the provider's own id for this call: the join key between this
+            // span and the provider's record of it (#846)
+            if let Some(id) = parse_response_id(self.is_sse, &self.buf) {
+                span.record(crate::genai::RESPONSE_ID, id.as_str());
+            }
+            // embeddings spans otherwise say nothing about the vectors, and
+            // dimensionality is what an index has to agree with. read from the
+            // response, since the provider may ignore a requested `dimensions`
+            if !self.is_sse {
+                if let Some(dimensions) = parse_embedding_dimensions(&self.buf) {
+                    span.record(crate::genai::EMBEDDINGS_DIMENSION_COUNT, dimensions);
+                }
             }
             // whether the model stopped on its own or was cut short; joined
             // because `tracing` has no array field type (#835)
@@ -1186,6 +1256,194 @@ data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\
     fn missing_finish_reason_is_empty() {
         assert!(parse_finish_reasons(false, br#"{"id":"x"}"#).is_empty());
         assert!(parse_finish_reasons(false, br#"{"data":[{"embedding":[0.1]}]}"#).is_empty());
+    }
+
+    // ── gen_ai.response.id (#846) ───────────────────────────────────────────
+    // the join key between a rolter span and the provider's own record of the
+    // call, so each dialect's spelling is pinned rather than assumed
+
+    #[test]
+    fn openai_response_id_is_read_from_the_body() {
+        let body = br#"{"id":"chatcmpl-9x","object":"chat.completion","model":"gpt-4o"}"#;
+        assert_eq!(
+            parse_response_id(false, body).as_deref(),
+            Some("chatcmpl-9x")
+        );
+    }
+
+    #[test]
+    fn openai_response_id_is_read_from_the_first_sse_chunk() {
+        let sse = b"data: {\"id\":\"chatcmpl-9x\",\"choices\":[]}\n\ndata: [DONE]\n\n";
+        assert_eq!(parse_response_id(true, sse).as_deref(), Some("chatcmpl-9x"));
+    }
+
+    /// Anthropic nests it under `message` in the `message_start` event, which
+    /// is exactly the shape `parse_response_model` already has to handle.
+    #[test]
+    fn anthropic_response_id_is_read_from_message_start() {
+        let sse = b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\"}}\n\n";
+        assert_eq!(parse_response_id(true, sse).as_deref(), Some("msg_01"));
+        let body = br#"{"id":"msg_02","type":"message","role":"assistant"}"#;
+        assert_eq!(parse_response_id(false, body).as_deref(), Some("msg_02"));
+    }
+
+    /// An absent or empty id is reported as absent. A span carrying an empty
+    /// join key is worse than one carrying none: it looks answerable.
+    #[test]
+    fn a_missing_response_id_is_none() {
+        assert_eq!(parse_response_id(false, br#"{"model":"gpt-4o"}"#), None);
+        assert_eq!(parse_response_id(false, br#"{"id":""}"#), None);
+        assert_eq!(parse_response_id(false, b"not json at all"), None);
+        assert_eq!(parse_response_id(true, b"data: [DONE]\n\n"), None);
+    }
+
+    // ── gen_ai.embeddings.dimension.count (#846) ────────────────────────────
+
+    /// Read from the vector that actually came back, not from a requested
+    /// `dimensions` the provider is free to ignore.
+    #[test]
+    fn embedding_dimensions_come_from_the_returned_vector() {
+        let body = br#"{"data":[{"embedding":[0.1,0.2,0.3,0.4]}],"model":"text-embedding-3"}"#;
+        assert_eq!(parse_embedding_dimensions(body), Some(4));
+    }
+
+    /// `encoding_format: "base64"` returns a string, and there is no honest
+    /// count to give without decoding it, so nothing is reported.
+    #[test]
+    fn a_base64_embedding_reports_no_dimension_count() {
+        let body = br#"{"data":[{"embedding":"eyJhIjoxfQ=="}]}"#;
+        assert_eq!(parse_embedding_dimensions(body), None);
+    }
+
+    #[test]
+    fn a_non_embeddings_response_reports_no_dimension_count() {
+        assert_eq!(parse_embedding_dimensions(br#"{"id":"chatcmpl-9x"}"#), None);
+        assert_eq!(parse_embedding_dimensions(br#"{"data":[]}"#), None);
+        assert_eq!(
+            parse_embedding_dimensions(br#"{"data":[{"embedding":[]}]}"#),
+            None
+        );
+    }
+
+    /// Collects every field recorded onto a span after creation, so the GenAI
+    /// attributes are asserted as *recorded* rather than as merely parsed. The
+    /// same shape `trace.rs` uses for the tenant attributes (#836).
+    #[derive(Clone, Default)]
+    struct Recorded(Arc<parking_lot::Mutex<Vec<(String, String)>>>);
+
+    impl Recorded {
+        fn get(&self, key: &str) -> Option<String> {
+            let seen = self.0.lock();
+            seen.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+        }
+    }
+
+    impl tracing::field::Visit for Recorded {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0
+                .lock()
+                .push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            self.0
+                .lock()
+                .push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0
+                .lock()
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+    }
+
+    impl<S> tracing_subscriber::Layer<S> for Recorded
+    where
+        S: tracing::Subscriber,
+    {
+        fn on_record(
+            &self,
+            _span: &tracing::span::Id,
+            values: &tracing::span::Record<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            values.record(&mut self.clone());
+        }
+    }
+
+    /// End of the #846 path, driven through `UsageLoggingStream` rather than by
+    /// calling the parsers: an embeddings response must leave the span carrying
+    /// the provider's id *and* the width of the vectors, neither of which any
+    /// other attribute expresses. A parser that is never wired into `finalize`
+    /// fails here, which is the failure mode worth testing for.
+    #[tokio::test]
+    async fn an_embeddings_response_records_its_id_and_dimension_count() {
+        use futures_util::StreamExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await;
+        });
+
+        let recorded = Recorded::default();
+        let subscriber = tracing_subscriber::registry().with(recorded.clone());
+        let _default = tracing::subscriber::set_default(subscriber);
+        let span = tracing::info_span!(
+            "upstream.request",
+            gen_ai.response.id = tracing::field::Empty,
+            gen_ai.embeddings.dimension.count = tracing::field::Empty,
+        );
+
+        let body = br#"{"id":"embd-77","data":[{"embedding":[0.1,0.2,0.3]}],"usage":{"prompt_tokens":2,"total_tokens":2}}"#;
+        let inner = futures_util::stream::iter(vec![Ok::<Bytes, reqwest::Error>(Bytes::from(
+            body.to_vec(),
+        ))]);
+        let mut wrapped = UsageLoggingStream::new(
+            Box::pin(inner),
+            false,
+            Instant::now(),
+            LogSink::spawn(
+                format!("http://{addr}"),
+                10,
+                Duration::from_millis(50),
+                100,
+                Arc::new(Metrics::default()),
+            ),
+            None,
+            RequestLog {
+                request_id: "req-embed".to_string(),
+                model: "text-embedding-3".to_string(),
+                ..Default::default()
+            },
+            None,
+            None,
+            None,
+        )
+        .with_genai_span(Some(span));
+
+        while wrapped.next().await.is_some() {}
+        drop(wrapped); // finalize runs here
+
+        assert_eq!(
+            recorded.get(crate::genai::RESPONSE_ID).as_deref(),
+            Some("embd-77"),
+            "the provider id is the join key to its own record of the call"
+        );
+        assert_eq!(
+            recorded
+                .get(crate::genai::EMBEDDINGS_DIMENSION_COUNT)
+                .as_deref(),
+            Some("3"),
+        );
     }
 
     #[test]
