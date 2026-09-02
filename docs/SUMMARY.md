@@ -53,6 +53,7 @@
 - [Dashboard error states](development/error-states.md)
 - [Commit conventions](development/commit-conventions.md)
 - [Issue tracking](development/issue-tracking.md)
+- [Merge protection on master](development/merge-protection.md)
 - [Packaging (uv / cargo / docker)](development/packaging.md)
 
 # Deployment

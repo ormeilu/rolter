@@ -76,23 +76,9 @@ fn config_for(model: &str, providers: Vec<(&str, SocketAddr)>) -> GatewayConfig 
     for (name, addr) in providers {
         config.providers.push(ProviderConfig {
             name: name.to_string(),
-            slug: None,
             kind: ProviderKind::OpenaiCompatible,
             api_base: format!("http://{addr}"),
-            api_key: None,
-            api_key_env: None,
-            egress_proxy: None,
-            egress_proxies: Vec::new(),
-            kv_events: None,
-            lmcache: None,
-            ca_bundles: None,
-            api_keys: Vec::new(),
-            also_track_via_llm_call: false,
-            llm_probe_model: None,
-            status_page_url: None,
-            role_profile: None,
-            model_role_profiles: Default::default(),
-            allow_custom_api_base: false,
+            ..Default::default()
         });
     }
     config.routes.push(ModelRoute {
@@ -308,20 +294,7 @@ async fn models_endpoint_lists_route_ids_and_provider_slug_model_ids() {
         slug: Some("vllm-spb".to_string()),
         kind: ProviderKind::OpenaiCompatible,
         api_base: "http://127.0.0.1:1".to_string(),
-        api_key: None,
-        api_key_env: None,
-        egress_proxy: None,
-        egress_proxies: Vec::new(),
-        kv_events: None,
-        lmcache: None,
-        ca_bundles: None,
-        api_keys: Vec::new(),
-        also_track_via_llm_call: false,
-        llm_probe_model: None,
-        status_page_url: None,
-        role_profile: None,
-        model_role_profiles: Default::default(),
-        allow_custom_api_base: false,
+        ..Default::default()
     });
     config.routes.push(ModelRoute {
         model: "chat".to_string(),
@@ -395,20 +368,7 @@ async fn provider_slug_model_pins_provider_and_rewrites_upstream_model() {
         slug: Some("vllm-spb".to_string()),
         kind: ProviderKind::OpenaiCompatible,
         api_base: format!("http://{upstream}"),
-        api_key: None,
-        api_key_env: None,
-        egress_proxy: None,
-        egress_proxies: Vec::new(),
-        kv_events: None,
-        lmcache: None,
-        ca_bundles: None,
-        api_keys: Vec::new(),
-        also_track_via_llm_call: false,
-        llm_probe_model: None,
-        status_page_url: None,
-        role_profile: None,
-        model_role_profiles: Default::default(),
-        allow_custom_api_base: false,
+        ..Default::default()
     });
     let gw = serve_gateway(&config).await;
 
@@ -2005,23 +1965,9 @@ async fn variant_routing_fails_over_to_next_variant() {
     for (name, addr) in [("down", down), ("up", up)] {
         config.providers.push(ProviderConfig {
             name: name.to_string(),
-            slug: None,
             kind: ProviderKind::OpenaiCompatible,
             api_base: format!("http://{addr}"),
-            api_key: None,
-            api_key_env: None,
-            egress_proxy: None,
-            egress_proxies: Vec::new(),
-            kv_events: None,
-            lmcache: None,
-            ca_bundles: None,
-            api_keys: Vec::new(),
-            also_track_via_llm_call: false,
-            llm_probe_model: None,
-            status_page_url: None,
-            role_profile: None,
-            model_role_profiles: Default::default(),
-            allow_custom_api_base: false,
+            ..Default::default()
         });
     }
     let mk_variant = |name: &str, provider: &str, weight: u32| Variant {

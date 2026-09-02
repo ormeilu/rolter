@@ -49,24 +49,11 @@ fn live_env() -> (String, String) {
 fn live_gateway(key: String, model: String) -> GatewayConfig {
     let provider = ProviderConfig {
         name: "gemini-interactions".into(),
-        slug: None,
         kind: ProviderKind::GeminiInteractions,
         api_base: std::env::var("ROLTER_GEMINI_API_BASE")
             .unwrap_or_else(|_| DEFAULT_API_BASE.to_string()),
         api_key: Some(key),
-        api_key_env: None,
-        egress_proxy: None,
-        egress_proxies: Vec::new(),
-        kv_events: None,
-        lmcache: None,
-        ca_bundles: None,
-        api_keys: vec![],
-        also_track_via_llm_call: false,
-        llm_probe_model: None,
-        status_page_url: None,
-        role_profile: None,
-        model_role_profiles: Default::default(),
-        allow_custom_api_base: false,
+        ..Default::default()
     };
     let mut config = GatewayConfig::default();
     config.routes.push(ModelRoute {

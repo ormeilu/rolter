@@ -89,20 +89,7 @@ fn config(upstream: SocketAddr, clickhouse: SocketAddr) -> GatewayConfig {
         kind: ProviderKind::OpenaiCompatible,
         api_base: format!("http://{upstream}"),
         api_key: Some("test-key".into()),
-        slug: None,
-        api_key_env: None,
-        egress_proxy: None,
-        egress_proxies: Vec::new(),
-        kv_events: None,
-        lmcache: None,
-        ca_bundles: None,
-        api_keys: vec![],
-        also_track_via_llm_call: false,
-        llm_probe_model: None,
-        status_page_url: None,
-        role_profile: None,
-        model_role_profiles: Default::default(),
-        allow_custom_api_base: false,
+        ..Default::default()
     });
     config.routes.push(ModelRoute {
         model: "slow-chat".into(),

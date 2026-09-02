@@ -40,23 +40,10 @@ fn config(api_base: String, key_env: &str, upstream_model: &str) -> GatewayConfi
     let mut config = GatewayConfig::default();
     config.providers.push(ProviderConfig {
         name: "cloud".into(),
-        slug: None,
         kind: ProviderKind::OllamaCloud,
         api_base,
-        api_key: None,
         api_key_env: Some(key_env.into()),
-        egress_proxy: None,
-        egress_proxies: Vec::new(),
-        kv_events: None,
-        lmcache: None,
-        ca_bundles: None,
-        api_keys: vec![],
-        also_track_via_llm_call: false,
-        llm_probe_model: None,
-        status_page_url: None,
-        role_profile: None,
-        model_role_profiles: Default::default(),
-        allow_custom_api_base: false,
+        ..Default::default()
     });
     config.routes.push(ModelRoute {
         model: "cloud-model".into(),

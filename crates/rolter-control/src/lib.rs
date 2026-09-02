@@ -2543,27 +2543,15 @@ mod tests {
         let mut config = GatewayConfig::default();
         config.providers.push(rolter_core::ProviderConfig {
             name: "openai".to_string(),
-            slug: None,
             kind: rolter_core::ProviderKind::Openai,
             api_base: "https://api.openai.com".to_string(),
             api_key: Some("sk-super-secret".to_string()),
-            api_key_env: None,
-            egress_proxy: None,
-            egress_proxies: Vec::new(),
-            kv_events: None,
-            lmcache: None,
-            ca_bundles: None,
             api_keys: vec![rolter_core::ApiKeyConfig {
                 key: Some("sk-also-secret".to_string()),
                 env: None,
                 weight: 1,
             }],
-            also_track_via_llm_call: false,
-            llm_probe_model: None,
-            status_page_url: None,
-            role_profile: None,
-            model_role_profiles: Default::default(),
-            allow_custom_api_base: false,
+            ..Default::default()
         });
         let state = ControlState {
             store: Arc::new(InMemoryConfigStore::new(config)),
