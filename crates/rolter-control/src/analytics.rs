@@ -237,7 +237,7 @@ pub(crate) fn run(rows: anyhow::Result<Vec<Value>>) -> Response {
             tracing::warn!(error = %err, "analytics query failed");
             (
                 StatusCode::BAD_GATEWAY,
-                Json(json!({"error": {"message": err.to_string()}})),
+                Json(json!({"error": {"message": "analytics query failed"}})),
             )
                 .into_response()
         }
