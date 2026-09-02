@@ -71,17 +71,6 @@
     "Upstream model",
     "Weight"
   ],
-  "src/components/ProviderSheet.tsx": [
-    "API base",
-    "API key (optional)",
-    "API key env var (optional)",
-    "Copy address prefix",
-    "Egress proxy (optional)",
-    "Kind",
-    "Name",
-    "Slug",
-    "Slug (optional)"
-  ],
   "src/components/ui/dialog.tsx": [
     "Close"
   ],
@@ -110,21 +99,6 @@
     "Read-only access to logs and analytics",
     "Slug",
     "Support engineers"
-  ],
-  "src/pages/Account.tsx": [
-    "Delete key",
-    "Done",
-    "Key ready",
-    "Mint",
-    "Model allow-list (optional)",
-    "Name (optional)",
-    "New key",
-    "Rotate: issue a new secret and disable this one",
-    "all models",
-    "gpt-4o, claude-sonnet",
-    "my laptop",
-    "no usage in the last 7 days",
-    "usage: analytics not configured"
   ],
   "src/pages/AdaptiveDashboard.tsx": [
     "Adaptive routes",
@@ -480,9 +454,7 @@
     "Send a text frame…",
     "Session",
     "Transcript",
-    "Virtual key",
     "no events yet",
-    "rolter-… (Bearer key the gateway authenticates)",
     "voice: nova",
     "voice: onyx",
     "voice: shimmer"
@@ -523,7 +495,7 @@
   ],
   "src/pages/Security.tsx": [
     "/v1/models, /v1/ping",
-    "Allow Direct API Keys",
+    "Allow direct provider keys",
     "Allowed Headers",
     "Allowed Origins",
     "Auth Bypass Routes",

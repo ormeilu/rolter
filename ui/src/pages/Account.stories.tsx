@@ -110,7 +110,7 @@ export const Empty: Story = {
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/haven't minted any keys yet/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/haven't minted a virtual key yet/i)).toBeInTheDocument();
   },
 };
 

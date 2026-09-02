@@ -250,11 +250,11 @@ export function ProviderSheet({
       <SheetBody>
         <p className="text-xs leading-snug text-muted-foreground">
           {mode === "add"
-            ? "Providers are scoped to the current org and used as route targets and provider-group members."
-            : "Leave the API key blank to keep the stored credential unchanged. Clear the env var or egress proxy field to unset it."}
+            ? t("providerSheet.fields.add")
+            : t("providerSheet.fields.edit")}
         </p>
 
-        <Field label="Name">
+        <Field label={t("providerSheet.fields.name")}>
           <Input
             value={draft.name}
             onChange={(e) => set({ name: e.target.value })}
@@ -265,8 +265,8 @@ export function ProviderSheet({
 
         {mode === "add" ? (
           <Field
-            label="Slug (optional)"
-            hint="URL-safe id for provider-slug/model addressing; derived from the name if blank, and immutable after create"
+            label={t("providerSheet.fields.slugOptional")}
+            hint={t("providerSheet.fields.slugOptionalHint")}
           >
             <Input
               value={draft.slug}
@@ -276,15 +276,18 @@ export function ProviderSheet({
             />
           </Field>
         ) : (
-          <Field label="Slug" hint="immutable identity for provider-slug/model addressing">
+          <Field
+            label={t("providerSheet.fields.slug")}
+            hint={t("providerSheet.fields.slugHint")}
+          >
             <div className="flex items-center gap-2">
               <Input value={draft.slug} readOnly disabled className="font-mono" />
-              {provider && <CopyButton value={`${provider.slug}/`} label="Copy address prefix" />}
+              {provider && <CopyButton value={`${provider.slug}/`} label={t("providerSheet.fields.copyPrefix")} />}
             </div>
           </Field>
         )}
 
-        <Field label="Kind">
+        <Field label={t("providerSheet.fields.kind")}>
           <Select value={draft.kind} onChange={(e) => set({ kind: e.target.value })}>
             {PROVIDER_KINDS.map((k) => (
               <option key={k} value={k}>
@@ -295,7 +298,7 @@ export function ProviderSheet({
         </Field>
 
         <Field
-          label="API base"
+          label={t("providerSheet.fields.apiBase")}
           hint={t(
             baseIncludesV1
               ? "providerSheet.apiBase.includesV1"
@@ -330,11 +333,11 @@ export function ProviderSheet({
         </Field>
 
         <Field
-          label="API key (optional)"
+          label={t("providerSheet.fields.providerKey")}
           hint={
             mode === "add"
-              ? "sealed at rest; never displayed again"
-              : "blank leaves the stored key unchanged; sealed at rest, never displayed"
+              ? t("providerSheet.fields.providerKeyHintAdd")
+              : t("providerSheet.fields.providerKeyHintEdit")
           }
         >
           <Input
@@ -346,7 +349,10 @@ export function ProviderSheet({
           />
         </Field>
 
-        <Field label="API key env var (optional)" hint="read from this env var instead">
+        <Field
+          label={t("providerSheet.fields.providerKeyEnv")}
+          hint={t("providerSheet.fields.providerKeyEnvHint")}
+        >
           <Input
             value={draft.apiKeyEnv}
             onChange={(e) => set({ apiKeyEnv: e.target.value })}
@@ -354,7 +360,7 @@ export function ProviderSheet({
           />
         </Field>
 
-        <Field label="Egress proxy (optional)">
+        <Field label={t("providerSheet.fields.egressProxy")}>
           <Input
             value={draft.egressProxy}
             onChange={(e) => set({ egressProxy: e.target.value })}

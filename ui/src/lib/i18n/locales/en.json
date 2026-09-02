@@ -135,7 +135,7 @@
     "compatibility": "Compatibility",
     "caching": "Caching",
     "security": "Security",
-    "api-keys": "API Keys",
+    "api-keys": "My Virtual Keys",
     "performance": "Performance Tuning",
     "feature-flags": "Feature Flags"
   },
@@ -491,12 +491,22 @@
     },
     "tool-groups": {
       "confirmDelete": "Are you sure you want to delete this tool group?"
+    },
+    "virtualKeys": {
+      "explainer": "Virtual keys are the credential clients send to the gateway (sk-rolter-…). Provider keys — the credentials your providers issued to rolter — live on the Providers screen and are never sent by clients."
     }
   },
   "playground": {
     "copyAsCode": "Copy as code",
     "copyAsCodeHint": "The same OpenAI SDK, pointed at Rolter. The key is read from an environment variable so the snippet is safe to paste anywhere.",
-    "language": "Language"
+    "language": "Language",
+    "key": {
+      "label": "Virtual key",
+      "placeholder": "sk-rolter-… (the key the gateway authenticates)",
+      "save": "Save",
+      "saved": "Saved ✓",
+      "hint": "A rolter virtual key, minted on the Virtual Keys screen. Not a provider key — those are configured on the provider and are never sent by clients."
+    }
   },
   "providerSheet": {
     "apiBase": {
@@ -510,7 +520,25 @@
     "testFailed": "Could not reach this provider",
     "testOk_one": "Reachable · {{count}} model · {{ms}} ms",
     "testOk_other": "Reachable · {{count}} models · {{ms}} ms",
-    "testing": "Testing…"
+    "testing": "Testing…",
+    "fields": {
+      "add": "Providers are scoped to the current org and used as route targets and provider-group members.",
+      "edit": "Leave the provider key blank to keep the stored credential unchanged. Clear the env var or egress proxy field to unset it.",
+      "name": "Name",
+      "slugOptional": "Slug (optional)",
+      "slugOptionalHint": "URL-safe id for provider-slug/model addressing; derived from the name if blank, and immutable after create",
+      "slug": "Slug",
+      "slugHint": "immutable identity for provider-slug/model addressing",
+      "copyPrefix": "Copy address prefix",
+      "kind": "Kind",
+      "apiBase": "API base",
+      "providerKey": "Provider key (optional)",
+      "providerKeyHintAdd": "the credential this provider issued to rolter — sealed at rest, never displayed again. not a rolter virtual key",
+      "providerKeyHintEdit": "blank leaves the stored provider key unchanged; sealed at rest, never displayed",
+      "providerKeyEnv": "Provider key env var (optional)",
+      "providerKeyEnvHint": "read the provider key from this env var instead",
+      "egressProxy": "Egress proxy (optional)"
+    }
   },
   "scope": {
     "loading": "Loading scope…",
@@ -726,7 +754,7 @@
     },
     "settings": {
       "title": "Settings",
-      "subtitle": "Client, caching, security, API keys, and feature flags."
+      "subtitle": "Client, caching, security, virtual keys, and feature flags."
     },
     "client-settings": {
       "title": "Client Settings",
@@ -745,8 +773,8 @@
       "subtitle": "Configure security and access-control settings for the gateway."
     },
     "api-keys": {
-      "title": "API Keys",
-      "subtitle": "Gateway API keys for programmatic access."
+      "title": "My Virtual Keys",
+      "subtitle": "Your own virtual keys for calling the gateway from code."
     },
     "performance": {
       "title": "Performance Tuning",
@@ -766,7 +794,7 @@
     "role": "Admin",
     "roleWithOrg": "Admin · {{org}}",
     "scope": "Scope",
-    "accountAndKeys": "Account & API keys",
+    "accountAndKeys": "Account & virtual keys",
     "signOut": "Sign out",
     "gatewayHealthy": "gateway healthy",
     "refresh": "Refresh",
@@ -791,6 +819,49 @@
     "openMode": {
       "title": "Self-service keys need a local account.",
       "body": "This control plane is running in open mode with no admin token, so it has no user accounts — there is no \"you\" to mint a key for. Set ROLTER_ADMIN_TOKEN and create a local account to use this screen, or manage keys from the admin Virtual Keys screen instead."
+    },
+    "keys": {
+      "explainer": "These are rolter virtual keys (sk-rolter-…) — the credential your code sends to the gateway. Provider keys are configured on the provider and are never sent by clients.",
+      "summary_one": "{{count}} virtual key · yours to rotate or revoke",
+      "summary_other": "{{count}} virtual keys · yours to rotate or revoke",
+      "generate": "Generate virtual key",
+      "selectProject": "Select a project in the sidebar to mint a virtual key",
+      "loading": "Loading…",
+      "empty": "You haven't minted a virtual key yet. Create one to start calling the gateway.",
+      "delete": {
+        "title": "Delete virtual key",
+        "body": "will stop authenticating immediately. This cannot be undone.",
+        "cancel": "Cancel",
+        "confirm": "Delete"
+      },
+      "card": {
+        "unnamed": "unnamed key",
+        "disabled": "disabled",
+        "active": "active",
+        "allModels": "all models",
+        "usageUnavailable": "usage: analytics not configured",
+        "usage": "{{requests}} req · {{cost}} (7d)",
+        "noUsage": "no usage in the last 7 days",
+        "rotate": "Rotate",
+        "rotateHint": "Rotate: issue a new secret and disable this one",
+        "deleteHint": "Delete this virtual key"
+      },
+      "mint": {
+        "title": "New virtual key",
+        "subtitle": "Personal virtual key in {{project}} — shown once, right after creation",
+        "currentProject": "the current project",
+        "save": "Mint",
+        "name": "Name (optional)",
+        "namePlaceholder": "my laptop",
+        "models": "Model allow-list (optional)",
+        "modelsHint": "comma-separated public model names; empty allows all models",
+        "modelsPlaceholder": "gpt-4o, claude-sonnet"
+      },
+      "revealed": {
+        "title": "Virtual key ready",
+        "body": "This is the only time the plaintext key is shown. Copy it now — it can't be retrieved again.",
+        "done": "Done"
+      }
     }
   }
 }

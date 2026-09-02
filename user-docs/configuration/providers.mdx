@@ -4,7 +4,7 @@ sidebarTitle: "Providers"
 description: "How Rolter reaches an upstream, where the credential lives, and how to check the pair actually works before a request depends on it."
 ---
 
-A provider is one upstream endpoint plus the credential Rolter uses to reach it. Routes and provider groups select *targets*, and every target names a provider.
+A provider is one upstream endpoint plus the credential Rolter uses to reach it. That credential is the *provider key* — the one the provider issued to Rolter, never the virtual key a client sends ([which key do I need?](/security/which-key)). Routes and provider groups select *targets*, and every target names a provider.
 
 Add them from **Providers** in the dashboard, or through the management API.
 
