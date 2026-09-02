@@ -56,6 +56,7 @@ rolter is a high-performance OpenAI/Anthropic-compatible AI gateway and load bal
 - Use `parking_lot::Mutex`, never `std::sync::Mutex`, for shared state on the data plane. A std mutex poisons when a thread panics holding it, so one transient panic turns every later `.lock().unwrap()` into a panic — a permanent, restart-only outage. `crates/rolter-gateway/tests/lock_discipline.rs` enforces this.
 - Code comments start lowercase with no trailing punctuation; `///` doc comments use normal prose.
 - New balancing strategies implement `rolter_balancer::LoadBalancer` and are wired into `build()`.
+- A type that fixtures construct everywhere (`ProviderConfig` is the model) carries a `Default` so tests can write `..Default::default()`; production mapping code still writes the literal out in full. See `docs/development/merge-protection.md`.
 - New storage backends implement the `rolter_store` traits behind a cargo feature.
 - The gateway ships a built-in `fake-llm` model (deterministic lorem ipsum, no upstream or config needed) on `/v1/chat/completions` and `/v1/messages` (non-streaming and SSE) plus `/v1/embeddings` (deterministic vectors). Use it for smoke tests and local dev without secrets; a configured route named `fake-llm` shadows the builtin.
 

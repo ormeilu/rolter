@@ -21,23 +21,10 @@ fn config(addr: SocketAddr, api_key: Option<&str>) -> GatewayConfig {
     let mut config = GatewayConfig::default();
     config.providers.push(ProviderConfig {
         name: "tei-local".into(),
-        slug: None,
         kind: ProviderKind::Tei,
         api_base: format!("http://{addr}"),
         api_key: api_key.map(str::to_string),
-        api_key_env: None,
-        egress_proxy: None,
-        egress_proxies: Vec::new(),
-        kv_events: None,
-        lmcache: None,
-        ca_bundles: None,
-        api_keys: vec![],
-        also_track_via_llm_call: false,
-        llm_probe_model: None,
-        status_page_url: None,
-        role_profile: None,
-        model_role_profiles: Default::default(),
-        allow_custom_api_base: false,
+        ..Default::default()
     });
     config.routes.push(ModelRoute {
         model: "embed-local".into(),

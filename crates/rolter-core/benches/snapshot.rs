@@ -11,31 +11,16 @@
 //! up a database.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use rolter_core::{
-    BalancingStrategy, GatewayConfig, ModelRoute, ProviderConfig, ProviderKind, Target,
-};
+use rolter_core::{BalancingStrategy, GatewayConfig, ModelRoute, ProviderConfig, Target};
 use std::hint::black_box;
 
 fn provider(i: usize) -> ProviderConfig {
     ProviderConfig {
         name: format!("provider-{i}"),
         slug: Some(format!("provider-{i}")),
-        kind: ProviderKind::OpenaiCompatible,
         api_base: format!("https://provider-{i}.example.test/v1"),
-        api_key: None,
         api_key_env: Some(format!("PROVIDER_{i}_KEY")),
-        egress_proxy: None,
-        egress_proxies: Vec::new(),
-        kv_events: None,
-        lmcache: None,
-        ca_bundles: None,
-        api_keys: Vec::new(),
-        also_track_via_llm_call: false,
-        llm_probe_model: None,
-        status_page_url: None,
-        role_profile: None,
-        model_role_profiles: Default::default(),
-        allow_custom_api_base: false,
+        ..Default::default()
     }
 }
 

@@ -231,23 +231,9 @@ mod tests {
     fn provider(name: &str) -> rolter_core::ProviderConfig {
         rolter_core::ProviderConfig {
             name: name.to_string(),
-            slug: None,
             kind: rolter_core::ProviderKind::Openai,
             api_base: "https://example.com".to_string(),
-            api_key: None,
-            api_key_env: None,
-            egress_proxy: None,
-            egress_proxies: Vec::new(),
-            kv_events: None,
-            lmcache: None,
-            ca_bundles: None,
-            api_keys: Vec::new(),
-            also_track_via_llm_call: false,
-            llm_probe_model: None,
-            status_page_url: None,
-            role_profile: None,
-            model_role_profiles: Default::default(),
-            allow_custom_api_base: false,
+            ..Default::default()
         }
     }
 

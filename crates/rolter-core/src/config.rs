@@ -605,7 +605,14 @@ fn default_realtime_idle_timeout_secs() -> u64 {
 }
 
 /// The wire protocol a provider speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+///
+/// The `Default` is [`ProviderKind::OpenaiCompatible`] — the one variant that
+/// names no vendor and carries no host pin, so a defaulted provider cannot be
+/// mistaken for a hosted operator. `kind` is a required field everywhere it is
+/// deserialized, so nothing on a config or database path can reach the default
+/// by omission; it exists for test and bench fixtures built with
+/// `..Default::default()`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     /// native openai chat/completions api
@@ -613,6 +620,7 @@ pub enum ProviderKind {
     /// native anthropic messages api
     Anthropic,
     /// any openai-compatible endpoint such as vllm, tgi or ollama
+    #[default]
     OpenaiCompatible,
     /// a self-hosted ollama daemon using its openai-compatible api
     Ollama,
@@ -725,7 +733,16 @@ pub enum RoleProfile {
 }
 
 /// An upstream provider rolter can forward to.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+///
+/// `Default` yields an unnamed, unaddressed openai-compatible target: every
+/// field is empty, absent or false. It is there so a fixture can name the two
+/// or three fields a test actually cares about and write `..Default::default()`
+/// for the rest — adding a field to this struct then stays a no-op for every
+/// test in the workspace instead of a compile error in all of them (#1150).
+/// Production code that maps a stored row or a parsed config into a
+/// `ProviderConfig` still writes the literal out in full, so the compiler keeps
+/// forcing a decision about each new field on the paths where one is owed.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ProviderConfig {
     pub name: String,
     /// stable, URL-safe identity for `provider-slug/model` addressing. When
@@ -3685,24 +3702,47 @@ mod tests {
     fn provider_with_keys(api_keys: Vec<ApiKeyConfig>) -> ProviderConfig {
         ProviderConfig {
             name: "p".to_string(),
-            slug: None,
             kind: ProviderKind::OpenaiCompatible,
             api_base: "http://x".to_string(),
             api_key: Some("legacy".to_string()),
-            api_key_env: None,
-            egress_proxy: None,
-            egress_proxies: Vec::new(),
-            kv_events: None,
-            lmcache: None,
-            ca_bundles: None,
             api_keys,
-            also_track_via_llm_call: false,
-            llm_probe_model: None,
-            status_page_url: None,
-            role_profile: None,
-            model_role_profiles: HashMap::new(),
-            allow_custom_api_base: false,
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_defaulted_provider_names_no_vendor_and_reaches_nothing() {
+        // the point of this Default is that a fixture can omit every field it
+        // does not care about (#1150), so it has to be inert: nothing here may
+        // send a request, pin a host, or burn tokens on a health sweep
+        let p = ProviderConfig::default();
+        assert!(p.name.is_empty());
+        assert!(p.api_base.is_empty());
+        assert_eq!(p.kind, ProviderKind::OpenaiCompatible);
+        assert!(p.slug.is_none());
+        assert!(p.api_key.is_none());
+        assert!(p.api_key_env.is_none());
+        assert!(p.api_keys.is_empty());
+        assert!(p.egress_proxy.is_none());
+        assert!(p.egress_proxies.is_empty());
+        assert!(!p.also_track_via_llm_call);
+        assert!(!p.allow_custom_api_base);
+        assert!(p.status_page_url.is_none());
+        assert!(p.model_role_profiles.is_empty());
+    }
+
+    #[test]
+    fn a_provider_kind_is_still_required_when_deserializing() {
+        // `ProviderKind: Default` must not let a config or a stored row omit
+        // `kind` and silently become openai-compatible
+        let err = toml::from_str::<ProviderConfig>(
+            r#"
+            name = "p"
+            api_base = "https://example.test"
+            "#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("kind"), "{err}");
     }
 
     #[test]
