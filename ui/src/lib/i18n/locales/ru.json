@@ -10,7 +10,18 @@
     "signingIn": "Вход…",
     "continueWith": "Войти через {{provider}}",
     "noMethod": "Для этой установки не включён ни один способ входа.",
-    "selfHosted": "Self-hosted · сессии не покидают эту установку."
+    "selfHosted": "Self-hosted · сессии не покидают эту установку.",
+    "errors": {
+      "invalidCredentials": "Эта пара «почта — пароль» не соответствует ни одной учётной записи.",
+      "passwordLoginDisabled": "Вход по паролю отключён для этой организации. Используйте single sign-on ниже.",
+      "tooManyAttempts": "Слишком много неудачных попыток. Повторите позже.",
+      "tooManyAttempts_wait_one": "Слишком много неудачных попыток. Повторите через {{count}} секунду.",
+      "tooManyAttempts_wait_few": "Слишком много неудачных попыток. Повторите через {{count}} секунды.",
+      "tooManyAttempts_wait_many": "Слишком много неудачных попыток. Повторите через {{count}} секунд.",
+      "tooManyAttempts_wait_other": "Слишком много неудачных попыток. Повторите через {{count}} секунды.",
+      "unavailable": "Не удалось связаться с control plane. Проверьте, что он запущен, и повторите попытку.",
+      "unexpected": "Не удалось войти: {{message}}"
+    }
   },
   "common": {
     "cancel": "Отмена",

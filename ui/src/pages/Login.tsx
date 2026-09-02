@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getAuthMethods, login, type AuthMethods } from "@/lib/api";
+import { ApiError, getAuthMethods, login, type AuthMethods } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 // login — one of the two sanctioned places the вышивка thread runs
@@ -18,12 +18,24 @@ export default function Login() {
   // what this deployment offers. null while unknown; the permissive shape is
   // assumed on failure so an api hiccup never hides the only way in
   const [methods, setMethods] = useState<AuthMethods | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // this control plane serves no auth endpoints at all — it is running in open
+  // mode with no store, so `/api/v1/auth/*` is not even mounted. That is the
+  // one case the email-only gate exists for, and it is identifiable up front
+  // rather than inferred from a failed sign-in (#1160)
+  const [openMode, setOpenMode] = useState(false);
 
   useEffect(() => {
     let live = true;
     void getAuthMethods()
       .then((m) => live && setMethods(m))
-      .catch(() => live && setMethods({ password: true, sso: [] }));
+      .catch((err) => {
+        if (!live) return;
+        // a permissive shape either way: an api hiccup must never hide the only
+        // way in. what changes is whether we already know the endpoints are gone
+        if (err instanceof ApiError && err.status === 404) setOpenMode(true);
+        setMethods({ password: true, sso: [] });
+      });
     return () => {
       live = false;
     };
@@ -32,18 +44,37 @@ export default function Login() {
   const showPassword = methods?.password !== false;
   const providers = methods?.sso ?? [];
 
-  // try a real local-account login first (needed for the self-service /me/*
-  // endpoints, which require a session token). if it fails — wrong creds, or an
-  // open-mode deployment with no local accounts — fall back to the email-only
-  // gate so the admin dashboard still opens exactly as before.
+  /**
+   * Sign in against a real local account, which is what the self-service
+   * `/me/*` endpoints need a session token for.
+   *
+   * The email-only gate is a fallback for exactly one deployment: open mode
+   * with no store, where `/api/v1/auth/login` is not mounted. It used to be
+   * the fallback for *every* failure, so a wrong password, a locked account
+   * and an SSO-only org all opened the dashboard with no session — the user
+   * believed they had signed in, and every later request failed for a reason
+   * nothing on screen explained (#1160).
+   */
   const submit = async () => {
     const addr = email.trim() || "operator";
+    setError(null);
     setPending(true);
+    if (openMode) {
+      signIn(addr);
+      setPending(false);
+      return;
+    }
     try {
       const res = await login(addr, pw);
       signIn(res.user.email, res.token);
-    } catch {
-      signIn(addr);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        // the endpoint is not served here after all: this is the open-mode
+        // deployment, discovered late
+        signIn(addr);
+      } else {
+        setError(loginErrorMessage(err, t));
+      }
     } finally {
       setPending(false);
     }
@@ -103,6 +134,14 @@ export default function Login() {
                 </button>
               </span>
             </label>
+            {error && (
+              <p
+                role="alert"
+                className="rounded-md border border-[color:var(--status-danger)]/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
+                {error}
+              </p>
+            )}
             <Button
               type="submit"
               disabled={pending}
@@ -151,4 +190,37 @@ export default function Login() {
       </div>
     </div>
   );
+}
+
+/**
+ * One message per reason the control plane can refuse a sign-in. Branching on
+ * `code` rather than the message keeps the wording free to be reworded and
+ * translated on both sides independently.
+ */
+function loginErrorMessage(
+  err: unknown,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  if (!(err instanceof ApiError)) {
+    // never reached the control plane: a network failure, or it is down
+    return t("auth.errors.unavailable");
+  }
+  switch (err.code) {
+    case "invalid_credentials":
+      return t("auth.errors.invalidCredentials");
+    case "password_login_disabled":
+      return t("auth.errors.passwordLoginDisabled");
+    case "too_many_attempts":
+      // the lock carries how long it lasts; saying so beats making the user
+      // guess, and beats making them poll to find out
+      return err.retryAfterSeconds && err.retryAfterSeconds > 0
+        ? t("auth.errors.tooManyAttempts_wait", {
+            count: Math.ceil(err.retryAfterSeconds),
+          })
+        : t("auth.errors.tooManyAttempts");
+    default:
+      return err.status >= 500
+        ? t("auth.errors.unavailable")
+        : t("auth.errors.unexpected", { message: err.message });
+  }
 }
