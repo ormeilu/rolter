@@ -213,8 +213,11 @@ export function NavSidebar({
         )}
       </div>
 
+      {/* the focus ring lives on the wrapper, not the input: the input is
+          borderless inside a bordered box, so a ring on it would draw inside
+          that box rather than around the control a keyboard user sees (#963) */}
       {searchable && !collapsed && (
-        <label className="flex items-center gap-2 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-base)] px-2 py-1.5 transition-colors focus-within:border-[color:var(--border-default)]">
+        <label className="flex items-center gap-2 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-base)] px-2 py-1.5 transition-colors focus-within:border-[color:var(--border-default)] focus-within:ring-1 focus-within:ring-ring">
           <Search className="h-3.5 w-3.5 flex-none text-[color:var(--text-subtle)]" />
           <input
             value={query}
