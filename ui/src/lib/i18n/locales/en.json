@@ -798,6 +798,7 @@
     "searchNav": "Search navigation",
     "collapseSidebar": "Collapse sidebar",
     "expandSidebar": "Expand sidebar",
+    "resizeSidebar": "Resize sidebar",
     "githubRepo": "GitHub repository",
     "reportBug": "Report a bug",
     "role": "Admin",

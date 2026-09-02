@@ -51,6 +51,7 @@
 - [Parallel development with Worktrunk](development/worktrees.md)
 - [Dashboard localization (i18n)](development/i18n.md)
 - [Dashboard error states](development/error-states.md)
+- [Dashboard navigation rail](development/dashboard-navigation.md)
 - [Commit conventions](development/commit-conventions.md)
 - [Issue tracking](development/issue-tracking.md)
 - [Packaging (uv / cargo / docker)](development/packaging.md)
