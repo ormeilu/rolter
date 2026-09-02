@@ -42,7 +42,6 @@ spec:
           ports:
             - name: http
               containerPort: 4000
-          env:
           env: {{- $gatewayEnv | nindent 12 }}
           volumeMounts:
             - name: config
