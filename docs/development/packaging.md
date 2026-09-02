@@ -109,13 +109,19 @@ python3 scripts/sync-chart-appversion.py --fix
 ## Release pipeline
 
 Releases are fully automated from Conventional Commits. Two workflows do the
-work, and the handoff between them is the part worth understanding.
+release work and `ci.yml` gates the release PR; the handoffs between them are
+the part worth understanding, because all three are `workflow_dispatch` calls
+made to get around GitHub's event suppression rather than ordinary triggers.
 
 ```text
 merge to master
       │
       ▼
 release-plz.yml ── release-pr ──►  "Release PR" (version bump + changelogs)
+      │                                    │
+      │                                    │ workflow_dispatch --ref <release branch>
+      │                                    ▼          ← dispatch-release-pr-ci
+      │                                 ci.yml ──►  ci-ok on the Release PR
       │
       │ (that PR is merged)
       ▼
@@ -162,6 +168,36 @@ Two properties make the barrier real:
 Each build is its own job, so a single flaky platform can be re-run on its own
 without re-publishing anything that already succeeded.
 
+### Why the release PR needs a dispatch too
+
+The same suppression hides the release PR itself. `ci-ok` is the only required
+status check on master, and only `ci.yml` reports it — but release-plz pushes
+the release branch and opens its PR with the repository `GITHUB_TOKEN`, so
+neither `push` nor `pull_request` fires and the required context is never
+reported. The PR stays at `BLOCKED` no matter how long you wait, and the only
+way to merge it is an admin bypass. Every release from the introduction of
+`ci-ok` up to [#1025] went out that way; the only checks that ever landed on a
+release PR were the externally-sourced ones (the CodeQL app, GitGuardian),
+because those do not come from a workflow event.
+
+`dispatch-release-pr-ci` closes it with the same tool as the tag handoff. It
+runs after `release-plz-pr` — so it sees the head that the `sync chart
+appVersion` step leaves behind, not the one before it — finds the open PR whose
+head branch starts with `release-plz-`, and runs `gh workflow run ci.yml --ref
+<branch>`. A `workflow_dispatch` run's check-runs attach to the head commit of
+the ref, which is exactly the commit branch protection is looking at. Like the
+tag handoff, the job fails if the dispatch produces no run.
+
+It deliberately does **not** read the branch from the action's `prs` output:
+that output is populated only on the run that *creates* the PR, while the branch
+is force-pushed on every later master commit and needs re-gating each time.
+
+One check is genuinely absent on a dispatched run: `pr-title` is
+`if: github.event_name == 'pull_request'`, so it is skipped, and `ci-ok`
+tolerates a skipped `pr-title` the same way it does on a push build. That is
+acceptable here because release-plz writes the release PR title itself and it is
+already a valid Conventional Commit line.
+
 ### Why the explicit dispatch
 
 `release.yml` also has a `push: tags` trigger, but it never fires for a real
@@ -197,6 +233,7 @@ before it is dispatched rather than halfway through the artifact build.
 
 [gh-token]: https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow
 [#903]: https://github.com/rolter-ai/rolter/issues/903
+[#1025]: https://github.com/rolter-ai/rolter/issues/1025
 [#1026]: https://github.com/rolter-ai/rolter/issues/1026
 
 ### Parity gate
