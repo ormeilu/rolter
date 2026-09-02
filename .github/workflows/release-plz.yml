@@ -32,6 +32,7 @@ jobs:
         with:
           toolchain: stable
       - name: run release-plz
+        id: release_pr
         uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5.131
         with:
           command: release-pr
@@ -39,6 +40,37 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      # release-plz bumps the workspace version but knows nothing about the helm
+      # chart, so `appVersion` — the value an operator reads to know which rolter
+      # a release deploys — drifted three releases behind before anyone noticed
+      # (#1140). reconcile it on the release branch itself, so the release PR is
+      # already consistent rather than needing a follow-up commit. the same check
+      # runs in `quality.yml`, which is what catches it if this step ever stops
+      # working.
+      - name: sync chart appVersion onto the release branch
+        if: steps.release_pr.outputs.prs_created == 'true'
+        env:
+          PRS: ${{ steps.release_pr.outputs.prs }}
+        run: |
+          set -euo pipefail
+          branch="$(printf '%s' "$PRS" | jq -r '.[0].head_branch // ""')"
+          if [ -z "$branch" ]; then
+            echo "::error::release-plz reported a created PR with no head_branch"
+            exit 1
+          fi
+          git fetch origin "$branch"
+          git checkout "$branch"
+          python3 scripts/sync-chart-appversion.py --fix
+          if git diff --quiet -- charts/rolter/Chart.yaml; then
+            echo "chart appVersion already matched; nothing to push"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --no-verify -m "chore(release): sync chart appVersion" \
+            -- charts/rolter/Chart.yaml
+          git push origin "$branch"
 
   # on merge of the release PR: publishes every workspace member to crates.io
   # in dependency order (`publish = true` in .github/config/release-plz.toml, using

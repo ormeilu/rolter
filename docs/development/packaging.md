@@ -81,6 +81,31 @@ the matching `version = "…"` on each internal `[workspace.dependencies]` entry
 release-plz picks the new line up on the next Release PR and auto-bumps from
 there.
 
+### The helm chart's appVersion
+
+`charts/rolter/Chart.yaml` carries two numbers and they mean different things.
+`version:` is the *chart's* version, on its own cadence, and nothing here
+touches it. `appVersion:` is which rolter a chart release deploys — the value
+`helm list` prints and most dashboards surface — so it must equal the workspace
+version.
+
+Nothing kept it there. It sat at `0.0.9` while the workspace shipped `0.0.10`,
+`0.0.11` and then `0.1.0`, pointing operators at a version that had never been
+deployed (#1140). Two things now hold it:
+
+- the `release-plz pr` job runs `scripts/sync-chart-appversion.py --fix` on the
+  release branch and pushes the result, so the Release PR is already consistent
+- `quality.yml`'s `helm chart` job runs the same script in check mode, so a
+  disagreement fails CI rather than shipping — including if the release-branch
+  step ever stops working
+
+The script is also a `prek` hook on `Cargo.toml` and `Chart.yaml`, so a manual
+version-line move is caught before it is pushed. To reconcile by hand:
+
+```bash
+python3 scripts/sync-chart-appversion.py --fix
+```
+
 ## Release pipeline
 
 Releases are fully automated from Conventional Commits. Two workflows do the
