@@ -209,6 +209,10 @@ pub(crate) enum ApiError {
     Unauthenticated,
     /// authenticated but lacking the required role at the scope (403)
     Forbidden,
+    /// the client has spent its budget of rejected attempts on a token
+    /// endpoint and is locked for a while (429, #1079). Carries the remaining
+    /// lock, which is rendered as `Retry-After`
+    TooManyAttempts(std::time::Duration),
 }
 
 impl From<Error> for ApiError {
@@ -219,6 +223,11 @@ impl From<Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        // read before the match consumes `self`
+        let retry_after = match &self {
+            Self::TooManyAttempts(remaining) => Some(*remaining),
+            _ => None,
+        };
         let (status, message) = match self {
             Self::Core(err) => {
                 let status = match &err {
@@ -237,12 +246,27 @@ impl IntoResponse for ApiError {
                 StatusCode::FORBIDDEN,
                 "insufficient role for this resource".to_string(),
             ),
+            Self::TooManyAttempts(_) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many rejected attempts; try again later".to_string(),
+            ),
         };
-        (
+        let mut response = (
             status,
             Json(serde_json::json!({"error": {"message": message}})),
         )
-            .into_response()
+            .into_response();
+        // say what the lock reads, so a client waits rather than polling. rounded
+        // up, so a sub-second remainder never renders as `0`
+        if let Some(retry_after) = retry_after {
+            let secs = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
+            if let Ok(value) = axum::http::HeaderValue::from_str(&secs.to_string()) {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::RETRY_AFTER, value);
+            }
+        }
+        response
     }
 }
 

@@ -1128,6 +1128,7 @@ mod tests {
         ("ldap.rs", include_str!("ldap.rs")),
         ("lib.rs", include_str!("lib.rs")),
         ("logging_settings.rs", include_str!("logging_settings.rs")),
+        ("login_throttle.rs", include_str!("login_throttle.rs")),
         ("main.rs", include_str!("main.rs")),
         ("mcp_logs.rs", include_str!("mcp_logs.rs")),
         ("model_defaults.rs", include_str!("model_defaults.rs")),

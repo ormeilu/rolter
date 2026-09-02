@@ -190,6 +190,10 @@ pub enum AuthError {
     /// [`Self::Unauthenticated`] because the remedy is completely different:
     /// this one is not fixed by signing in (#942)
     OpenModeNoSession,
+    /// the account or the client address has spent its failed-login budget and
+    /// is locked for a while (#1079). Carries the remaining lock so the client
+    /// gets a `Retry-After` instead of having to poll
+    TooManyAttempts(std::time::Duration),
     Internal(String),
 }
 
@@ -222,15 +226,33 @@ impl IntoResponse for AuthError {
                  under /api/v1/me/ are per-user and cannot be served without one — set an \
                  admin token and create a local account, or use the admin virtual-key API",
             ),
+            Self::TooManyAttempts(_) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "too_many_attempts",
+                "too many failed sign-in attempts; try again later",
+            ),
             Self::Internal(ref msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal", msg.as_str())
             }
         };
-        (
+        let mut response = (
             status,
             Json(serde_json::json!({"error": {"message": message, "code": code}})),
         )
-            .into_response()
+            .into_response();
+        // a lock is a clock, so say what it reads: a client that is told how
+        // long to wait does not have to poll to find out
+        if let Self::TooManyAttempts(retry_after) = self {
+            // round up, so a sub-second remainder never renders as `0` and
+            // invites an immediate retry
+            let secs = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
+            if let Ok(value) = axum::http::HeaderValue::from_str(&secs.to_string()) {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::RETRY_AFTER, value);
+            }
+        }
+        response
     }
 }
 
@@ -259,25 +281,94 @@ struct LoginResponse {
 
 async fn login(
     State(state): State<ControlState>,
+    client: crate::login_throttle::ClientAddr,
+    headers: axum::http::HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> AuthResult<Json<LoginResponse>> {
     let email = body.email.trim().to_string();
     let pool = pool(&state);
 
+    let client_ip = client.resolve(&headers, state.trust_forwarded_for);
+    let subjects = state.login_throttle.subjects(&email, client_ip);
+
+    // checked *before* the password is verified. refusing afterwards would
+    // still buy the attacker a full argon2 hash per request, which is the
+    // cpu-exhaustion half of #1079 rather than the guessing half
+    if let Some(locked) = state.login_throttle.check(&subjects).await {
+        state.metrics.record_login("throttled");
+        audit_login_failure(
+            &state,
+            &email,
+            client_ip,
+            "auth.login_throttled",
+            serde_json::json!({
+                "scope": locked.scope.as_str(),
+                "retry_after_secs": locked.retry_after.as_secs(),
+            }),
+        );
+        return Err(AuthError::TooManyAttempts(locked.retry_after));
+    }
+
     let provider = LocalIdentityProvider::new(pool.clone());
-    let identity = provider
+    let resolved = provider
         .resolve(Credential::Password {
-            email,
+            email: email.clone(),
             password: body.password,
         })
-        .await
-        .map_err(|err| match err {
-            IdentityError::PolicyDenied(_) => AuthError::PasswordLoginDisabled,
-            IdentityError::Provider(msg) => AuthError::Internal(msg),
-            IdentityError::NotVerified | IdentityError::UnsupportedCredential { .. } => {
-                AuthError::InvalidCredentials
+        .await;
+
+    let identity = match resolved {
+        Ok(identity) => identity,
+        Err(err) => {
+            // a provider (database) error is the server's fault, not the
+            // caller's: counting it would let a database blip lock out the
+            // whole user base
+            if let IdentityError::Provider(msg) = err {
+                state.metrics.record_login("error");
+                return Err(AuthError::Internal(msg));
             }
-        })?;
+            let penalty = state.login_throttle.record_failure(&subjects).await;
+            let mut detail = serde_json::json!({ "delay_ms": penalty.delay.as_millis() as u64 });
+            if let Some(lock) = penalty.locked_for {
+                detail["locked_for_secs"] = (lock.as_secs()).into();
+                detail["locked_scope"] = penalty
+                    .locked_scope
+                    .map(|scope| scope.as_str())
+                    .unwrap_or_default()
+                    .into();
+            }
+            audit_login_failure(
+                &state,
+                &email,
+                client_ip,
+                if penalty.locked_for.is_some() {
+                    "auth.login_locked"
+                } else {
+                    "auth.login_failed"
+                },
+                detail,
+            );
+            state.metrics.record_login(if penalty.locked_for.is_some() {
+                "locked"
+            } else {
+                "invalid"
+            });
+            // the delay follows the attempt counter, which is keyed on the
+            // submitted address whether or not anybody has registered it — so
+            // it stays identical for an unknown account and a wrong password,
+            // exactly like the constant-cost argon2 verification above
+            if !penalty.delay.is_zero() {
+                tokio::time::sleep(penalty.delay).await;
+            }
+            return Err(match err {
+                IdentityError::PolicyDenied(_) => AuthError::PasswordLoginDisabled,
+                _ => AuthError::InvalidCredentials,
+            });
+        }
+    };
+
+    let after_lock = state.login_throttle.record_success(&subjects).await;
+    state.metrics.record_login("success");
 
     let user_id: Uuid = identity
         .subject
@@ -291,7 +382,10 @@ async fn login(
         .create(user.id, &token_hash, expires_at)
         .await?;
 
-    // best-effort; login must succeed even if the audit write fails
+    // best-effort; login must succeed even if the audit write fails.
+    // a sign-in that follows a lockout is the one an operator investigating a
+    // stuffing run needs to see, so it says so rather than looking like any
+    // other login
     let _ = AuditLogRepo(pool)
         .create(
             None,
@@ -299,7 +393,7 @@ async fn login(
             "auth.login",
             Some("user"),
             Some(user.id),
-            None,
+            after_lock.then(|| serde_json::json!({ "after_lock": true })),
         )
         .await;
 
@@ -308,6 +402,52 @@ async fn login(
         expires_at,
         user,
     }))
+}
+
+/// Record a rejected sign-in, off the response path.
+///
+/// Spawned rather than awaited for two reasons. It is best-effort — a failed
+/// audit write must never turn a rejected login into a 500 — and, more
+/// importantly, an entry only lands on the dashboard's per-org AuditLog screen
+/// if it carries an org, which costs a lookup that *only exists when the
+/// account does*. Awaiting that would make a registered address measurably
+/// slower to reject than an unregistered one, handing back precisely the
+/// enumeration oracle the constant-cost password path is built to avoid.
+fn audit_login_failure(
+    state: &ControlState,
+    email: &str,
+    client: Option<std::net::IpAddr>,
+    action: &'static str,
+    mut detail: serde_json::Value,
+) {
+    let pool = pool(state).clone();
+    // the address is attacker-supplied, so it is bounded before it reaches a row
+    let email: String = email.chars().take(320).collect();
+    detail["email"] = email.clone().into();
+    detail["client"] = client.map(|ip| ip.to_string()).into();
+    // visible even on a deployment nobody is watching the audit screen of
+    tracing::warn!(action, client = ?client, "rejected sign-in");
+    tokio::spawn(async move {
+        let user = UserRepo(&pool).find_by_email(&email).await.ok().flatten();
+        let org_id = match &user {
+            Some(user) => MembershipRepo(&pool)
+                .list_for_user(user.id)
+                .await
+                .ok()
+                .and_then(|memberships| memberships.first().and_then(|m| m.org_id)),
+            // an attempt on an address nobody has registered belongs to no org,
+            // so it is recorded org-less and read from the logs and the metric
+            // rather than from the per-org screen
+            None => None,
+        };
+        let actor = user.as_ref().map(|user| user.id);
+        if let Err(err) = AuditLogRepo(&pool)
+            .create(org_id, actor, action, Some("user"), actor, Some(detail))
+            .await
+        {
+            tracing::warn!(error = %err, action, "failed to write login audit entry");
+        }
+    });
 }
 
 async fn logout(State(state): State<ControlState>, headers: axum::http::HeaderMap) -> StatusCode {
@@ -514,12 +654,44 @@ mod tests {
             AuthError::Unauthenticated,
             AuthError::PasswordLoginDisabled,
             AuthError::OpenModeNoSession,
+            AuthError::TooManyAttempts(std::time::Duration::from_secs(30)),
             AuthError::Internal("boom".to_string()),
         ] {
             let (_, code, message) = rendered(err).await;
             assert!(!code.is_empty());
             assert!(!message.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn a_throttled_login_answers_429_with_a_retry_after() {
+        // a client that is told how long the lock lasts does not have to poll to
+        // find out, and polling is the thing the lock exists to stop
+        let response =
+            AuthError::TooManyAttempts(std::time::Duration::from_secs(90)).into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+            Some("90")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sub_second_lock_never_renders_as_retry_after_zero() {
+        // `0` reads as "retry now", which would turn the tail of every lock into
+        // a hot loop against the endpoint the lock is protecting
+        let response =
+            AuthError::TooManyAttempts(std::time::Duration::from_millis(120)).into_response();
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+            Some("1")
+        );
     }
 
     #[tokio::test]

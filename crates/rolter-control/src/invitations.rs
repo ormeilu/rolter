@@ -202,9 +202,11 @@ struct InvitationPreview {
 
 async fn preview(
     State(state): State<ControlState>,
+    client: crate::login_throttle::ClientAddr,
+    headers: axum::http::HeaderMap,
     Path(token): Path<String>,
 ) -> ApiResult<Json<InvitationPreview>> {
-    let invitation = live_invitation(&state, &token).await?;
+    let invitation = live_invitation_throttled(&state, client, &headers, &token).await?;
     let org = OrgRepo(pool(&state)).get(invitation.org_id).await?;
     Ok(Json(InvitationPreview {
         org_name: org.name,
@@ -228,10 +230,12 @@ struct AcceptResponse {
 
 async fn accept(
     State(state): State<ControlState>,
+    client: crate::login_throttle::ClientAddr,
+    headers: axum::http::HeaderMap,
     Path(token): Path<String>,
     SafeJson(body): SafeJson<AcceptInvitation>,
 ) -> ApiResult<Json<AcceptResponse>> {
-    let invitation = live_invitation(&state, &token).await?;
+    let invitation = live_invitation_throttled(&state, client, &headers, &token).await?;
     let hash = hash_password(&body.password)?;
     let pool_ref = pool(&state);
 
@@ -330,6 +334,47 @@ async fn live_invitation(state: &ControlState, token: &str) -> ApiResult<Invitat
         .find_live_by_hash(&hash)
         .await?
         .ok_or(ApiError::Unauthenticated)
+}
+
+/// [`live_invitation`] behind the same failed-attempt counters as the password
+/// login (#1079).
+///
+/// An invitation token is 32 random bytes, so this is not really about someone
+/// guessing one — it is about the endpoint being an unauthenticated door that
+/// answers an unlimited number of requests, and about `accept` reaching an
+/// argon2 hash once a token resolves. The counters key on the *submitted token*
+/// and on the client address, so a run of rejected links costs the caller a
+/// growing delay and then a temporary lock, exactly like a run of wrong
+/// passwords.
+async fn live_invitation_throttled(
+    state: &ControlState,
+    client: crate::login_throttle::ClientAddr,
+    headers: &axum::http::HeaderMap,
+    token: &str,
+) -> ApiResult<Invitation> {
+    let ip = client.resolve(headers, state.trust_forwarded_for);
+    let subjects = state.login_throttle.subjects(token, ip);
+    if let Some(locked) = state.login_throttle.check(&subjects).await {
+        tracing::warn!(
+            scope = locked.scope.as_str(),
+            client = ?ip,
+            "rejected invitation lookup: too many failed attempts"
+        );
+        return Err(ApiError::TooManyAttempts(locked.retry_after));
+    }
+    match live_invitation(state, token).await {
+        Ok(invitation) => {
+            state.login_throttle.record_success(&subjects).await;
+            Ok(invitation)
+        }
+        Err(err) => {
+            let penalty = state.login_throttle.record_failure(&subjects).await;
+            if !penalty.delay.is_zero() {
+                tokio::time::sleep(penalty.delay).await;
+            }
+            Err(err)
+        }
+    }
 }
 
 fn generate_invite_token() -> (String, String) {

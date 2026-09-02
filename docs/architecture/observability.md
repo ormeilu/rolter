@@ -237,6 +237,21 @@ reconstructed from a counter after the fact.
 | `rolter_control_request_ms` | ms | `http.route`, `http.request.method`, `http.response.status_class` |
 | `rolter_db_pool_acquire_ms` | ms | `outcome` (`ok` / `timeout`) |
 
+And one counter, for the endpoint an unauthenticated attacker can reach (#1079):
+
+| Metric | Meaning | Attributes |
+|---|---|---|
+| `rolter_control_login_attempts` | resolved control-plane sign-in attempts | `outcome` (`success` / `invalid` / `throttled` / `locked` / `error`) |
+
+A counter rather than a histogram: the question it answers — "is somebody
+running a credential-stuffing run against this deployment" — is a rate, not a
+distribution. It carries no account or address label; either would be unbounded
+cardinality *and* would put the identity an attacker is guessing into the
+metrics pipeline. A rising `invalid` with a rising `locked` behind it is the
+throttle working; a rising `invalid` with no `locked` means the run is spread
+thin enough to stay inside the per-account budget, and the per-address budget is
+the one to tighten.
+
 And the connection pool, as observable gauges (#1052):
 
 | Metric | Meaning |

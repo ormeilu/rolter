@@ -164,7 +164,34 @@ fn control_args(args: &EasyUpArgs, database_url: Option<String>) -> rolter_contr
         db_idle_timeout_secs: env_or("ROLTER_DB_IDLE_TIMEOUT_SECS", 600),
         #[cfg(feature = "postgres")]
         db_max_lifetime_secs: env_or("ROLTER_DB_MAX_LIFETIME_SECS", 1800),
+        // and the same for the failed-login throttle (#1079): hand-built args
+        // skip clap's `env =`, so an operator who tuned the budget under
+        // `rolter control` would silently get the defaults under `easy-up`
+        login_throttle_disabled: env_flag("ROLTER_LOGIN_THROTTLE_DISABLED"),
+        login_max_failures: env_or_num("ROLTER_LOGIN_MAX_FAILURES", 5),
+        login_ip_max_failures: env_or_num("ROLTER_LOGIN_IP_MAX_FAILURES", 50),
+        login_failure_window_secs: env_or_num("ROLTER_LOGIN_FAILURE_WINDOW_SECS", 900),
+        login_lock_secs: env_or_num("ROLTER_LOGIN_LOCK_SECS", 60),
+        login_max_lock_secs: env_or_num("ROLTER_LOGIN_MAX_LOCK_SECS", 900),
+        login_max_delay_ms: env_or_num("ROLTER_LOGIN_MAX_DELAY_MS", 2000),
+        login_trust_forwarded_for: env_flag("ROLTER_LOGIN_TRUST_FORWARDED_FOR"),
     }
+}
+
+/// Same as [`env_or`], but available in every feature build: the throttle
+/// settings are not postgres-gated the way the pool settings are.
+fn env_or_num<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.trim().parse().ok())
+        .unwrap_or(default)
+}
+
+/// A boolean switch read the way clap reads one: present and truthy is on.
+fn env_flag(key: &str) -> bool {
+    std::env::var(key)
+        .map(|raw| matches!(raw.trim(), "1" | "true" | "TRUE" | "yes" | "on"))
+        .unwrap_or(false)
 }
 
 /// Read a numeric setting from the environment, falling back to the same

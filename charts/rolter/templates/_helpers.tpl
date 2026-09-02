@@ -94,6 +94,20 @@ copy that drifts.
 - name: ROLTER_DB_MAX_LIFETIME_SECS
   value: {{ .maxLifetimeSeconds | quote }}
 {{- end }}
+{{- with .Values.control.login }}
+- name: ROLTER_LOGIN_MAX_FAILURES
+  value: {{ .maxFailures | quote }}
+- name: ROLTER_LOGIN_IP_MAX_FAILURES
+  value: {{ .ipMaxFailures | quote }}
+- name: ROLTER_LOGIN_FAILURE_WINDOW_SECS
+  value: {{ .failureWindowSeconds | quote }}
+- name: ROLTER_LOGIN_LOCK_SECS
+  value: {{ .lockSeconds | quote }}
+- name: ROLTER_LOGIN_MAX_LOCK_SECS
+  value: {{ .maxLockSeconds | quote }}
+- name: ROLTER_LOGIN_TRUST_FORWARDED_FOR
+  value: {{ .trustForwardedFor | quote }}
+{{- end }}
 {{- if .Values.env.redisUrl }}
 - name: ROLTER_REDIS_URL
   value: {{ .Values.env.redisUrl | quote }}

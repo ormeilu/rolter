@@ -177,6 +177,9 @@ fn api_error_message(err: ApiError) -> String {
         ApiError::Conflict(msg) => msg,
         ApiError::Unauthenticated => "unauthenticated".to_string(),
         ApiError::Forbidden => "forbidden".to_string(),
+        ApiError::TooManyAttempts(remaining) => {
+            format!("too many attempts; retry in {}s", remaining.as_secs())
+        }
     }
 }
 
