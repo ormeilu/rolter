@@ -70,3 +70,4 @@
 - [llama.cpp](deployment/llama-cpp.md)
 - [Hugging Face TEI](deployment/tei.md)
 - [Air-gapped install & operation](deployment/air-gapped.md)
+- [Backup, restore and KEK rotation](deployment/backup-and-restore.md)

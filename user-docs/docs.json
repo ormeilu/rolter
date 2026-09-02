@@ -106,7 +106,8 @@
               "deployment/docker",
               "deployment/production",
               "deployment/cluster",
-              "deployment/air-gapped"
+              "deployment/air-gapped",
+              "deployment/backup-and-restore"
             ]
           }
         ]

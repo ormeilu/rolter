@@ -65,6 +65,7 @@ that looks healthy while quietly not doing what it was configured to do.
 | `ROLTER_KEY_PEPPER` present | warning | Without it a leaked virtual-key digest is usable as-is against this deployment |
 | CORS does not allow `*` | error | The dashboard is served same-origin; a wildcard lets any page a logged-in operator visits drive the management API as them |
 | Datastores accept a connection (with `--connect`) | error / warning | A URL that parses but resolves to nothing fails at first use rather than at rollout |
+| `ROLTER_KEK` opens the store (with `--connect`, postgres builds) | error | Every other KEK rule reads the environment alone, so all of them pass on a database restored under a *different* KEK — a failure with no startup symptom at all |
 | Config file parses (with `--config`) | error | A config that fails to load leaves the gateway on whatever it last had |
 
 `--connect` is opt-in because a check that opens sockets cannot be the default
@@ -74,6 +75,15 @@ question that actually goes wrong during a rollout — the name does not resolve
 or nothing is listening. A datastore that accepts TCP but rejects the
 credentials is a different failure, and one the process reports loudly on its
 own.
+
+The KEK-against-the-store check is the one exception to "TCP connect, not a
+protocol handshake": it opens a one-connection pool, samples up to 25 rows per
+sealed column and tries to decrypt them. It never runs migrations — a check
+asked to inspect a database must not change it — and it reports counts, never
+plaintext. A store that holds no sealed secrets yet is reported as neither
+verified nor broken, because an empty store would let any KEK look correct.
+[The backup and restore runbook](backup-and-restore.md) covers what to do when
+it fires, and `rolter kek verify` runs the same audit on its own.
 
 Redis and the bind address are warnings rather than errors because a
 single-replica deployment behind an ingress is legitimately fine without either.

@@ -327,6 +327,75 @@ async fn check_reachability(env: &dyn Env, out: &mut Vec<Finding>) {
     }
 }
 
+/// Does the KEK in the environment open the secrets this store already holds?
+/// (#923)
+///
+/// Every other KEK rule above reads the environment alone, so all of them pass
+/// on a restored database sealed under a *different* KEK. That failure has no
+/// startup symptom at all: the process boots, the dashboard renders, and the
+/// first sign is an upstream 401 hours later, blamed on the provider. This is
+/// the only check that can catch it, because only the data knows.
+///
+/// Behind `--connect` for the same reason the reachability probe is: it opens a
+/// socket. Behind the `postgres` feature because it needs the driver and the
+/// cipher, and `rolter check` must keep working in a build that has neither.
+#[cfg(feature = "postgres")]
+async fn check_kek_opens_the_store(env: &dyn Env, out: &mut Vec<Finding>) {
+    use rolter_store::postgres::crypto::Kek;
+    use rolter_store::postgres::kek_audit;
+
+    let (Some(database_url), Some(secret)) = (env.get("ROLTER_DATABASE_URL"), env.get(KEK_ENV))
+    else {
+        return;
+    };
+    let timeout = std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS);
+    let audit = match kek_audit::audit_kek_at(&database_url, &Kek::from_secret(&secret), timeout)
+        .await
+    {
+        Ok(audit) => audit,
+        // not fatal on its own: an unusable database is already an error from
+        // the reachability probe, and a schema this binary predates is a
+        // migration away rather than a KEK problem. Saying which check did not
+        // run beats reporting a KEK as verified when it was never tried
+        Err(error) => {
+            out.push(Finding::warn(
+                "could not verify the KEK against the store",
+                format!(
+                    "reading the sealed columns failed, so a KEK mismatch would not be caught                      here: {error}"
+                ),
+            ));
+            return;
+        }
+    };
+
+    if let Some(finding) = kek_mismatch_finding(&audit) {
+        out.push(finding);
+    }
+}
+
+/// Turn an audit into a finding, or `None` when the KEK opened everything.
+///
+/// Split out from the probe above so the message — the part an operator reads
+/// at 3am with a restored database and no idea why the gateway is returning
+/// 401s — is testable without a database.
+#[cfg(feature = "postgres")]
+fn kek_mismatch_finding(audit: &rolter_store::postgres::kek_audit::KekAudit) -> Option<Finding> {
+    if audit.is_intact() {
+        return None;
+    }
+    let mut detail = format!(
+        "{KEK_ENV} does not open secrets already in this database. This is what a restore onto          the wrong KEK looks like: the dump carried the ciphertext, the KEK was not in the dump,          and nothing else fails until an upstream call does. Restore the KEK that sealed this          database — the ciphertext cannot be recovered without it. See          docs/deployment/backup-and-restore.md."
+    );
+    for line in audit.damage_report() {
+        detail.push_str("\n       - ");
+        detail.push_str(&line);
+    }
+    Some(Finding::error(
+        format!("{KEK_ENV} does not match the one this store was sealed with"),
+        detail,
+    ))
+}
+
 /// Seconds allowed for a `--connect` probe. Short: this runs before a process
 /// starts, and a check that hangs is worse than one that reports unreachable.
 const CONNECT_TIMEOUT_SECS: u64 = 5;
@@ -415,6 +484,8 @@ pub async fn run(args: CheckArgs) -> anyhow::Result<()> {
 
     if args.connect {
         check_reachability(&ProcessEnv, &mut findings).await;
+        #[cfg(feature = "postgres")]
+        check_kek_opens_the_store(&ProcessEnv, &mut findings).await;
     }
 
     // the config file is optional: a fully DB-backed deployment has none
@@ -628,6 +699,68 @@ mod tests {
             .expect("missing redis not reported");
         // a single-replica deployment is legitimately fine without redis
         assert!(!redis.fatal);
+    }
+
+    #[cfg(feature = "postgres")]
+    mod kek_against_the_store {
+        use super::*;
+        use rolter_store::postgres::kek_audit::{ColumnAudit, KekAudit, SEALED_COLUMNS};
+
+        fn audit(sampled: usize, opened: usize) -> KekAudit {
+            KekAudit {
+                columns: vec![ColumnAudit {
+                    column: SEALED_COLUMNS[0],
+                    sampled,
+                    opened,
+                }],
+            }
+        }
+
+        #[test]
+        fn a_kek_that_opens_everything_produces_no_finding() {
+            assert!(kek_mismatch_finding(&audit(10, 10)).is_none());
+        }
+
+        #[test]
+        fn an_empty_store_produces_no_finding_either() {
+            // vacuously intact. `rolter check` must not invent a failure for a
+            // deployment that simply has not stored a credential yet
+            assert!(kek_mismatch_finding(&KekAudit::default()).is_none());
+        }
+
+        #[test]
+        fn a_mismatch_is_fatal_and_explains_the_restore_that_caused_it() {
+            let finding =
+                kek_mismatch_finding(&audit(10, 0)).expect("a wrong KEK must be reported");
+            assert!(
+                finding.fatal,
+                "starting into an unreadable store is worse than not starting"
+            );
+            assert!(finding.title.contains(KEK_ENV));
+            assert!(
+                finding.detail.contains("restore"),
+                "the detail must name the cause, not only the symptom: {}",
+                finding.detail
+            );
+            assert!(
+                finding.detail.contains("provider_keys"),
+                "the detail must name what cannot be read: {}",
+                finding.detail
+            );
+            assert!(
+                finding.detail.contains("backup-and-restore"),
+                "the detail must point at the runbook: {}",
+                finding.detail
+            );
+        }
+
+        #[test]
+        fn a_partial_mismatch_is_reported_too() {
+            // one unreadable row is already a split store; nothing about it
+            // gets better by being rare
+            let finding = kek_mismatch_finding(&audit(10, 9)).expect("reported");
+            assert!(finding.detail.contains("1 of 10"));
+        }
     }
 
     #[test]

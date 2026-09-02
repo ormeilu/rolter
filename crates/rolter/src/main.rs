@@ -10,6 +10,7 @@
 //! rolter easy-up            # gateway + control + UI in one supervised process
 //! rolter init               # generate a production config and its secrets
 //! rolter check              # pre-boot validation for a production deployment
+//! rolter kek verify         # does ROLTER_KEK open what the store already holds
 //! ```
 //!
 //! The `gateway`/`control` subcommands reuse the exact argument set of the
@@ -18,6 +19,8 @@
 
 mod easy_up;
 mod init;
+#[cfg(feature = "postgres")]
+mod kek;
 mod preflight;
 
 use clap::{Parser, Subcommand};
@@ -48,6 +51,9 @@ enum Command {
     /// validate a production deployment before starting it, so a
     /// misconfiguration fails loudly instead of starting degraded
     Check(preflight::CheckArgs),
+    /// verify or rotate the key-encryption key against the control-plane store
+    #[cfg(feature = "postgres")]
+    Kek(kek::KekArgs),
 }
 
 #[tokio::main]
@@ -59,5 +65,7 @@ async fn main() -> anyhow::Result<()> {
         Command::EasyUp(args) => easy_up::run(args).await,
         Command::Init(args) => init::run(args).await,
         Command::Check(args) => preflight::run(args).await,
+        #[cfg(feature = "postgres")]
+        Command::Kek(args) => kek::run(args).await,
     }
 }

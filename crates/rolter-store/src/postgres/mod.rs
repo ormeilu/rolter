@@ -1,6 +1,7 @@
 //! Postgres-backed [`ConfigStore`], gated behind the `postgres` feature.
 
 pub mod crypto;
+pub mod kek_audit;
 pub mod models;
 pub mod repo;
 
@@ -174,7 +175,7 @@ pub(crate) mod test_support {
 
     /// `url` with the connection pinned to `schema` via `search_path`, so
     /// migrations and queries land in the isolated schema rather than `public`.
-    fn with_search_path(url: &str, schema: &str) -> String {
+    pub(crate) fn with_search_path(url: &str, schema: &str) -> String {
         let sep = if url.contains('?') { '&' } else { '?' };
         // percent-encode the space and `=` inside the libpq options string
         format!("{url}{sep}options=-c%20search_path%3D{schema}")
@@ -182,6 +183,12 @@ pub(crate) mod test_support {
 
     /// Create a fresh isolated schema and return a migrated pool scoped to it.
     pub(crate) async fn fresh_scoped_pool(url: &str) -> PgPool {
+        fresh_scoped_pool_named(url).await.0
+    }
+
+    /// As [`fresh_scoped_pool`], also returning the schema name. A test that
+    /// shells out to `pg_dump` needs the name; one that only queries does not.
+    pub(crate) async fn fresh_scoped_pool_named(url: &str) -> (PgPool, String) {
         let schema = unique_schema();
 
         // (re)create the isolated schema over a default-search_path connection
@@ -201,7 +208,7 @@ pub(crate) mod test_support {
             .await
             .expect("connect scoped");
         run_migrations(&pool).await.expect("run migrations");
-        pool
+        (pool, schema)
     }
 }
 
