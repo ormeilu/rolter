@@ -46,6 +46,53 @@ struct SnapshotResponse {
     problems: Vec<String>,
 }
 
+/// Ask the control plane where the fleet logs, before the log writer is built.
+///
+/// The ClickHouse writer is spawned once, from the bootstrap config, at
+/// startup — the hot-swappable [`Snapshot`] carries routing, not background
+/// tasks. So a destination that only arrives on the first *poll* arrives too
+/// late to open a sink. This is the one read that happens early enough to
+/// matter (#929).
+///
+/// Best-effort by construction: a control plane that is not up yet, is slow, or
+/// answers with something unparsable yields `None` and the gateway starts
+/// exactly as it did before. Startup must not depend on the control plane
+/// being reachable, so every failure here is a debug line, not an error.
+pub async fn fetch_log_destination(
+    snapshot_url: &str,
+    admin_token: Option<&str>,
+    timeout: Duration,
+) -> Option<String> {
+    let client = Client::builder().timeout(timeout).build().ok()?;
+    // version=0 asks for the current snapshot rather than a 304
+    let mut request = client.get(snapshot_url).query(&[("version", "0")]);
+    if let Some(token) = admin_token {
+        request = request.bearer_auth(token);
+    }
+    let resp = match request.send().await {
+        Ok(resp) if resp.status().is_success() => resp,
+        Ok(resp) => {
+            tracing::debug!(status = %resp.status(), "no log destination from the control plane");
+            return None;
+        }
+        Err(err) => {
+            tracing::debug!(error = %err, "no log destination from the control plane");
+            return None;
+        }
+    };
+    let body: SnapshotResponse = match resp.json().await {
+        Ok(body) => body,
+        Err(err) => {
+            tracing::debug!(error = %err, "unparsable snapshot while reading log destination");
+            return None;
+        }
+    };
+    body.config
+        .logging
+        .clickhouse_url
+        .filter(|url| !url.trim().is_empty())
+}
+
 /// Spawn the background watcher. `snapshot_url` is the control plane's
 /// snapshot endpoint (e.g. `http://control:4001/internal/snapshot`); `period`
 /// is the poll interval; `redis_url`, when set, adds an instant pub/sub
@@ -460,5 +507,86 @@ mod tests {
         )
         .await;
         assert!(err.is_err());
+    }
+
+    /// #929: the log writer is spawned once at startup from the bootstrap
+    /// config, so a destination that only arrives on the first poll arrives too
+    /// late to open a sink. This read is the one that happens early enough.
+    #[tokio::test]
+    async fn the_control_planes_log_destination_is_readable_before_startup() {
+        use axum::routing::get;
+        use axum::{Json, Router};
+
+        async fn snapshot() -> Json<serde_json::Value> {
+            Json(serde_json::json!({
+                "version": 7,
+                "config": {
+                    "server": {"host": "0.0.0.0", "port": 4000},
+                    "logging": {"clickhouse_url": "http://clickhouse:8123"}
+                }
+            }))
+        }
+
+        let app = Router::new().route("/internal/snapshot", get(snapshot));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let url = format!("http://{addr}/internal/snapshot");
+        let found = fetch_log_destination(&url, None, Duration::from_secs(2)).await;
+        assert_eq!(found.as_deref(), Some("http://clickhouse:8123"));
+    }
+
+    #[tokio::test]
+    async fn a_control_plane_that_names_no_destination_yields_none() {
+        use axum::routing::get;
+        use axum::{Json, Router};
+
+        // both shapes a real control plane produces: the field absent, and the
+        // field present but empty. Neither may open a sink pointed at nothing
+        async fn absent() -> Json<serde_json::Value> {
+            Json(serde_json::json!({
+                "version": 1,
+                "config": {"server": {"host": "0.0.0.0", "port": 4000}}
+            }))
+        }
+        async fn blank() -> Json<serde_json::Value> {
+            Json(serde_json::json!({
+                "version": 1,
+                "config": {
+                    "server": {"host": "0.0.0.0", "port": 4000},
+                    "logging": {"clickhouse_url": "   "}
+                }
+            }))
+        }
+
+        let app = Router::new()
+            .route("/absent", get(absent))
+            .route("/blank", get(blank));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        for path in ["absent", "blank"] {
+            let url = format!("http://{addr}/{path}");
+            assert_eq!(
+                fetch_log_destination(&url, None, Duration::from_secs(2)).await,
+                None,
+                "{path}"
+            );
+        }
+    }
+
+    /// startup must not depend on the control plane being up: an unreachable
+    /// one costs one short timeout and the gateway starts as it always did
+    #[tokio::test]
+    async fn an_unreachable_control_plane_costs_a_timeout_and_nothing_else() {
+        let found = fetch_log_destination(
+            "http://127.0.0.1:1/internal/snapshot",
+            None,
+            Duration::from_millis(200),
+        )
+        .await;
+        assert_eq!(found, None);
     }
 }

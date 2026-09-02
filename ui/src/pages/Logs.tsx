@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Filter, X } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   FilterCheckList,
@@ -46,6 +47,7 @@ const TD =
 // streaming request table with sticky headers, and a right detail drawer with
 // the raw request/response payloads
 export default function Logs() {
+  const { t } = useTranslation();
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [status, setStatus] = React.useState<StatusFilter>("all");
   const [modelSel, setModelSel] = React.useState<string[]>([]);
@@ -257,7 +259,7 @@ export default function Logs() {
           </table>
           {!query.isLoading && rows.length === 0 && (
             <p className="px-4 py-10 text-center text-sm text-muted-foreground">
-              No requests in this window.
+              {t("analytics.noRowsYet")}
             </p>
           )}
         </div>

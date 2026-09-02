@@ -18,7 +18,7 @@ These variables control the gateway process (`rolter-gateway`).
 | `ROLTER_HOST` | Listen host. Overrides `[server] host` in `rolter.toml`. |
 | `ROLTER_PORT` | Listen port. Overrides `[server] port` in `rolter.toml`. |
 | `ROLTER_KEY_PEPPER` | Secret mixed into virtual-key digests. Keeps plaintext keys out of gateway memory; a leaked digest is useless without it. Overrides `[server] key_pepper`. |
-| `CLICKHOUSE_URL` | ClickHouse HTTP interface URL, e.g. `http://localhost:8123`. Overrides `[logging] clickhouse_url`. |
+| `CLICKHOUSE_URL` | ClickHouse HTTP interface URL, e.g. `http://localhost:8123`. Read by **both** the gateway (which writes request, usage and cost rows) and the control plane (which reads them back for the dashboard), so set it on both. A `[logging] clickhouse_url` in the gateway's own config file wins over it; a gateway with neither inherits the control plane's value from `/internal/snapshot`. Leave it unset everywhere and the Usage, Costs and Logs screens stay empty however much traffic is served. |
 
 ---
 

@@ -12,6 +12,41 @@
 - Roadmap: add per-provider/route labels on the histograms, in-flight gauges, cache-hit ratio, and circuit-breaker state gauges.
 - Roadmap: **scrape/federate upstream engine metrics** from vLLM/SGLang/TGI `/metrics` and correlate them per target (queue depth, KV-cache usage, running/waiting requests) to feed load- and cache-aware routing and the dashboard.
 
+## Where request logs go (#929)
+
+The dashboard's Usage, Costs and Logs screens read ClickHouse through the
+control plane. The rows they read are written by the **gateway**. For a long
+time nothing connected the two: the control plane took `CLICKHOUSE_URL`, the
+gateway took `[logging].clickhouse_url` from its own bootstrap TOML, and a
+deployment that set only the first one logged nowhere while the screens queried
+a table nobody filled. The snapshot even carried the field, as
+`"clickhouse_url": null`, so the control plane was telling every gateway to log
+nowhere.
+
+There is now one variable and one order of precedence. The gateway resolves its
+destination, at startup, as:
+
+1. `[logging].clickhouse_url` in its own config file — an explicit local
+   decision is never overridden.
+2. `CLICKHOUSE_URL` in its environment. Both processes read this one variable,
+   which is what a compose file, a Helm release or `rolter init` sets.
+3. The value the control plane publishes in `/internal/snapshot`, when the
+   gateway is started with `--snapshot-url`. The control plane puts its own
+   `CLICKHOUSE_URL` there, so a fleet writes where the dashboard reads without
+   anyone configuring the gateways individually.
+
+Step 3 is read **before** `AppState` is built, not on the first poll, because
+the ClickHouse writer is spawned once at startup — the hot-swappable snapshot
+carries routing, not background tasks, so a destination arriving on a later
+poll would arrive too late to open a sink. It is best-effort by construction: a
+control plane that is not up yet costs one five-second timeout and the gateway
+starts exactly as it did before.
+
+When all three come up empty on a gateway that has a control plane, startup
+logs a warning naming both fixes. An empty analytics screen and a quiet
+deployment look identical, and `rolter check` says the same thing before
+anything starts.
+
 ## Tracing & context propagation
 
 - `tracing` + `tracing-subscriber` with `RUST_LOG` filtering; `TraceLayer` logs each HTTP request.

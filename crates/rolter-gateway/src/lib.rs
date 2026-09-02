@@ -131,8 +131,63 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     }
 
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port).parse()?;
+
+    // #929: a managed gateway with no `[logging].clickhouse_url` of its own
+    // used to write nowhere while the dashboard queried the control plane's
+    // ClickHouse — permanently empty analytics screens that looked exactly like
+    // a quiet deployment. The control plane now publishes its own destination
+    // in the snapshot, and this is the one read early enough to open a sink
+    // with it: the writer is spawned once, here, and the hot-swappable snapshot
+    // carries routing rather than background tasks.
+    //
+    // Best-effort: a control plane that is not up yet costs one short timeout
+    // and the gateway starts exactly as it did before. A local
+    // `clickhouse_url` short-circuits it entirely — an explicit decision in
+    // this process's own config is never overridden by an inherited one.
+    // `CLICKHOUSE_URL` is documented as overriding `[logging].clickhouse_url`
+    // (user-docs/configuration/environment-variables.mdx) and the control plane
+    // has always read it, but the gateway never did — so the one variable a
+    // compose file or a Helm chart sets on both processes reached only one of
+    // them. It does now, below an explicit value in this gateway's own config.
+    if config.logging.clickhouse_url.is_none() {
+        match std::env::var("CLICKHOUSE_URL") {
+            Ok(url) if !url.trim().is_empty() => {
+                config.logging.clickhouse_url = Some(url.trim().to_string());
+            }
+            _ => {}
+        }
+    }
+
+    if config.logging.clickhouse_url.is_none() {
+        if let Some(snapshot_url) = args.snapshot_url.as_deref() {
+            let token = args
+                .internal_token
+                .as_deref()
+                .or(args.admin_token.as_deref());
+            if let Some(url) = watcher::fetch_log_destination(
+                snapshot_url,
+                token,
+                std::time::Duration::from_secs(5),
+            )
+            .await
+            {
+                tracing::info!(%url, "inheriting the control plane's log destination");
+                config.logging.clickhouse_url = Some(url);
+            }
+        }
+    }
+
     if let Some(url) = &config.logging.clickhouse_url {
         tracing::info!(%url, "clickhouse request logging enabled");
+    } else if args.snapshot_url.is_some() {
+        // an empty analytics screen and a quiet deployment look identical, so
+        // say which one this is while the operator is still reading the log
+        tracing::warn!(
+            "no clickhouse destination: request logs are not written, and the \
+             dashboard's usage, cost and log screens will stay empty. Set \
+             CLICKHOUSE_URL on the control plane (the fleet inherits it) or \
+             [logging].clickhouse_url on this gateway"
+        );
     }
     let mut state = AppState::with_logging(&config, args.redis_url.as_deref());
     // a control-plane-managed gateway fails closed when the key set is empty:

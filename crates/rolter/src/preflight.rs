@@ -188,6 +188,32 @@ fn check_datastores(env: &dyn Env, out: &mut Vec<Finding>) {
     }
 }
 
+/// The dashboard reads usage rows the gateway writes. If nothing tells the two
+/// sides where ClickHouse is, the analytics screens are empty forever and look
+/// exactly like a quiet deployment (#929).
+fn check_analytics_destination(env: &dyn Env, out: &mut Vec<Finding>) {
+    let configured = env
+        .get("CLICKHOUSE_URL")
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty());
+    if configured.is_some() {
+        return;
+    }
+    // no database means this is a toy or a smoke test, and an empty analytics
+    // screen is not a surprise there
+    if env.get("ROLTER_DATABASE_URL").is_none() {
+        return;
+    }
+    out.push(Finding::warn(
+        "CLICKHOUSE_URL is unset, so the analytics screens will stay empty",
+        "the gateway writes request, usage and cost rows to ClickHouse and the dashboard reads \
+         them back from it. With no destination the rows are never written, and Usage, Costs \
+         and Logs render as an empty deployment rather than an unconfigured one. Both \
+         processes read this one variable; the gateway also inherits it from the control \
+         plane's snapshot when only the control plane has it.",
+    ));
+}
+
 /// Placeholder values that were meant to be replaced.
 fn check_example_values(env: &dyn Env, out: &mut Vec<Finding>) {
     for var in [
@@ -344,6 +370,7 @@ pub(crate) fn run_checks(env: &dyn Env) -> Vec<Finding> {
     check_exposure(env, &mut out);
     check_key_pepper(env, &mut out);
     check_cors(env, &mut out);
+    check_analytics_destination(env, &mut out);
     out
 }
 
@@ -432,6 +459,7 @@ mod tests {
                 .with("ROLTER_REDIS_URL", "redis://redis:6379")
                 .with("ROLTER_CONTROL_HOST", "127.0.0.1")
                 .with("ROLTER_KEY_PEPPER", "a-deployment-wide-pepper")
+                .with("CLICKHOUSE_URL", "http://clickhouse:8123")
         }
     }
 
@@ -777,5 +805,48 @@ mod tests {
             "{:?}",
             titles(&findings)
         );
+    }
+
+    #[test]
+    fn an_unset_clickhouse_url_is_called_out_rather_than_left_to_an_empty_chart() {
+        // #929: the dashboard reads rows the gateway writes. With no
+        // destination, Usage/Costs/Logs render as a quiet deployment rather
+        // than an unconfigured one, and nothing anywhere says which it is
+        let env = FakeEnv::healthy();
+        let mut findings = Vec::new();
+        check_analytics_destination(&env, &mut findings);
+        assert!(findings.is_empty(), "{:?}", titles(&findings));
+
+        let mut env = FakeEnv::healthy();
+        env.0.remove("CLICKHOUSE_URL");
+        let mut findings = Vec::new();
+        check_analytics_destination(&env, &mut findings);
+        assert_eq!(findings.len(), 1, "{:?}", titles(&findings));
+        assert!(findings[0].title.contains("CLICKHOUSE_URL"));
+        // a warning, not an error: a deployment can legitimately run without
+        // analytics, it just should not be surprised by an empty screen
+        assert!(!findings[0].fatal);
+    }
+
+    #[test]
+    fn a_deployment_with_no_database_is_not_nagged_about_analytics() {
+        // no store means a smoke test or a local toy, where an empty analytics
+        // screen surprises nobody
+        let mut env = FakeEnv::healthy();
+        env.0.remove("CLICKHOUSE_URL");
+        env.0.remove("ROLTER_DATABASE_URL");
+        let mut findings = Vec::new();
+        check_analytics_destination(&env, &mut findings);
+        assert!(findings.is_empty(), "{:?}", titles(&findings));
+    }
+
+    #[test]
+    fn an_empty_clickhouse_url_counts_as_unset() {
+        // a compose file that declares the variable without a value is the
+        // same deployment as one that never mentioned it
+        let env = FakeEnv::healthy().with("CLICKHOUSE_URL", "   ");
+        let mut findings = Vec::new();
+        check_analytics_destination(&env, &mut findings);
+        assert_eq!(findings.len(), 1, "{:?}", titles(&findings));
     }
 }
