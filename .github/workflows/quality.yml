@@ -306,17 +306,14 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - name: install
-        # dependabot's npm ecosystem bumps ui/package.json but never writes
-        # bun.lock, so a frozen install fails on its PRs; reconcile the lockfile
-        # for dependabot while keeping frozen integrity for every human PR
-        env:
-          IS_DEPENDABOT: ${{ github.actor == 'dependabot[bot]' }}
-        run: |
-          if [ "$IS_DEPENDABOT" = "true" ]; then
-            bun install --no-frozen-lockfile
-          else
-            bun install --frozen-lockfile
-          fi
+        # frozen for everyone, dependabot included. it used to self-heal on
+        # dependabot's PRs, because the npm ecosystem bumped package.json
+        # without writing bun.lock — but that made dependabot's PR pass without
+        # making its *merge* safe, so every other open PR went red the moment
+        # it landed (#1137). dependabot now manages bun.lock directly
+        # (package-ecosystem: bun), so a stale lockfile fails here, on the PR
+        # that caused it, and never reaches master
+        run: bun install --frozen-lockfile
       - name: lint (tsc --noEmit)
         run: bun run lint
       # every locale must match the en base catalog: a missing key falls back to
@@ -352,14 +349,8 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - name: install
-        env:
-          IS_DEPENDABOT: ${{ github.actor == 'dependabot[bot]' }}
-        run: |
-          if [ "$IS_DEPENDABOT" = "true" ]; then
-            bun install --no-frozen-lockfile
-          else
-            bun install --frozen-lockfile
-          fi
+        # frozen for everyone; see the ui job's install step for why (#1137)
+        run: bun install --frozen-lockfile
       # the test-runner launches the headless shell, a separate download from the
       # full chromium build. ui/package.json pins the test-runner's playwright to
       # the same version as @playwright/test, so one install serves both (#737)

@@ -188,6 +188,32 @@ Policy (ROL-246):
 
 `.github/workflows/ci.yml` delegates to the shared `quality.yml` gate, which runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo nextest run --workspace --all-features` plus a `cargo test --doc` pass, the feature matrix, `cargo doc` (warnings as errors), cargo-deny, gitleaks, the UI lint/build, and a Conventional Commit PR-title check on every push/PR.
 
+### UI dependencies and the lockfile
+
+The `ui` and `storybook` jobs both install with `bun install --frozen-lockfile`,
+for everyone — dependabot included. That was not always true, and the reason it
+is now is worth recording.
+
+`ui/` is bun-managed, but dependabot could not speak bun, so the repository kept
+a `package-lock.json` purely for dependabot's benefit and ran the `npm`
+ecosystem against it. A bump moved `package.json` and `package-lock.json` and
+left `bun.lock` untouched, which fails a frozen install — so the install
+self-healed with `--no-frozen-lockfile` whenever the actor was dependabot.
+
+That kept dependabot's own PR green without making its **merge** safe. The
+moment such a bump landed, every other open PR installed frozen against the new
+`package.json` and failed in eight seconds with `lockfile had changes, but
+lockfile is frozen` — a red check on work that had touched no dependency, which
+is exactly the kind of failure that trains people to re-run without reading
+(#1137, reconciled by hand in #1086 and again in #1136).
+
+Dependabot has spoken bun since bun 1.1.39, so `/ui` now runs as
+`package-ecosystem: bun` and `package-lock.json` is gone. Dependabot writes
+`bun.lock` itself, so a stale lockfile fails on the PR that caused it and never
+reaches `master`. The trade is that the bun ecosystem does version updates but
+not security updates: alerts still fire on `ui` dependencies, but the security
+bump has to be raised by hand (#1148).
+
 ### Secret scanning
 
 The `gitleaks` job runs the gitleaks **CLI** from a digest-pinned container, not
