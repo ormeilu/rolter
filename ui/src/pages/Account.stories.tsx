@@ -230,13 +230,13 @@ export const AnEditedMintFormPromptsBeforeDiscarding: Story = {
   play: async ({ canvasElement }) => {
     await clickWhenEnabled(canvasElement, /generate virtual key/i);
     const form = sheet();
-    await userEvent.type(within(form).getByLabelText("Name (optional)"), "half typed");
+    await userEvent.type(within(form).getByLabelText("Name"), "half typed");
 
     await withConfirm(false, async () => {
       await userEvent.click(within(form).getByRole("button", { name: "Cancel" }));
       // declining keeps the sheet, and the typing, alive
       await expect(within(document.body).getByRole("dialog")).toBeInTheDocument();
-      await expect(within(form).getByLabelText("Name (optional)")).toHaveValue("half typed");
+      await expect(within(form).getByLabelText("Name")).toHaveValue("half typed");
     });
   },
 };
