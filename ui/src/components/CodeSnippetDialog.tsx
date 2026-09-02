@@ -99,15 +99,21 @@ export function CopyAsCodeButton({ request }: { request: SnippetRequest }) {
   const [open, setOpen] = React.useState(false);
   return (
     <>
+      {/* a labelled control, not a bare glyph: the dialog behind this is the
+          payoff for integrating with rolter at all, and an anonymous `</>`
+          icon made it something an operator had to click to discover (#963).
+          the label collapses below `sm`, where the header has no room for it —
+          the aria-label and the tooltip carry the name there */}
       <Button
         size="sm"
         variant="ghost"
-        className="h-8"
+        className="h-8 gap-1.5"
         onClick={() => setOpen(true)}
         aria-label={t("playground.copyAsCode")}
         title={t("playground.copyAsCode")}
       >
         <Code2 className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">{t("playground.copyAsCode")}</span>
       </Button>
       {open && (
         <CodeSnippetDialog open={open} onOpenChange={setOpen} request={request} />

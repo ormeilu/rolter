@@ -1,5 +1,6 @@
 import { Boxes, KeyRound, Play, ScrollText } from "lucide-react";
 import type { Meta, StoryObj } from "@storybook/react";
+import { expect, userEvent, within } from "storybook/test";
 
 import { NavSidebar } from "./nav-sidebar";
 
@@ -47,4 +48,20 @@ export const Default: Story = {};
 
 export const Collapsed: Story = {
   args: { defaultCollapsed: true },
+};
+
+// the search box was the only control in the first fourteen tab stops with no
+// visible focus indicator at all (#963). the ring is drawn as a box-shadow on
+// the wrapping label, so "no indicator" is exactly `box-shadow: none` there
+export const SearchFocusRing: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const search = canvas.getByRole("textbox", { name: /search/i });
+    const wrapper = search.closest("label");
+    await expect(wrapper).not.toBeNull();
+    await expect(getComputedStyle(wrapper as HTMLElement).boxShadow).toBe("none");
+    await userEvent.click(search);
+    await expect(search).toHaveFocus();
+    await expect(getComputedStyle(wrapper as HTMLElement).boxShadow).not.toBe("none");
+  },
 };

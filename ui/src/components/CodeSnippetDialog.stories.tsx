@@ -62,3 +62,14 @@ export const NeverInlinesTheKey: Story = {
     }
   },
 };
+
+// the entry point shipped as a bare `</>` glyph, so the dialog behind it was
+// undiscoverable without clicking an anonymous icon (#963)
+export const TriggerIsLabelled: Story = {
+  play: async () => {
+    const trigger = await screen().findByRole("button", { name: /copy as code/i });
+    // the visible label, not just the accessible name the aria-label supplied
+    await expect(trigger).toHaveTextContent(/copy as code/i);
+    await expect(trigger).toHaveAttribute("title", expect.stringMatching(/copy as code/i));
+  },
+};
