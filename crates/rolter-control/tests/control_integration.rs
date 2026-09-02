@@ -6600,3 +6600,91 @@ async fn collector_config_renders_a_managed_secret_as_a_bearer_header() {
         "{body}"
     );
 }
+
+/// #1162: the Security screen wrote to a table nothing downstream read. This
+/// is the propagation half of the fix — the enforcement half lives in
+/// `rolter-gateway`'s integration suite. It asserts the settings arrive in the
+/// snapshot *and* that the dashboard credential material does not.
+#[tokio::test]
+async fn security_policy_reaches_the_snapshot_without_the_dashboard_secret() {
+    skip_without_db!();
+    // sealing the dashboard secret needs a KEK, exactly as the provider-key
+    // test does; the value is arbitrary because nothing here decrypts it
+    std::env::set_var("ROLTER_KEK", "security-policy-test-kek");
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    // the default is "no extra rules", so an untouched deployment is unchanged
+    let before: Value = client
+        .get(format!("{base}/internal/snapshot"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(before["config"]["security"]["virtual_key_required"], false);
+    assert!(before["config"]["security"]["required_headers"].is_null());
+    assert!(before["config"]["security"]["auth_bypass_routes"].is_null());
+
+    let saved: Value = client
+        .put(format!("{base}/api/v1/security-settings"))
+        .bearer_auth("sekrit")
+        .json(&json!({
+            "virtual_key_required": true,
+            "allowed_origins": [],
+            "allowed_headers": [],
+            "required_headers": {"X-Mesh-Id": "edge-42"},
+            "auth_bypass_routes": ["/v1/models"],
+            "dashboard_auth_enabled": false,
+            "managed_dashboard_secret": "hunter2",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(saved["virtual_key_required"], true, "{saved}");
+    // the write-only column is reported as configured, never returned
+    assert_eq!(saved["dashboard_secret_configured"], true);
+    assert!(saved.get("managed_dashboard_secret").is_none());
+    // and the toggle that controlled nothing is gone from the surface (#1162)
+    assert!(saved.get("allow_direct_provider_keys").is_none());
+
+    let after: Value = client
+        .get(format!("{base}/internal/snapshot"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let security = &after["config"]["security"];
+    assert_eq!(security["virtual_key_required"], true);
+    // header names are lowercased on the way through, because that is how the
+    // gateway looks them up
+    assert_eq!(security["required_headers"]["x-mesh-id"], "edge-42");
+    assert_eq!(security["auth_bypass_routes"][0], "/v1/models");
+
+    // the sealed dashboard secret must not ride along anywhere in the payload
+    let payload = serde_json::to_string(&after).unwrap();
+    assert!(
+        !payload.contains("hunter2"),
+        "the snapshot carries the secret"
+    );
+    assert!(!payload.contains("dashboard_credential"), "{payload}");
+
+    // and the write bumped the version, so a polling gateway actually sees it
+    assert!(
+        after["version"].as_i64().unwrap() > before["version"].as_i64().unwrap(),
+        "config_version did not move"
+    );
+}

@@ -316,6 +316,13 @@ pub fn build_router(state: AppState, metrics_path: &str, max_body_bytes: usize) 
         // next, so it wraps the limit layer and rewrites its 413 into json
         .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
         .layer(axum::middleware::from_fn(handlers::map_payload_too_large))
+        // the operator's ingress filter (#1162). added after the body limit so
+        // it wraps it: a request that fails the filter is refused without the
+        // gateway reading its body at all
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            handlers::enforce_required_headers,
+        ))
         // ensure every request carries an x-request-id (generated when absent)
         // and echo it on the response, for end-to-end correlation
         .layer(axum::middleware::from_fn(trace::ensure_request_id))

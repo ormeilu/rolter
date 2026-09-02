@@ -359,6 +359,16 @@ pub struct ClientSettings {
     pub updated_at: DateTime<Utc>,
 }
 
+/// the policy half of `security_settings`, and only that half: the dashboard
+/// credential columns exist on the table but are deliberately absent here so
+/// they cannot reach a snapshot by accident (#1162)
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SecurityPolicyRow {
+    pub virtual_key_required: bool,
+    pub required_headers: serde_json::Value,
+    pub auth_bypass_routes: Vec<String>,
+}
+
 /// singleton inference-parameter defaults projected into snapshots (#564)
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct ModelDefaults {
@@ -723,7 +733,6 @@ pub struct AuditLogEntry {
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct SecuritySettings {
     pub virtual_key_required: bool,
-    pub allow_direct_provider_keys: bool,
     pub allowed_origins: Vec<String>,
     pub allowed_headers: Vec<String>,
     pub required_headers: serde_json::Value,

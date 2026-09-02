@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::postgres::models::{
     AdaptiveRoutingPolicy, Budget, ClientSettings, CompatibilityPolicy, FeatureFlags,
     GuardrailProvider, GuardrailRule as GuardrailRuleRow, LoggingSettings, ModelDefaults,
-    ModelPrice, PluginInstance, RateLimit, RuntimePolicy,
+    ModelPrice, PluginInstance, RateLimit, RuntimePolicy, SecurityPolicyRow,
 };
 use crate::ConfigStore;
 
@@ -526,6 +526,20 @@ impl PostgresConfigStore {
             "select public_base_url, forwarded_headers, injected_headers, request_id_header, \
                     updated_at \
              from client_settings where id = true",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(store_err)
+    }
+
+    /// The policy half of `security_settings`. The ciphertext columns are not
+    /// selected at all: the migration's own comment promises snapshots receive
+    /// policy only, and the surest way to keep that promise is for the query
+    /// never to name them (#1162).
+    async fn load_security_policy(&self) -> Result<SecurityPolicyRow> {
+        sqlx::query_as(
+            "select virtual_key_required, required_headers, auth_bypass_routes \
+             from security_settings where id = true",
         )
         .fetch_one(&self.pool)
         .await
@@ -1243,6 +1257,7 @@ impl ConfigStore for PostgresConfigStore {
         let logging = self.load_logging_settings().await?;
         let compatibility = self.load_compatibility_policy().await?;
         let client_settings = self.load_client_settings().await?;
+        let security = self.load_security_policy().await?;
         let model_defaults = self.load_model_defaults().await?;
         let adaptive = self.load_adaptive_routing_policy().await?;
         let guardrails = self.load_guardrails().await?;
@@ -1330,6 +1345,32 @@ impl ConfigStore for PostgresConfigStore {
                 })
                 .unwrap_or_default(),
             request_id_header: client_settings.request_id_header.to_ascii_lowercase(),
+        };
+        config.security = rolter_core::SecurityPolicyConfig {
+            virtual_key_required: security.virtual_key_required,
+            // same treatment as injected_headers: a hand-edited non-object row
+            // must not take the fleet's config propagation down with it. an
+            // unreadable rule is dropped, never silently turned into a
+            // different rule
+            required_headers: security
+                .required_headers
+                .as_object()
+                .map(|map| {
+                    map.iter()
+                        .filter_map(|(name, value)| {
+                            let value = value.as_str()?;
+                            Some((name.trim().to_ascii_lowercase(), value.to_string()))
+                        })
+                        .filter(|(name, value)| !name.is_empty() && !value.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            auth_bypass_routes: security
+                .auth_bypass_routes
+                .into_iter()
+                .map(|route| route.trim().to_string())
+                .filter(|route| !route.is_empty())
+                .collect(),
         };
         config.model_defaults = rolter_core::ModelDefaultsConfig {
             enabled: model_defaults.enabled,

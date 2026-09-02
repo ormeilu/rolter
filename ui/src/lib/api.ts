@@ -1892,7 +1892,6 @@ export function fetchAuditLogPage(
 
 export interface SecuritySettingsDto {
   virtual_key_required: boolean;
-  allow_direct_provider_keys: boolean;
   allowed_origins: string[];
   allowed_headers: string[];
   required_headers: Record<string, string>;
@@ -1905,7 +1904,6 @@ export interface SecuritySettingsDto {
 
 export interface UpdateSecuritySettingsInput {
   virtual_key_required: boolean;
-  allow_direct_provider_keys: boolean;
   allowed_origins: string[];
   allowed_headers: string[];
   required_headers: Record<string, string>;

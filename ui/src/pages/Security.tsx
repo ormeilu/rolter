@@ -18,7 +18,6 @@ interface FormState {
   credentialRef: string;
   managedSecret: string;
   enforceVk: boolean;
-  allowDirect: boolean;
   allowedOrigins: string;
   allowedHeaders: string;
   requiredHeaders: string;
@@ -47,7 +46,6 @@ const fromDto = (dto: SecuritySettingsDto): FormState => ({
   credentialRef: dto.dashboard_credential_ref ?? "",
   managedSecret: "",
   enforceVk: dto.virtual_key_required,
-  allowDirect: dto.allow_direct_provider_keys,
   allowedOrigins: dto.allowed_origins.join(", "),
   allowedHeaders: dto.allowed_headers.join(", "),
   requiredHeaders: Object.entries(
@@ -86,7 +84,6 @@ export default function Security() {
     mutationFn: (f: FormState) =>
       updateSecuritySettings({
         virtual_key_required: f.enforceVk,
-        allow_direct_provider_keys: f.allowDirect,
         allowed_origins: splitList(f.allowedOrigins),
         allowed_headers: splitList(f.allowedHeaders),
         required_headers: parseRequiredHeaders(f.requiredHeaders),
@@ -178,13 +175,6 @@ export default function Security() {
         checked={form.enforceVk}
         onChange={(v) => set({ enforceVk: v })}
       />
-      <ToggleCard
-        title="Allow direct provider keys"
-        desc="When enabled, callers may send a provider key (the credential a provider issued, not a rolter virtual key) in the Authorization header, bypassing the registered key pool."
-        checked={form.allowDirect}
-        onChange={(v) => set({ allowDirect: v })}
-      />
-
       <TextCard
         title="Allowed Origins"
         desc="Comma-separated list of exact http(s) origins allowed for CORS and WebSocket connections. Wildcards are rejected — list each origin explicitly."

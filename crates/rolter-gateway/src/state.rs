@@ -129,6 +129,9 @@ pub struct Snapshot {
     /// config override for whether an empty `keys` set still enforces auth.
     /// `None` defers to the deployment (see [`AppState::managed_auth`])
     pub require_auth: Option<bool>,
+    /// deployment-wide ingress policy set on the control plane's Security
+    /// screen and carried here by the snapshot (#1162)
+    pub security: rolter_core::SecurityPolicyConfig,
     /// per-model token pricing, keyed by public model name, with every rate
     /// already expressed in [`Self::base_currency`] — a model priced in EUR
     /// arrives here converted, so the hot path never does FX (#650)
@@ -433,6 +436,7 @@ impl Snapshot {
             mcp_oauth_sessions,
             pepper,
             require_auth: config.server.require_auth,
+            security: config.security.clone(),
             prices,
             base_currency,
             budgets: Arc::new(config.budgets.clone()),

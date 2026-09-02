@@ -38,7 +38,6 @@ async fn get_security_settings(
 #[derive(Deserialize)]
 struct UpdateSecuritySettings {
     virtual_key_required: bool,
-    allow_direct_provider_keys: bool,
     #[serde(default)]
     allowed_origins: Vec<String>,
     #[serde(default)]
@@ -167,8 +166,12 @@ async fn update_security_settings(
         .map(|(ciphertext, nonce)| (ciphertext.as_slice(), nonce.as_slice()));
     let row = SecuritySettingsRepo(pool(&state))
         .update(
+            // #1162: `allow_direct_provider_keys` is gone from this call.
+            // The gateway has no direct-provider-key passthrough, so the
+            // column never controlled anything; the store pins it to its
+            // default rather than leave a toggle that reads like a security
+            // control and is not one
             body.virtual_key_required,
-            body.allow_direct_provider_keys,
             &body.allowed_origins,
             &body.allowed_headers,
             serde_json::to_value(&body.required_headers).map_err(|err| invalid(err.to_string()))?,
@@ -196,7 +199,6 @@ async fn update_security_settings(
             None,
             Some(serde_json::json!({
                 "virtual_key_required": row.virtual_key_required,
-                "allow_direct_provider_keys": row.allow_direct_provider_keys,
                 "origin_count": row.allowed_origins.len(),
                 "required_header_count": body.required_headers.len(),
                 "bypass_route_count": row.auth_bypass_routes.len(),
@@ -233,7 +235,6 @@ mod tests {
     fn rejects_multiline_required_header_value() {
         let body = UpdateSecuritySettings {
             virtual_key_required: false,
-            allow_direct_provider_keys: false,
             allowed_origins: Vec::new(),
             allowed_headers: Vec::new(),
             required_headers: [("x-tenant".to_string(), "a\nb".to_string())]
