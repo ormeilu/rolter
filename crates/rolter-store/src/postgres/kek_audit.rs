@@ -96,7 +96,7 @@ pub const SEALED_COLUMNS: &[SealedColumn] = &[
 /// Rows sampled per column. The audit answers a yes/no question — a KEK either
 /// sealed this database or it did not — so reading every row would buy nothing
 /// and would make the check's cost scale with the deployment it gates.
-const SAMPLE_LIMIT: i64 = 25;
+pub const SAMPLE_LIMIT: i64 = 25;
 
 /// What one sealed column looked like when sampled.
 #[derive(Debug, Clone, PartialEq, Eq)]
