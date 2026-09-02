@@ -6608,6 +6608,9 @@ async fn collector_config_renders_a_managed_secret_as_a_bearer_header() {
 #[tokio::test]
 async fn security_policy_reaches_the_snapshot_without_the_dashboard_secret() {
     skip_without_db!();
+    // sealing the dashboard secret needs a KEK, exactly as the provider-key
+    // test does; the value is arbitrary because nothing here decrypts it
+    std::env::set_var("ROLTER_KEK", "security-policy-test-kek");
     let pool = fresh_pool().await;
     let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
         .await
