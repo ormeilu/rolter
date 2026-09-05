@@ -644,5 +644,6 @@ jobs:
         if: steps.baseline.outputs.tag != ''
         env:
           BASELINE: ${{ steps.baseline.outputs.tag }}
-        # shellcheck disable=SC2086 # GUARDED is a deliberate word-split list
-        run: cargo semver-checks $GUARDED --baseline-rev "$BASELINE" --release-type patch
+        run: |
+          # shellcheck disable=SC2086 # GUARDED is a deliberate word-split list
+          cargo semver-checks $GUARDED --baseline-rev "$BASELINE" --release-type patch
