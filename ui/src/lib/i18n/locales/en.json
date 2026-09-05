@@ -111,8 +111,8 @@
       "connectors": "connectors",
       "customers": "customers",
       "featureFlags": "feature flags",
-    "guardrailProviders": "guardrail providers",
-    "guardrailRules": "guardrail rules",
+      "guardrailProviders": "guardrail providers",
+      "guardrailRules": "guardrail rules",
       "logsSettings": "logs settings",
       "mcpLibrary": "the MCP library",
       "mcpLogDetail": "this MCP tool call",
@@ -587,7 +587,8 @@
       "confirm": {
         "title": "Delete tool group {{name}}?",
         "body": "The bundle is removed and any client relying on it loses access to the tools it governed."
-      }
+      },
+      "emptyTitle": "No tool groups"
     },
     "virtualKeys": {
       "explainer": "Virtual keys are the credential clients send to the gateway (sk-rolter-…). Provider keys — the credentials your providers issued to rolter — live on the Providers screen and are never sent by clients.",
@@ -824,7 +825,13 @@
       "reportingGateways_other": "{{count}} reporting gateways",
       "emptyTitle": "No fresh adaptive routing telemetry",
       "emptyBody": "A gateway appears here after it serves a route on the adaptive strategy and reports to the control plane. Reports older than {{seconds}} seconds are hidden.",
-      "emptyAction": "Review routing rules"
+      "emptyAction": "Review routing rules",
+      "stats": {
+        "adaptiveRoutes": "Adaptive routes",
+        "blendActive": "Blend active",
+        "reportingGateways": "Reporting gateways",
+        "observedPicks": "Observed picks"
+      }
     },
     "govTeams": {
       "created": "created {{date}}"
@@ -1141,6 +1148,9 @@
         "fields_one": "{{count}} field",
         "fields_other": "{{count}} fields"
       }
+    },
+    "mcpSettings": {
+      "defaultTransport": "Default transport"
     }
   },
   "playground": {

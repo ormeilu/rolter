@@ -122,9 +122,7 @@
     "unauthorized — set a valid virtual key"
   ],
   "src/pages/AdaptiveDashboard.tsx": [
-    "Adaptive routes",
     "Blend",
-    "Blend active",
     "Blend score",
     "Cost / Mtok",
     "Exploration",
@@ -133,8 +131,6 @@
     "Latency",
     "Live scores and decision modes reported by gateways using the adaptive strategy. Counts reset when a gateway rebuilds its routing snapshot.",
     "No target signals were included in this report.",
-    "Observed picks",
-    "Reporting gateways",
     "Samples",
     "Upstream"
   ],
@@ -462,7 +458,6 @@
     "Create tool group",
     "Declare the endpoint and exact tool names exposed through the organization registry.",
     "Default failure policy",
-    "Default transport",
     "Defaults apply when registering new MCP servers. Runtime authorization still comes from server scopes and each user&apos;s OAuth session.",
     "Delete",
     "Delete server",
@@ -482,7 +477,6 @@
     "No MCP servers registered",
     "No OAuth scopes",
     "No description provided.",
-    "No tool groups",
     "No tools declared",
     "Permit clients to request tools not declared in the registry manifest.",
     "Register MCP server",

@@ -157,10 +157,10 @@ function AdaptiveDashboardScreen() {
       ) : (
         <>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard label="Adaptive routes" value={fmt.number(routes.length)} />
-            <StatCard label="Blend active" value={fmt.number(engaged)} />
-            <StatCard label="Reporting gateways" value={fmt.number(nodes.size)} />
-            <StatCard label="Observed picks" value={fmt.number(observed)} />
+            <StatCard label={t("pages.adaptiveDashboard.stats.adaptiveRoutes")} value={fmt.number(routes.length)} />
+            <StatCard label={t("pages.adaptiveDashboard.stats.blendActive")} value={fmt.number(engaged)} />
+            <StatCard label={t("pages.adaptiveDashboard.stats.reportingGateways")} value={fmt.number(nodes.size)} />
+            <StatCard label={t("pages.adaptiveDashboard.stats.observedPicks")} value={fmt.number(observed)} />
           </div>
 
           <div className="flex flex-col gap-4">
