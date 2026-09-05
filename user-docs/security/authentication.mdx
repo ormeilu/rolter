@@ -191,3 +191,21 @@ The email-only gate — where the dashboard opens with no session at all — is
 reserved for an open-mode control plane running with no store, where the auth
 endpoints are not served. Anywhere else, a failed sign-in leaves you on the
 sign-in screen with the reason on it.
+
+### Staying signed in
+
+A session token is valid for seven days. The dashboard re-checks the one it
+stored every time it loads, with `GET /api/v1/auth/me`, and takes the answer
+literally:
+
+- **200** — the session is live. The account's superadmin flag and its
+  memberships come from that answer, so the role shown in the sidebar and the
+  organization the scope switcher opens on are the server's view, not a stale
+  copy from the last sign-in.
+- **401** — the session is over. The stored token is discarded and the sign-in
+  screen appears with *"Your session expired — sign in again."* Any other
+  request that is refused the same way ends the session too, so an expired
+  token cannot linger behind a screen that merely fails to load.
+- **anything else** — a network failure, a 5xx, or a control plane that does
+  not serve `/api/v1/auth/*` at all. The session is kept: a control plane that
+  blinked is not a reason to sign you out.

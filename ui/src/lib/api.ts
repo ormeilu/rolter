@@ -84,10 +84,53 @@ export function isOpenModeNoSession(error: unknown): boolean {
   return error instanceof ApiError && error.code === "open_mode_no_session";
 }
 
+// the shell's "this token is dead" handler, registered by AuthProvider (#1196).
+// a module-level callback rather than an import so api.ts keeps knowing nothing
+// about react, and so a request that 401s in a screen nobody is watching still
+// signs the session out once, centrally, instead of leaving every screen to
+// reach LoadError with the same dead token still attached
+type SessionExpiredHandler = () => void;
+let sessionExpiredHandler: SessionExpiredHandler | null = null;
+
+/**
+ * Register the handler called when a request made *with a session token* is
+ * answered 401. Returns an unsubscribe, so a provider can drop it on unmount.
+ */
+export function setSessionExpiredHandler(
+  handler: SessionExpiredHandler | null,
+): () => void {
+  sessionExpiredHandler = handler;
+  return () => {
+    if (sessionExpiredHandler === handler) sessionExpiredHandler = null;
+  };
+}
+
+// endpoints whose 401 is about the credentials in the request, not about the
+// session token that happens to be in localStorage: a wrong password and an
+// invite token that expired are both answered 401, and neither means the
+// current session died
+const SESSION_EXEMPT_PATHS = [
+  "/api/v1/auth/login",
+  "/api/v1/invitations/accept/",
+];
+
+/// signal a dead session, but only for the failures that actually are one
+function noteUnauthorized(url: string, authed: boolean, err: ApiError) {
+  if (!authed || err.status !== 401) return;
+  // open mode has no accounts at all, so there is no session to have expired
+  // and no sign-in that would help (#942)
+  if (isOpenModeNoSession(err)) return;
+  if (SESSION_EXEMPT_PATHS.some((path) => url.includes(path))) return;
+  sessionExpiredHandler?.();
+}
+
 async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: authHeaders() });
+  const headers = authHeaders();
+  const res = await fetch(url, { headers });
   if (!res.ok) {
-    throw await apiError(res);
+    const err = await apiError(res);
+    noteUnauthorized(url, "Authorization" in headers, err);
+    throw err;
   }
   return (await res.json()) as T;
 }
@@ -130,16 +173,19 @@ async function sendJson<T>(
   url: string,
   body?: unknown,
 ): Promise<T> {
+  const auth = authHeaders();
   const res = await fetch(url, {
     method,
     headers: {
-      ...authHeaders(),
+      ...auth,
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    throw await apiError(res);
+    const err = await apiError(res);
+    noteUnauthorized(url, "Authorization" in auth, err);
+    throw err;
   }
   if (res.status === 204) {
     return undefined as T;
@@ -1546,6 +1592,36 @@ export function getAuthMethods(): Promise<AuthMethods> {
 
 export function logout(): Promise<void> {
   return sendJson<void>("POST", "/api/v1/auth/logout");
+}
+
+/**
+ * A membership as `/auth/me` serialises it (rolter-store `Membership`).
+ *
+ * Same row as [`MembershipRow`] plus `source`, which the admin CRUD screens
+ * have no use for: `manual` (invitation, seed, admin api) or `sso` (an IdP
+ * group mapping).
+ */
+export interface MeMembership extends MembershipRow {
+  source: string;
+}
+
+/** `{user, memberships}` — crates/rolter-control/src/auth.rs `MeResponse` */
+export interface MeResponse {
+  user: UserRow;
+  memberships: MeMembership[];
+}
+
+/**
+ * Who the stored session token belongs to.
+ *
+ * The shell calls this on boot: a 200 says the token is still live and carries
+ * the account's superadmin flag and memberships straight from the server, a
+ * 401 says it is dead and the session is cleared (#1196). Not mounted at all
+ * on an open-mode control plane with no store, which answers 404 — a
+ * deployment shape, not a rejected session.
+ */
+export function fetchMe(): Promise<MeResponse> {
+  return getJson<MeResponse>("/api/v1/auth/me");
 }
 
 // --- invitations (crates/rolter-control/src/invitations.rs, #712) ---

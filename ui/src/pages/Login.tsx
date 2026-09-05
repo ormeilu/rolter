@@ -10,7 +10,7 @@ import { useAuth } from "@/lib/auth";
 // login — one of the two sanctioned places the вышивка thread runs
 export default function Login() {
   const { t } = useTranslation();
-  const { signIn } = useAuth();
+  const { signIn, expired } = useAuth();
   // empty by design: the prototype shipped a fake demo account here, which a
   // real deployment then showed to every operator as if it were a login
   const [email, setEmail] = useState("");
@@ -68,7 +68,7 @@ export default function Login() {
     }
     try {
       const res = await login(addr, pw);
-      signIn(res.user.email, res.token);
+      signIn(res.user.email, res.token, res.user);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         // the endpoint is not served here after all: this is the open-mode
@@ -97,6 +97,18 @@ export default function Login() {
             <h1 className="text-xl font-semibold">{t("auth.title")}</h1>
             <p className="text-sm text-muted-foreground">{t("auth.subtitle")}</p>
           </div>
+          {/* the session that was here a moment ago was rejected by the
+              control plane (#1196). said once, above the form, so the screen
+              explains why it is asking again instead of looking like a
+              spontaneous sign-out */}
+          {expired && !error && (
+            <p
+              role="status"
+              className="rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-hover)] px-3 py-2 text-sm text-muted-foreground"
+            >
+              {t("auth.sessionExpired")}
+            </p>
+          )}
           {showPassword && (
           <form
             className="flex flex-col gap-4"

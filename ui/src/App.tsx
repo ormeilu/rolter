@@ -14,14 +14,15 @@ import { LocalePicker } from "@/components/LocalePicker";
 import { OpenModeBanner } from "@/components/OpenModeBanner";
 import { ScopeSwitcher } from "@/components/ScopeSwitcher";
 import { ScreenHeader } from "@/components/ScreenHeader";
+import { ShellSkeleton } from "@/components/ShellSkeleton";
 import {
   NavSidebar,
   type NavGroup,
   type NavItem,
 } from "@/components/ui/nav-sidebar";
 import { BUILT, NAV, leafKeys, useScreenMeta, type NavDef } from "@/lib/nav";
-import { logout } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
+import { logout, ROLES, type MeMembership } from "@/lib/api";
+import { useAuth, type SessionUser } from "@/lib/auth";
 import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 import { isOpenMode } from "@/lib/telemetry";
@@ -200,6 +201,32 @@ function MenuRow({
   );
 }
 
+/**
+ * What to call the signed-in account in the rail.
+ *
+ * The server's answer, not the client's guess: `is_superadmin` comes from
+ * `/auth/me` (falling back to the blob cached at login), and a plain account
+ * is named by its membership role in the org currently in scope. Before #1196
+ * every session read "Admin", including the ones that were not.
+ */
+function roleLabel(
+  t: TFunction,
+  user: SessionUser | null,
+  memberships: MeMembership[],
+  orgId: string | undefined,
+): string {
+  if (user && !user.is_superadmin) {
+    const membership =
+      memberships.find((m) => m.org_id && m.org_id === orgId) ?? memberships[0];
+    // an unknown role string from a newer control plane has no label here, so
+    // it falls through rather than rendering a raw key
+    if (membership && (ROLES as readonly string[]).includes(membership.role)) {
+      return t(`shell.roles.${membership.role}`);
+    }
+  }
+  return t("shell.role");
+}
+
 function Screen({ screen }: { screen: string }) {
   const [title, subtitle] = useScreenMeta(screen);
   return (
@@ -218,7 +245,7 @@ function Screen({ screen }: { screen: string }) {
 
 export default function App() {
   const { t } = useTranslation();
-  const { email, token, signOut } = useAuth();
+  const { email, token, user, memberships, status, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const scope = useScope();
@@ -249,6 +276,14 @@ export default function App() {
     return <AcceptInvite token={decodeURIComponent(invite[1])} />;
   }
 
+  // the stored token has not been re-checked yet: hold the shape of the shell
+  // rather than flashing Login at someone whose session turns out to be fine,
+  // and rather than letting every screen fire a request with a token that may
+  // already be dead (#1196)
+  if (status === "checking") {
+    return <ShellSkeleton />;
+  }
+
   if (!email) {
     return <Login />;
   }
@@ -258,9 +293,10 @@ export default function App() {
   const navGroups: NavGroup[] = [
     { items: NAV.map((def) => toNavItem(def, t)) },
   ];
+  const roleName = roleLabel(t, user, memberships, scope.orgId);
   const role = orgName
-    ? t("shell.roleWithOrg", { org: orgName })
-    : t("shell.role");
+    ? t("shell.roleWithOrg", { role: roleName, org: orgName })
+    : roleName;
   const initials = (email.trim()[0] ?? "?").toUpperCase();
 
   return (

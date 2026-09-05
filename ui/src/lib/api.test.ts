@@ -7,6 +7,8 @@ import {
   ApiError,
   isOpenModeNoSession,
   login,
+  fetchMe,
+  setSessionExpiredHandler,
   apiBaseDoublesV1,
   resolveUpstreamUrl,
   isConvertible,
@@ -352,5 +354,167 @@ describe("isConvertible", () => {
   it("stays quiet until the settings have loaded", () => {
     // warning on every price before the table arrives would be a false alarm
     expect(isConvertible(undefined, "RUB")).toBe(true);
+  });
+});
+
+
+// #1196: the dashboard never re-checked the stored token, and never dropped
+// one the control plane had already rejected.
+describe("session revalidation", () => {
+  let fetchMock: any;
+  let store: Record<string, string>;
+
+  beforeEach(() => {
+    fetchMock = mock();
+    globalThis.fetch = fetchMock;
+    store = {};
+    Object.defineProperty(globalThis, "localStorage", {
+      value: {
+        getItem: (key: string) => store[key] ?? null,
+        setItem: (key: string, val: string) => {
+          store[key] = val;
+        },
+        removeItem: (key: string) => {
+          delete store[key];
+        },
+      },
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    setSessionExpiredHandler(null);
+    mock.restore();
+  });
+
+  const ME = {
+    user: {
+      id: "user-1",
+      email: "anya@acme.co",
+      is_superadmin: true,
+      deactivated_at: null,
+      created_at: "2026-01-01T00:00:00Z",
+    },
+    memberships: [
+      {
+        id: "m-1",
+        user_id: "user-1",
+        org_id: "org-1",
+        team_id: null,
+        project_id: null,
+        role: "admin",
+        source: "manual",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ],
+  };
+
+  const refusal = (status: number, code: string) =>
+    new Response(JSON.stringify({ error: { message: "no", code } }), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  it("asks /auth/me with the stored token and returns {user, memberships}", async () => {
+    store["rolter.session.token"] = "sess-1";
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(ME), { status: 200 }),
+    );
+
+    const me = await fetchMe();
+    expect(me.user.is_superadmin).toBe(true);
+    expect(me.user.email).toBe("anya@acme.co");
+    expect(me.memberships[0].org_id).toBe("org-1");
+    expect(me.memberships[0].source).toBe("manual");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/auth/me");
+    expect(init.headers).toEqual({ Authorization: "Bearer sess-1" });
+  });
+
+  it("signals the shell once when a request with a token is refused", async () => {
+    store["rolter.session.token"] = "sess-1";
+    let signalled = 0;
+    setSessionExpiredHandler(() => {
+      signalled += 1;
+    });
+    fetchMock.mockResolvedValueOnce(refusal(401, "unauthenticated"));
+
+    await expect(fetchMe()).rejects.toThrow();
+    expect(signalled).toBe(1);
+  });
+
+  it("signals on a write too, not just a read", async () => {
+    store["rolter.session.token"] = "sess-1";
+    let signalled = 0;
+    setSessionExpiredHandler(() => {
+      signalled += 1;
+    });
+    fetchMock.mockResolvedValueOnce(refusal(401, "unauthenticated"));
+
+    await expect(createOrg({ name: "n", slug: "n" })).rejects.toThrow();
+    expect(signalled).toBe(1);
+  });
+
+  it("stays quiet for a wrong password", async () => {
+    // a stale token in storage does not make a refused login an expired
+    // session: the credentials in the request are what was rejected
+    store["rolter.session.token"] = "sess-1";
+    let signalled = 0;
+    setSessionExpiredHandler(() => {
+      signalled += 1;
+    });
+    fetchMock.mockResolvedValueOnce(refusal(401, "invalid_credentials"));
+
+    await expect(login("a@b.co", "pw")).rejects.toThrow();
+    expect(signalled).toBe(0);
+  });
+
+  it("stays quiet in open mode, which has no session to expire", async () => {
+    store["rolter.session.token"] = "sess-1";
+    let signalled = 0;
+    setSessionExpiredHandler(() => {
+      signalled += 1;
+    });
+    fetchMock.mockResolvedValueOnce(refusal(401, "open_mode_no_session"));
+
+    await expect(fetchMe()).rejects.toThrow();
+    expect(signalled).toBe(0);
+  });
+
+  it("stays quiet when the request carried no token at all", async () => {
+    let signalled = 0;
+    setSessionExpiredHandler(() => {
+      signalled += 1;
+    });
+    fetchMock.mockResolvedValueOnce(refusal(401, "unauthenticated"));
+
+    await expect(fetchMe()).rejects.toThrow();
+    expect(signalled).toBe(0);
+  });
+
+  it("stays quiet on a 403, which signing in again does not fix", async () => {
+    store["rolter.session.token"] = "sess-1";
+    let signalled = 0;
+    setSessionExpiredHandler(() => {
+      signalled += 1;
+    });
+    fetchMock.mockResolvedValueOnce(refusal(403, "forbidden"));
+
+    await expect(fetchMe()).rejects.toThrow();
+    expect(signalled).toBe(0);
+  });
+
+  it("unsubscribes, so an unmounted provider is not called", async () => {
+    store["rolter.session.token"] = "sess-1";
+    let signalled = 0;
+    const off = setSessionExpiredHandler(() => {
+      signalled += 1;
+    });
+    off();
+    fetchMock.mockResolvedValueOnce(refusal(401, "unauthenticated"));
+
+    await expect(fetchMe()).rejects.toThrow();
+    expect(signalled).toBe(0);
   });
 });

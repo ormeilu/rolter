@@ -11,6 +11,7 @@
     "continueWith": "Войти через {{provider}}",
     "noMethod": "Для этой установки не включён ни один способ входа.",
     "selfHosted": "Self-hosted · сессии не покидают эту установку.",
+    "sessionExpired": "Сессия истекла — войдите снова.",
     "errors": {
       "invalidCredentials": "Эта пара «почта — пароль» не соответствует ни одной учётной записи.",
       "passwordLoginDisabled": "Вход по паролю отключён для этой организации. Используйте single sign-on ниже.",
@@ -849,7 +850,13 @@
     "githubRepo": "Репозиторий на GitHub",
     "reportBug": "Сообщить об ошибке",
     "role": "Администратор",
-    "roleWithOrg": "Администратор · {{org}}",
+    "roleWithOrg": "{{role}} · {{org}}",
+    "roles": {
+      "admin": "Администратор",
+      "member": "Участник",
+      "viewer": "Наблюдатель"
+    },
+    "checkingSession": "Проверяем сессию…",
     "scope": "Область",
     "accountAndKeys": "Аккаунт и виртуальные ключи",
     "signOut": "Выйти",
