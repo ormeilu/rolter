@@ -1,18 +1,29 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Meta, StoryObj } from "@storybook/react";
-import * as React from "react";
+import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import AccessProfiles from "./AccessProfiles";
 import {
   cancelConfirmation,
+  clickWhenEnabled,
   confirmDestructive,
+  expectEmptyState,
+  expectLoadError,
   expectSkeleton,
+  Harness,
+  json,
+  pending,
   recording,
+  scoped,
+  sheet,
+  type FetchStub,
 } from "./story-harness";
-import type { AccessProfileRow } from "@/lib/api";
+import type {
+  AccessProfileDetail,
+  AccessProfileRow,
+  CustomRoleRow,
+} from "@/lib/api";
 
-const ORG = "11111111-1111-1111-1111-111111111111";
+const ORG = "org-1";
 
 const profile = (over: Partial<AccessProfileRow> = {}): AccessProfileRow => ({
   id: "p-1",
@@ -37,59 +48,83 @@ const PROFILES: AccessProfileRow[] = [
   }),
 ];
 
-const ASSIGNMENTS: Record<string, unknown[]> = {
-  "p-1": [
-    { id: "a-1", profile_id: "p-1", user_id: "u-1", team_id: null, created_at: "" },
-    { id: "a-2", profile_id: "p-1", user_id: null, team_id: "t-1", created_at: "" },
-  ],
-  "p-2": [],
+// `GET /api/v1/access-profiles/{id}` is the only call that answers what a
+// profile carries: the roles composed into it, everyone it reaches, and the
+// model policy — which has no list endpoint at all (#1184)
+const DETAILS: Record<string, AccessProfileDetail> = {
+  "p-1": {
+    ...profile(),
+    roles: [
+      {
+        id: "pr-1",
+        profile_id: "p-1",
+        role_id: "role-1",
+        org_id: ORG,
+        team_id: null,
+        project_id: null,
+        created_at: "2026-08-01T10:00:00Z",
+      },
+    ],
+    assignments: [
+      { id: "a-1", profile_id: "p-1", user_id: "u-1", team_id: null, created_at: "" },
+      { id: "a-2", profile_id: "p-1", user_id: null, team_id: "t-1", created_at: "" },
+    ],
+    policy: {
+      profile_id: "p-1",
+      allowed_models: ["gpt-4o", "claude-*"],
+      denied_models: ["o1-preview"],
+      allowed_routes: [],
+      denied_routes: [],
+      updated_at: "2026-08-01T10:00:00Z",
+    },
+  },
+  "p-2": {
+    ...profile({ id: "p-2", slug: "oncall", name: "On-call", description: null }),
+    roles: [],
+    assignments: [],
+    policy: null,
+  },
 };
 
-type FetchStub = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+const ROLES: CustomRoleRow[] = [
+  {
+    id: "role-1",
+    org_id: ORG,
+    slug: "support-engineer",
+    name: "Support engineer",
+    description: null,
+    base_role: "viewer",
+    created_at: "2026-08-01T10:00:00Z",
+    updated_at: "2026-08-01T10:00:00Z",
+  },
+  {
+    id: "role-2",
+    org_id: ORG,
+    slug: "deploy-admin",
+    name: "Deploy admin",
+    description: null,
+    base_role: "member",
+    created_at: "2026-08-01T10:00:00Z",
+    updated_at: "2026-08-01T10:00:00Z",
+  },
+];
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-
-/// Route by URL: the screen resolves an org through `useScope`, which fetches
-/// `/api/v1/orgs` first, so a stub that answers only the profile call would
-/// leave the screen permanently disabled.
-function stub(profiles: () => Promise<Response>): FetchStub {
-  return async (input) => {
+/**
+ * Route by URL.
+ *
+ * The detail path is tested before the list it is a prefix of: both contain
+ * `/access-profiles`, and answering the detail with the list would leave the
+ * card reporting a profile that carries nothing.
+ */
+function stub(profiles: () => Promise<Response>, roles = ROLES): FetchStub {
+  return scoped(async (input) => {
     const url = String(input);
-    if (url.includes("/access-profiles/") && url.endsWith("/assignments")) {
-      const id = url.split("/access-profiles/")[1].split("/")[0];
-      return json(ASSIGNMENTS[id] ?? []);
-    }
+    const detail = /\/access-profiles\/([^/?]+)$/.exec(url);
+    if (detail) return json(DETAILS[detail[1]] ?? {});
     if (url.includes("/access-profiles")) return profiles();
-    if (url.includes("/teams") || url.includes("/projects")) return json([]);
-    if (url.includes("/orgs")) return json([{ id: ORG, name: "Acme" }]);
+    if (url.includes("/custom-roles")) return json(roles);
     return json([]);
-  };
-}
-
-// the stub is installed during render, not in an effect: child effects run
-// before the parent's, so an effect would let the first real fetch through
-function Harness({ fetchStub }: { fetchStub: FetchStub }) {
-  const original = React.useRef<typeof globalThis.fetch | null>(null);
-  const client = React.useMemo(() => {
-    original.current ??= globalThis.fetch;
-    globalThis.fetch = fetchStub as typeof globalThis.fetch;
-    return new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  }, [fetchStub]);
-  React.useEffect(
-    () => () => {
-      if (original.current) globalThis.fetch = original.current;
-    },
-    [],
-  );
-  return (
-    <QueryClientProvider client={client}>
-      <AccessProfiles />
-    </QueryClientProvider>
-  );
+  });
 }
 
 const meta = {
@@ -102,7 +137,11 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Loaded: Story = {
-  render: () => <Harness fetchStub={stub(async () => json(PROFILES))} />,
+  render: () => (
+    <Harness fetchStub={stub(async () => json(PROFILES))}>
+      <AccessProfiles />
+    </Harness>
+  ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() =>
@@ -116,12 +155,20 @@ export const Loaded: Story = {
     );
     // and a profile assigned to nobody says so plainly
     await expect(canvas.getByText("Not assigned to anyone yet")).toBeVisible();
+
+    // the roles and the policy it carries, read back from the detail — before
+    // #1184 a policy could be written and never shown again
+    await expect(canvas.getByText("1 custom role")).toBeVisible();
+    await expect(canvas.getByText("3 policy patterns")).toBeVisible();
+    await expect(canvas.getByText("No model or route policy")).toBeVisible();
   },
 };
 
 export const Loading: Story = {
   render: () => (
-    <Harness fetchStub={stub(() => new Promise<Response>(() => {}))} />
+    <Harness fetchStub={pending}>
+      <AccessProfiles />
+    </Harness>
   ),
   play: async ({ canvasElement }) => {
     await expectSkeleton(canvasElement);
@@ -131,16 +178,91 @@ export const Loading: Story = {
 // the state every deployment starts in: the backend has shipped for a while,
 // but nobody has created a profile yet
 export const Empty: Story = {
-  render: () => <Harness fetchStub={stub(async () => json([]))} />,
+  render: () => (
+    <Harness fetchStub={stub(async () => json([]))}>
+      <AccessProfiles />
+    </Harness>
+  ),
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await waitFor(() =>
-      expect(canvas.getByText("No access profiles yet")).toBeVisible(),
-    );
+    await expectEmptyState(canvasElement, /No access profiles yet/, /Add profile/);
   },
 };
 
-// the delete mutation is shared by every card, so `isPending` alone marks the
+// a profile is created whole: the roles it composes and the policy it carries
+// go in the same request, so it is never assignable half-written
+const creates = recording(stub(async () => json([])));
+
+export const CreatesAProfileWithRolesAndPolicy: Story = {
+  render: () => (
+    <Harness fetchStub={creates.stub}>
+      <AccessProfiles />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    // the button stays disabled until the org/team/project chain has resolved
+    await clickWhenEnabled(canvasElement, "+ Add profile");
+
+    const form = within(sheet());
+    await userEvent.type(form.getByLabelText("Name"), "Support");
+    await userEvent.click(form.getByRole("checkbox", { name: /Support engineer/ }));
+    await userEvent.type(form.getByLabelText("Allowed models"), "gpt-4o\nclaude-*");
+    await userEvent.type(form.getByLabelText("Denied models"), "o1-preview");
+    await userEvent.click(form.getByRole("button", { name: "Create profile" }));
+
+    const body = (await creates.expectSentBody("POST", "/access-profiles")) as {
+      name: string;
+      roles: { role_id: string }[];
+      policy: Record<string, string[]>;
+    };
+    expect(body.name).toBe("Support");
+    // scope is left to the server, which defaults a composition to the
+    // profile's own org — the whole tenant, which is what the sheet promises
+    expect(body.roles).toEqual([{ role_id: "role-1" }]);
+    expect(body.policy).toEqual({
+      allowed_models: ["gpt-4o", "claude-*"],
+      denied_models: ["o1-preview"],
+      allowed_routes: [],
+      denied_routes: [],
+    });
+  },
+};
+
+// an edit seeds from the detail and replaces both wholesale, which is also how
+// a role is detached before it can be deleted
+const edits = recording(stub(async () => json(PROFILES)));
+
+export const EditsAProfile: Story = {
+  render: () => (
+    <Harness fetchStub={edits.stub}>
+      <AccessProfiles />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const edit = await canvas.findByRole("button", { name: "Edit Support engineers" });
+    // the button waits for the detail: there is nothing to seed the sheet with
+    // until the roles and the policy have landed
+    await waitFor(() => expect(edit).toBeEnabled());
+    await userEvent.click(edit);
+
+    const form = within(sheet());
+    await expect(form.getByRole("checkbox", { name: /Support engineer/ })).toBeChecked();
+    await expect(form.getByLabelText("Allowed models")).toHaveValue("gpt-4o\nclaude-*");
+
+    // detach the role, keep the policy
+    await userEvent.click(form.getByRole("checkbox", { name: /Support engineer/ }));
+    await userEvent.click(form.getByRole("button", { name: "Save profile" }));
+
+    const body = (await edits.expectSentBody("PUT", "/access-profiles/p-1")) as {
+      roles: unknown[];
+      policy: Record<string, string[]>;
+    };
+    expect(body.roles).toEqual([]);
+    expect(body.policy.allowed_models).toEqual(["gpt-4o", "claude-*"]);
+  },
+};
+
+// the delete mutation is shared by every card, so `isPending` alone marked the
 // whole grid busy. the pending row is the one the mutation was given, and this
 // story is what stops that regression coming back: one row spins, the other
 // stays clickable.
@@ -152,7 +274,9 @@ export const Deleting: Story = {
         if (init?.method === "DELETE") return new Promise<Response>(() => {});
         return stub(async () => json(PROFILES))(input, init);
       }}
-    />
+    >
+      <AccessProfiles />
+    </Harness>
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -160,8 +284,8 @@ export const Deleting: Story = {
       expect(canvas.getByText("Support engineers")).toBeVisible(),
     );
 
-    const target = canvas.getByLabelText("Delete Support engineers");
-    const other = canvas.getByLabelText("Delete On-call");
+    const target = canvas.getByRole("button", { name: "Delete Support engineers" });
+    const other = canvas.getByRole("button", { name: "Delete On-call" });
     await expect(target).toBeEnabled();
     await expect(other).toBeEnabled();
 
@@ -184,18 +308,26 @@ const deletes = recording(async (input, init) => {
 });
 
 export const ConfirmsBeforeDeletingAProfile: Story = {
-  render: () => <Harness fetchStub={deletes.stub} />,
+  render: () => (
+    <Harness fetchStub={deletes.stub}>
+      <AccessProfiles />
+    </Harness>
+  ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() =>
       expect(canvas.getByText("Support engineers")).toBeVisible(),
     );
 
-    await userEvent.click(canvas.getByLabelText("Delete Support engineers"));
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Delete Support engineers" }),
+    );
     await cancelConfirmation();
     deletes.expectNotSent("DELETE", "/access-profiles/p-1");
 
-    await userEvent.click(canvas.getByLabelText("Delete Support engineers"));
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Delete Support engineers" }),
+    );
     await confirmDestructive(/Support engineers/, /delete profile/i);
     await deletes.expectSent("DELETE", "/access-profiles/p-1");
   },
@@ -207,12 +339,11 @@ export const Error_: Story = {
   render: () => (
     <Harness
       fetchStub={stub(async () => json({ error: { message: "forbidden" } }, 403))}
-    />
+    >
+      <AccessProfiles />
+    </Harness>
   ),
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await waitFor(() =>
-      expect(canvas.getByText(/You do not have access to access profiles/)).toBeVisible(),
-    );
+    await expectLoadError(canvasElement, /You do not have access to access profiles/);
   },
 };

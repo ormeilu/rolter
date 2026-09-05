@@ -127,6 +127,23 @@ curl -X POST https://control.example.com/api/v1/access-profiles/$PROFILE_ID/assi
 
 Scope is honoured exactly as it is for memberships: a grant attached to one project authorizes that project, not the whole org.
 
+### Managing them in the dashboard
+
+Everything above is also on screen, so a role does not have to be defined with `curl`.
+
+**Roles & Permissions** carries two tabs. The first is the [permission matrix](#reading-it-in-the-dashboard). The second, **Custom roles**, lists the org's own roles with the base role each extends, how many pairs it grants, and which access profiles compose it — that last one is what a delete would have to be detached from first.
+
+Creating or editing a role opens a grant grid: one row per resource the deployment guards, four columns for read, create, update and delete. The grid is built from the same `GET /api/v1/rbac/matrix` response as the matrix tab, never from a list written into the dashboard, so it can only ever offer pairs this build actually defines. Two kinds of cell cannot be ticked:
+
+- a pair the resource does not have — an audit log has no update — shows a dash rather than a checkbox, because "there is no such action" is a different answer from "you may not grant it";
+- a **deployment-wide** action shows a checkbox that is disabled. No custom role can reach one, for the reason in the note above, and hiding it would leave an operator hunting for a row that is deliberately out of reach.
+
+<Note>
+  A role can also carry grants naming a resource this build no longer defines — after a downgrade, say. They are not on the grid, since there is no row to tick them on, but the sheet counts them and saving keeps them exactly as they are. Editing a role for an unrelated reason never quietly rewrites it.
+</Note>
+
+**Access Profiles** reads `GET /api/v1/access-profiles/{id}` for each profile, so a card shows the roles composed into it, everyone it reaches, and the model policy it carries — the policy in particular has no list endpoint, and before this it could be written and never seen again. The same sheet creates and edits: name, the custom roles to compose, and the four allow/deny pattern lists, saved in one request. Roles picked here are composed at **organization scope**; a narrower team- or project-scoped composition is still API-only.
+
 ## Model and route policy
 
 A profile can also carry a **model and route policy** — allow and deny lists for the models and routes its holders may reach. Entries are exact names or a trailing-`*` prefix glob (`gpt-*`), an empty allow-list means "no restriction", and deny always wins over allow. Where someone holds several profiles the lists are unioned, never intersected, so giving a person another profile can only ever widen their access.

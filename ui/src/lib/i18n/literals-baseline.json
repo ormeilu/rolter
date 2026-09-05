@@ -121,21 +121,6 @@
     "gateway request failed: ${res.status}",
     "unauthorized — set a valid virtual key"
   ],
-  "src/pages/AccessProfiles.tsx": [
-    "A profile is a reusable bundle. Assign it to a user or a team, and everyone it reaches picks up the roles and policy it carries.",
-    "Add access profile",
-    "Cancel",
-    "Create profile",
-    "Creating…",
-    "Delete profile",
-    "Description",
-    "Loading assignments…",
-    "Name",
-    "Not assigned to anyone yet",
-    "Read-only access to logs and analytics",
-    "Slug",
-    "Support engineers"
-  ],
   "src/pages/AdaptiveDashboard.tsx": [
     "Adaptive routes",
     "Blend",
