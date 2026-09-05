@@ -15,6 +15,7 @@ import {
   MCP_TRANSPORTS,
   type McpLogRow,
 } from "@/lib/api";
+import { useFormat } from "@/lib/i18n/format";
 import { useDrawerA11y } from "@/lib/use-drawer-a11y";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -191,6 +192,7 @@ export default function McpLogs() {
 }
 
 function McpRow({ row, onSelect }: { row: McpLogRow; onSelect: () => void }) {
+  const fmt = useFormat();
   const tone = statusTone(row.status);
   return (
     <ListRow
@@ -199,7 +201,7 @@ function McpRow({ row, onSelect }: { row: McpLogRow; onSelect: () => void }) {
       onClick={onSelect}
     >
       <span className="font-mono text-xs text-[color:var(--text-secondary)]">
-        {row.ts.slice(5, 19).replace("T", " ")}
+        {fmt.dateTime(row.ts)}
       </span>
       <span className="truncate font-mono text-xs">{row.server}</span>
       <span className="truncate font-mono text-xs text-[color:var(--text-secondary)]">
@@ -238,6 +240,7 @@ function McpStat({ label, value }: { label: string; value: string }) {
 
 function DetailDrawer({ eventId, onClose }: { eventId: string; onClose: () => void }) {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const drawer = useDrawerA11y(true, onClose);
   const detail = useQuery({
     queryKey: ["mcp-log", eventId],
@@ -284,7 +287,7 @@ function DetailDrawer({ eventId, onClose }: { eventId: string; onClose: () => vo
             <DrawerStat label="Status" value={d.status} />
             <DrawerStat label="Latency" value={`${d.latency_ms} ms`} />
             <DrawerStat label="Transport" value={d.transport} />
-            <DrawerStat label="Time" value={d.ts.slice(0, 19).replace("T", " ")} />
+            <DrawerStat label="Time" value={fmt.dateTime(d.ts)} />
             <DrawerStat label="Request" value={d.request_id || "—"} />
             <DrawerStat label="Trace" value={d.trace_id || "—"} />
           </div>

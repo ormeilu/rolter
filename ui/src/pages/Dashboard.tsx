@@ -25,6 +25,7 @@ import {
   fetchInvocations,
   type InvocationRow,
 } from "@/lib/api";
+import { useCurrencyCode } from "@/lib/currency";
 import { useFormat } from "@/lib/i18n/format";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -53,7 +54,8 @@ export default function Dashboard() {
   const { t } = useTranslation();
   // formatting follows the dashboard language, not the browser locale
   const fmt = useFormat();
-  const money = (n: number) => fmt.currency(n);
+  const currency = useCurrencyCode();
+  const money = (n: number) => fmt.currency(n, currency);
   const summary = useQuery({
     queryKey: ["analytics", "summary", "24h"],
     queryFn: () => fetchAnalyticsSummary(WINDOW),
@@ -125,7 +127,7 @@ export default function Dashboard() {
 
   const spendPoints = (series.data ?? []).map((p) => num(p.cost_usd));
   const spendLabels = (series.data ?? []).map(
-    (p) => p.bucket.slice(11, 16) || p.bucket,
+    (p) => fmt.timeShort(p.bucket) || p.bucket,
   );
   // buckets exist but every one of them is zero: the window had traffic that
   // was never priced, which is not the same as spend that happened to be zero
@@ -137,10 +139,7 @@ export default function Dashboard() {
     value: num(m.requests),
   }));
   const totalReq = traffic.reduce((a, t) => a + t.value, 0);
-  const fmtK = (v: number) =>
-    v >= 1000
-      ? fmt.number(v / 1000, { maximumFractionDigits: 1 }) + "k"
-      : fmt.number(v);
+  const fmtK = fmt.compact;
 
   const barMax = Math.max(1, ...models.map((m) => num(m.requests)));
   const bars = [...models]
@@ -155,7 +154,7 @@ export default function Dashboard() {
 
   const recentRows = (recent.data ?? []).map((r: InvocationRow) => ({
     id: r.request_id || r.ts,
-    t: (r.ts ?? "").slice(11, 19),
+    t: fmt.time(r.ts),
     model: r.model,
     status: num(r.status),
     lat: Math.round(num(r.latency_ms)),

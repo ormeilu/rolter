@@ -23,6 +23,7 @@ import {
   type RouteTargetRow,
 } from "@/lib/api";
 import { StrategyHint } from "@/components/StrategyHint";
+import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { strategyOptions, strategyTone } from "@/lib/strategies";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
@@ -33,6 +34,7 @@ const TARGET_BARS = ["var(--red-folk)", "var(--zinc-400)", "var(--status-info)",
 // strategy pill, per-target weight bars, and edit/delete actions
 export default function RoutingRules() {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const queryClient = useQueryClient();
   const scope = useScope();
 
@@ -140,7 +142,7 @@ export default function RoutingRules() {
                   <p className="text-xs text-muted-foreground">No targets yet.</p>
                 )}
                 {targets.map((t, i) => {
-                  const pct = Math.round((t.weight / totalWeight) * 100);
+                  const share = t.weight / totalWeight;
                   return (
                     <div key={t.id} className="flex flex-col gap-[5px]">
                       <div className="flex items-center gap-2 font-mono text-xs">
@@ -152,13 +154,16 @@ export default function RoutingRules() {
                         <span className="min-w-0 truncate text-muted-foreground">
                           {t.upstream_model || r.model}
                         </span>
-                        <span className="ml-auto text-[color:var(--text-secondary)]">{pct}%</span>
+                        <span className="ml-auto text-[color:var(--text-secondary)]">
+                          {fmt.percent(share, 0)}
+                        </span>
                       </div>
                       <div className="h-[5px] overflow-hidden rounded-full bg-[color:var(--surface-subtle)]">
                         <div
                           className="h-full rounded-full"
                           style={{
-                            width: `${pct}%`,
+                            // a CSS length, never a localized percentage
+                            width: `${Math.round(share * 100)}%`,
                             background: TARGET_BARS[i % TARGET_BARS.length],
                           }}
                         />
@@ -169,7 +174,7 @@ export default function RoutingRules() {
               </div>
               <div className="flex items-center gap-2 border-t border-[color:var(--border-subtle)] pt-3">
                 <span className="text-xs text-[color:var(--text-subtle)]">
-                  {targets.length} target(s)
+                  {t("pages.routing.targetCount", { count: targets.length })}
                 </span>
                 <button
                   type="button"

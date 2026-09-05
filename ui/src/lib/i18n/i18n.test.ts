@@ -196,4 +196,56 @@ describe("formatters", () => {
   test("percent formatting is stable", () => {
     expect(formattersFor("en").percent(0.734)).toBe("73.4%");
   });
+
+  test("compact numbers keep chart axes narrow", () => {
+    expect(formattersFor("en").compact(1234)).toBe("1.2K");
+    expect(formattersFor("en").compact(2000)).toBe("2K");
+    // the decimal mark and the suffix are the locale's, which a hand-rolled
+    // `1.2k` never was
+    expect(formattersFor("ru").compact(1234)).toContain("1,2");
+  });
+
+  test("durations are rendered in the largest unit that fits", () => {
+    const en = formattersFor("en");
+    expect(en.duration(42)).toBe("42s");
+    expect(en.duration(90)).toBe("1.5m");
+    expect(en.duration(7200)).toBe("2h");
+    // the unit is translated, not appended as an english letter
+    expect(formattersFor("ru").duration(7200)).not.toContain("h");
+  });
+
+  // a local-time literal, so the assertions do not depend on the runner's TZ
+  const at = new Date(2026, 9, 5, 15, 34, 56, 789);
+
+  test("log stamps share one house format, with milliseconds where they matter", () => {
+    const en = formattersFor("en");
+    expect(en.dateTime(at)).toContain("15:34:56");
+    expect(en.dateTime(at)).toContain("10/05/2026");
+    expect(en.dateTimeMs(at)).toContain("15:34:56.789");
+    expect(en.time(at)).toBe("15:34:56");
+    expect(en.timeShort(at)).toBe("15:34");
+  });
+
+  test("the house date is unambiguous in every locale", () => {
+    // `10/5/2026` reads as 5 October in half the world; a named month cannot
+    expect(formattersFor("en").date(at)).toBe("Oct 5, 2026");
+    expect(formattersFor("ru").date(at)).toContain("2026");
+  });
+
+  test("a missing or malformed timestamp renders empty instead of throwing", () => {
+    const en = formattersFor("en");
+    expect(en.date("")).toBe("");
+    expect(en.dateTime("not a date")).toBe("");
+    expect(en.relative("")).toBe("");
+  });
+
+  test("relative time follows the active language", () => {
+    const now = new Date(2026, 9, 5, 15, 34, 56);
+    const threeMinutesAgo = new Date(now.getTime() - 3 * 60_000);
+    expect(formattersFor("en").relative(threeMinutesAgo, now)).toBe("3 min. ago");
+    expect(formattersFor("en").relative(new Date(now.getTime() + 2 * 3600_000), now)).toBe(
+      "in 2 hr.",
+    );
+    expect(formattersFor("ru").relative(threeMinutesAgo, now)).toContain("назад");
+  });
 });

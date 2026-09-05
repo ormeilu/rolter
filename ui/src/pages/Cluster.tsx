@@ -16,19 +16,12 @@ import {
   setClusterNodeDrain,
   type ClusterNodeRow,
 } from "@/lib/api";
+import { useFormat } from "@/lib/i18n/format";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // nodes fall out of the liveness window in under a minute, so the inventory is
 // only useful if it refreshes on its own
 const REFETCH_MS = 15_000;
-
-function relative(iso: string, now: number): string {
-  const secs = Math.max(0, Math.round((now - Date.parse(iso)) / 1000));
-  if (secs < 60) return `${secs}s ago`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86_400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86_400)}d ago`;
-}
 
 // the two health axes the server reports separately: a node can be polling but
 // lagging the newest snapshot, or converged but no longer polling at all
@@ -52,6 +45,7 @@ function StateBadges({ node }: { node: ClusterNodeRow }) {
 // (#543, #568)
 export default function Cluster() {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const queryClient = useQueryClient();
   const nodes = useQuery({
     queryKey: ["cluster-nodes"],
@@ -121,7 +115,9 @@ export default function Cluster() {
       header: "Last seen",
       align: "right",
       render: (_v, row) => (
-        <span title={row.last_seen_at}>{relative(row.last_seen_at, now)}</span>
+        <span title={fmt.dateTime(row.last_seen_at)}>
+          {fmt.relative(row.last_seen_at, now)}
+        </span>
       ),
     },
     {

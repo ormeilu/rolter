@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { createTeam, fetchBudgets, fetchMemberships, fetchTeams } from "@/lib/api";
+import { useCurrencyCode } from "@/lib/currency";
+import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -17,6 +19,8 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 // team-scoped budget (when one exists), and the team admin
 export default function Teams() {
   const { t } = useTranslation();
+  const fmt = useFormat();
+  const currency = useCurrencyCode();
   const queryClient = useQueryClient();
   const scope = useScope();
 
@@ -97,7 +101,7 @@ export default function Teams() {
                 <div className="min-w-0">
                   <div className="font-mono text-sm font-semibold">{team.name}</div>
                   <div className="truncate text-xs text-muted-foreground">
-                    created {team.created_at?.slice(0, 10)}
+                    {t("pages.govTeams.created", { date: fmt.date(team.created_at ?? "") })}
                   </div>
                 </div>
               </div>
@@ -115,7 +119,9 @@ export default function Teams() {
                     Budget
                   </div>
                   <div className="font-mono text-sm text-[color:var(--text-secondary)]">
-                    {budget ? `$${budget.limit_usd} / ${budget.period}` : "—"}
+                    {budget
+                      ? `${fmt.currency(Number(budget.limit_usd), currency)} / ${budget.period}`
+                      : "—"}
                   </div>
                 </div>
               </div>

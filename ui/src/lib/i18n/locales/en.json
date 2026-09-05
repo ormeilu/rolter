@@ -37,7 +37,8 @@
     "viewDocs": "View docs",
     "aboutField": "About {{label}}",
     "copyFailed": "Copy failed — the clipboard is unavailable on this page",
-    "copyValue": "{{label}}: {{value}}"
+    "copyValue": "{{label}}: {{value}}",
+    "moreInfo": "More info"
   },
   "errors": {
     "load": {
@@ -299,7 +300,9 @@
         "title": "Delete route {{model}}?",
         "body": "Clients calling this model name stop resolving to any provider the moment the route is gone.",
         "confirm": "Delete route"
-      }
+      },
+      "targetCount_one": "{{count}} target",
+      "targetCount_other": "{{count}} targets"
     },
     "pricing": {
       "unconvertible": "Priced in {{code}}, which has no conversion rate — this model's spend is missing from {{base}} totals and budgets."
@@ -526,7 +529,9 @@
       }
     },
     "virtualKeys": {
-      "explainer": "Virtual keys are the credential clients send to the gateway (sk-rolter-…). Provider keys — the credentials your providers issued to rolter — live on the Providers screen and are never sent by clients."
+      "explainer": "Virtual keys are the credential clients send to the gateway (sk-rolter-…). Provider keys — the credentials your providers issued to rolter — live on the Providers screen and are never sent by clients.",
+      "expiresOn": "expires {{date}}",
+      "noExpiry": "no expiry"
     },
     "acceptInvite": {
       "invalidLink": "This invitation link is not valid. It may have been used, revoked, or expired — ask whoever invited you for a new one.",
@@ -569,21 +574,30 @@
         "title": "Delete connector {{name}}?",
         "body": "Request logs stop being shipped to this endpoint immediately, and its delivery history goes with it.",
         "confirm": "Delete connector"
-      }
+      },
+      "checkedAt": "checked {{time}}"
     },
     "accessProfiles": {
       "confirm": {
         "title": "Delete profile {{name}}?",
         "body": "Every user and team assigned this profile loses the roles and model policy it carries, immediately.",
         "confirm": "Delete profile"
-      }
+      },
+      "userCount_one": "{{count}} user",
+      "userCount_other": "{{count}} users",
+      "teamCount_one": "{{count}} team",
+      "teamCount_other": "{{count}} teams"
     },
     "mcpOAuth": {
       "confirm": {
         "sessionTitle": "Revoke session on {{server}}?",
         "sessionBody": "The token behind this session stops working at once. The consent it was minted under stands, so a new session can be created without asking the user again.",
         "sessionConfirm": "Revoke session"
-      }
+      },
+      "liveShort_one": "{{count}} live",
+      "liveShort_other": "{{count}} live",
+      "liveSessions_one": "{{count}} live session",
+      "liveSessions_other": "{{count}} live sessions"
     },
     "cluster": {
       "confirm": {
@@ -610,6 +624,17 @@
         "title": "Delete {{name}}?",
         "body": "External enforcement through this provider stops immediately; traffic it was screening is no longer sent to it."
       }
+    },
+    "adaptiveDashboard": {
+      "reportingGateways_one": "{{count}} reporting gateway",
+      "reportingGateways_other": "{{count}} reporting gateways"
+    },
+    "govTeams": {
+      "created": "created {{date}}"
+    },
+    "rbac": {
+      "memberCount_one": "{{count}} member",
+      "memberCount_other": "{{count}} members"
     }
   },
   "playground": {
@@ -681,7 +706,15 @@
     "deleteTeamTitle": "Delete team",
     "deleteProjectTitle": "Delete project",
     "deleteCascadeHint": "This removes <0>{{name}}</0> and everything under it. This cannot be undone.",
-    "deleteHint": "This removes <0>{{name}}</0>. This cannot be undone."
+    "deleteHint": "This removes <0>{{name}}</0>. This cannot be undone.",
+    "errors": {
+      "orgsFailed": "failed to load orgs",
+      "noOrg": "no org configured — create one to get started",
+      "teamsFailed": "failed to load teams",
+      "noTeam": "no team configured — create one to get started",
+      "projectsFailed": "failed to load projects",
+      "noProject": "no project configured — create one to get started"
+    }
   },
   "screens": {
     "playground": {
@@ -1018,6 +1051,9 @@
     "noRowsYet": "No requests logged in this window. Either nothing was served, or the gateways are not writing to ClickHouse — an unconfigured destination looks exactly like a quiet deployment.",
     "details": "Details",
     "mcpDetails": "MCP call details",
-    "openDetails": "Open request details for {{model}}"
+    "openDetails": "Open request details for {{model}}",
+    "ms": "{{value}} ms",
+    "unpriced": "—",
+    "unpricedHint": "No price is configured for this model, so this request was recorded as unpriced rather than as free."
   }
 }

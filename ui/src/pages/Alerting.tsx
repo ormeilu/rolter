@@ -27,6 +27,7 @@ import {
   type AlertChannelRow,
   type AlertRuleRow,
 } from "@/lib/api";
+import { useFormat } from "@/lib/i18n/format";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const STATE_TONE: Record<string, [string, string]> = {
@@ -238,6 +239,7 @@ function AddChannelDialog({
 
 export function AlertRules() {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const queryClient = useQueryClient();
   const rules = useQuery({ queryKey: ["alert-rules"], queryFn: fetchAlertRules, retry: false });
 
@@ -333,7 +335,7 @@ export function AlertRules() {
                 />
                 <RuleStat
                   label="Evaluated"
-                  value={r.last_evaluated_at ? r.last_evaluated_at.slice(11, 19) : "never"}
+                  value={r.last_evaluated_at ? fmt.time(r.last_evaluated_at) : "never"}
                 />
                 <RuleStat label="Channel" value={channelName(r.channel_id)} />
               </div>
@@ -524,6 +526,7 @@ const HISTORY_GRID = "150px 1.4fr 110px 130px 2fr";
 
 export function AlertHistory() {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const history = useQuery({
     queryKey: ["alert-history"],
     queryFn: () => fetchAlertHistory(200),
@@ -569,7 +572,7 @@ export function AlertHistory() {
             return (
               <ListRow key={n.id} grid={HISTORY_GRID}>
                 <span className="font-mono text-xs text-[color:var(--text-secondary)]">
-                  {n.sent_at.slice(0, 19).replace("T", " ")}
+                  {fmt.dateTime(n.sent_at)}
                 </span>
                 <span className="truncate font-mono text-xs">{ruleName(n.rule_id)}</span>
                 <Pill color={tone[0]} tint={tone[1]}>

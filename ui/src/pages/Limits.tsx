@@ -30,6 +30,8 @@ import {
   type BudgetRow,
   type RateLimitRow,
 } from "@/lib/api";
+import { useCurrencyCode } from "@/lib/currency";
+import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -41,6 +43,8 @@ export default function Limits() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const scope = useScope();
+  // the scope hook names a catalog key rather than carrying english copy
+  const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
 
   const [scopeType, setScopeType] = React.useState<string>("project");
   const [scopeId, setScopeId] = React.useState<string>("");
@@ -103,14 +107,14 @@ export default function Limits() {
   const [addBudgetOpen, setAddBudgetOpen] = React.useState(false);
   const [addRateLimitOpen, setAddRateLimitOpen] = React.useState(false);
 
-  const scopeBlocked = !scope.isLoading && !!scope.error;
+  const scopeBlocked = !scope.isLoading && !!scope.errorKey;
 
   return (
     <PageBody className="gap-[22px]">
 
       {scopeBlocked && (
         <p className="text-sm text-muted-foreground">
-          Scope defaults are unavailable: {scope.error}. Pick a scope manually below.
+          Scope defaults are unavailable: {scopeMessage}. Pick a scope manually below.
         </p>
       )}
 
@@ -299,10 +303,16 @@ function BudgetCard({
   onDelete: () => void;
   deleting: boolean;
 }) {
+  // budgets are denominated in the deployment's settlement currency, not in
+  // dollars — the `_usd` in the column name is historic (#1182)
+  const fmt = useFormat();
+  const currency = useCurrencyCode();
   return (
     <div className="flex flex-col gap-3 rounded-[10px] border border-[color:var(--border-default)] bg-card p-4">
       <div className="flex items-center gap-2.5">
-        <span className="font-mono text-xl font-medium">${budget.limit_usd}</span>
+        <span className="font-mono text-xl font-medium">
+          {fmt.currency(Number(budget.limit_usd), currency)}
+        </span>
         <Badge tone="outline">{budget.period}</Badge>
         <button
           type="button"

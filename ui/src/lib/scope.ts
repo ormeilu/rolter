@@ -53,7 +53,8 @@ export interface ScopeResult {
   setTeamId: (id: string) => void;
   setProjectId: (id: string) => void;
   isLoading: boolean;
-  error?: string;
+  /** catalog key for why the scope is unusable — the caller runs it through `t` */
+  errorKey?: string;
 }
 
 export function useScope(): ScopeResult {
@@ -127,15 +128,16 @@ export function useScope(): ScopeResult {
 
   const isLoading = orgs.isLoading || teams.isLoading || projects.isLoading;
 
-  let error: string | undefined;
+  // the hook has no `t` of its own — it is called from contexts that are not
+  // components — so it names the catalog key and the caller translates it
+  let errorKey: string | undefined;
   if (!isLoading) {
-    if (orgs.error) error = "failed to load orgs";
-    else if (!orgId) error = "no org configured — create one to get started";
-    else if (teams.error) error = "failed to load teams";
-    else if (!teamId) error = "no team configured — create one to get started";
-    else if (projects.error) error = "failed to load projects";
-    else if (!projectId)
-      error = "no project configured — create one to get started";
+    if (orgs.error) errorKey = "scope.errors.orgsFailed";
+    else if (!orgId) errorKey = "scope.errors.noOrg";
+    else if (teams.error) errorKey = "scope.errors.teamsFailed";
+    else if (!teamId) errorKey = "scope.errors.noTeam";
+    else if (projects.error) errorKey = "scope.errors.projectsFailed";
+    else if (!projectId) errorKey = "scope.errors.noProject";
   }
 
   return {
@@ -149,6 +151,6 @@ export function useScope(): ScopeResult {
     setTeamId,
     setProjectId,
     isLoading,
-    error,
+    errorKey,
   };
 }

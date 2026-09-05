@@ -1,7 +1,13 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect } from "storybook/test";
 
+import { formattersFor } from "@/lib/i18n/format";
+
 import { LineChart } from "./line-chart";
+
+// the chart takes a formatter rather than owning one; these stories pass the
+// same locale-bound money formatter the screens do
+const money = formattersFor("en");
 
 const meta = {
   title: "Charts/LineChart",
@@ -34,7 +40,7 @@ export const AxisLabelsAreNotClipped: Story = {
     height: 200,
     labels: ["13:00", "15:00", "17:00", "19:00", "21:00"],
     series: [{ name: "spend", values: [1.2, 3.4, 2.8, 4.1, 3.6] }],
-    formatValue: (v: number) => `$${v.toFixed(2)}`,
+    formatValue: (v: number) => money.currency(v),
   },
   play: async ({ canvasElement }) => {
     const svg = canvasElement.querySelector("svg");
@@ -63,11 +69,13 @@ export const ReadableYAxisScale: Story = {
     height: 200,
     labels: ["00:00", "06:00", "12:00", "18:00"],
     series: [{ name: "spend", values: [0.5, 2, 1.25, 3] }],
-    formatValue: (v: number) => `$${v.toFixed(2)}`,
+    formatValue: (v: number) => money.currency(v),
   },
   play: async ({ canvasElement }) => {
+    // whatever the money formatter prefixes an amount with in this locale
+    const symbol = money.currency(0).replace(/[\d.,\s]/g, "");
     const ticks = [...canvasElement.querySelectorAll("text")].filter((node) =>
-      (node.textContent ?? "").startsWith("$"),
+      (node.textContent ?? "").startsWith(symbol),
     );
     await expect(ticks.length).toBeGreaterThanOrEqual(5);
   },
@@ -82,7 +90,7 @@ export const NoData: Story = {
     height: 200,
     labels: [],
     series: [],
-    formatValue: (v: number) => `$${v.toFixed(2)}`,
+    formatValue: (v: number) => money.currency(v),
     emptyState: <p className="text-sm text-muted-foreground">No requests in this window.</p>,
   },
   play: async ({ canvas, canvasElement }) => {
@@ -102,7 +110,7 @@ export const FlatAtZero: Story = {
     height: 200,
     labels: ["00:00", "06:00", "12:00", "18:00"],
     series: [{ name: "spend", values: [0, 0, 0, 0] }],
-    formatValue: (v: number) => `$${v.toFixed(2)}`,
+    formatValue: (v: number) => money.currency(v),
   },
   play: async ({ canvasElement }) => {
     await expect(canvasElement.querySelector("svg")).toBeTruthy();

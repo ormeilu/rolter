@@ -40,6 +40,7 @@ import {
   type TeamRow,
   type UserRow,
 } from "@/lib/api";
+import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -50,7 +51,10 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 // superadmin on the backend, org-scoped invite/role-grant require org admin.
 export default function Users() {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const scope = useScope();
+  // the scope hook names a catalog key rather than carrying english copy
+  const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
   const orgId = scope.orgId;
   const queryClient = useQueryClient();
 
@@ -156,7 +160,7 @@ export default function Users() {
 
       {!orgId && (
         <p className="text-sm text-muted-foreground">
-          {scope.error ?? "Select an org to manage its users."}
+          {scopeMessage ?? "Select an org to manage its users."}
         </p>
       )}
       {(users.error || memberships.error) && (
@@ -224,7 +228,7 @@ export default function Users() {
                 </span>
               </div>
               <span className="font-mono text-xs text-muted-foreground">
-                {user.created_at?.slice(0, 10)}
+                {fmt.date(user.created_at ?? "")}
               </span>
               <div className="flex justify-end gap-[5px]">
                 <RowIconButton title="Grant role" onClick={() => setRoleUser(user)}>

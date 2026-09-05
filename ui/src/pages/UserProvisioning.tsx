@@ -29,6 +29,7 @@ import {
   type CreatedScimToken,
   type ScimTokenRow,
 } from "@/lib/api";
+import { useFormat, type Formatters } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -41,8 +42,8 @@ function isForbidden(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403;
 }
 
-function stamp(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleString() : "—";
+function stamp(fmt: Formatters, iso: string | null): string {
+  return (iso ? fmt.dateTime(iso) : "") || "—";
 }
 
 // SCIM provisioning tokens for /api/v1/orgs/{org}/scim-tokens (#540, #563).
@@ -50,6 +51,7 @@ function stamp(iso: string | null): string {
 // resource endpoints under /scim/v2 are driven by the IdP, never from here
 export default function UserProvisioning() {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const queryClient = useQueryClient();
   const scope = useScope();
   const orgId = scope.orgId;
@@ -93,7 +95,7 @@ export default function UserProvisioning() {
       header: "Status",
       render: (_v, row) =>
         row.revoked_at ? (
-          <Badge tone="danger" title={`revoked ${stamp(row.revoked_at)}`}>
+          <Badge tone="danger" title={`revoked ${stamp(fmt, row.revoked_at)}`}>
             REVOKED
           </Badge>
         ) : (
@@ -107,7 +109,7 @@ export default function UserProvisioning() {
       header: "Last sync",
       render: (_v, row) =>
         row.last_used_at ? (
-          stamp(row.last_used_at)
+          stamp(fmt, row.last_used_at)
         ) : (
           <span className="text-[color:var(--text-subtle)]">never used</span>
         ),
@@ -116,7 +118,8 @@ export default function UserProvisioning() {
       key: "created_at",
       header: "Created",
       align: "right",
-      render: (_v, row) => stamp(row.created_at),
+      // "created" is a day, not an instant — the short date, as everywhere else
+      render: (_v, row) => fmt.date(row.created_at) || "—",
     },
     {
       key: "actions",

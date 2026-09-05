@@ -1,7 +1,15 @@
 import type { Meta, StoryObj } from "@storybook/react";
 import { expect } from "storybook/test";
 
+import { formattersFor } from "@/lib/i18n/format";
+
 import { ModelPriceCell } from "./ModelPriceCell";
+
+// the cell renders prices the catalogue screen has already formatted, so the
+// sample args come from the same formatter that screen uses
+const money = formattersFor("en");
+const inPrice = money.currency(0.15);
+const outPrice = money.currency(0.6);
 
 const meta = {
   title: "Components/ModelPriceCell",
@@ -12,9 +20,9 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Priced: Story = {
-  args: { priced: true, inPrice: "$0.15", outPrice: "$0.60" },
+  args: { priced: true, inPrice, outPrice },
   play: async ({ canvas }) => {
-    await expect(await canvas.findByText(/\$0\.15 · \$0\.60/)).toBeInTheDocument();
+    await expect(await canvas.findByText(`${inPrice} · ${outPrice}`)).toBeInTheDocument();
     await expect(canvas.queryByText(/no price set/i)).toBeNull();
   },
 };

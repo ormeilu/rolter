@@ -14,9 +14,12 @@ import { Button } from "@/components/ui/button";
 import {
   AnalyticsUnavailableError,
   fetchInvocations,
+  fetchModelPrices,
   fetchModels,
   type InvocationRow,
 } from "@/lib/api";
+import { useCurrencyCode } from "@/lib/currency";
+import { useFormat } from "@/lib/i18n/format";
 import { useDrawerA11y } from "@/lib/use-drawer-a11y";
 import { cn } from "@/lib/utils";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
@@ -50,6 +53,8 @@ const TD =
 // the raw request/response payloads
 export default function Logs() {
   const { t } = useTranslation();
+  const fmt = useFormat();
+  const currency = useCurrencyCode();
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [status, setStatus] = React.useState<StatusFilter>("all");
   const [modelSel, setModelSel] = React.useState<string[]>([]);
@@ -64,6 +69,15 @@ export default function Logs() {
   );
 
   const models = useQuery({ queryKey: ["models"], queryFn: fetchModels });
+  // the price table is what tells a zero cost apart from an unpriced one: the
+  // control plane records `unpriced` per request but does not return it on an
+  // invocation row, so the dashboard re-derives it from the same evidence the
+  // summary banner uses — a model with no price row (#969, #1182)
+  const prices = useQuery({
+    queryKey: ["model-prices"],
+    queryFn: fetchModelPrices,
+    retry: false,
+  });
 
 
   // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
@@ -93,6 +107,13 @@ export default function Logs() {
 
   const rows = query.data ?? [];
   const hasMore = rows.length === PAGE_SIZE;
+  // while the price table is loading, or if it failed, every model would
+  // otherwise be reported as unpriced on no evidence
+  const pricedModels = new Set((prices.data ?? []).map((p) => p.model));
+  const isUnpriced = (row: InvocationRow) =>
+    num(row.cost_usd) <= 0 && prices.isSuccess && !pricedModels.has(row.model);
+  const cost = (row: InvocationRow) =>
+    isUnpriced(row) ? null : fmt.currency(num(row.cost_usd), currency);
   const filterCount = (status === "all" ? 0 : 1) + modelSel.length;
 
   if (isUnavailable(query.error)) {
@@ -231,7 +252,7 @@ export default function Logs() {
                     className="cursor-pointer transition-colors hover:bg-[color:var(--surface-hover)]"
                   >
                     <td className={cn(TD, "truncate whitespace-nowrap")}>
-                      {r.ts?.replace("T", " ").slice(0, 23)}
+                      {fmt.dateTimeMs(r.ts)}
                     </td>
                     <td className={cn(TD, "[overflow-wrap:anywhere]")}>{r.model}</td>
                     <td className={cn(TD, "truncate whitespace-nowrap text-[color:var(--text-secondary)]")}>
@@ -246,13 +267,20 @@ export default function Logs() {
                       </span>
                     </td>
                     <td className={cn(TD, "text-right text-[color:var(--text-secondary)]")}>
-                      {Math.round(num(r.latency_ms))} ms
+                      {t("analytics.ms", { value: fmt.number(Math.round(num(r.latency_ms))) })}
                     </td>
                     <td className={cn(TD, "text-right text-[color:var(--text-secondary)]")}>
-                      {num(r.total_tokens).toLocaleString()}
+                      {fmt.number(num(r.total_tokens))}
                     </td>
                     <td className={cn(TD, "text-right text-[color:var(--text-secondary)]")}>
-                      ${num(r.cost_usd).toFixed(4)}
+                      {cost(r) ?? (
+                        <span
+                          className="text-[color:var(--text-subtle)]"
+                          title={t("analytics.unpricedHint")}
+                        >
+                          {t("analytics.unpriced")}
+                        </span>
+                      )}
                     </td>
                     <td className={cn(TD, "pr-2.5 text-right")}>
                       {/* the row's click target is a mouse convenience; this
@@ -313,8 +341,17 @@ export default function Logs() {
             <div className="grid grid-cols-2 gap-3">
               <DrawerStat label="Model" value={selected.model} />
               <DrawerStat label="Provider" value={selected.provider || "—"} />
-              <DrawerStat label="Latency" value={`${Math.round(num(selected.latency_ms))} ms`} />
-              <DrawerStat label="Cost" value={`$${num(selected.cost_usd).toFixed(4)}`} />
+              <DrawerStat
+                label="Latency"
+                value={t("analytics.ms", {
+                  value: fmt.number(Math.round(num(selected.latency_ms))),
+                })}
+              />
+              <DrawerStat
+                label="Cost"
+                value={cost(selected) ?? t("analytics.unpriced")}
+                title={isUnpriced(selected) ? t("analytics.unpricedHint") : undefined}
+              />
               <DrawerStat
                 label="Tokens"
                 value={`${num(selected.prompt_tokens)} in · ${num(selected.completion_tokens)} out`}
@@ -348,13 +385,23 @@ function pretty(raw: string | undefined): string | null {
   }
 }
 
-function DrawerStat({ label, value }: { label: string; value: string }) {
+function DrawerStat({
+  label,
+  value,
+  title,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+}) {
   return (
     <div>
       <div className="mb-[3px] text-[0.6875rem] uppercase tracking-[0.06em] text-[color:var(--text-subtle)]">
         {label}
       </div>
-      <div className="truncate font-mono text-sm">{value}</div>
+      <div className="truncate font-mono text-sm" title={title}>
+        {value}
+      </div>
     </div>
   );
 }

@@ -41,6 +41,7 @@ import {
   type CreatedVirtualKey,
   type VirtualKeyRow,
 } from "@/lib/api";
+import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { useErrorState, useFormTelemetry, useScreenReady } from "@/lib/ux-react";
 
@@ -48,8 +49,13 @@ const KEYS_QUERY_KEY = ["virtual-keys"];
 
 export default function Keys() {
   const { t } = useTranslation();
+  // the same short date the mint sheet previews, so a row and its preview
+  // cannot disagree about when the key stops working (#1182)
+  const fmt = useFormat();
   const queryClient = useQueryClient();
   const scope = useScope();
+  // the scope hook names a catalog key rather than carrying english copy
+  const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
 
   const keys = useQuery({
     queryKey: [...KEYS_QUERY_KEY, scope.projectId],
@@ -87,7 +93,7 @@ export default function Keys() {
   useErrorState(!!keys.error, "virtual-key-list");
   const deleteUx = useFormTelemetry("virtual-key-delete", !!deleteTarget);
 
-  const scopeBlocked = !scope.isLoading && !!scope.error;
+  const scopeBlocked = !scope.isLoading && !!scope.errorKey;
 
   const q = search.trim().toLowerCase();
   const rows = (keys.data ?? []).filter(
@@ -145,7 +151,7 @@ export default function Keys() {
       )}
       {scopeBlocked && (
         <p className="text-sm text-muted-foreground">
-          Add/edit/delete is unavailable: {scope.error}. Read-only view still works.
+          Add/edit/delete is unavailable: {scopeMessage}. Read-only view still works.
         </p>
       )}
 
@@ -164,8 +170,8 @@ export default function Keys() {
               <div className="truncate text-sm font-semibold">{key.name ?? "unnamed key"}</div>
               <div className="truncate text-[0.6875rem] text-muted-foreground">
                 {key.expires_at
-                  ? `expires ${new Date(key.expires_at).toLocaleDateString()}`
-                  : "no expiry"}
+                  ? t("pages.virtualKeys.expiresOn", { date: fmt.date(key.expires_at) })
+                  : t("pages.virtualKeys.noExpiry")}
               </div>
             </div>
             <div className="flex min-w-0 items-center gap-0.5">

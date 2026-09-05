@@ -35,6 +35,7 @@ import {
   type McpServerRow,
   type UserRow,
 } from "@/lib/api";
+import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -45,25 +46,6 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const GRANT_GRID = "1.2fr 1.3fr 1.6fr 150px 130px 96px 44px";
 const SESSION_GRID = "1.1fr 1.2fr 1.4fr 140px 130px 150px 44px";
-
-function stamp(iso: string): string {
-  return iso.slice(0, 16).replace("T", " ");
-}
-
-function relative(iso: string, now: number): string {
-  const secs = Math.round((now - Date.parse(iso)) / 1000);
-  const ahead = secs < 0;
-  const abs = Math.abs(secs);
-  const unit =
-    abs < 60
-      ? `${abs}s`
-      : abs < 3600
-        ? `${Math.floor(abs / 60)}m`
-        : abs < 86_400
-          ? `${Math.floor(abs / 3600)}h`
-          : `${Math.floor(abs / 86_400)}d`;
-  return ahead ? `in ${unit}` : `${unit} ago`;
-}
 
 // the org's grants, sessions and the lookup tables that give them names. The
 // users listing is best-effort: a member may not be allowed to read it, and
@@ -172,6 +154,8 @@ function NoOrgNote({ noun }: { noun: string }) {
 // grants: the consent record a user signed for one MCP server
 
 export function OAuthGrants() {
+  const { t } = useTranslation();
+  const fmt = useFormat();
   const scope = useScope();
   const queryClient = useQueryClient();
   const { servers, grants, sessions, users } = useOrgOAuth(scope.orgId);
@@ -268,10 +252,10 @@ export function OAuthGrants() {
                       className="font-mono text-xs text-[color:var(--text-secondary)]"
                       title={g.granted_at}
                     >
-                      {stamp(g.granted_at)}
+                      {fmt.dateTime(g.granted_at)}
                     </span>
                     <span className="text-xs text-[color:var(--text-secondary)]">
-                      {sessionsKnown ? `${live} live` : "—"}
+                      {sessionsKnown ? t("pages.mcpOAuth.liveShort", { count: live }) : "—"}
                     </span>
                     <Badge tone={g.active ? "success" : "neutral"} dot={g.active}>
                       {g.active ? "ACTIVE" : "REVOKED"}
@@ -315,9 +299,9 @@ export function OAuthGrants() {
                 </span>{" "}
                 also revokes{" "}
                 {sessionsKnown
-                  ? `${liveByGrant.get(confirming.id) ?? 0} live session${
-                      (liveByGrant.get(confirming.id) ?? 0) === 1 ? "" : "s"
-                    }`
+                  ? t("pages.mcpOAuth.liveSessions", {
+                      count: liveByGrant.get(confirming.id) ?? 0,
+                    })
                   : "every session"}{" "}
                 under it, in the same transaction. The user must consent again
                 before the server can be called on their behalf.
@@ -353,6 +337,7 @@ function sessionState(s: McpOAuthSessionRow, now: number): SessionState {
 
 export function AuthSessions() {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const scope = useScope();
   const queryClient = useQueryClient();
   const { servers, grants, sessions, users } = useOrgOAuth(scope.orgId);
@@ -455,13 +440,13 @@ export function AuthSessions() {
                     </span>
                     <Scopes scopes={s.scopes} />
                     <span className="text-xs text-[color:var(--text-secondary)]">
-                      {s.last_used_at ? relative(s.last_used_at, now) : "never"}
+                      {s.last_used_at ? fmt.relative(s.last_used_at, now) : "never"}
                     </span>
                     <span
                       className="font-mono text-xs text-[color:var(--text-secondary)]"
                       title={s.expires_at}
                     >
-                      {stamp(s.expires_at)}
+                      {fmt.dateTime(s.expires_at)}
                     </span>
                     <div className="flex flex-wrap items-center gap-1.5">
                       <Badge
