@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
 
 import Login from "./Login";
-import { Harness, json, type FetchStub } from "./story-harness";
+import { Harness, StaleSession, json, type FetchStub } from "./story-harness";
 import { AuthProvider } from "@/lib/auth";
 
 /**
@@ -128,5 +128,85 @@ export const ControlPlaneUnreachable: Story = {
     await expect(
       await within(canvasElement).findByRole("alert"),
     ).toHaveTextContent(/could not be reached/i);
+  },
+};
+
+/**
+ * The session in localStorage was already dead when the tab reopened, and
+ * `/auth/me` said so (#1196). The screen has to explain why it is asking
+ * again — a sign-in form that appears with no reason reads like the dashboard
+ * lost the session on its own.
+ */
+export const SessionExpired: Story = {
+  render: () => (
+    <Harness
+      fetchStub={async (input) => {
+        const url = String(input);
+        if (url.includes("/auth/methods")) return json(METHODS);
+        if (url.includes("/auth/me")) {
+          return json(
+            { error: { message: "missing or invalid session", code: "unauthenticated" } },
+            401,
+          );
+        }
+        return json({});
+      }}
+    >
+      <StaleSession>
+        <Login />
+      </StaleSession>
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByRole("status")).toHaveTextContent(
+      /session expired/i,
+    );
+    // and the way back in is right there, not behind a reload
+    await expect(canvas.getByRole("button", { name: /sign in/i })).toBeVisible();
+  },
+};
+
+/**
+ * The counterpart: the control plane refused the *credentials*, not the
+ * session. Only one of the two messages may be on screen, or the screen is
+ * telling the user two different stories about the same click.
+ */
+export const ExpiredNoticeYieldsToLoginError: Story = {
+  render: () => (
+    <Harness
+      fetchStub={async (input) => {
+        const url = String(input);
+        if (url.includes("/auth/methods")) return json(METHODS);
+        if (url.includes("/auth/me")) {
+          return json(
+            { error: { message: "missing or invalid session", code: "unauthenticated" } },
+            401,
+          );
+        }
+        if (url.includes("/auth/login")) {
+          return json(
+            { error: { message: "refused", code: "invalid_credentials" } },
+            401,
+          );
+        }
+        return json({});
+      }}
+    >
+      <StaleSession>
+        <Login />
+      </StaleSession>
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByRole("status")).toHaveTextContent(
+      /session expired/i,
+    );
+    await signIn(canvasElement);
+    await expect(await canvas.findByRole("alert")).toHaveTextContent(
+      /do not match an account/i,
+    );
+    await expect(canvas.queryByRole("status")).toBeNull();
   },
 };

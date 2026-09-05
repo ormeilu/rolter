@@ -52,6 +52,20 @@ token, which has no accounts to sign into at all — signing in again is exactly
 the wrong advice. And a retry button on a 403 suggests the failure was transient
 when it was a permission, so `isRetryable` withholds it.
 
+## A 401 is handled once, not per screen
+
+Since #1196 the shell owns the expired session. `api.ts` calls the handler
+`AuthProvider` registered through `setSessionExpiredHandler` whenever a request
+that *carried the session token* is answered 401 — the token and the cached
+account are dropped and the sign-in screen explains why. A screen still renders
+`LoadError` for the request that failed, but it no longer does so with a dead
+token attached and no way out except signing out by hand.
+
+Three 401s are deliberately not that: `open_mode_no_session` (there is no
+account to sign in to), a refused `POST /api/v1/auth/login` (the password was
+wrong, the session was not), and an expired invitation token. None of them says
+anything about the session in localStorage.
+
 ## Two things that are not this component
 
 **An empty result is not a failure.** A successful request returning zero rows

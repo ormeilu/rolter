@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
+import { AuthProvider } from "@/lib/auth";
+
 // Shared fetch-stub harness for screen stories (#879).
 //
 // `Plugins.stories.tsx` established the shape — swap `globalThis.fetch`, clear
@@ -86,6 +88,39 @@ export function Harness({
     [],
   );
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
+/**
+ * An `AuthProvider` that boots with a session token already in localStorage,
+ * the way a reloaded tab does (#1196).
+ *
+ * The token is written during render, before the provider mounts and reads it,
+ * and the whole session is cleared again on unmount so a story that leaves a
+ * dead token behind cannot change what the next story sees.
+ */
+export function StaleSession({
+  token = "stale-session-token",
+  email = "anya@acme.co",
+  children,
+}: {
+  token?: string;
+  email?: string;
+  children: React.ReactNode;
+}) {
+  React.useState(() => {
+    localStorage.setItem("rolter.session.token", token);
+    localStorage.setItem("rolter.session.email", email);
+    return null;
+  });
+  React.useEffect(
+    () => () => {
+      localStorage.removeItem("rolter.session.token");
+      localStorage.removeItem("rolter.session.email");
+      localStorage.removeItem("rolter.session.user");
+    },
+    [],
+  );
+  return <AuthProvider>{children}</AuthProvider>;
 }
 
 /**

@@ -11,6 +11,7 @@
     "continueWith": "Continue with {{provider}}",
     "noMethod": "No login method is enabled for this deployment.",
     "selfHosted": "Self-hosted · sessions are local to this deployment.",
+    "sessionExpired": "Your session expired — sign in again.",
     "errors": {
       "invalidCredentials": "That email and password do not match an account here.",
       "passwordLoginDisabled": "Password sign-in is turned off for this organization. Use single sign-on below.",
@@ -833,7 +834,13 @@
     "githubRepo": "GitHub repository",
     "reportBug": "Report a bug",
     "role": "Admin",
-    "roleWithOrg": "Admin · {{org}}",
+    "roleWithOrg": "{{role}} · {{org}}",
+    "roles": {
+      "admin": "Admin",
+      "member": "Member",
+      "viewer": "Viewer"
+    },
+    "checkingSession": "Checking your session…",
     "scope": "Scope",
     "accountAndKeys": "Account & virtual keys",
     "signOut": "Sign out",

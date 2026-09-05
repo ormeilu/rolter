@@ -166,7 +166,11 @@ describe("setLocale", () => {
 
   test("interpolation is applied in the active locale", async () => {
     await setLocale("ru");
-    expect(i18n.t("shell.roleWithOrg", { org: "Acme" })).toBe("Администратор · Acme");
+    // the role is interpolated too since #1196: the badge says what the server
+    // said about the account, so "Admin" is no longer baked into the sentence
+    expect(
+      i18n.t("shell.roleWithOrg", { role: i18n.t("shell.roles.admin"), org: "Acme" }),
+    ).toBe("Администратор · Acme");
   });
 
   test("the choice is persisted for the next visit", async () => {
