@@ -16,7 +16,7 @@ export const Default: Story = {};
 
 export const Grid: Story = {
   render: () => (
-    <div className="grid max-w-3xl grid-cols-3 gap-3">
+    <div className="grid max-w-3xl grid-cols-1 gap-3 sm:grid-cols-3">
       <StatCard label="Requests / min" value="1,284" delta="+12%" trend="up" />
       <StatCard label="p95 latency" value="342" unit="ms" delta="-8%" trend="down" />
       <StatCard label="Error rate" value="0.4" unit="%" delta="0%" trend="flat" />

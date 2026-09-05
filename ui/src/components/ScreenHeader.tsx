@@ -1,4 +1,4 @@
-import { RefreshCw } from "lucide-react";
+import { Menu, RefreshCw } from "lucide-react";
 import { useQueryClient, useIsFetching } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -9,7 +9,19 @@ import { cn } from "@/lib/utils";
 // gateway-healthy pill + refresh on the right, over the вышивка rule that
 // recurs under the header on every screen. the org/project scope picker lives
 // in the sidebar user menu, not here.
-export function ScreenHeader({ title, subtitle }: { title: string; subtitle: string }) {
+//
+// below `md` it also carries the only way back to the navigation, which is a
+// drawer at that width (#959); the row wraps rather than letting the status
+// pill land on top of the subtitle.
+export function ScreenHeader({
+  title,
+  subtitle,
+  onOpenNav,
+}: {
+  title: string;
+  subtitle: string;
+  onOpenNav?: () => void;
+}) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const isGlobalFetching = useIsFetching() > 0;
@@ -28,12 +40,26 @@ export function ScreenHeader({ title, subtitle }: { title: string; subtitle: str
 
   return (
     <>
-      <header className="flex flex-none items-center gap-4 px-[22px] py-4">
-        <div className="min-w-0">
+      <header className="flex flex-none flex-wrap items-center gap-x-4 gap-y-2 px-[22px] py-4">
+        {onOpenNav && (
+          <button
+            type="button"
+            title={t("shell.openNav")}
+            aria-label={t("shell.openNav")}
+            onClick={onOpenNav}
+            className="-ml-1.5 flex h-10 w-10 flex-none items-center justify-center rounded-md border border-[color:var(--border-subtle)] text-muted-foreground transition-colors hover:bg-[color:var(--surface-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:hidden"
+          >
+            <Menu aria-hidden className="h-[18px] w-[18px]" />
+          </button>
+        )}
+        <div className="min-w-0 flex-1">
           <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">{subtitle}</p>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        {/* below `sm` the actions take a row of their own: sharing one with a
+            title that has nowhere left to go is what put the status pill on
+            top of the subtitle (#959) */}
+        <div className="ml-auto flex w-full items-center justify-end gap-2 sm:w-auto">
           <span className="inline-flex items-center gap-[7px] rounded-full border border-[color:var(--border-subtle)] px-2.5 py-[5px] font-mono text-xs text-muted-foreground">
             <span className="rl-pulse h-[7px] w-[7px] rounded-full bg-[color:var(--status-success)]" />
             {t("shell.gatewayHealthy")}

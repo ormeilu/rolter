@@ -643,7 +643,7 @@ function ImageMode({ models }: { models: ModelOption[] }) {
         <p className="mb-2.5 font-mono text-xs text-muted-foreground">
           Output · {images.length} sample{images.length === 1 ? "" : "s"}
         </p>
-        <div className="grid grid-cols-2 gap-2.5">
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
           {(images.length ? images : Array.from({ length: n }, () => null)).map(
             (img, i) => (
               <div

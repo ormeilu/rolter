@@ -84,17 +84,31 @@ export function Pill({
 }
 
 // the bordered list-table container from the prototype: css-grid header row
-// over css-grid data rows, columns supplied per screen
+// over css-grid data rows, columns supplied per screen.
+//
+// the columns have a width below which they stop being readable, so the table
+// scrolls sideways inside its own border rather than squeezing them or letting
+// the page scroll under the whole shell (#1203). `minWidth` is that floor; it
+// lands on the rows through a child selector because the header and the rows
+// are siblings, not one element the caller could size.
 export function ListTable({
   className,
+  minWidth = 760,
+  style,
   ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
+}: React.HTMLAttributes<HTMLDivElement> & { minWidth?: number }) {
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-[10px] border border-[color:var(--border-subtle)]",
+        // `relative` is load-bearing: the row buttons carry `sr-only` labels,
+        // which are absolutely positioned. without a containing block here they
+        // resolve against the page and drag the *document* out to the table's
+        // unscrolled width, which is the overflow this scroll container exists
+        // to prevent
+        "relative overflow-x-auto rounded-[10px] border border-[color:var(--border-subtle)] [&>*]:min-w-[var(--rl-list-min-w)]",
         className,
       )}
+      style={{ "--rl-list-min-w": `${minWidth}px`, ...style } as React.CSSProperties}
       {...props}
     />
   );

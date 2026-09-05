@@ -1053,7 +1053,7 @@ export function ModelSheet({
           onToggle={() => toggleSec("general")}
           className="space-y-3.5"
         >
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <FieldLabel
                 label="Provider"
@@ -1316,7 +1316,7 @@ export function ModelSheet({
             info="What this model endpoint supports. Flags gate request features and hint the playground — they don't add capabilities the provider lacks. The set shown depends on the model type."
             open={secOpen.caps}
             onToggle={() => toggleSec("caps")}
-            className="grid grid-cols-2 gap-2.5"
+            className="grid grid-cols-1 gap-2.5 sm:grid-cols-2"
           >
             <SwitchRow
               title="Streaming"
@@ -1368,7 +1368,7 @@ export function ModelSheet({
             Optional cost overrides for accurate tracking — fields shown match the model
             type. Leave blank for free / provider-tracked.
           </p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {(draft.modality === "chat" || draft.modality === "embedding") &&
               priceInput("input", `Input ${cur}/Mtok`)}
             {draft.modality === "chat" && (
@@ -1444,7 +1444,7 @@ export function ModelSheet({
           onToggle={() => toggleSec("advanced")}
           className="space-y-3"
         >
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {numInput(
               "rpm",
               "Requests / min",

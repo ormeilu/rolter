@@ -162,7 +162,7 @@ export default function Dashboard() {
 
   return (
     <PageBody className="gap-[18px]">
-      <div className="grid grid-cols-2 gap-3.5 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
         {summary.isLoading ? (
           Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} height={104} radius={10} />

@@ -17,7 +17,7 @@ export function ShellSkeleton() {
       aria-label={t("shell.checkingSession")}
       className="flex h-screen bg-[color:var(--surface-app)]"
     >
-      <div className="flex w-[var(--sidebar-width)] flex-col gap-3 border-r border-[color:var(--border-subtle)] px-2 py-3">
+      <div className="hidden w-[52px] flex-col gap-3 border-r border-[color:var(--border-subtle)] px-2 py-3 md:flex lg:w-[var(--sidebar-width)]">
         <Skeleton height={28} radius={8} />
         <Skeleton height={30} radius={8} />
         <div className="flex flex-col gap-1.5 pt-2">
@@ -32,7 +32,7 @@ export function ShellSkeleton() {
       <div className="flex min-w-0 flex-1 flex-col gap-4 border-l border-[color:var(--border-subtle)] bg-background p-6">
         <Skeleton width={220} height={22} radius={6} />
         <Skeleton width={340} height={14} radius={6} />
-        <div className="grid grid-cols-4 gap-3 pt-2">
+        <div className="grid grid-cols-1 gap-3 pt-2 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 4 }, (_, i) => (
             <Skeleton key={i} height={96} radius={10} />
           ))}

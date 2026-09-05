@@ -43,8 +43,10 @@ export function Sheet({ open, onOpenChange, onDismiss, children }: SheetProps) {
         aria-modal="true"
         aria-labelledby={titleId}
         className={cn(
-          "rl-sheet-in relative flex h-full w-full max-w-[580px] flex-col",
-          "border-l border-[color:var(--border-default)] bg-[color:var(--surface-base)]",
+          // full-bleed below `sm`: a 580px panel on a 375px screen is not a
+          // slide-over, it is the screen with a sliver of scrim (#1203)
+          "rl-sheet-in relative flex h-full w-full flex-col sm:max-w-[580px]",
+          "bg-[color:var(--surface-base)] sm:border-l sm:border-[color:var(--border-default)]",
           "shadow-[-14px_0_44px_rgba(0,0,0,0.42)] focus-visible:outline-none",
         )}
         {...a11y}

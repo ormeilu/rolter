@@ -1200,6 +1200,8 @@
     "collapseSidebar": "Свернуть панель",
     "expandSidebar": "Развернуть панель",
     "resizeSidebar": "Изменить ширину панели",
+    "openNav": "Открыть навигацию",
+    "closeNav": "Закрыть навигацию",
     "githubRepo": "Репозиторий на GitHub",
     "reportBug": "Сообщить об ошибке",
     "role": "Администратор",

@@ -15,6 +15,7 @@ import {
 } from "./story-harness";
 import type { InvocationRow, ModelPriceRow } from "@/lib/api";
 import { formattersFor } from "@/lib/i18n/format";
+import { atMobile, atTablet, expectNoHorizontalOverflow } from "@/lib/story-viewport";
 
 // the formatter the screen itself uses, so a story asserts the house format
 // rather than a second copy of it
@@ -180,5 +181,38 @@ export const Forbidden: Story = {
   ),
   play: async ({ canvasElement }) => {
     await expectLoadError(canvasElement, /You do not have access to request logs/);
+  },
+};
+
+/**
+ * #1203: the 248px filter rail and the 380px detail drawer both sat in the
+ * flow, so at 375px the table had 127px and the page scrolled sideways. Both
+ * are overlays at this width, and the table scrolls inside its own container.
+ */
+export const Mobile: Story = {
+  ...atMobile,
+  render: () => (
+    <Harness fetchStub={withLogs(ROWS)}>
+      <Logs />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findAllByText(fmt.dateTimeMs(PRICED_AT));
+    await expectNoHorizontalOverflow();
+  },
+};
+
+export const Tablet: Story = {
+  ...atTablet,
+  render: () => (
+    <Harness fetchStub={withLogs(ROWS)}>
+      <Logs />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findAllByText(fmt.dateTimeMs(PRICED_AT));
+    await expectNoHorizontalOverflow();
   },
 };

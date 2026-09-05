@@ -4,6 +4,7 @@ import { expect, waitFor, within } from "storybook/test";
 import Security from "./Security";
 import { Harness, expectLoadError, expectSkeleton, json } from "./story-harness";
 import type { SecuritySettingsDto } from "@/lib/api";
+import { atMobile, atTablet, expectNoHorizontalOverflow } from "@/lib/story-viewport";
 
 const BASE: SecuritySettingsDto = {
   virtual_key_required: true,
@@ -86,5 +87,38 @@ export const Error_: Story = {
     // the control plane's own words survive rather than being swallowed
     await expect(canvas.getByText(/pool timed out/)).toBeVisible();
     await expect(canvas.getByRole("button", { name: /Try again/ })).toBeInTheDocument();
+  },
+};
+
+/** The settings panels are one column below `sm`, and nothing spills (#1203). */
+export const Mobile: Story = {
+  ...atMobile,
+  render: () => (
+    <Harness fetchStub={async () => json(BASE)}>
+      <Security />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getByText("Password protect the dashboard")).toBeVisible(),
+    );
+    await expectNoHorizontalOverflow();
+  },
+};
+
+export const Tablet: Story = {
+  ...atTablet,
+  render: () => (
+    <Harness fetchStub={async () => json(BASE)}>
+      <Security />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getByText("Password protect the dashboard")).toBeVisible(),
+    );
+    await expectNoHorizontalOverflow();
   },
 };
