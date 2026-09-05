@@ -96,7 +96,7 @@ export default function GuardrailRules() {
     <div className="mx-auto flex max-w-[1120px] flex-col gap-5 p-[22px]">
       <div className="flex flex-col gap-3 border-b border-[color:var(--border-subtle)] pb-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="font-mono text-[0.6875rem] uppercase tracking-[0.16em] text-[color:var(--status-danger)]">
+          <p className="font-mono text-[0.6875rem] uppercase tracking-[0.16em] text-[color:var(--status-danger-text)]">
             Ordered policy stack
           </p>
           <h1 className="mt-1 text-xl font-semibold tracking-tight">
@@ -372,7 +372,7 @@ function RuleDialog({
           onChange={(include_system) => set({ include_system })}
         />
         {error && (
-          <p role="alert" className="text-xs text-destructive">
+          <p role="alert" className="text-xs text-[color:var(--status-danger-text)]">
             {error}
           </p>
         )}

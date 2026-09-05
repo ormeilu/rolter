@@ -31,7 +31,7 @@ const TONE_TOKENS = {
   warning: "--status-warning-text",
   danger: "--status-danger-text",
   info: "--status-info-text",
-  accent: "--red-500",
+  accent: "--red-folk-text",
 } as const;
 
 // resolve a custom property the way the browser would, so the assertion follows

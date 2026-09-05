@@ -25,6 +25,13 @@ export interface ScatterPlotProps extends React.HTMLAttributes<HTMLDivElement> {
   yUnit?: string;
   height?: number;
   color?: string;
+  /**
+   * Accessible name for the graphic. `role="img"` promises a name, and axe
+   * fails the story when there is none (#1181); a chart the caller does not
+   * name is treated as decorative instead, because the heading and the figures
+   * beside it already carry the fact. Pass a translated string.
+   */
+  label?: string;
 }
 
 const PALETTE = [
@@ -68,6 +75,7 @@ export function ScatterPlot({
   yUnit = "",
   height = 220,
   color = "var(--zinc-300)",
+  label,
   className,
   ...props
 }: ScatterPlotProps) {
@@ -97,7 +105,7 @@ export function ScatterPlot({
         viewBox={`0 0 ${W} ${H}`}
         width="100%"
         height={H}
-        role="img"
+        {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
         preserveAspectRatio="xMidYMid meet"
         style={{ display: "block", overflow: "visible" }}
       >

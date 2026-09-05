@@ -17,7 +17,7 @@ export function StrategyHint({ strategy }: { strategy: string }) {
   const key = strategyHintKey(strategy);
   if (!key) return null;
   return (
-    <p className="mt-1.5 text-xs text-[color:var(--status-warning)]" role="note">
+    <p className="mt-1.5 text-xs text-[color:var(--status-warning-text)]" role="note">
       {t(key)}
     </p>
   );

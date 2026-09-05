@@ -75,7 +75,7 @@ export function Field({
       )}
       {labelled}
       {error ? (
-        <p id={messageId} role="alert" className="text-xs text-destructive">
+        <p id={messageId} role="alert" className="text-xs text-[color:var(--status-danger-text)]">
           {error}
         </p>
       ) : hint ? (

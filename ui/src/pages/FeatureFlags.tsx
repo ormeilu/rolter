@@ -135,12 +135,12 @@ export default function FeatureFlags() {
 
       <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-[color:var(--border-subtle)] bg-background py-3">
         {save.isError && (
-          <span className="text-xs text-destructive">
+          <span className="text-xs text-[color:var(--status-danger-text)]">
             {(save.error as Error).message}
           </span>
         )}
         {saved && (
-          <span className="text-xs text-[color:var(--status-success)]">
+          <span className="text-xs text-[color:var(--status-success-text)]">
             Feature flags updated.
           </span>
         )}

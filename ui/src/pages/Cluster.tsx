@@ -191,7 +191,7 @@ export default function Cluster() {
           {lagging > 0 && ` · ${lagging} still applying the newest config`}
         </span>
         {actionError && !forgetTarget && (
-          <span className="text-xs text-destructive">{actionError.message}</span>
+          <span className="text-xs text-[color:var(--status-danger-text)]">{actionError.message}</span>
         )}
       </div>
 

@@ -62,20 +62,20 @@ export function strategyOptions(current?: string): string[] {
 
 /** `[color, tint]` for the strategy pill. */
 export const STRATEGY_TONE: Record<string, [string, string]> = {
-  cache_aware: ["var(--status-info)", "rgba(59,130,246,.14)"],
-  precise_cache_aware: ["var(--status-info)", "rgba(59,130,246,.14)"],
-  lmcache_aware: ["var(--status-info)", "rgba(59,130,246,.14)"],
-  lora_aware: ["var(--status-info)", "rgba(59,130,246,.14)"],
-  predicted_latency: ["var(--status-info)", "rgba(59,130,246,.14)"],
-  weighted: ["var(--status-success)", "rgba(22,163,74,.14)"],
-  cheapest: ["var(--status-success)", "rgba(22,163,74,.14)"],
+  cache_aware: ["var(--status-info-text)", "rgba(59,130,246,.14)"],
+  precise_cache_aware: ["var(--status-info-text)", "rgba(59,130,246,.14)"],
+  lmcache_aware: ["var(--status-info-text)", "rgba(59,130,246,.14)"],
+  lora_aware: ["var(--status-info-text)", "rgba(59,130,246,.14)"],
+  predicted_latency: ["var(--status-info-text)", "rgba(59,130,246,.14)"],
+  weighted: ["var(--status-success-text)", "rgba(22,163,74,.14)"],
+  cheapest: ["var(--status-success-text)", "rgba(22,163,74,.14)"],
   round_robin: ["var(--text-secondary)", "var(--surface-subtle)"],
   random: ["var(--text-secondary)", "var(--surface-subtle)"],
   pipeline: ["var(--text-secondary)", "var(--surface-subtle)"],
-  consistent_hash: ["var(--status-warning)", "rgba(245,158,11,.14)"],
-  fastest: ["var(--status-warning)", "rgba(245,158,11,.14)"],
-  adaptive: ["var(--status-warning)", "rgba(245,158,11,.14)"],
-  power_of_two: ["var(--red-folk)", "var(--red-tint)"],
+  consistent_hash: ["var(--status-warning-text)", "rgba(245,158,11,.14)"],
+  fastest: ["var(--status-warning-text)", "rgba(245,158,11,.14)"],
+  adaptive: ["var(--status-warning-text)", "rgba(245,158,11,.14)"],
+  power_of_two: ["var(--red-folk-text)", "var(--red-tint)"],
 };
 
 /** Tone for `strategy`, falling back to the neutral one for unknown values. */

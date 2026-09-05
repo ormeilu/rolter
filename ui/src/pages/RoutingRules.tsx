@@ -197,7 +197,7 @@ export default function RoutingRules() {
                   aria-label="Delete route"
                   disabled={remove.isPending && remove.variables === r.id}
                   onClick={() => startDelete(r)}
-                  className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger-text)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   {remove.isPending && remove.variables === r.id ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -211,7 +211,7 @@ export default function RoutingRules() {
         })}
       </div>
       {remove.isError && !deleteTarget && (
-        <p className="text-xs text-destructive">{(remove.error as Error).message}</p>
+        <p className="text-xs text-[color:var(--status-danger-text)]">{(remove.error as Error).message}</p>
       )}
 
       <ConfirmDialog

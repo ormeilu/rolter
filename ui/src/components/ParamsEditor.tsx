@@ -297,7 +297,7 @@ export function ParamsEditor(props: EditProps | CreateProps) {
                 {unknown && (
                   <AlertTriangle
                     aria-label="Unrecognized param key"
-                    className="pointer-events-none absolute right-2 top-2 h-3.5 w-3.5 text-[color:var(--status-warning)]"
+                    className="pointer-events-none absolute right-2 top-2 h-3.5 w-3.5 text-[color:var(--status-warning-text)]"
                   />
                 )}
               </div>
@@ -351,7 +351,7 @@ export function ParamsEditor(props: EditProps | CreateProps) {
                   className={
                     "mt-0.5 shrink-0 rounded-md border border-input p-1.5 transition-colors hover:bg-transparent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring " +
                     (row.locked
-                      ? "bg-destructive text-destructive-foreground hover:text-destructive"
+                      ? "bg-destructive text-destructive-foreground hover:text-[color:var(--status-danger-text)]"
                       : "bg-[color:var(--surface-subtle)] text-muted-foreground hover:text-foreground")
                   }
                 >
@@ -366,7 +366,7 @@ export function ParamsEditor(props: EditProps | CreateProps) {
                 type="button"
                 aria-label="Remove param"
                 onClick={() => removeRow(row.id)}
-                className="mt-1.5 shrink-0 text-muted-foreground hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded"
+                className="mt-1.5 shrink-0 text-muted-foreground hover:text-[color:var(--status-danger-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -423,7 +423,7 @@ export function ParamsEditor(props: EditProps | CreateProps) {
       </div>
 
       {(localError || (!isCreate && props.error)) && (
-        <p className="text-xs text-destructive">
+        <p className="text-xs text-[color:var(--status-danger-text)]">
           {localError || (!isCreate ? props.error : null)}
         </p>
       )}

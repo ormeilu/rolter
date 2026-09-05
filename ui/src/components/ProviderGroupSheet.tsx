@@ -81,6 +81,7 @@ function MemberEditor({
   members: DraftMember[];
   onChange: (next: DraftMember[]) => void;
 }) {
+  const { t } = useTranslation();
   const update = (i: number, patch: Partial<DraftMember>) =>
     onChange(members.map((m, idx) => (idx === i ? { ...m, ...patch } : m)));
   const remove = (i: number) => onChange(members.filter((_, idx) => idx !== i));
@@ -130,6 +131,7 @@ function MemberEditor({
         >
           <Select
             value={m.provider_id}
+            aria-label={t("common.provider")}
             onChange={(e) => update(i, { provider_id: e.target.value })}
           >
             {providers.map((p) => (
@@ -156,7 +158,7 @@ function MemberEditor({
             title="Remove member"
             aria-label="Remove member"
             onClick={() => remove(i)}
-            className="flex flex-none items-center justify-center rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex flex-none items-center justify-center rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -297,9 +299,13 @@ export function ProviderGroupSheet({
                 ? "changing the slug breaks any client using the old group-slug/model address"
                 : "immutable identity for group-slug/model addressing — enable the switch to change it"
             }
+            // the child here is a row, not the control, so Field cannot find
+            // the input to hang the id on — say which one the label means
+            htmlFor="provider-group-slug"
           >
             <div className="flex items-center gap-2">
               <Input
+                id="provider-group-slug"
                 value={draft.slug}
                 onChange={(e) => set({ slug: e.target.value })}
                 readOnly={!draft.allowSlugChange}
@@ -313,9 +319,10 @@ export function ProviderGroupSheet({
             <div className="flex items-center gap-2 pt-1.5">
               <Switch
                 checked={draft.allowSlugChange}
+                aria-labelledby="provider-group-slug-toggle"
                 onCheckedChange={(v) => set({ allowSlugChange: v })}
               />
-              <span className="text-xs text-muted-foreground">Allow slug change</span>
+              <span id="provider-group-slug-toggle" className="text-xs text-muted-foreground">Allow slug change</span>
             </div>
           </Field>
         )}
@@ -340,7 +347,7 @@ export function ProviderGroupSheet({
 
       <SheetFooter>
         {save.isError && (
-          <p className="px-[22px] pt-2.5 text-xs text-destructive">
+          <p className="px-[22px] pt-2.5 text-xs text-[color:var(--status-danger-text)]">
             {(save.error as Error).message}
           </p>
         )}

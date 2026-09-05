@@ -228,7 +228,7 @@ export function OAuthGrants() {
               {rows.length} grants · {active} active
             </span>
             {revoke.isError && (
-              <span className="text-xs text-destructive">
+              <span className="text-xs text-[color:var(--status-danger-text)]">
                 {(revoke.error as Error).message}
               </span>
             )}
@@ -423,7 +423,7 @@ export function AuthSessions() {
               {rows.length} sessions · {live} live
             </span>
             {revoke.isError && !confirming && (
-              <span className="text-xs text-destructive">
+              <span className="text-xs text-[color:var(--status-danger-text)]">
                 {(revoke.error as Error).message}
               </span>
             )}

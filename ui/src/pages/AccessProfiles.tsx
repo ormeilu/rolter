@@ -241,7 +241,7 @@ export default function AccessProfiles() {
           />
         </Field>
         {create.isError && (
-          <p className="text-sm text-destructive">
+          <p className="text-sm text-[color:var(--status-danger-text)]">
             {(create.error as Error).message}
           </p>
         )}

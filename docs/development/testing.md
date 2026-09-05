@@ -259,8 +259,31 @@ launch and the play tests silently stop running (#737). Keep both on one version
 and install `chromium-headless-shell` alongside `chromium`, since the test-runner
 launches the shell rather than the full build.
 
-The job is **informational** (`continue-on-error: true`) pending the ROL-124
-promotion path.
+The job carries no `continue-on-error`, so it blocks: a failing story fails
+`quality`, which fails `ci-ok`. (This paragraph used to say the opposite —
+`continue-on-error: true` was removed when the job was promoted in #753 and the
+line was left behind.)
+
+#### Every story is also an axe test
+
+`postVisit` in `ui/.storybook/test-runner.ts` runs `axe-playwright` over the
+whole document once the play function has finished, and fails the story on any
+**serious** or **critical** violation. The rule set is `wcag2a` + `wcag2aa` +
+`best-practice`, with exactly two rules disabled — `document-title` and
+`html-has-lang`, which describe Storybook's own iframe rather than the
+dashboard. The whole document rather than `#storybook-root`, because dialogs,
+sheets and toasts portal to `<body>` and those are the ones worth checking.
+
+The failure prints the story id, then two tables: the rule and its impact, then
+the CSS selector and the HTML of each offending node. `color-contrast` also
+names the measured foreground, background and ratio, which is usually enough to
+pick the right token straight from
+[Dashboard theme](dashboard-theme.md) without opening a browser. Narrow a run
+to one screen with `bun run test-storybook --url … -- -t "Keys"`.
+
+A story can opt out with `parameters: { a11y: { disable: true } }` and a comment
+saying why. None currently does — treat needing one as a signal that the screen,
+not the checker, is wrong.
 
 #### The screen-story harness
 

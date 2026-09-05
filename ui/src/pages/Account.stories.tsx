@@ -16,7 +16,7 @@ import {
   withConfirm,
   type FetchStub,
 } from "./story-harness";
-import type { MintedKey, MyUsageRow, OwnedKeyRow } from "@/lib/api";
+import type { MintedKey, MyUsageRow, OwnedKeyRow, ProviderRow } from "@/lib/api";
 
 const KEYS: OwnedKeyRow[] = [
   {
@@ -45,6 +45,19 @@ const KEYS: OwnedKeyRow[] = [
   },
 ];
 
+const PROVIDERS: ProviderRow[] = [
+  {
+    id: "prov-1",
+    org_id: "org-1",
+    name: "OpenAI",
+    slug: "openai",
+    kind: "openai",
+    api_base: "https://api.openai.com/v1",
+    egress_proxies: [],
+    created_at: "2026-01-01T00:00:00Z",
+  },
+];
+
 const USAGE: MyUsageRow[] = [
   { virtual_key_id: "vk-1", requests: 1204, tokens: 903_112, cost_usd: "12.34", errors: 3 },
 ];
@@ -70,20 +83,25 @@ const MINTED: MintedKey = {
  * is allowed to fail on its own, so every stub has to answer both.
  */
 const account = (
-  keys: () => Response,
+  keys: (init?: RequestInit) => Response,
   usage: () => Response = () => json({ data: USAGE }),
 ): FetchStub =>
-  scoped(async (input) => (String(input).includes("/me/usage") ? usage() : keys()));
+  scoped(async (input, init) => {
+    const url = String(input);
+    // the mint sheet's provider picker reads this one, and answering it with
+    // the key list gave it an option named `null` — a checkbox row with no
+    // label at all, which is what axe reported as `button-name` (#1181)
+    if (url.includes("/providers")) return json(PROVIDERS);
+    if (url.includes("/me/usage")) return usage();
+    return keys(init);
+  });
 
 const loaded = account(() => json(KEYS));
 
 // rotation is destructive — the old secret dies the moment the new one exists —
 // so the confirmation is what stands between a stray click and a broken client
 const rotations = recording(
-  scoped(async (input, init) => {
-    if (init?.method === "POST") return json(MINTED);
-    return String(input).includes("/me/usage") ? json({ data: USAGE }) : json(KEYS);
-  }),
+  account((init) => (init?.method === "POST" ? json(MINTED) : json(KEYS))),
 );
 
 const meta = {
@@ -169,12 +187,9 @@ export const AnalyticsUnavailable: Story = {
 export const MintsAKey: Story = {
   render: () => (
     <Harness
-      fetchStub={scoped(async (input, init) => {
-        const url = String(input);
-        if (init?.method === "POST") return json(MINTED, 201);
-        if (url.includes("/me/usage")) return json({ data: USAGE });
-        return json(KEYS);
-      })}
+      fetchStub={account((init) =>
+        init?.method === "POST" ? json(MINTED, 201) : json(KEYS),
+      )}
     >
       <Account />
     </Harness>
@@ -204,12 +219,7 @@ export const MintsAKey: Story = {
 export const RotatingAKeyRevealsTheNewSecret: Story = {
   render: () => (
     <Harness
-      fetchStub={scoped(async (input, init) => {
-        const url = String(input);
-        if (init?.method === "POST") return json(MINTED);
-        if (url.includes("/me/usage")) return json({ data: USAGE });
-        return json(KEYS);
-      })}
+      fetchStub={account((init) => (init?.method === "POST" ? json(MINTED) : json(KEYS)))}
     >
       <Account />
     </Harness>
@@ -287,7 +297,7 @@ export const AnEditedMintFormPromptsBeforeDiscarding: Story = {
  */
 export const MintRequiresANameAndDefaultsToAFiniteLife: Story = {
   render: () => (
-    <Harness fetchStub={scoped(async () => json(KEYS))}>
+    <Harness fetchStub={account(() => json(KEYS))}>
       <Account />
     </Harness>
   ),
@@ -319,16 +329,14 @@ export const MintRequiresANameAndDefaultsToAFiniteLife: Story = {
 export const NeverExpiringIsADeliberateChoice: Story = {
   render: () => (
     <Harness
-      fetchStub={scoped(async (_input, init) => {
-        if (init?.method === "POST") {
-          // the body is what the assertion is really about: no TTL at all,
-          // rather than a zero or an empty string the server would reject
-          const body = JSON.parse(String(init.body));
-          if (body.expires_in_days !== undefined) return json({ error: { message: "sent a ttl" } }, 400);
-          if (!body.name) return json({ error: { message: "sent no name" } }, 400);
-          return json(MINTED, 201);
-        }
-        return json(KEYS);
+      fetchStub={account((init) => {
+        if (init?.method !== "POST") return json(KEYS);
+        // the body is what the assertion is really about: no TTL at all,
+        // rather than a zero or an empty string the server would reject
+        const body = JSON.parse(String(init.body));
+        if (body.expires_in_days !== undefined) return json({ error: { message: "sent a ttl" } }, 400);
+        if (!body.name) return json({ error: { message: "sent no name" } }, 400);
+        return json(MINTED, 201);
       })}
     >
       <Account />
@@ -355,11 +363,11 @@ export const NeverExpiringIsADeliberateChoice: Story = {
 export const MintRejectionIsShownOnTheSheet: Story = {
   render: () => (
     <Harness
-      fetchStub={scoped(async (_input, init) => {
-        if (init?.method === "POST")
-          return json({ error: { message: "virtual key name is required" } }, 400);
-        return json(KEYS);
-      })}
+      fetchStub={account((init) =>
+        init?.method === "POST"
+          ? json({ error: { message: "virtual key name is required" } }, 400)
+          : json(KEYS),
+      )}
     >
       <Account />
     </Harness>

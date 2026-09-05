@@ -36,13 +36,13 @@ export default function Config() {
         <div className="flex items-center gap-2.5">
           <h2 className="text-base font-medium">Effective config</h2>
           <span className="font-mono text-xs text-[color:var(--text-subtle)]">{summary}</span>
-          <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-[color:var(--status-success)]">
+          <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-[color:var(--status-success-text)]">
             <span className="h-[7px] w-[7px] rounded-full bg-[color:var(--status-success)]" />
             reload-free
           </span>
         </div>
         <div className="inline-flex items-center gap-2 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] px-3 py-2 text-xs text-muted-foreground">
-          <ShieldCheck className="h-3.5 w-3.5 flex-none text-[color:var(--red-folk)]" />
+          <ShieldCheck className="h-3.5 w-3.5 flex-none text-[color:var(--red-folk-text)]" />
           Admin-only · read-only view. Config is applied from{" "}
           <span className="font-mono text-[color:var(--text-secondary)]">rolter.toml</span> or the
           control-plane store and synced on reload.
@@ -99,7 +99,7 @@ export default function Config() {
         )}
 
         <p className="flex items-start gap-2 text-xs text-muted-foreground">
-          <Check className="mt-0.5 h-3.5 w-3.5 flex-none text-[color:var(--status-success)]" />
+          <Check className="mt-0.5 h-3.5 w-3.5 flex-none text-[color:var(--status-success-text)]" />
           Config hot-swaps with no restart — the gateway polls the control plane's snapshot
           endpoint.
         </p>
@@ -144,7 +144,7 @@ function RelatedLink({ to, title, desc }: { to: string; title: string; desc: str
         <div className="text-sm">{title}</div>
         <div className="text-xs text-muted-foreground">{desc}</div>
       </div>
-      <ArrowRight className="h-4 w-4 flex-none text-[color:var(--text-subtle)] transition-colors group-hover:text-[color:var(--red-folk)]" />
+      <ArrowRight className="h-4 w-4 flex-none text-[color:var(--text-subtle)] transition-colors group-hover:text-[color:var(--red-folk-text)]" />
     </Link>
   );
 }

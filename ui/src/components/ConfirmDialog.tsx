@@ -62,7 +62,7 @@ export function ConfirmDialog({
       {/* the control plane's own message, never a gloss on it — see
           docs/development/error-states.md */}
       {error !== undefined && error !== null && (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="text-xs text-[color:var(--status-danger-text)]">
           {error instanceof Error ? error.message : String(error)}
         </p>
       )}

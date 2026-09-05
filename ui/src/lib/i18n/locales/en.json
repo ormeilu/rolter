@@ -39,7 +39,8 @@
     "copyFailed": "Copy failed — the clipboard is unavailable on this page",
     "copyValue": "{{label}}: {{value}}",
     "moreInfo": "More info",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "provider": "Provider"
   },
   "errors": {
     "load": {
@@ -228,7 +229,8 @@
         "title_other": "{{count}} requests in this window are unpriced.",
         "body_one": "They ran against {{count}} model with no price set, so spend below is a floor, not a total. Set a price to include them.",
         "body_other": "They ran against {{count}} models with no price set, so spend below is a floor, not a total. Set prices to include them."
-      }
+      },
+      "spendChartAria": "Spend over the last 24 hours"
     },
     "models": {
       "unpriced": {
@@ -358,7 +360,13 @@
     "playground": {
       "groupRoutes": "Routes",
       "modelsNeedKey": "Showing configured routes. Set a virtual key above to list what the gateway actually serves — provider-pinned and provider-group addresses only appear in the gateway's list.",
-      "modelsUnreachable": "Could not read the gateway's model list with this key, so configured routes are shown instead. Provider-pinned and provider-group addresses are missing from this list."
+      "modelsUnreachable": "Could not read the gateway's model list with this key, so configured routes are shown instead. Provider-pinned and provider-group addresses are missing from this list.",
+      "modelAria": "Model",
+      "imageSizeAria": "Image size",
+      "imageCountAria": "Number of images",
+      "voiceAria": "Voice",
+      "multimodal": "Multimodal",
+      "pcaChartAria": "PCA projection of the embedded texts"
     },
     "promptRepo": {
       "renameTitle": "Rename prompt template",
@@ -596,7 +604,8 @@
       "editTitle": "Key reach and attribution",
       "editSubtitleHint": "Renaming and re-scoping a key are not offered: the control plane cannot change either after the secret is issued.",
       "save": "Save",
-      "saving": "Saving…"
+      "saving": "Saving…",
+      "toggleAria": "Enable {{name}}"
     },
     "acceptInvite": {
       "invalidLink": "This invitation link is not valid. It may have been used, revoked, or expired — ask whoever invited you for a new one.",
@@ -613,13 +622,15 @@
       "channels": {
         "emptyTitle": "No channels yet",
         "emptyBody": "Add a webhook destination — Slack, PagerDuty, email or a custom endpoint — so rules have somewhere to deliver.",
-        "add": "Add channel"
+        "add": "Add channel",
+        "toggleAria": "Enable {{name}}"
       },
       "rules": {
         "emptyTitle": "No alert rules",
         "emptyBody": "Add a threshold or anomaly rule and Rolter evaluates it against gateway analytics every minute.",
         "emptyBodyNoChannel": "Add a channel first, then a rule that delivers to it. Rules without a channel evaluate but never notify.",
-        "add": "Add rule"
+        "add": "Add rule",
+        "toggleAria": "Enable {{name}}"
       },
       "history": {
         "emptyTitle": "No alerts delivered yet",
@@ -655,7 +666,8 @@
       "emptyTitle": "No connectors yet",
       "emptyBody": "Add an OTLP/HTTP collector and request logs are mirrored to it — Datadog, Langfuse, or your own stack.",
       "emptyAction": "Add connector",
-      "testFailed": "Delivery failed: {{message}}"
+      "testFailed": "Delivery failed: {{message}}",
+      "toggleAria": "Enable {{name}}"
     },
     "accessProfiles": {
       "confirm": {
@@ -871,13 +883,16 @@
       "noMatchTitle": "No entries match these filters",
       "noMatchBody": "Nothing in the selected window matched the actor, action and target you picked.",
       "noOrgTitle": "Choose an organization",
-      "noOrgBody": "The audit log is scoped to one organization. Pick or create one to view its history."
+      "noOrgBody": "The audit log is scoped to one organization. Pick or create one to view its history.",
+      "actionFilterAria": "Filter by action",
+      "targetFilterAria": "Filter by target type"
     },
     "complexityRouter": {
       "emptyTitle": "No routes to give a policy",
       "emptyBody": "A complexity policy hangs off a route, so create a route first — its input-size tiers are set from here afterwards.",
       "emptyAction": "Open routing rules",
-      "noPolicyYet": "No policy yet"
+      "noPolicyYet": "No policy yet",
+      "tierRouteAria": "Route for this tier"
     },
     "health": {
       "emptyTitle": "No health events recorded yet",
@@ -920,7 +935,9 @@
       "emptyTitle": "No MCP tool calls yet",
       "emptyBody": "Every tool call the gateway proxies to an MCP server lands here, with its arguments and result redacted to policy.",
       "noMatchTitle": "No calls match these filters",
-      "noMatchBody": "Nothing in this window matched the status and transport you selected."
+      "noMatchBody": "Nothing in this window matched the status and transport you selected.",
+      "statusFilterAria": "Filter by status",
+      "transportFilterAria": "Filter by transport"
     },
     "providerGroups": {
       "emptyTitle": "No provider groups yet",
@@ -968,7 +985,8 @@
       "noMatchTitle": "No users match",
       "noMatchBody": "Nothing matched your search and the status tab you are on.",
       "noOrgTitle": "Choose an organization",
-      "noOrgBody": "Users are managed per organization. Pick or create one to see its members."
+      "noOrgBody": "Users are managed per organization. Pick or create one to see its members.",
+      "superadmin": "Superadmin (full cross-org access)"
     },
     "config": {
       "allSections": {
@@ -994,7 +1012,8 @@
       "save": "Save",
       "saved": "Saved ✓",
       "hint": "A rolter virtual key, minted on the Virtual Keys screen. Not a provider key — those are configured on the provider and are never sent by clients."
-    }
+    },
+    "snippet": "Code snippet"
   },
   "providerSheet": {
     "apiBase": {

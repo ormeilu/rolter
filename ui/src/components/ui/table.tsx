@@ -46,8 +46,12 @@ export function Table<T extends Record<string, unknown>>({
 }: TableProps<T>) {
   return (
     <div
+      // a scroll container has to be reachable from the keyboard, or the part
+      // of the table past the right edge is mouse-only (#1181)
+      tabIndex={0}
       className={cn(
         "w-full overflow-x-auto rounded-lg border border-[color:var(--border-default)]",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         className,
       )}
       {...props}

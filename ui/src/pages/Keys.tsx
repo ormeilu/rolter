@@ -240,7 +240,14 @@ export default function Keys() {
         </ListHeader>
         {keys.isLoading && <ListSkeleton rows={4} className="p-3" />}
         {rows.map((key) => (
-          <ListRow key={key.id} grid={GRID} style={{ opacity: key.disabled ? 0.55 : 1 }}>
+          <ListRow
+            key={key.id}
+            grid={GRID}
+            // a disabled key reads as a quieter band, not as faded text:
+            // container opacity fades the glyphs toward the page background
+            // and takes every one of them under 4.5:1 (#1181)
+            className={key.disabled ? "bg-[color:var(--surface-subtle)]/60" : undefined}
+          >
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold">{key.name ?? "unnamed key"}</div>
               <div className="truncate text-[0.6875rem] text-muted-foreground">
@@ -287,6 +294,9 @@ export default function Keys() {
             <Switch
               checked={!key.disabled}
               disabled={toggleDisabled.isPending}
+              aria-label={t("pages.virtualKeys.toggleAria", {
+                name: key.name ?? key.key_prefix,
+              })}
               onCheckedChange={(enabled) =>
                 toggleDisabled.mutate({ id: key.id, disabled: !enabled })
               }
@@ -309,7 +319,7 @@ export default function Keys() {
                 title="Delete key"
                 aria-label={`Delete key ${key.name ?? key.key_prefix}`}
                 onClick={() => setDeleteTarget(key)}
-                className="flex rounded-[6px] p-1 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex rounded-[6px] p-1 text-[color:var(--status-danger-text)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -383,7 +393,7 @@ export default function Keys() {
           </DialogDescription>
         </DialogHeader>
         {removeKey.isError && (
-          <p className="text-xs text-destructive">
+          <p className="text-xs text-[color:var(--status-danger-text)]">
             {(removeKey.error as Error).message}
           </p>
         )}

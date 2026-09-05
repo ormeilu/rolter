@@ -137,6 +137,7 @@ function ModelSelect({
     <Select
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      aria-label={t("pages.playground.modelAria")}
       className={className ?? "h-8 text-xs"}
     >
       {[...groups].map(([label, options]) => (
@@ -215,7 +216,7 @@ function KeyBar() {
 function ErrorNote({ error }: { error: string | null }) {
   if (!error) return null;
   return (
-    <p className="rounded-md border border-[color:var(--status-danger)]/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+    <p className="rounded-md border border-[color:var(--status-danger)]/40 bg-destructive/10 px-3 py-2 text-xs text-[color:var(--status-danger-text)]">
       {error}
     </p>
   );
@@ -383,6 +384,7 @@ function ChatColumn({
 }
 
 function ChatMode({ models }: { models: ModelOption[] }) {
+  const { t } = useTranslation();
   const [cols, setCols] = React.useState<{ model: string }[]>([{ model: FAKE }]);
   const [multimodal, setMultimodal] = React.useState(false);
   // the list arrives after the first render. until the operator picks
@@ -407,8 +409,12 @@ function ChatMode({ models }: { models: ModelOption[] }) {
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2.5">
         <label className="flex items-center gap-2 text-sm">
-          <Switch checked={multimodal} onCheckedChange={setMultimodal} />
-          Multimodal
+          <Switch
+            checked={multimodal}
+            aria-labelledby="playground-multimodal-label"
+            onCheckedChange={setMultimodal}
+          />
+          <span id="playground-multimodal-label">{t("pages.playground.multimodal")}</span>
         </label>
         <span className="text-xs text-[color:var(--text-subtle)]">
           · attach images to any turn
@@ -488,6 +494,7 @@ function pca2(vectors: number[][]): { x: number; y: number }[] {
 }
 
 function EmbeddingsMode({ models }: { models: ModelOption[] }) {
+  const { t } = useTranslation();
   const [model, setModel] = React.useState(FAKE);
   const [texts, setTexts] = React.useState<string[]>([
     "reset my password",
@@ -575,7 +582,13 @@ function EmbeddingsMode({ models }: { models: ModelOption[] }) {
           PCA projection · {points.length} vectors
         </p>
         {points.length ? (
-          <ScatterPlot height={300} xLabel="PC1" yLabel="PC2" points={points} />
+          <ScatterPlot
+            height={300}
+            xLabel="PC1"
+            yLabel="PC2"
+            label={t("pages.playground.pcaChartAria")}
+            points={points}
+          />
         ) : (
           <p className="py-16 text-center text-sm text-muted-foreground">
             Embed some texts to see them projected to 2D.
@@ -588,6 +601,7 @@ function EmbeddingsMode({ models }: { models: ModelOption[] }) {
 
 /* ---------------- image ---------------- */
 function ImageMode({ models }: { models: ModelOption[] }) {
+  const { t } = useTranslation();
   const [model, setModel] = React.useState(FAKE);
   const [prompt, setPrompt] = React.useState(
     "A cross-stitch folk pattern of a fox, deep red thread on black linen",
@@ -620,7 +634,12 @@ function ImageMode({ models }: { models: ModelOption[] }) {
           className="min-h-[120px] text-sm"
         />
         <div className="flex gap-2.5">
-          <Select value={size} onChange={(e) => setSize(e.target.value)} className="h-8 text-xs">
+          <Select
+            value={size}
+            onChange={(e) => setSize(e.target.value)}
+            aria-label={t("pages.playground.imageSizeAria")}
+            className="h-8 text-xs"
+          >
             <option value="1024x1024">1024²</option>
             <option value="1024x1792">1024×1792</option>
             <option value="1792x1024">1792×1024</option>
@@ -628,6 +647,7 @@ function ImageMode({ models }: { models: ModelOption[] }) {
           <Select
             value={String(n)}
             onChange={(e) => setN(Number(e.target.value))}
+            aria-label={t("pages.playground.imageCountAria")}
             className="h-8 text-xs"
           >
             <option value="1">n=1</option>
@@ -668,6 +688,7 @@ function ImageMode({ models }: { models: ModelOption[] }) {
 
 /* ---------------- audio ---------------- */
 function AudioMode({ models }: { models: ModelOption[] }) {
+  const { t } = useTranslation();
   const [tab, setTab] = React.useState("tts");
   const [model, setModel] = React.useState(FAKE);
   const [text, setText] = React.useState(
@@ -725,7 +746,12 @@ function AudioMode({ models }: { models: ModelOption[] }) {
               className="min-h-[100px] text-sm"
             />
             <div className="flex gap-2.5">
-              <Select value={voice} onChange={(e) => setVoice(e.target.value)} className="h-8 text-xs">
+              <Select
+                value={voice}
+                onChange={(e) => setVoice(e.target.value)}
+                aria-label={t("pages.playground.voiceAria")}
+                className="h-8 text-xs"
+              >
                 <option value="nova">voice: nova</option>
                 <option value="onyx">voice: onyx</option>
                 <option value="shimmer">voice: shimmer</option>

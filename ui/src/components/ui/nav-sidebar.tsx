@@ -381,7 +381,7 @@ export function NavSidebar({
         {!folded && (
           <span className="font-mono text-lg font-semibold leading-none tracking-[-0.03em] text-foreground">
             {brand}
-            <span className="text-[color:var(--red-folk)]">.</span>
+            <span className="text-[color:var(--red-folk-text)]">.</span>
           </span>
         )}
         {collapsible && !folded && !isDrawer && (

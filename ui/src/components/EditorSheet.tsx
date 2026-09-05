@@ -59,7 +59,7 @@ export function EditorSheet({
       <SheetBody>{children}</SheetBody>
       <SheetFooter>
         {errorMessage && (
-          <p className="px-[22px] pt-2.5 text-xs text-destructive">{errorMessage}</p>
+          <p className="px-[22px] pt-2.5 text-xs text-[color:var(--status-danger-text)]">{errorMessage}</p>
         )}
         <div className="flex items-center justify-end gap-2.5 px-[22px] py-3.5">
           <Button variant="ghost" onClick={close}>

@@ -237,6 +237,7 @@ export default function Dashboard() {
                 series={[{ name: "spend", values: spendPoints }]}
                 labels={spendLabels}
                 height={220}
+                label={t("pages.dashboard.spendChartAria")}
                 formatValue={(v) => money(v)}
                 emptyState={
                   <p className="text-sm text-muted-foreground">
@@ -366,10 +367,10 @@ export default function Dashboard() {
 function StatusBadge({ status }: { status: number }) {
   const tone =
     status < 400
-      ? ["var(--status-success)", "rgba(22,163,74,.14)"]
+      ? ["var(--status-success-text)", "rgba(22,163,74,.14)"]
       : status === 429
-        ? ["var(--status-warning)", "rgba(245,158,11,.14)"]
-        : ["var(--status-danger)", "rgba(229,57,53,.14)"];
+        ? ["var(--status-warning-text)", "rgba(245,158,11,.14)"]
+        : ["var(--status-danger-text)", "rgba(229,57,53,.14)"];
   return (
     <span
       className="inline-flex items-center rounded-[6px] px-[7px] py-0.5 font-mono text-[11px] font-semibold"

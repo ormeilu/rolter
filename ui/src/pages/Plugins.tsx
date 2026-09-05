@@ -126,7 +126,7 @@ export default function Plugins() {
       <header className="flex flex-col gap-3 border-b border-[color:var(--border-subtle)] pb-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <p className="font-mono text-[0.6875rem] uppercase tracking-[0.16em] text-[color:var(--status-info)]">
+            <p className="font-mono text-[0.6875rem] uppercase tracking-[0.16em] text-[color:var(--status-info-text)]">
               {t("pages.plugins.eyebrow")}
             </p>
           </div>
@@ -593,7 +593,7 @@ function PluginDialog({
           />
         </div>
         {(localError || mutation.isError) && (
-          <p role="alert" className="text-xs text-destructive">
+          <p role="alert" className="text-xs text-[color:var(--status-danger-text)]">
             {localError ?? (mutation.error as Error).message}
           </p>
         )}

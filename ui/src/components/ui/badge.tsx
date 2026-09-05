@@ -23,8 +23,9 @@ const badgeVariants = cva(
         danger:
           "border-transparent bg-[color:var(--status-danger)]/15 text-[color:var(--status-danger-text)]",
         info: "border-transparent bg-[color:var(--status-info)]/15 text-[color:var(--status-info-text)]",
-        // accent is not a status: it borrows the folkloric red thread
-        accent: "border-transparent bg-[color:var(--red-tint)] text-[color:var(--red-500)]",
+        // accent is not a status: it borrows the folkloric red thread, in the
+        // text half of it — --red-500 on the tint is 4.16:1 (#1181)
+        accent: "border-transparent bg-[color:var(--red-tint)] text-[color:var(--red-folk-text)]",
       },
     },
     defaultVariants: { tone: "neutral" },

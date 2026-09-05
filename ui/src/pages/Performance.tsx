@@ -208,8 +208,12 @@ export default function Performance() {
             onCheckedChange={(v) => set({ queueEnabled: v })}
           />
         </div>
-        <div
-          className="flex flex-wrap gap-4"
+        {/* a disabled fieldset rather than a dimmed div: every control inside
+            already carries `disabled`, and fading a live div drags its labels and
+            hints below 4.5:1 while telling assistive tech nothing (#1181) */}
+        <fieldset
+          className="flex min-w-0 flex-wrap gap-4"
+          disabled={!queue}
           style={{ opacity: queue ? 1 : 0.55 }}
         >
           <NumberField
@@ -253,18 +257,18 @@ export default function Performance() {
             disabled={!queue || form.queueBackpressure !== "block"}
             onChange={(v) => set({ queueBlockMs: v })}
           />
-        </div>
+        </fieldset>
       </section>
 
       <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-[color:var(--border-subtle)] bg-background py-3">
-        {localError && <span className="text-xs text-destructive">{localError}</span>}
+        {localError && <span className="text-xs text-[color:var(--status-danger-text)]">{localError}</span>}
         {!localError && save.isError && (
-          <span className="text-xs text-destructive">
+          <span className="text-xs text-[color:var(--status-danger-text)]">
             {(save.error as Error).message}
           </span>
         )}
         {saved && (
-          <span className="text-xs text-[color:var(--status-success)]">
+          <span className="text-xs text-[color:var(--status-success-text)]">
             Runtime policy updated.
           </span>
         )}

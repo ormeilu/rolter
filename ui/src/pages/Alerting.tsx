@@ -32,10 +32,12 @@ import {
 import { useFormat } from "@/lib/i18n/format";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
+// `[label, tint]`: the label colour is the -text half of the hue, because a
+// state pill is a glyph on a tint rather than a shape (#1181)
 const STATE_TONE: Record<string, [string, string]> = {
-  ok: ["var(--status-success)", "rgba(22,163,74,.14)"],
-  firing: ["var(--status-danger)", "var(--red-tint)"],
-  pending: ["var(--status-warning)", "rgba(245,158,11,.14)"],
+  ok: ["var(--status-success-text)", "rgba(22,163,74,.14)"],
+  firing: ["var(--status-danger-text)", "var(--red-tint)"],
+  pending: ["var(--status-warning-text)", "rgba(245,158,11,.14)"],
   unknown: ["var(--text-secondary)", "var(--surface-subtle)"],
 };
 
@@ -115,6 +117,7 @@ export function AlertChannels() {
               <Switch
                 checked={c.enabled}
                 disabled={toggle.isPending}
+                aria-label={t("pages.alerting.channels.toggleAria", { name: c.name })}
                 onCheckedChange={() => toggle.mutate(c)}
               />
             </div>
@@ -123,7 +126,7 @@ export function AlertChannels() {
                 {c.kind}
               </Pill>
               {c.secret_configured && (
-                <Pill color="var(--status-info)" tint="rgba(59,130,246,.14)">
+                <Pill color="var(--status-info-text)" tint="rgba(59,130,246,.14)">
                   secret set
                 </Pill>
               )}
@@ -133,7 +136,7 @@ export function AlertChannels() {
                 aria-label="Delete channel"
                 disabled={remove.isPending && remove.variables === c.id}
                 onClick={() => startDelete(c)}
-                className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger-text)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
               >
                 {remove.isPending && remove.variables === c.id ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -328,6 +331,7 @@ export function AlertRules() {
                   className="ml-auto"
                   checked={r.enabled}
                   disabled={toggle.isPending}
+                  aria-label={t("pages.alerting.rules.toggleAria", { name: r.name })}
                   onCheckedChange={() => toggle.mutate(r)}
                 />
               </div>
@@ -346,7 +350,7 @@ export function AlertRules() {
                 <RuleStat label="Channel" value={channelName(r.channel_id)} />
               </div>
               {r.last_error && (
-                <p className="text-xs text-destructive">{r.last_error}</p>
+                <p className="text-xs text-[color:var(--status-danger-text)]">{r.last_error}</p>
               )}
               <div className="flex items-center gap-2 border-t border-[color:var(--border-subtle)] pt-3">
                 <Button
@@ -364,7 +368,7 @@ export function AlertRules() {
                   aria-label="Delete rule"
                   disabled={remove.isPending && remove.variables === r.id}
                   onClick={() => startDelete(r)}
-                  className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                  className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger-text)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
                 >
                   {remove.isPending && remove.variables === r.id ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />

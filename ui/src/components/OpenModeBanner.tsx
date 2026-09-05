@@ -20,7 +20,7 @@ export function OpenModeBanner({ open }: { open: boolean }) {
     >
       <ShieldAlert
         aria-hidden
-        className="mt-px h-4 w-4 flex-none text-[color:var(--status-danger)]"
+        className="mt-px h-4 w-4 flex-none text-[color:var(--status-danger-text)]"
       />
       <p className="min-w-0 text-foreground">
         <span className="font-semibold">{t("shell.openMode.title")}</span>{" "}

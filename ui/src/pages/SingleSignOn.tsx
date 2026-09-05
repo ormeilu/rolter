@@ -165,7 +165,7 @@ function SignInPolicyCard({
         )}
         {/* the control plane's own words, never a gloss on them */}
         {save.isError && (
-          <p role="alert" className="text-xs text-destructive">
+          <p role="alert" className="text-xs text-[color:var(--status-danger-text)]">
             {(save.error as Error).message}
           </p>
         )}
@@ -251,7 +251,7 @@ function GroupMappings({ provider }: { provider: SsoProviderRow }) {
 
       {mappings.isLoading && <Skeleton className="mt-2.5 h-8 rounded-md" />}
       {mappings.isError && (
-        <p className="mt-2.5 text-sm text-destructive">
+        <p className="mt-2.5 text-sm text-[color:var(--status-danger-text)]">
           {(mappings.error as Error).message}
         </p>
       )}
@@ -323,7 +323,7 @@ function GroupMappings({ provider }: { provider: SsoProviderRow }) {
         </Button>
       </div>
       {create.isError && (
-        <p role="alert" className="mt-2 text-sm text-destructive">
+        <p role="alert" className="mt-2 text-sm text-[color:var(--status-danger-text)]">
           {(create.error as Error).message}
         </p>
       )}

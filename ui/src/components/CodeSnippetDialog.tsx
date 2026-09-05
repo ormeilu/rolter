@@ -80,7 +80,15 @@ export function CodeSnippetDialog({
         <CopyButton value={snippet} className="ml-auto" />
       </div>
 
-      <pre className="max-h-[340px] overflow-auto rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] p-3 text-xs leading-relaxed">
+      {/* a scrollable region has to be reachable from the keyboard, or the part
+          of the snippet below the fold is unreachable without a mouse (#1181).
+          tabIndex + a name make it a proper document region */}
+      <pre
+        tabIndex={0}
+        role="region"
+        aria-label={t("playground.snippet")}
+        className="max-h-[340px] overflow-auto rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] p-3 text-xs leading-relaxed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
         <code>{snippet}</code>
       </pre>
 

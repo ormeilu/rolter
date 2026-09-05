@@ -27,7 +27,7 @@ export function IncompleteSpendNotice({
     >
       <CircleDollarSign
         aria-hidden
-        className="mt-0.5 h-4 w-4 flex-none text-[color:var(--status-warning)]"
+        className="mt-0.5 h-4 w-4 flex-none text-[color:var(--status-warning-text)]"
       />
       <p className="min-w-0 text-sm text-muted-foreground">
         <span className="font-medium text-foreground">

@@ -15,6 +15,13 @@ export interface BarChartProps extends React.HTMLAttributes<HTMLDivElement> {
   unit?: string;
   yMax?: number;
   gap?: number;
+  /**
+   * Accessible name for the graphic. `role="img"` promises a name, and axe
+   * fails the story when there is none (#1181); a chart the caller does not
+   * name is treated as decorative instead, because the heading and the figures
+   * beside it already carry the fact. Pass a translated string.
+   */
+  label?: string;
 }
 
 export function BarChart({
@@ -29,6 +36,7 @@ export function BarChart({
   unit = "",
   yMax,
   gap = 0.25,
+  label,
   className,
   ...props
 }: BarChartProps) {
@@ -45,6 +53,7 @@ export function BarChart({
         topN={topN}
         unit={unit}
         max={yMax}
+        label={label}
         className={className}
         {...props}
       />
@@ -71,7 +80,7 @@ export function BarChart({
         viewBox={`0 0 ${W} ${H}`}
         width="100%"
         height={H}
-        role="img"
+        {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
         preserveAspectRatio="xMidYMid meet"
         style={{ display: "block", overflow: "visible" }}
       >
@@ -128,6 +137,7 @@ interface RankedBarsProps extends React.HTMLAttributes<HTMLDivElement> {
   topN?: number;
   unit: string;
   max?: number;
+  label?: string;
 }
 
 // horizontal ranked bars — the readable pattern for 10+ categories.
@@ -139,6 +149,7 @@ function RankedBars({
   topN,
   unit,
   max,
+  label,
   className,
   ...props
 }: RankedBarsProps) {
@@ -151,6 +162,10 @@ function RankedBars({
     <div
       className={className}
       style={{ display: "flex", flexDirection: "column", gap: 6 }}
+      // rows of real text rather than an <svg>, so this needs no role to be
+      // read — a name is only attached when the caller supplies one, and
+      // `aria-label` on a bare <div> is a prohibited attribute (#1181)
+      {...(label ? { role: "group", "aria-label": label } : {})}
       {...props}
     >
       {rows.map((r, i) => (

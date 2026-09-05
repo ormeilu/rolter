@@ -447,7 +447,7 @@ function FieldLabel({
       >
         {label}
       </label>
-      {required && <span className="text-xs text-destructive">*</span>}
+      {required && <span className="text-xs text-[color:var(--status-danger-text)]">*</span>}
       {info && <InfoHint text={info} label={`About ${label}`} />}
     </div>
   );
@@ -455,7 +455,7 @@ function FieldLabel({
 
 function FieldError({ error }: { error?: string }) {
   if (!error) return null;
-  return <p className="text-xs leading-snug text-destructive">{error}</p>;
+  return <p className="text-xs leading-snug text-[color:var(--status-danger-text)]">{error}</p>;
 }
 
 function Section({
@@ -588,7 +588,7 @@ function LockButton({
       className={cn(
         "flex h-8 w-8 flex-none items-center justify-center rounded-md border transition-colors duration-[120ms] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         locked
-          ? "border-[color:var(--red-500)] bg-[color:var(--red-tint)] text-[color:var(--red-500)]"
+          ? "border-[color:var(--red-500)] bg-[color:var(--red-tint)] text-[color:var(--red-folk-text)]"
           : "border-[color:var(--border-subtle)] bg-transparent text-[color:var(--text-subtle)]",
       )}
     >
@@ -670,7 +670,7 @@ function SwitchRow({
         </div>
         {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
       </div>
-      <Switch checked={checked} onCheckedChange={onChange} disabled={disabled} />
+      <Switch checked={checked} onCheckedChange={onChange} disabled={disabled} aria-label={title} />
     </div>
   );
 }
@@ -1352,7 +1352,7 @@ export function ModelSheet({
                         params: d.params.filter((_, idx) => idx !== i),
                       }))
                     }
-                    className="flex flex-none rounded-md border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-subtle)] transition-colors hover:border-destructive hover:text-destructive"
+                    className="flex flex-none rounded-md border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-subtle)] transition-colors hover:border-destructive hover:text-[color:var(--status-danger-text)]"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -1618,7 +1618,7 @@ export function ModelSheet({
                         headers: d.headers.filter((_, idx) => idx !== i),
                       }))
                     }
-                    className="flex flex-none rounded-md border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-subtle)] transition-colors hover:border-destructive hover:text-destructive"
+                    className="flex flex-none rounded-md border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-subtle)] transition-colors hover:border-destructive hover:text-[color:var(--status-danger-text)]"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -1754,14 +1754,14 @@ export function ModelSheet({
         {errors.length > 0 && (
           <div className="space-y-1 px-[22px] pt-2.5">
             {errors.map((e) => (
-              <p key={e} className="text-xs leading-snug text-destructive">
+              <p key={e} className="text-xs leading-snug text-[color:var(--status-danger-text)]">
                 • {e}
               </p>
             ))}
           </div>
         )}
         {save.isError && (
-          <p className="px-[22px] pt-2.5 text-xs text-destructive">
+          <p className="px-[22px] pt-2.5 text-xs text-[color:var(--status-danger-text)]">
             {(save.error as Error).message}
           </p>
         )}
@@ -1774,7 +1774,7 @@ export function ModelSheet({
               "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
               "inline-flex h-9 items-center gap-1.5 rounded-md border border-[color:var(--border-subtle)] px-3 text-sm transition-colors hover:bg-[color:var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50",
               testState === "ok"
-                ? "text-[color:var(--status-success)]"
+                ? "text-[color:var(--status-success-text)]"
                 : "text-[color:var(--text-secondary)]",
             )}
           >

@@ -208,7 +208,7 @@ export default function Account() {
           </DialogDescription>
         </DialogHeader>
         {removeKey.isError && (
-          <p className="text-xs text-destructive">
+          <p className="text-xs text-[color:var(--status-danger-text)]">
             {(removeKey.error as Error).message}
           </p>
         )}

@@ -96,7 +96,7 @@ export default function ComplexityRouter() {
             className="flex flex-col gap-3 rounded-[10px] border border-[color:var(--border-default)] bg-card p-4"
           >
             <div className="flex items-center gap-2.5">
-              <span className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] text-[color:var(--red-folk)]">
+              <span className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] text-[color:var(--red-folk-text)]">
                 <ArrowLeftRight className="h-4 w-4" />
               </span>
               <span className="min-w-0 truncate font-mono text-sm font-semibold">
@@ -104,7 +104,7 @@ export default function ComplexityRouter() {
               </span>
               <Pill
                 className="ml-auto"
-                color="var(--status-info)"
+                color="var(--status-info-text)"
                 tint="rgba(59,130,246,.14)"
               >
                 {tiers.length} tiers
@@ -187,6 +187,8 @@ function PolicyDialog({
   allRoutes: string[];
   onClose: () => void;
 }) {
+  // `t` is the tier in the rows below, so the catalog reader takes another name
+  const { t: translate } = useTranslation();
   const queryClient = useQueryClient();
   const existing = useQuery({
     queryKey: ["route-complexity", route.id],
@@ -255,6 +257,7 @@ function PolicyDialog({
             />
             <Select
               className="min-w-0 flex-1 font-mono text-xs"
+              aria-label={translate("pages.complexityRouter.tierRouteAria")}
               value={t.route}
               onChange={(e) => set(i, { route: e.target.value })}
             >
@@ -269,7 +272,7 @@ function PolicyDialog({
               title="Remove tier"
               aria-label={`Remove tier ${i + 1}`}
               onClick={() => setTiers((ts) => ts?.filter((_, j) => j !== i) ?? null)}
-              className="flex h-8 flex-none items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="flex h-8 flex-none items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger-text)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>

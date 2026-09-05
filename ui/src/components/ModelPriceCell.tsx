@@ -34,7 +34,7 @@ export function ModelPriceCell({
       <div className="flex justify-end">
         <Pill
           className="cursor-help"
-          color="var(--status-warning)"
+          color="var(--status-warning-text)"
           tint="var(--red-tint)"
           border="color-mix(in srgb, var(--status-warning) 32%, transparent)"
         >

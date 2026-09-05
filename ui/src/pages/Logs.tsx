@@ -41,10 +41,10 @@ const num = (v: number | string | undefined): number => {
 };
 
 function statusTone(status: number): [string, string] {
-  if (status === 0 || status >= 500) return ["var(--status-danger)", "rgba(229,57,53,.14)"];
-  if (status === 429) return ["var(--status-warning)", "rgba(245,158,11,.14)"];
-  if (status >= 400) return ["var(--status-warning)", "rgba(245,158,11,.14)"];
-  return ["var(--status-success)", "rgba(22,163,74,.14)"];
+  if (status === 0 || status >= 500) return ["var(--status-danger-text)", "rgba(229,57,53,.14)"];
+  if (status === 429) return ["var(--status-warning-text)", "rgba(245,158,11,.14)"];
+  if (status >= 400) return ["var(--status-warning-text)", "rgba(245,158,11,.14)"];
+  return ["var(--status-success-text)", "rgba(22,163,74,.14)"];
 }
 
 function isUnavailable(error: unknown): boolean {

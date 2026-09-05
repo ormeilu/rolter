@@ -99,7 +99,11 @@ export function ListTable({
 }: React.HTMLAttributes<HTMLDivElement> & { minWidth?: number }) {
   return (
     <div
+      // a scroll container has to be reachable from the keyboard, or the part
+      // of the row past the right edge is mouse-only (#1181)
+      tabIndex={0}
       className={cn(
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         // `relative` is load-bearing: the row buttons carry `sr-only` labels,
         // which are absolutely positioned. without a containing block here they
         // resolve against the page and drag the *document* out to the table's
@@ -227,7 +231,7 @@ export function RowIconButton({
       className={cn(
         "flex flex-none items-center justify-center rounded-[6px] border border-[color:var(--border-subtle)] bg-transparent p-[5px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         danger
-          ? "text-[color:var(--status-danger)] hover:bg-[color:var(--red-tint)]"
+          ? "text-[color:var(--status-danger-text)] hover:bg-[color:var(--red-tint)]"
           : "text-muted-foreground hover:text-foreground",
         className,
       )}

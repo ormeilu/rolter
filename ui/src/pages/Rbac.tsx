@@ -52,19 +52,22 @@ interface RoleColumn {
   custom?: RbacCustomRoleView;
 }
 
+// a cell holds a letter, so `color` is always the -text half of the hue and the
+// border keeps the fill. the quiet states carry no `opacity` either: --text-subtle
+// at 0.45 is about 2.3:1, and an empty tint already reads as "not granted" (#1181)
 const CELL_STYLE: Record<CellState, React.CSSProperties> = {
   allowed: {
-    color: "var(--red-folk)",
+    color: "var(--red-folk-text)",
     background: "var(--red-tint)",
     borderColor: "color-mix(in srgb, var(--red-folk) 30%, transparent)",
   },
   granted: {
-    color: "var(--status-info)",
+    color: "var(--status-info-text)",
     background: "rgba(59, 130, 246, .14)",
     borderColor: "color-mix(in srgb, var(--status-info) 34%, transparent)",
   },
   superadmin: {
-    color: "var(--status-warning)",
+    color: "var(--status-warning-text)",
     background: "rgba(245, 158, 11, .12)",
     borderColor: "color-mix(in srgb, var(--status-warning) 32%, transparent)",
   },
@@ -72,13 +75,11 @@ const CELL_STYLE: Record<CellState, React.CSSProperties> = {
     color: "var(--text-subtle)",
     background: "transparent",
     borderColor: "var(--border-subtle)",
-    opacity: 0.45,
   },
   na: {
     color: "var(--text-subtle)",
     background: "transparent",
     borderColor: "transparent",
-    opacity: 0.3,
   },
 };
 
@@ -203,7 +204,7 @@ export default function Rbac() {
         </p>
       )}
 
-      <div className="overflow-x-auto">
+      <div tabIndex={0} className="overflow-x-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
         <div className="min-w-[720px] overflow-hidden rounded-[10px] border border-[color:var(--border-subtle)]">
           <div
             className="grid items-end gap-3 border-b border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] px-4 py-[11px]"
