@@ -1012,7 +1012,11 @@
       "noOrgTitle": "Choose an organization",
       "noOrgBody": "The audit log is scoped to one organization. Pick or create one to view its history.",
       "actionFilterAria": "Filter by action",
-      "targetFilterAria": "Filter by target type"
+      "targetFilterAria": "Filter by target type",
+      "hideDetailsAria": "Hide details for action {{action}} on target {{target}}",
+      "showDetailsAria": "Show details for action {{action}} on target {{target}}",
+      "prevPageAria": "Previous page",
+      "nextPageAria": "Next page"
     },
     "complexityRouter": {
       "emptyTitle": "No routes to give a policy",

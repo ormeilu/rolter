@@ -82,7 +82,8 @@ const TARGET_PATH: Record<string, string> = {
   security_settings: "/security",
 };
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // server-side paginated, filtered audit log: action/target/actor/time-range
 // filters map to query params, pagination walks the keyset cursor
@@ -110,7 +111,15 @@ export default function AuditLog() {
   const actorParam = UUID_RE.test(actor.trim()) ? actor.trim() : undefined;
 
   const page = useQuery({
-    queryKey: ["audit-log", scope.orgId, action, target, actorParam, rangeIdx, cursor],
+    queryKey: [
+      "audit-log",
+      scope.orgId,
+      action,
+      target,
+      actorParam,
+      rangeIdx,
+      cursor,
+    ],
     queryFn: () =>
       fetchAuditLogPage(scope.orgId as string, {
         limit: PAGE_SIZE,
@@ -123,7 +132,6 @@ export default function AuditLog() {
       }),
     enabled: !!scope.orgId,
   });
-
 
   // UX stream (#805). the screen key comes from the enclosing UxScreenProvider;
 
@@ -140,7 +148,8 @@ export default function AuditLog() {
 
   const rows = page.data?.items ?? [];
   const [total, setTotal] = React.useState<number | null>(null);
-  const filtersActive = !!actor || !!action || !!target || rangeIdx !== DEFAULT_RANGE;
+  const filtersActive =
+    !!actor || !!action || !!target || rangeIdx !== DEFAULT_RANGE;
   const clearFilters = () => {
     setActor("");
     setAction("");
@@ -202,7 +211,12 @@ export default function AuditLog() {
             type="button"
             className="rounded-sm text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             aria-expanded={expanded === row.id}
-            aria-label={`${expanded === row.id ? 'Hide' : 'Show'} details for action ${row.action} on target ${row.target_type || 'unknown'}`}
+            aria-label={t(
+              expanded === row.id
+                ? "pages.auditLog.hideDetailsAria"
+                : "pages.auditLog.showDetailsAria",
+              { action: row.action, target: row.target_type || "unknown" },
+            )}
             onClick={() => setExpanded(expanded === row.id ? null : row.id)}
           >
             {expanded === row.id ? "hide" : "show"}
@@ -291,7 +305,9 @@ export default function AuditLog() {
             <TableSkeleton rows={6} />
           ) : (
             <Table
-              columns={columns as unknown as TableColumn<Record<string, unknown>>[]}
+              columns={
+                columns as unknown as TableColumn<Record<string, unknown>>[]
+              }
               data={rows as unknown as Record<string, unknown>[]}
               rowKey="id"
               empty={
@@ -329,7 +345,7 @@ export default function AuditLog() {
               <div className="flex gap-1">
                 <button
                   type="button"
-                  aria-label="Previous page"
+                  aria-label={t("pages.auditLog.prevPageAria")}
                   disabled={cursors.length === 0}
                   onClick={() => setCursors((c) => c.slice(0, -1))}
                   className="rounded-md border border-border px-2.5 py-1 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-40"
@@ -338,7 +354,7 @@ export default function AuditLog() {
                 </button>
                 <button
                   type="button"
-                  aria-label="Next page"
+                  aria-label={t("pages.auditLog.nextPageAria")}
                   disabled={!page.data?.has_next || !page.data.next_cursor}
                   onClick={() =>
                     page.data?.next_cursor &&
@@ -357,7 +373,11 @@ export default function AuditLog() {
               tabIndex={0}
               className="max-h-64 overflow-auto rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-subtle)] p-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
-              {JSON.stringify(rows.find((e) => e.id === expanded)?.detail, null, 2)}
+              {JSON.stringify(
+                rows.find((e) => e.id === expanded)?.detail,
+                null,
+                2,
+              )}
             </pre>
           )}
         </>
