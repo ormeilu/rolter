@@ -551,6 +551,136 @@ async fn governance_scoped_budgets_and_rate_limits() {
         .any(|l| l["scope"] == "customer" && l["id"] == customer_id));
 }
 
+/// #996: a budget may carry its own `unpriced_policy`, and it has to survive
+/// the whole path — create, list, and the snapshot the gateway actually reads.
+/// A field that only toml could populate would silently do nothing for the
+/// deployments that use the control plane, which is why #974 left it out.
+#[tokio::test]
+async fn a_budget_carries_its_own_unpriced_policy_into_the_snapshot() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let addr = serve(
+        rolter_control::test_app(pool.clone())
+            .await
+            .expect("build app"),
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    async fn post(client: &reqwest::Client, url: String, body: Value) -> Value {
+        let resp = client.post(&url).json(&body).send().await.unwrap();
+        let status = resp.status();
+        let json: Value = resp.json().await.unwrap();
+        assert!(status.is_success(), "POST {url} failed ({status}): {json}");
+        json
+    }
+
+    let org = post(
+        &client,
+        format!("{base}/api/v1/orgs"),
+        json!({"name": "Unpriced", "slug": "unpriced"}),
+    )
+    .await;
+    let org_id = org["id"].as_str().expect("org id").to_string();
+    let team = post(
+        &client,
+        format!("{base}/api/v1/orgs/{org_id}/teams"),
+        json!({"name": "Platform"}),
+    )
+    .await;
+    let team_id = team["id"].as_str().expect("team id").to_string();
+
+    // the org refuses what it cannot account for
+    let strict = post(
+        &client,
+        format!("{base}/api/v1/budgets"),
+        json!({
+            "scope_type": "org",
+            "scope_id": org_id,
+            "limit_usd": "1000.0",
+            "unpriced_policy": "block",
+        }),
+    )
+    .await;
+    assert_eq!(strict["unpriced_policy"], "block");
+
+    // a budget that says nothing inherits the deployment-wide setting, and
+    // comes back as null rather than as a guessed default
+    let inheriting = post(
+        &client,
+        format!("{base}/api/v1/budgets"),
+        json!({"scope_type": "team", "scope_id": team_id, "limit_usd": "10.0"}),
+    )
+    .await;
+    assert!(inheriting["unpriced_policy"].is_null());
+
+    // an unknown policy is a 400 that names the three values, not a 500 from
+    // the column's check constraint
+    let bad = client
+        .post(format!("{base}/api/v1/budgets"))
+        .json(&json!({
+            "scope_type": "org",
+            "scope_id": org_id,
+            "limit_usd": "5.0",
+            "unpriced_policy": "blocked",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
+
+    let listed: Value = client
+        .get(format!(
+            "{base}/api/v1/budgets?scope_type=org&scope_id={org_id}"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["unpriced_policy"], "block");
+
+    // and the gateway sees it: the override rides the snapshot, and the
+    // inheriting budget carries no field at all rather than a fabricated one
+    let snap: Value = client
+        .get(format!("{base}/internal/snapshot"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let budgets = snap["config"]["budgets"].as_array().expect("budgets");
+    let org_budget = budgets
+        .iter()
+        .find(|b| b["id"] == org_id.as_str())
+        .expect("org budget in snapshot");
+    assert_eq!(org_budget["unpriced_policy"], "block");
+    let team_budget = budgets
+        .iter()
+        .find(|b| b["id"] == team_id.as_str())
+        .expect("team budget in snapshot");
+    assert!(team_budget.get("unpriced_policy").is_none());
+
+    // the audit row says an override was set, because it changes what the
+    // gateway will serve rather than only what it counts
+    let details: Vec<Value> = sqlx::query_scalar(
+        "select detail from audit_log where action = 'budget.create' order by at desc",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(details
+        .iter()
+        .any(|detail| detail["unpriced_policy"] == "block"));
+    assert!(details
+        .iter()
+        .any(|detail| detail["unpriced_policy"].is_null()));
+}
+
 #[tokio::test]
 async fn virtual_key_cost_attribution_round_trip() {
     skip_without_db!();

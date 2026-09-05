@@ -1065,12 +1065,21 @@
       "uptimeMeta": "uptime · {{events}} events"
     },
     "limits": {
-      "budgetsEmptyTitle": "No budgets for this scope",
-      "budgetsEmptyBody": "A budget caps spend for the selected org, team, project or key over a period, and stops requests once it is reached.",
+      "budgetCreated": "Budget created",
+      "budgetDeleted": "Budget deleted",
+      "budgetNoun": "the budget",
       "budgetsEmptyAction": "Add budget",
-      "rateLimitsEmptyTitle": "No rate limits for this scope",
-      "rateLimitsEmptyBody": "A rate limit caps requests and tokens per minute for the selected scope, so one client cannot starve the rest.",
+      "budgetsEmptyBody": "A budget caps spend for the selected org, team, project or key over a period, and stops requests once it is reached.",
+      "budgetsEmptyTitle": "No budgets for this scope",
+      "budgetsHint": "Spend caps per org, team, project, virtual key, business unit, or customer",
+      "rateLimitCreated": "Rate limit created",
+      "rateLimitDeleted": "Rate limit deleted",
+      "rateLimitNoun": "the rate limit",
       "rateLimitsEmptyAction": "Add rate limit",
+      "rateLimitsEmptyBody": "A rate limit caps requests and tokens per minute for the selected scope, so one client cannot starve the rest.",
+      "rateLimitsEmptyTitle": "No rate limits for this scope",
+      "rateLimitsHint": "Requests- and tokens-per-minute caps per scope",
+      "scopeHint": "The {{type}} this cap applies to",
       "scopeTypes": {
         "org": "Organization",
         "team": "Team",
@@ -1081,15 +1090,15 @@
       },
       "selectBusinessUnit": "Select a business unit",
       "selectCustomer": "Select a customer",
-      "budgetsHint": "Spend caps per org, team, project, virtual key, business unit, or customer",
-      "rateLimitsHint": "Requests- and tokens-per-minute caps per scope",
-      "budgetNoun": "the budget",
-      "rateLimitNoun": "the rate limit",
-      "budgetCreated": "Budget created",
-      "budgetDeleted": "Budget deleted",
-      "rateLimitCreated": "Rate limit created",
-      "rateLimitDeleted": "Rate limit deleted",
-      "scopeHint": "The {{type}} this cap applies to"
+      "unpriced": {
+        "inherit": "Inherit deployment setting",
+        "ignore": "Serve and ignore",
+        "warn": "Serve and warn",
+        "block": "Refuse"
+      },
+      "unpricedBadge": "unpriced: {{policy}}",
+      "unpricedHint": "What to do about a model with no price row: its spend is never counted, so it can never exhaust this budget. Inherit uses the deployment-wide setting; an override can only tighten it.",
+      "unpricedLabel": "Unpriced traffic"
     },
     "logs": {
       "emptyTitle": "Nothing logged yet",

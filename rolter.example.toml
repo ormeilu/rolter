@@ -330,6 +330,11 @@ disabled = false # revoke without deleting
 # id = "org-uuid"
 # limit_usd = 500.0
 # period = "monthly"   # monthly (default) | daily | total
+# this budget's own answer to unpriced traffic, overriding the deployment-wide
+# unpriced_policy below. omit it to inherit. resolution is most-restrictive-wins
+# across the scope chain and against the deployment setting, so a budget can
+# tighten what the deployment asked for but never loosen it:
+# unpriced_policy = "block"   # ignore | warn | block
 
 # what to do about traffic the gateway cannot price. a model with no
 # [[model_prices]] row accrues zero spend, so it can never exceed a budget no
