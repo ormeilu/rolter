@@ -1760,6 +1760,16 @@ export const SCOPE_TYPES = [
 
 export type ScopeType = (typeof SCOPE_TYPES)[number];
 
+/**
+ * A budget's own answer to traffic against a model with no price row, which
+ * accrues zero spend and so can never exhaust the budget. `null` inherits the
+ * deployment-wide setting; an override can only tighten it, because the gateway
+ * resolves most-restrictive-wins across the scope chain (#996).
+ */
+export const UNPRICED_POLICIES = ["ignore", "warn", "block"] as const;
+
+export type UnpricedPolicy = (typeof UNPRICED_POLICIES)[number];
+
 export interface BudgetRow {
   id: string;
   scope_type: string;
@@ -1767,6 +1777,7 @@ export interface BudgetRow {
   /// decimal, returned as text
   limit_usd: string;
   period: string;
+  unpriced_policy: UnpricedPolicy | null;
   created_at: string;
 }
 
@@ -1775,6 +1786,7 @@ export interface CreateBudgetInput {
   scope_id: string;
   limit_usd: string;
   period?: string;
+  unpriced_policy?: UnpricedPolicy | null;
 }
 
 export function fetchBudgets(

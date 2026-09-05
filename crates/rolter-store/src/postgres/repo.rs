@@ -3191,7 +3191,7 @@ pub struct BudgetRepo<'a>(pub &'a PgPool);
 impl BudgetRepo<'_> {
     pub async fn list_for_scope(&self, scope_type: &str, scope_id: Uuid) -> Result<Vec<Budget>> {
         sqlx::query_as(
-            "select id, scope_type, scope_id, limit_usd::text as limit_usd, period, created_at
+            "select id, scope_type, scope_id, limit_usd::text as limit_usd, period, unpriced_policy, created_at
              from budgets where scope_type = $1 and scope_id = $2 order by created_at",
         )
         .bind(scope_type)
@@ -3203,7 +3203,7 @@ impl BudgetRepo<'_> {
 
     pub async fn get(&self, id: Uuid) -> Result<Budget> {
         sqlx::query_as(
-            "select id, scope_type, scope_id, limit_usd::text as limit_usd, period, created_at
+            "select id, scope_type, scope_id, limit_usd::text as limit_usd, period, unpriced_policy, created_at
              from budgets where id = $1",
         )
         .bind(id)
@@ -3213,22 +3213,26 @@ impl BudgetRepo<'_> {
         .ok_or_else(|| Error::NotFound(format!("budget {id}")))
     }
 
+    /// `unpriced_policy` is `None` for a budget that inherits the
+    /// deployment-wide setting, which is every budget created before #996.
     pub async fn create(
         &self,
         scope_type: &str,
         scope_id: Uuid,
         limit_usd: &str,
         period: &str,
+        unpriced_policy: Option<&str>,
     ) -> Result<Budget> {
         sqlx::query_as(
-            "insert into budgets (scope_type, scope_id, limit_usd, period)
-             values ($1, $2, $3::numeric, $4)
-             returning id, scope_type, scope_id, limit_usd::text as limit_usd, period, created_at",
+            "insert into budgets (scope_type, scope_id, limit_usd, period, unpriced_policy)
+             values ($1, $2, $3::numeric, $4, $5)
+             returning id, scope_type, scope_id, limit_usd::text as limit_usd, period,              unpriced_policy, created_at",
         )
         .bind(scope_type)
         .bind(scope_id)
         .bind(limit_usd)
         .bind(period)
+        .bind(unpriced_policy)
         .fetch_one(self.0)
         .await
         .map_err(store_err)
@@ -5261,17 +5265,31 @@ mod tests {
 
         let budgets = BudgetRepo(&pool);
         let budget = budgets
-            .create("project", project.id, "100.5000", "30d")
+            .create("project", project.id, "100.5000", "30d", None)
             .await
             .unwrap();
         assert_eq!(budget.limit_usd, "100.5000");
+        // no override means "inherit the deployment-wide unpriced policy", and
+        // it round-trips as null rather than as a guessed default (#996)
+        assert_eq!(budget.unpriced_policy, None);
+        let strict = budgets
+            .create("project", project.id, "10.0000", "30d", Some("block"))
+            .await
+            .unwrap();
+        assert_eq!(strict.unpriced_policy, Some("block".to_string()));
+        assert_eq!(
+            budgets.get(strict.id).await.unwrap().unpriced_policy,
+            Some("block".to_string())
+        );
+        // both budgets belong to the project scope, the inherited one and the
+        // strict one, so the scope lists two
         assert_eq!(
             budgets
                 .list_for_scope("project", project.id)
                 .await
                 .unwrap()
                 .len(),
-            1
+            2
         );
 
         let limits = RateLimitRepo(&pool);
