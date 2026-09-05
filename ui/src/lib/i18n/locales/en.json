@@ -195,8 +195,7 @@
     "security": "Security",
     "api-keys": "My Virtual Keys",
     "performance": "Performance Tuning",
-    "feature-flags": "Feature Flags",
-    "caching": "Caching"
+    "feature-flags": "Feature Flags"
   },
   "pages": {
     "dashboard": {
@@ -1284,10 +1283,6 @@
     "feature-flags": {
       "title": "Feature Flags",
       "subtitle": "Toggle experimental gateway features."
-    },
-    "caching": {
-      "title": "Caching",
-      "subtitle": "Direct and semantic response caching."
     }
   },
   "shell": {
