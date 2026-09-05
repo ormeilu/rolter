@@ -388,6 +388,34 @@ export const DetailDrawerNamesTheAttribution: Story = {
   },
 };
 
+/**
+ * #954: an absent payload used to read "payload logging is off", which is one
+ * of three possible reasons and often the wrong one. A viewer cannot read the
+ * logging settings — that route is superadmin-only — so the screen does not
+ * ask, and the copy names every reason instead of asserting one. Either way it
+ * says where the setting lives.
+ */
+export const AnAbsentPayloadSaysWhy: Story = {
+  render: () => (
+    <Harness fetchStub={withLogs(ROWS)}>
+      <Logs />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      await canvas.findByRole("button", { name: /Open request details for gpt-4o/i }),
+    );
+    const drawer = within(await canvas.findByRole("complementary", { name: "Details" }));
+    // both the Request and the Response panel explain themselves
+    await expect(drawer.getAllByText(/retention window has already passed/i)).toHaveLength(2);
+    // and it is not the old claim, which asserted a reason it could not know
+    await expect(drawer.queryByText("payload logging is off")).not.toBeInTheDocument();
+    const link = drawer.getAllByRole("link", { name: "Open log settings" })[0];
+    await expect(link).toHaveAttribute("href", "/logs-settings");
+  },
+};
+
 // a control plane with no clickhouse_url answers the analytics routes 503, and
 // one too old to have them answers 404. Both used to render an untranslated
 // grey paragraph of this screen's own (#1236)

@@ -19,10 +19,12 @@ import {
   fetchBusinessUnits,
   fetchCustomers,
   fetchInvocations,
+  fetchLoggingSettings,
   fetchModelPrices,
   fetchModels,
   type InvocationRow,
 } from "@/lib/api";
+import { useIsSuperadmin } from "@/lib/can";
 import { useCurrencyCode } from "@/lib/currency";
 import { useScope } from "@/lib/scope";
 import { useFormat } from "@/lib/i18n/format";
@@ -243,14 +245,8 @@ export default function Logs() {
       {selected.error && (
         <DrawerBlock label="Error" content={selected.error} />
       )}
-      <DrawerBlock
-        label="Request"
-        content={pretty(selected.request_payload) ?? "payload logging is off"}
-      />
-      <DrawerBlock
-        label="Response"
-        content={pretty(selected.response_payload) ?? "payload logging is off"}
-      />
+      <PayloadBlock label="Request" raw={selected.request_payload} />
+      <PayloadBlock label="Response" raw={selected.response_payload} />
     </>
   );
 
@@ -544,6 +540,66 @@ export default function Logs() {
             <div className="flex flex-col gap-3.5 p-[18px]">{detail}</div>
           </aside>
         ))}
+    </div>
+  );
+}
+
+/**
+ * One request or response body in the detail drawer, and — when there is none —
+ * why (#954).
+ *
+ * An empty panel used to say "payload logging is off", which is one of three
+ * possible reasons and was often the wrong one. A payload is absent when
+ * capture is off, when it is on but this request's model or key falls outside
+ * the allow-list, or when the payload's retention window (shorter than the log
+ * row's, by design) has already elapsed. The row itself does not record which,
+ * so the copy names all three rather than asserting one.
+ *
+ * A superadmin can be told which it is, because they can read the setting; for
+ * everyone else the answer would be a 403, so the screen does not ask. Either
+ * way the text says where the setting lives instead of leaving the reader to
+ * hunt for it.
+ */
+function PayloadBlock({ label, raw }: { label: string; raw: string | undefined }) {
+  const { t } = useTranslation();
+  const isSuperadmin = useIsSuperadmin();
+  const body = pretty(raw);
+  const settings = useQuery({
+    queryKey: ["logging-settings", "payload-hint"],
+    queryFn: fetchLoggingSettings,
+    // only asked when the answer is readable, and a failure is not worth
+    // surfacing: the generic explanation below is still true
+    enabled: isSuperadmin === true && body === null,
+    retry: false,
+    staleTime: 60_000,
+  });
+
+  if (body !== null) return <DrawerBlock label={label} content={body} />;
+
+  const captureOff = settings.data ? !settings.data.payload_capture_enabled : undefined;
+  const reason =
+    captureOff === true
+      ? t("pages.logs.payloadCaptureOff")
+      : captureOff === false
+        ? t("pages.logs.payloadCaptureOnButAbsent", {
+            hours: settings.data?.payload_retention_hours ?? 0,
+          })
+        : t("pages.logs.payloadAbsent");
+
+  return (
+    <div className="mt-4">
+      <div className="mb-1.5 text-[0.6875rem] uppercase tracking-[0.06em] text-[color:var(--text-subtle)]">
+        {label}
+      </div>
+      <div className="rounded-[8px] border border-dashed border-[color:var(--border-default)] bg-[color:var(--surface-subtle)] p-3">
+        <p className="text-xs leading-relaxed text-muted-foreground">{reason}</p>
+        <a
+          href="/logs-settings"
+          className="mt-2 inline-block text-xs font-medium text-foreground underline decoration-[color:var(--border-strong)] underline-offset-4 transition-colors hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {t("pages.logs.payloadSettingsLink")}
+        </a>
+      </div>
     </div>
   );
 }
