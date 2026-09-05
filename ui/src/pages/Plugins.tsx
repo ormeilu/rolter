@@ -3,6 +3,7 @@ import { ArrowDown, Loader2, Plus, Puzzle, Webhook } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { LoadError } from "@/components/LoadError";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -97,6 +98,14 @@ export default function Plugins() {
     mutationFn: deletePlugin,
     onSuccess: invalidate,
   });
+  // was a bare window.confirm, which carried the copy but none of the styling,
+  // and had no pending state to show while the delete was in flight (#1179)
+  const [deleteTarget, setDeleteTarget] =
+    React.useState<PluginInstanceRow | null>(null);
+  const startDelete = (plugin: PluginInstanceRow) => {
+    remove.reset();
+    setDeleteTarget(plugin);
+  };
 
   if (scope.isLoading) {
     return <PluginLoading />;
@@ -165,11 +174,7 @@ export default function Plugins() {
                 removingId={remove.isPending ? remove.variables : undefined}
                 onToggle={(plugin) => toggle.mutate(plugin)}
                 onEdit={setEditing}
-                onDelete={(plugin) =>
-                  window.confirm(
-                    t("pages.plugins.deleteConfirm", { name: plugin.name }),
-                  ) && remove.mutate(plugin.id)
-                }
+                onDelete={startDelete}
               />
               {index < stages.length - 1 && (
                 <ArrowDown
@@ -181,6 +186,20 @@ export default function Plugins() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={t("pages.plugins.confirm.title", { name: deleteTarget?.name })}
+        description={t("pages.plugins.confirm.body")}
+        confirmLabel={t("common.delete")}
+        pending={remove.isPending}
+        error={remove.error}
+        onConfirm={() =>
+          deleteTarget &&
+          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
+        }
+      />
 
       <PluginDialog
         key={editing?.id ?? (editing === null ? "new" : "closed")}

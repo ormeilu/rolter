@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import Cluster from "./Cluster";
+import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
 import type { ClusterNodeRow } from "@/lib/api";
 
 const node = (over: Partial<ClusterNodeRow> = {}): ClusterNodeRow => ({
@@ -146,5 +147,32 @@ export const ForgetOnlyOfferedForStaleNodes: Story = {
     const buttons = await canvas.findAllByRole("button", { name: "Forget" });
     await expect(buttons[0]).toBeDisabled();
     await expect(buttons[1]).toBeEnabled();
+  },
+};
+
+// forgetting drops a node's history from the inventory, so it is confirmed by
+// id — and the dialog repeats the thing that surprises people, that a node
+// still running comes straight back (#1179)
+const forgets = recording(async (_input, init) => {
+  if (init?.method === "DELETE") return json({}, 204);
+  return json([node(), node({ id: "gw-old", live: false })]);
+});
+
+const NODE_PATH = "/cluster/nodes/gw-old";
+
+export const ConfirmsBeforeForgettingANode: Story = {
+  render: () => <Harness fetchStub={forgets.stub} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const stale = async () =>
+      (await canvas.findAllByRole("button", { name: "Forget" }))[1];
+
+    await userEvent.click(await stale());
+    await cancelConfirmation();
+    forgets.expectNotSent("DELETE", NODE_PATH);
+
+    await userEvent.click(await stale());
+    await confirmDestructive(/gw-old/, /forget node/i);
+    await forgets.expectSent("DELETE", NODE_PATH);
   },
 };

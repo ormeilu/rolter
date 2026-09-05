@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { AuthSessions, OAuthGrants } from "./McpOAuth";
+import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
 import type {
   McpOAuthGrantRow,
   McpOAuthSessionRow,
@@ -314,6 +315,35 @@ export const SessionsEmpty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() => expect(canvas.getByText("No sessions yet")).toBeVisible());
+  },
+};
+
+// grants on this screen have always confirmed before revoking; a session
+// revoke went straight through on one click until #1179
+const sessionRevokes = recording(async (input, init) =>
+  init?.method === "DELETE" ? json(session({ revoked_at: new Date().toISOString() })) : routed()(input, init),
+);
+
+export const SessionRevokeConfirmsFirst: Story = {
+  render: () => (
+    <Harness fetchStub={sessionRevokes.stub}>
+      <AuthSessions />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const revoke = async () =>
+      (await canvas.findAllByRole("button", { name: "Revoke session on github" }))[0];
+
+    await userEvent.click(await revoke());
+    await cancelConfirmation();
+    sessionRevokes.expectNotSent("DELETE", "/mcp/sessions/sess-1");
+
+    await userEvent.click(await revoke());
+    // the copy is the counterpart of the grant dialog: this one does *not*
+    // cascade, and says so
+    await confirmDestructive(/github/, /revoke session/i);
+    await sessionRevokes.expectSent("DELETE", "/mcp/sessions/sess-1");
   },
 };
 

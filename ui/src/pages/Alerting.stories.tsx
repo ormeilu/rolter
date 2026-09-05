@@ -1,16 +1,19 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { AlertChannels, AlertHistory, AlertRules } from "./Alerting";
 import {
   Harness,
+  cancelConfirmation,
   clickWhenEnabled,
+  confirmDestructive,
   expectClosesWithoutPrompting,
   expectSheetClosed,
   json,
   pending,
   routes,
   scoped,
+  recording,
   sheet,
   withConfirm,
 } from "./story-harness";
@@ -200,6 +203,63 @@ export const AnUntouchedChannelFormClosesWithoutPrompting: Story = {
   },
 };
 
+// a channel is the destination every rule delivers through, so deleting one
+// strands rules that are still firing — it asks by name first (#1179)
+const channelDeletes = recording(
+  scoped(async (input, init) => {
+    if (init?.method === "DELETE") return json({}, 204);
+    return loaded(input, init);
+  }),
+);
+
+export const ConfirmsBeforeDeletingAChannel: Story = {
+  render: () => (
+    <Harness fetchStub={channelDeletes.stub}>
+      <AlertChannels />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("ops-slack")).toBeInTheDocument();
+    const buttons = canvas.getAllByRole("button", { name: /delete channel/i });
+
+    await userEvent.click(buttons[0]);
+    await cancelConfirmation();
+    channelDeletes.expectNotSent("DELETE", "/alert-channels/chan-1");
+
+    await userEvent.click(buttons[0]);
+    await confirmDestructive(/ops-slack/, /delete channel/i);
+    await channelDeletes.expectSent("DELETE", "/alert-channels/chan-1");
+  },
+};
+
+// the failure stays in the dialog rather than closing on a delete that never
+// happened
+export const ChannelDeleteFails: Story = {
+  render: () => (
+    <Harness
+      fetchStub={scoped(async (input, init) =>
+        init?.method === "DELETE"
+          ? json({ error: { message: "channel is referenced by 1 alert rule" } }, 409)
+          : loaded(input, init),
+      )}
+    >
+      <AlertChannels />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("ops-slack")).toBeInTheDocument();
+    await userEvent.click(canvas.getAllByRole("button", { name: /delete channel/i })[0]);
+    await confirmDestructive(/ops-slack/, /delete channel/i);
+    await waitFor(() =>
+      expect(within(document.body).getByRole("alert")).toHaveTextContent(
+        /referenced by 1 alert rule/,
+      ),
+    );
+  },
+};
+
 export const RulesLoaded: Story = {
   render: () => (
     <Harness fetchStub={loaded}>
@@ -287,6 +347,34 @@ export const AnEditedRuleFormPromptsBeforeDiscarding: Story = {
       await userEvent.click(within(form).getByRole("button", { name: "Cancel" }));
       await expectSheetClosed();
     });
+  },
+};
+
+const ruleDeletes = recording(
+  scoped(async (input, init) => {
+    if (init?.method === "DELETE") return json({}, 204);
+    return loaded(input, init);
+  }),
+);
+
+export const ConfirmsBeforeDeletingARule: Story = {
+  render: () => (
+    <Harness fetchStub={ruleDeletes.stub}>
+      <AlertRules />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("high error rate")).toBeInTheDocument();
+    const buttons = canvas.getAllByRole("button", { name: /delete rule/i });
+
+    await userEvent.click(buttons[0]);
+    await cancelConfirmation();
+    ruleDeletes.expectNotSent("DELETE", "/alert-rules/rule-1");
+
+    await userEvent.click(buttons[0]);
+    await confirmDestructive(/high error rate/, /delete rule/i);
+    await ruleDeletes.expectSent("DELETE", "/alert-rules/rule-1");
   },
 };
 

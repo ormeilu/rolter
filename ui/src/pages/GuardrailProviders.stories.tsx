@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import GuardrailProviders from "./GuardrailProviders";
+import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
 import type { GuardrailProviderRow } from "@/lib/api";
 
 const PROVIDERS: GuardrailProviderRow[] = [
@@ -69,6 +70,28 @@ export const RegistersProvider: Story = {
     const dialog = within(document.body).getByRole("dialog");
     await userEvent.type(within(dialog).getByLabelText("Provider name"), "Policy service");
     await expect(within(dialog).getByRole("button", { name: "Save provider" })).toBeEnabled();
+  },
+};
+
+// deleting an enabled provider stops external enforcement outright, which is
+// too large a change for a bare window.confirm to carry (#1179)
+const deletes = recording(async (_input, init) =>
+  init?.method === "DELETE" ? json({}, 204) : json(PROVIDERS),
+);
+
+export const ConfirmsBeforeDeletingAProvider: Story = {
+  render: () => <Harness fetchStub={deletes.stub} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const del = async () => (await canvas.findAllByRole("button", { name: "Delete" }))[0];
+
+    await userEvent.click(await del());
+    await cancelConfirmation();
+    deletes.expectNotSent("DELETE", "/guardrails/providers/provider-primary");
+
+    await userEvent.click(await del());
+    await confirmDestructive(/Production LLM Guard/, "Delete");
+    await deletes.expectSent("DELETE", "/guardrails/providers/provider-primary");
   },
 };
 

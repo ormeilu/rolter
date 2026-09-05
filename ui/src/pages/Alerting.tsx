@@ -3,6 +3,7 @@ import { Gavel, History, Loader2, Megaphone, Play, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EditorSheet } from "@/components/EditorSheet";
 import { ListHeader, ListRow, ListTable, PageBody, Pill, StatusDot } from "@/components/screen";
 import { Button } from "@/components/ui/button";
@@ -58,6 +59,13 @@ export function AlertChannels() {
   const remove = useMutation({ mutationFn: deleteAlertChannel, onSuccess: invalidate });
 
   const [addOpen, setAddOpen] = React.useState(false);
+  // deleting a channel silently strands every rule delivering through it, so
+  // the name and the consequence are stated before the request (#1179)
+  const [deleteTarget, setDeleteTarget] = React.useState<AlertChannelRow | null>(null);
+  const startDelete = (channel: AlertChannelRow) => {
+    remove.reset();
+    setDeleteTarget(channel);
+  };
 
   return (
     <PageBody>
@@ -119,7 +127,7 @@ export function AlertChannels() {
                 title="Delete channel"
                 aria-label="Delete channel"
                 disabled={remove.isPending && remove.variables === c.id}
-                onClick={() => remove.mutate(c.id)}
+                onClick={() => startDelete(c)}
                 className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
               >
                 {remove.isPending && remove.variables === c.id ? (
@@ -132,6 +140,20 @@ export function AlertChannels() {
           </div>
         ))}
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={t("pages.alerting.confirm.channelTitle", { name: deleteTarget?.name })}
+        description={t("pages.alerting.confirm.channelBody")}
+        confirmLabel={t("pages.alerting.confirm.channelConfirm")}
+        pending={remove.isPending}
+        error={remove.error}
+        onConfirm={() =>
+          deleteTarget &&
+          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
+        }
+      />
 
       <AddChannelDialog open={addOpen} onOpenChange={setAddOpen} onDone={invalidate} />
     </PageBody>
@@ -244,6 +266,11 @@ export function AlertRules() {
   const remove = useMutation({ mutationFn: deleteAlertRule, onSuccess: invalidate });
 
   const [addOpen, setAddOpen] = React.useState(false);
+  const [deleteTarget, setDeleteTarget] = React.useState<AlertRuleRow | null>(null);
+  const startDelete = (rule: AlertRuleRow) => {
+    remove.reset();
+    setDeleteTarget(rule);
+  };
 
   return (
     <PageBody>
@@ -328,7 +355,7 @@ export function AlertRules() {
                   title="Delete rule"
                   aria-label="Delete rule"
                   disabled={remove.isPending && remove.variables === r.id}
-                  onClick={() => remove.mutate(r.id)}
+                  onClick={() => startDelete(r)}
                   className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
                 >
                   {remove.isPending && remove.variables === r.id ? (
@@ -342,6 +369,20 @@ export function AlertRules() {
           );
         })}
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={t("pages.alerting.confirm.ruleTitle", { name: deleteTarget?.name })}
+        description={t("pages.alerting.confirm.ruleBody")}
+        confirmLabel={t("pages.alerting.confirm.ruleConfirm")}
+        pending={remove.isPending}
+        error={remove.error}
+        onConfirm={() =>
+          deleteTarget &&
+          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
+        }
+      />
 
       <AddRuleDialog
         open={addOpen}

@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { McpCatalog, McpLibrary, McpSettings, ToolGroups } from "./McpManagement";
+import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
 import type { McpGatewaySettingsRow, McpLibraryItem, McpServerRow, McpToolGroupRow } from "@/lib/api";
 
 const ORG = { id: "org-1", name: "Acme", slug: "acme", created_at: "2026-01-01T00:00:00Z" };
@@ -72,6 +73,26 @@ export const LibraryInstallsServer: Story = { render: () => { let installed = fa
 export const ToolGroupsLoaded: Story = { render: () => <Harness fetchStub={routed()}><ToolGroups /></Harness>, play: async ({ canvasElement }) => { const canvas = within(canvasElement); await waitFor(() => expect(canvas.getByText("Triage")).toBeVisible()); await expect(canvas.getByText("GitHub/search_code")).toBeVisible(); } };
 export const ToolGroupsEmpty: Story = { render: () => <Harness fetchStub={routed({ groups: async () => json([]) })}><ToolGroups /></Harness> };
 export const ToolGroupSelectsTools: Story = { render: () => <Harness fetchStub={routed({ groups: async () => json([]) })}><ToolGroups /></Harness>, play: async ({ canvasElement }) => { const canvas = within(canvasElement); const create = await canvas.findByRole("button", { name: "Create group" }); await waitFor(() => expect(create).toBeEnabled()); await userEvent.click(create); const body = within(document.body); await userEvent.type(body.getByLabelText("Name"), "Builders"); await userEvent.click(body.getByRole("button", { name: "create_issue" })); await expect(body.getByRole("button", { name: "create_issue" })).toHaveAttribute("aria-pressed", "true"); await expect(body.getByRole("button", { name: "Save group" })).toBeEnabled(); } };
+
+// the group delete was the last window.confirm on this screen, and it could not
+// even name the group it was about (#1179)
+const groupDeletes = recording(routed({ groups: async (_input, init) => init?.method === "DELETE" ? json({}, 204) : json(GROUPS) }));
+export const ToolGroupConfirmsBeforeDeleting: Story = {
+  render: () => <Harness fetchStub={groupDeletes.stub}><ToolGroups /></Harness>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("Triage")).toBeVisible());
+    const del = () => canvas.getByRole("button", { name: "Delete" });
+
+    await userEvent.click(del());
+    await cancelConfirmation();
+    groupDeletes.expectNotSent("DELETE", "/mcp/tool-groups/group-1");
+
+    await userEvent.click(del());
+    await confirmDestructive(/Triage/, "Delete");
+    await groupDeletes.expectSent("DELETE", "/mcp/tool-groups/group-1");
+  },
+};
 
 export const SettingsLoaded: Story = { render: () => <Harness fetchStub={routed()}><McpSettings /></Harness> };
 export const SettingsSavesChanges: Story = { render: () => { let saved = SETTINGS; const stub = routed({ settings: async (_input, init) => { if (init?.method === "PUT") saved = { ...SETTINGS, ...JSON.parse(String(init.body)), updated_at: "2026-08-02T00:00:00Z" }; return json(saved); } }); return <Harness fetchStub={stub}><McpSettings /></Harness>; }, play: async ({ canvasElement }) => { const canvas = within(canvasElement); const retries = await canvas.findByLabelText("Maximum retries"); await userEvent.clear(retries); await userEvent.type(retries, "3"); await userEvent.click(canvas.getByRole("button", { name: "Save MCP settings" })); await waitFor(() => expect(retries).toHaveValue(3)); } };

@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Network } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -49,6 +51,7 @@ function StateBadges({ node }: { node: ClusterNodeRow }) {
 // poll, so this screen only reads the inventory and drains or forgets a node
 // (#543, #568)
 export default function Cluster() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const nodes = useQuery({
     queryKey: ["cluster-nodes"],
@@ -81,6 +84,17 @@ export default function Cluster() {
     onSuccess: invalidate,
   });
   const actionError = (drain.error ?? forget.error) as Error | undefined;
+
+  // forgetting drops the node's history from the inventory, so it is confirmed
+  // by id — and the dialog repeats the one thing that surprises people, that a
+  // still-running node comes straight back (#1179)
+  const [forgetTarget, setForgetTarget] = React.useState<ClusterNodeRow | null>(
+    null,
+  );
+  const startForget = (node: ClusterNodeRow) => {
+    forget.reset();
+    setForgetTarget(node);
+  };
 
   const columns: TableColumn<ClusterNodeRow & Record<string, unknown>>[] = [
     { key: "id", header: "Node", mono: true },
@@ -138,7 +152,7 @@ export default function Cluster() {
                   ? "node is still polling; it would reappear on its next snapshot poll"
                   : undefined
               }
-              onClick={() => forget.mutate(row.id)}
+              onClick={() => startForget(row)}
             >
               {forget.isPending && forget.variables === row.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Forget
@@ -177,10 +191,24 @@ export default function Cluster() {
           {rows.length} nodes · {live} live
           {lagging > 0 && ` · ${lagging} still applying the newest config`}
         </span>
-        {actionError && (
+        {actionError && !forgetTarget && (
           <span className="text-xs text-destructive">{actionError.message}</span>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!forgetTarget}
+        onOpenChange={(open) => !open && setForgetTarget(null)}
+        title={t("pages.cluster.confirm.title", { id: forgetTarget?.id })}
+        description={t("pages.cluster.confirm.body")}
+        confirmLabel={t("pages.cluster.confirm.confirm")}
+        pending={forget.isPending}
+        error={forget.error}
+        onConfirm={() =>
+          forgetTarget &&
+          forget.mutate(forgetTarget.id, { onSuccess: () => setForgetTarget(null) })
+        }
+      />
 
       {rows.length === 0 ? (
         <EmptyState uxTarget="cluster-nodes"

@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import AccessProfiles from "./AccessProfiles";
+import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
 import type { AccessProfileRow } from "@/lib/api";
 
 const ORG = "11111111-1111-1111-1111-111111111111";
@@ -161,11 +162,38 @@ export const Deleting: Story = {
     await expect(other).toBeEnabled();
 
     await userEvent.click(target);
+    // the delete only leaves once the confirmation is answered (#1179)
+    await confirmDestructive(/Support engineers/, /delete profile/i);
 
     // the clicked row goes busy...
     await waitFor(() => expect(target).toBeDisabled());
     // ...and the sibling row is untouched
     await expect(other).toBeEnabled();
+  },
+};
+
+// a profile reaches whole teams, so removing one changes what a group of people
+// can do — it is named and the consequence stated before anything leaves
+const deletes = recording(async (input, init) => {
+  if (init?.method === "DELETE") return json({}, 204);
+  return stub(async () => json(PROFILES))(input, init);
+});
+
+export const ConfirmsBeforeDeletingAProfile: Story = {
+  render: () => <Harness fetchStub={deletes.stub} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getByText("Support engineers")).toBeVisible(),
+    );
+
+    await userEvent.click(canvas.getByLabelText("Delete Support engineers"));
+    await cancelConfirmation();
+    deletes.expectNotSent("DELETE", "/access-profiles/p-1");
+
+    await userEvent.click(canvas.getByLabelText("Delete Support engineers"));
+    await confirmDestructive(/Support engineers/, /delete profile/i);
+    await deletes.expectSent("DELETE", "/access-profiles/p-1");
   },
 };
 

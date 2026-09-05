@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Shield, Trash2, Users } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageBody, Pill } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import {
@@ -97,6 +99,7 @@ function ProfileCard({
 }
 
 export default function AccessProfiles() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const scope = useScope();
   const orgId = scope.orgId as string | undefined;
@@ -127,6 +130,15 @@ export default function AccessProfiles() {
   });
 
   const [open, setOpen] = React.useState(false);
+  // a profile reaches users and teams, so deleting it changes what a group of
+  // people can do — confirmed by name first (#1179)
+  const [deleteTarget, setDeleteTarget] = React.useState<AccessProfileRow | null>(
+    null,
+  );
+  const startDelete = (profile: AccessProfileRow) => {
+    remove.reset();
+    setDeleteTarget(profile);
+  };
   const [name, setName] = React.useState("");
   const [slug, setSlug] = React.useState("");
   const [description, setDescription] = React.useState("");
@@ -172,10 +184,24 @@ export default function AccessProfiles() {
             key={profile.id}
             profile={profile}
             deleting={remove.isPending && remove.variables === profile.id}
-            onDelete={(p) => remove.mutate(p.id)}
+            onDelete={startDelete}
           />
         ))}
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => !o && setDeleteTarget(null)}
+        title={t("pages.accessProfiles.confirm.title", { name: deleteTarget?.name })}
+        description={t("pages.accessProfiles.confirm.body")}
+        confirmLabel={t("pages.accessProfiles.confirm.confirm")}
+        pending={remove.isPending}
+        error={remove.error}
+        onConfirm={() =>
+          deleteTarget &&
+          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
+        }
+      />
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogHeader>
