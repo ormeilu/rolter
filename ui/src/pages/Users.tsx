@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { Ban, Building2, Loader2, Pencil, Plus, Trash2, UsersRound } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { LoadError } from "@/components/LoadError";
+import { ListSkeleton } from "@/components/LoadingState";
 import { EditorSheet } from "@/components/EditorSheet";
 import {
   ListHeader,
@@ -21,6 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -121,6 +123,12 @@ export default function Users() {
     deactivated: (users.data ?? []).filter((u) => !!u.deactivated_at).length,
   };
 
+  const filtersActive = !!q || statusTab !== "all";
+  const clearFilters = () => {
+    setSearch("");
+    setStatusTab("all");
+  };
+
   const GRID = "1.7fr 1.4fr 110px 1fr 110px";
   const AVATARS = ["#c0392b", "#2e7d5b", "#3d6fb4", "#8e5aa8", "#b8860b", "#6b7280"];
 
@@ -159,9 +167,12 @@ export default function Users() {
       </div>
 
       {!orgId && (
-        <p className="text-sm text-muted-foreground">
-          {scopeMessage ?? "Select an org to manage its users."}
-        </p>
+        <EmptyState
+          uxTarget="users-no-org"
+          icon={<Building2 />}
+          title={t("pages.users.noOrgTitle")}
+          description={scopeMessage ?? t("pages.users.noOrgBody")}
+        />
       )}
       {(users.error || memberships.error) && (
         <LoadError
@@ -173,7 +184,6 @@ export default function Users() {
           }}
         />
       )}
-      {orgId && users.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
       <ListTable>
         <ListHeader grid={GRID}>
@@ -183,6 +193,7 @@ export default function Users() {
           <span>Created</span>
           <span />
         </ListHeader>
+        {orgId && users.isLoading && <ListSkeleton rows={4} className="p-3" />}
         {rows.map((user, i) => {
           const active = !user.deactivated_at;
           const grants = byUser.get(user.id) ?? [];
@@ -254,7 +265,23 @@ export default function Users() {
           );
         })}
         {orgId && !users.isLoading && rows.length === 0 && (
-          <p className="px-4 py-8 text-center text-sm text-muted-foreground">No users match.</p>
+          <EmptyState
+            uxTarget="users"
+            icon={<UsersRound />}
+            title={filtersActive ? t("pages.users.noMatchTitle") : t("pages.users.emptyTitle")}
+            description={filtersActive ? t("pages.users.noMatchBody") : t("pages.users.emptyBody")}
+            actions={
+              filtersActive ? (
+                <Button variant="outline" onClick={clearFilters}>
+                  {t("common.clearSearch")}
+                </Button>
+              ) : (
+                <Button disabled={!orgId} onClick={() => setInviteOpen(true)}>
+                  {t("pages.users.emptyAction")}
+                </Button>
+              )
+            }
+          />
         )}
       </ListTable>
 

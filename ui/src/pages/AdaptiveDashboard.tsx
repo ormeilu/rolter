@@ -2,11 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, Network } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
+import { PanelSkeleton, StatGridSkeleton } from "@/components/LoadingState";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import {
   fetchAdaptiveRoutingTelemetry,
@@ -90,15 +90,9 @@ export default function AdaptiveDashboard() {
 
   if (telemetry.isLoading) {
     return (
-      <PageBody aria-label="Loading adaptive routing telemetry">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {[0, 1, 2, 3].map((item) => (
-            <Skeleton key={item} height={92} radius={10} />
-          ))}
-        </div>
-        {[0, 1].map((item) => (
-          <Skeleton key={item} height={224} radius={10} />
-        ))}
+      <PageBody>
+        <StatGridSkeleton cards={4} />
+        <PanelSkeleton panels={2} height={224} />
       </PageBody>
     );
   }
@@ -106,25 +100,11 @@ export default function AdaptiveDashboard() {
   if (telemetry.isError) {
     return (
       <PageBody>
-        <div
-          role="alert"
-          className="flex max-w-[65ch] flex-col items-start gap-3 rounded-[10px] border border-[color:var(--border-subtle)] p-4"
-        >
-          <div>
-            <p className="text-sm font-medium text-foreground">
-              Unable to load adaptive routing telemetry
-            </p>
-            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              Check your superadmin access and connection, then try again.
-            </p>
-            <p className="mt-1 font-mono text-xs text-muted-foreground">
-              {telemetry.error.message}
-            </p>
-          </div>
-          <Button variant="outline" onClick={() => void telemetry.refetch()}>
-            Try again
-          </Button>
-        </div>
+        <LoadError
+          error={telemetry.error}
+          resource={t("errors.resources.adaptiveTelemetry")}
+          onRetry={() => void telemetry.refetch()}
+        />
       </PageBody>
     );
   }
@@ -157,16 +137,19 @@ export default function AdaptiveDashboard() {
       </div>
 
       {routes.length === 0 ? (
-        <EmptyState uxTarget="adaptive-routes"
+        <EmptyState
+          uxTarget="adaptive-routes"
           icon={<Activity aria-hidden="true" />}
-          title="No fresh adaptive routing telemetry"
-          description={`A gateway appears here after it serves a route on the adaptive strategy and reports to the control plane. Reports older than ${view?.fresh_window_secs ?? 60} seconds are hidden.`}
+          title={t("pages.adaptiveDashboard.emptyTitle")}
+          description={t("pages.adaptiveDashboard.emptyBody", {
+            seconds: view?.fresh_window_secs ?? 60,
+          })}
           actions={
             <a
               href="/routing-rules"
               className="text-sm font-medium text-foreground underline decoration-[color:var(--border-strong)] underline-offset-4 transition-colors hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              Review routing rules
+              {t("pages.adaptiveDashboard.emptyAction")}
             </a>
           }
         />

@@ -4,7 +4,12 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { AuthSessions, OAuthGrants } from "./McpOAuth";
-import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
+import {
+  cancelConfirmation,
+  confirmDestructive,
+  expectSkeleton,
+  recording,
+} from "./story-harness";
 import type {
   McpOAuthGrantRow,
   McpOAuthSessionRow,
@@ -223,6 +228,9 @@ export const GrantsLoading: Story = {
       <OAuthGrants />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 export const GrantsEmpty: Story = {
@@ -253,7 +261,7 @@ export const GrantsForbidden: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() =>
-      expect(canvas.getByText(/do not have access to this org's OAuth grants/)).toBeVisible(),
+      expect(canvas.getByText(/You do not have access to OAuth grants/)).toBeVisible(),
     );
   },
 };
@@ -304,6 +312,9 @@ export const SessionsLoading: Story = {
       <AuthSessions />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 export const SessionsEmpty: Story = {
@@ -360,7 +371,7 @@ export const SessionsForbidden: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() =>
-      expect(canvas.getByText(/do not have access to this org's auth sessions/)).toBeVisible(),
+      expect(canvas.getByText(/You do not have access to auth sessions/)).toBeVisible(),
     );
   },
 };

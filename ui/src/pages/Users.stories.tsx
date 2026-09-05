@@ -7,6 +7,7 @@ import {
   clickWhenEnabled,
   expectClosesWithoutPrompting,
   expectSheetClosed,
+  expectSkeleton,
   json,
   pending,
   routes,
@@ -99,6 +100,9 @@ export const Loading: Story = {
       <Users />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 export const Empty: Story = {

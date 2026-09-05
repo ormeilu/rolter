@@ -4,7 +4,12 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import Connectors from "./Connectors";
-import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
+import {
+  cancelConfirmation,
+  confirmDestructive,
+  expectSkeleton,
+  recording,
+} from "./story-harness";
 import type { ConnectorRow } from "@/lib/api";
 
 const connector = (over: Partial<ConnectorRow> = {}): ConnectorRow => ({
@@ -109,8 +114,7 @@ export const Loaded: Story = {
 export const Loading: Story = {
   render: () => <Harness fetchStub={() => new Promise<Response>(() => {})} />,
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await expect(canvas.getByText("Loading…")).toBeVisible();
+    await expectSkeleton(canvasElement);
   },
 };
 
@@ -135,7 +139,7 @@ export const Error_: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() =>
-      expect(canvas.getByText(/need superadmin access/)).toBeVisible(),
+      expect(canvas.getByText(/You do not have access to connectors/)).toBeVisible(),
     );
   },
 };

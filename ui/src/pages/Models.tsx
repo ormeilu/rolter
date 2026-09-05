@@ -1,9 +1,10 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Lock, Trash2, Loader2 } from "lucide-react";
+import { Boxes, Lock, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { LoadError } from "@/components/LoadError";
+import { ListSkeleton } from "@/components/LoadingState";
 import { ModelPriceCell } from "@/components/ModelPriceCell";
 import { ModelSheet, type ModelSheetMode } from "@/components/ModelSheet";
 import {
@@ -18,6 +19,7 @@ import {
   useSort,
 } from "@/components/screen";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   Dialog,
   DialogDescription,
@@ -200,6 +202,12 @@ export default function Models() {
   });
 
   const scopeBlocked = !scope.isLoading && !!scope.errorKey;
+  const filtersActive = !!q || origin !== "all" || unpricedOnly;
+  const clearFilters = () => {
+    setSearch("");
+    setOrigin("all");
+    setUnpricedOnly(false);
+  };
 
   return (
     <PageBody>
@@ -281,7 +289,6 @@ export default function Models() {
         )}
       </div>
 
-      {models.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {models.error && (
         <LoadError
           error={models.error}
@@ -316,6 +323,7 @@ export default function Models() {
           />
           <span />
         </ListHeader>
+        {models.isLoading && <ListSkeleton rows={5} className="p-3" />}
         {sorted.map((r) => (
           <ListRow key={r.name} grid={GRID}>
             <div className="flex min-w-0 items-center gap-2">
@@ -394,9 +402,30 @@ export default function Models() {
           </ListRow>
         ))}
         {!models.isLoading && sorted.length === 0 && (
-          <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-            No models match.
-          </p>
+          // "no rows" and "nothing matched the filters" are different answers:
+          // one wants a model created, the other wants the filter cleared
+          <EmptyState
+            uxTarget="models"
+            icon={<Boxes />}
+            title={filtersActive ? t("pages.models.noMatchTitle") : t("pages.models.emptyTitle")}
+            description={
+              filtersActive ? t("pages.models.noMatchBody") : t("pages.models.emptyBody")
+            }
+            actions={
+              filtersActive ? (
+                <Button variant="outline" onClick={clearFilters}>
+                  {t("common.clearSearch")}
+                </Button>
+              ) : (
+                <Button
+                  disabled={scopeBlocked || !scope.projectId}
+                  onClick={() => setSheet({ mode: "add" })}
+                >
+                  {t("pages.models.emptyAction")}
+                </Button>
+              )
+            }
+          />
         )}
       </ListTable>
 

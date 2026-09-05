@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Loader2 } from "lucide-react";
+import { CircleDollarSign, Plus, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { LoadError } from "@/components/LoadError";
+import { CardGridSkeleton } from "@/components/LoadingState";
 import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -88,7 +90,7 @@ export default function Pricing() {
         </Button>
       </div>
 
-      {prices.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {prices.isLoading && <CardGridSkeleton cards={4} height={152} min={300} />}
       {prices.error && (
         <LoadError
           error={prices.error}
@@ -97,7 +99,22 @@ export default function Pricing() {
         />
       )}
       {!prices.isLoading && prices.data?.length === 0 && (
-        <p className="text-sm text-muted-foreground">No model prices set yet.</p>
+        <EmptyState
+          uxTarget="model-prices"
+          icon={<CircleDollarSign />}
+          title={t("pages.pricing.emptyTitle")}
+          description={t("pages.pricing.emptyBody")}
+          actions={
+            <Button
+              onClick={() => {
+                setEditTarget(null);
+                setEditOpen(true);
+              }}
+            >
+              {t("pages.pricing.emptyAction")}
+            </Button>
+          }
+        />
       )}
 
       <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(300px,1fr))]">

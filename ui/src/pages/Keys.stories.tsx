@@ -7,12 +7,13 @@ import {
   clickWhenEnabled,
   expectClosesWithoutPrompting,
   expectSheetClosed,
+  expectSkeleton,
   json,
   pending,
   scoped,
   sheet,
-  withConfirm,
   type FetchStub,
+  withConfirm,
 } from "./story-harness";
 import type { VirtualKeyRow } from "@/lib/api";
 import { formattersFor } from "@/lib/i18n/format";
@@ -78,6 +79,9 @@ export const Loading: Story = {
       <Keys />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 export const Empty: Story = {

@@ -11,6 +11,7 @@ import {
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { FormSkeleton } from "@/components/LoadingState";
 import { Button } from "@/components/ui/button";
 import { InfoHint } from "@/components/ui/info-hint";
 import { Input } from "@/components/ui/input";
@@ -1020,7 +1021,7 @@ export function ModelSheet({
             </p>
           </div>
         )}
-        {editLoading && <p className="text-xs text-muted-foreground">Loading…</p>}
+        {editLoading && <FormSkeleton fields={3} />}
 
         {mode === "add" && (
           <div className="space-y-1.5">

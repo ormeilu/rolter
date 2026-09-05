@@ -5,6 +5,8 @@ import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EditorSheet } from "@/components/EditorSheet";
+import { LoadError } from "@/components/LoadError";
+import { CardGridSkeleton, TableSkeleton } from "@/components/LoadingState";
 import { ListHeader, ListRow, ListTable, PageBody, Pill, StatusDot } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -79,11 +81,13 @@ export function AlertChannels() {
         </Button>
       </div>
 
-      {channels.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {channels.isLoading && <CardGridSkeleton cards={3} height={168} min={340} />}
       {channels.isError && (
-        <p className="text-sm text-muted-foreground">
-          Alert channels need superadmin access: {(channels.error as Error).message}
-        </p>
+        <LoadError
+          error={channels.error}
+          resource={t("errors.resources.alertChannels")}
+          onRetry={() => void channels.refetch()}
+        />
       )}
       {channels.data && channels.data.length === 0 && (
         <EmptyState
@@ -285,11 +289,13 @@ export function AlertRules() {
         </Button>
       </div>
 
-      {rules.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {rules.isLoading && <CardGridSkeleton cards={3} height={196} min={380} />}
       {rules.isError && (
-        <p className="text-sm text-muted-foreground">
-          Alert rules need superadmin access: {(rules.error as Error).message}
-        </p>
+        <LoadError
+          error={rules.error}
+          resource={t("errors.resources.alertRules")}
+          onRetry={() => void rules.refetch()}
+        />
       )}
       {rules.data && rules.data.length === 0 && (
         <EmptyState
@@ -544,11 +550,13 @@ export function AlertHistory() {
       <span className="text-sm text-muted-foreground">
         {history.data?.length ?? 0} notifications · newest first
       </span>
-      {history.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {history.isLoading && <TableSkeleton rows={5} />}
       {history.isError && (
-        <p className="text-sm text-muted-foreground">
-          Alert history needs superadmin access: {(history.error as Error).message}
-        </p>
+        <LoadError
+          error={history.error}
+          resource={t("errors.resources.alertHistory")}
+          onRetry={() => void history.refetch()}
+        />
       )}
       {history.data && history.data.length === 0 && (
         <EmptyState
@@ -556,6 +564,14 @@ export function AlertHistory() {
           icon={<History />}
           title={t("pages.alerting.history.emptyTitle")}
           description={t("pages.alerting.history.emptyBody")}
+          actions={
+            <a
+              href="/alerting-rules"
+              className="text-sm font-medium text-foreground underline decoration-[color:var(--border-strong)] underline-offset-4 transition-colors hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {t("pages.alerting.history.emptyAction")}
+            </a>
+          }
         />
       )}
       {history.data && history.data.length > 0 && (

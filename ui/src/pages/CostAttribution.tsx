@@ -4,6 +4,8 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { LoadError } from "@/components/LoadError";
+import { TableSkeleton } from "@/components/LoadingState";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +14,6 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Sheet, SheetBody, SheetFooter, SheetHeader } from "@/components/ui/sheet";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   createBusinessUnit,
   createCustomer,
@@ -196,6 +197,7 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
   isLoading,
   isError,
   error,
+  onRetry,
   onCreate,
   onUpdate,
   onRetire,
@@ -213,6 +215,7 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
   isLoading: boolean;
   isError: boolean;
   error?: Error;
+  onRetry: () => void;
   onCreate: (form: EditorState) => void;
   onUpdate: (form: EditorState, original: T) => void;
   onRetire: (row: T, retired: boolean) => void;
@@ -266,16 +269,23 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
   if (isLoading) {
     return (
       <PageBody>
-        <Skeleton className="h-9 w-[260px] rounded-md" />
-        <Skeleton className="h-[180px] rounded-lg" />
+        <TableSkeleton rows={4} />
       </PageBody>
     );
   }
   if (isError) {
     return (
-      <p className="p-[22px] text-sm text-muted-foreground">
-        Could not load {plural}: {error?.message}
-      </p>
+      <PageBody>
+        <LoadError
+          error={error}
+          resource={
+            kind === "unit"
+              ? t("errors.resources.businessUnits")
+              : t("errors.resources.customers")
+          }
+          onRetry={onRetry}
+        />
+      </PageBody>
     );
   }
 
@@ -298,13 +308,18 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
       </div>
 
       {rows.length === 0 ? (
-        <EmptyState uxTarget="cost-attribution"
+        <EmptyState
+          uxTarget="cost-attribution"
           icon={kind === "unit" ? <Building2 /> : <WalletCards />}
-          title={`No ${plural} yet`}
+          title={
+            kind === "unit"
+              ? t("pages.costAttribution.unitEmptyTitle")
+              : t("pages.costAttribution.customerEmptyTitle")
+          }
           description={
             kind === "unit"
-              ? "Business units roll teams up so spend can be attributed to the part of the organisation that incurred it."
-              : "Customers attribute usage and spend to the people you serve, so it can be billed on or reported per account."
+              ? t("pages.costAttribution.unitEmptyBody")
+              : t("pages.costAttribution.customerEmptyBody")
           }
           actions={
             <Button disabled={disabled} onClick={startCreate}>
@@ -473,6 +488,7 @@ export function BusinessUnits() {
       isLoading={units.isLoading}
       isError={units.isError}
       error={units.error as Error | undefined}
+      onRetry={() => void units.refetch()}
       disabled={!orgId}
       mutating={
         create.isPending || update.isPending || retire.isPending || remove.isPending
@@ -563,6 +579,7 @@ export function Customers() {
       isLoading={customers.isLoading}
       isError={customers.isError}
       error={customers.error as Error | undefined}
+      onRetry={() => void customers.refetch()}
       disabled={!orgId}
       mutating={
         create.isPending || update.isPending || retire.isPending || remove.isPending

@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import ModelSettings from "./ModelSettings";
+import { expectSkeleton } from "./story-harness";
 import type { ModelDefaultsDto } from "@/lib/api";
 
 const BASE: ModelDefaultsDto = {
@@ -82,6 +83,9 @@ export const Configured: Story = {
 
 export const Loading: Story = {
   render: () => <Harness fetchStub={() => new Promise<Response>(() => {})} />,
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 // a non-superadmin principal gets 403
@@ -92,7 +96,7 @@ export const Forbidden: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() =>
-      expect(canvas.getByText(/need superadmin access/)).toBeVisible(),
+      expect(canvas.getByText(/You do not have access to model settings/)).toBeVisible(),
     );
   },
 };

@@ -4,7 +4,12 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { BusinessUnits, Customers } from "./CostAttribution";
-import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
+import {
+  cancelConfirmation,
+  confirmDestructive,
+  expectSkeleton,
+  recording,
+} from "./story-harness";
 import type { BusinessUnitRow, CustomerRow } from "@/lib/api";
 
 const ORG = "11111111-1111-1111-1111-111111111111";
@@ -124,11 +129,22 @@ export const BusinessUnitsLoaded: Story = {
 };
 
 export const BusinessUnitsLoading: Story = {
+  // only the collection hangs: the scope chain still has to resolve, or the
+  // query never becomes enabled and the screen shows an empty list instead
   render: () => (
-    <Harness fetchStub={() => new Promise<Response>(() => {})}>
+    <Harness
+      fetchStub={async (input, init) =>
+        String(input).includes("/business-units")
+          ? new Promise<Response>(() => {})
+          : router({})(input, init)
+      }
+    >
       <BusinessUnits />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 export const BusinessUnitsEmpty: Story = {
@@ -158,7 +174,9 @@ export const BusinessUnitsForbidden: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() =>
-      expect(canvas.getByText(/Could not load business units/)).toBeVisible(),
+      expect(
+        canvas.getByText(/You do not have access to business units/),
+      ).toBeVisible(),
     );
   },
 };

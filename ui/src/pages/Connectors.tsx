@@ -5,8 +5,11 @@ import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EditorSheet } from "@/components/EditorSheet";
+import { LoadError } from "@/components/LoadError";
+import { CardGridSkeleton } from "@/components/LoadingState";
 import { PageBody, Pill, StatusDot } from "@/components/screen";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -83,16 +86,29 @@ export default function Connectors() {
         </Button>
       </div>
 
-      {connectors.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {connectors.isLoading && <CardGridSkeleton cards={3} height={186} min={380} />}
+      {/* the endpoint is superadmin-only, so a non-superadmin lands on the
+          `forbidden` kind, which names who can widen the role rather than
+          asserting a permission problem for every cause (#1180) */}
       {connectors.isError && (
-        <p className="text-sm text-muted-foreground">
-          Connectors need superadmin access: {(connectors.error as Error).message}
-        </p>
+        <LoadError
+          error={connectors.error}
+          resource={t("errors.resources.connectors")}
+          onRetry={() => void connectors.refetch()}
+        />
       )}
       {connectors.data && connectors.data.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No connectors yet. Add one to ship request logs to your observability stack.
-        </p>
+        <EmptyState
+          uxTarget="connectors"
+          icon={<Cable />}
+          title={t("pages.connectors.emptyTitle")}
+          description={t("pages.connectors.emptyBody")}
+          actions={
+            <Button onClick={() => setAddOpen(true)}>
+              {t("pages.connectors.emptyAction")}
+            </Button>
+          }
+        />
       )}
       <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(380px,1fr))]">
         {(connectors.data ?? []).map((c) => {

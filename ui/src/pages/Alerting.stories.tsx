@@ -9,11 +9,12 @@ import {
   confirmDestructive,
   expectClosesWithoutPrompting,
   expectSheetClosed,
+  expectSkeleton,
   json,
   pending,
+  recording,
   routes,
   scoped,
-  recording,
   sheet,
   withConfirm,
 } from "./story-harness";
@@ -138,6 +139,9 @@ export const ChannelsLoading: Story = {
       <AlertChannels />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 export const ChannelsEmpty: Story = {
@@ -163,7 +167,7 @@ export const ChannelsForbidden: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByText(/alert channels need superadmin access/i),
+      await canvas.findByText(/You do not have access to alert channels/i),
     ).toBeInTheDocument();
   },
 };
@@ -280,6 +284,9 @@ export const RulesLoading: Story = {
       <AlertRules />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 export const RulesEmpty: Story = {
@@ -303,7 +310,9 @@ export const RulesForbidden: Story = {
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/alert rules need superadmin access/i)).toBeInTheDocument();
+    await expect(
+      await canvas.findByText(/You do not have access to alert rules/i),
+    ).toBeInTheDocument();
   },
 };
 
@@ -392,6 +401,19 @@ export const HistoryLoaded: Story = {
   },
 };
 
+// the delivery table is a list, so its placeholder is a header bar over row
+// bars rather than a word on one line
+export const HistoryLoading: Story = {
+  render: () => (
+    <Harness fetchStub={() => new Promise<Response>(() => {})}>
+      <AlertHistory />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
+};
+
 export const HistoryEmpty: Story = {
   render: () => (
     <Harness fetchStub={empty}>
@@ -413,7 +435,7 @@ export const HistoryForbidden: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByText(/alert history needs superadmin access/i),
+      await canvas.findByText(/You do not have access to alert history/i),
     ).toBeInTheDocument();
   },
 };

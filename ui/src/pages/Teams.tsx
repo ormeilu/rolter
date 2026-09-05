@@ -5,8 +5,10 @@ import { useTranslation } from "react-i18next";
 
 import { EditorSheet } from "@/components/EditorSheet";
 import { LoadError } from "@/components/LoadError";
+import { CardGridSkeleton } from "@/components/LoadingState";
 import { PageBody } from "@/components/screen";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { createTeam, fetchBudgets, fetchMemberships, fetchTeams } from "@/lib/api";
@@ -75,12 +77,25 @@ export default function Teams() {
         </Button>
       </div>
 
-      {teams.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {teams.isLoading && <CardGridSkeleton cards={3} height={186} min={320} />}
       {teams.error && (
         <LoadError
           error={teams.error}
           resource={t("errors.resources.teams")}
           onRetry={() => void teams.refetch()}
+        />
+      )}
+      {!teams.isLoading && !teams.error && (teams.data?.length ?? 0) === 0 && (
+        <EmptyState
+          uxTarget="teams"
+          icon={<Building />}
+          title={t("pages.teams.emptyTitle")}
+          description={t("pages.teams.emptyBody")}
+          actions={
+            <Button disabled={!scope.orgId} onClick={() => setAddOpen(true)}>
+              {t("pages.teams.emptyAction")}
+            </Button>
+          }
         />
       )}
       <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">

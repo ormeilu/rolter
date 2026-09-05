@@ -4,6 +4,8 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { LoadError } from "@/components/LoadError";
+import { CardGridSkeleton } from "@/components/LoadingState";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +14,6 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -45,14 +46,6 @@ function Dialog({ onClose, children }: { open?: boolean; onClose: () => void; ch
   return <BaseDialog open onOpenChange={(open) => !open && onClose()}>{children}</BaseDialog>;
 }
 
-function LoadingGrid({ count = 3 }: { count?: number }) {
-  return <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{Array.from({ length: count }, (_, index) => <Skeleton key={index} width="100%" height={190} radius={10} />)}</div>;
-}
-
-function QueryError({ error, retry }: { error: Error; retry: () => void }) {
-  return <div role="alert" className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-surface)] p-5"><p className="font-medium text-[color:var(--danger-text)]">MCP configuration unavailable</p><p className="mt-1 text-sm text-muted-foreground">{error.message}</p><Button className="mt-4" variant="outline" onClick={retry}>Try again</Button></div>;
-}
-
 function PageLead({ eyebrow, children, action }: { eyebrow: string; children: React.ReactNode; action?: React.ReactNode }) {
   return <div className="flex flex-col gap-4 border-b border-[color:var(--border-subtle)] pb-5 sm:flex-row sm:items-end"><div className="min-w-0 flex-1"><p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[color:var(--red-folk)]">{eyebrow}</p><div className="mt-2 text-sm leading-relaxed text-muted-foreground">{children}</div></div>{action}</div>;
 }
@@ -67,6 +60,7 @@ function ConfirmDelete({ server, pending, error, onClose, onConfirm }: { server:
 }
 
 export function McpCatalog() {
+  const { t } = useTranslation();
   const { orgId } = useScope();
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["mcp-servers", orgId], queryFn: () => fetchMcpServers(orgId as string), enabled: !!orgId, retry: false });
@@ -90,7 +84,7 @@ export function McpCatalog() {
     <PageLead eyebrow="live registry" action={<Button onClick={() => setEditing(null)}><Plus className="h-4 w-4" aria-hidden />Register server</Button>}>
       {query.data ? <><span>{live.length} enabled {live.length === 1 ? "server" : "servers"}</span>{" · "}<span>{liveTools} declared {liveTools === 1 ? "tool" : "tools"}</span></> : "Registered servers are projected into the gateway snapshot when enabled."}
     </PageLead>
-    {query.isLoading ? <LoadingGrid /> : query.error ? <QueryError error={query.error} retry={() => void query.refetch()} /> : !query.data?.length ? <EmptyState uxTarget="mcp-servers" icon={<Server />} title="No MCP servers registered" description="Register a custom endpoint or install a curated server from MCP Library." actions={<Button onClick={() => setEditing(null)}>Register server</Button>} /> : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{query.data.map((server) => <article key={server.id} className={`min-w-0 rounded-[10px] border border-[color:var(--border-default)] bg-card p-4 ${server.enabled ? "" : "opacity-60"}`}>
+    {query.isLoading ? <CardGridSkeleton cards={3} height={190} min={300} /> : query.error ? <LoadError error={query.error} resource={t("errors.resources.mcpServers")} onRetry={() => void query.refetch()} /> : !query.data?.length ? <EmptyState uxTarget="mcp-servers" icon={<Server />} title="No MCP servers registered" description="Register a custom endpoint or install a curated server from MCP Library." actions={<Button onClick={() => setEditing(null)}>Register server</Button>} /> : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{query.data.map((server) => <article key={server.id} className={`min-w-0 rounded-[10px] border border-[color:var(--border-default)] bg-card p-4 ${server.enabled ? "" : "opacity-60"}`}>
       <div className="flex items-start gap-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-subtle)]"><Server className="h-4 w-4" aria-hidden /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate font-mono text-sm font-semibold">{server.name}</h2><Badge tone={server.source === "library" ? "accent" : "neutral"}>{server.source}</Badge></div><p className="mt-1 truncate font-mono text-xs text-muted-foreground">{server.url}</p></div><Switch checked={server.enabled} aria-label={`Enable ${server.name}`} onCheckedChange={() => toggle.mutate(server)} /></div>
       <p className="mt-3 min-h-10 text-xs leading-relaxed text-muted-foreground">{server.description || "No description provided."}</p><div className="mt-3"><ToolBadges tools={server.tools} /></div>
       <div className="mt-4 flex items-center gap-2 border-t border-[color:var(--border-subtle)] pt-3"><Badge tone="info">{server.transport.replace("_", " ")}</Badge><span className="ml-auto flex gap-1"><Button variant="ghost" aria-label={`Delete ${server.name}`} onClick={() => setDeleting(server)}>Delete</Button><Button variant="outline" aria-label={`Configure ${server.name}`} onClick={() => setEditing(server)}>Configure</Button></span></div>
@@ -116,6 +110,7 @@ function ServerDialog({ initial, pending, error, onClose, onSave }: { initial: M
 }
 
 export function McpLibrary() {
+  const { t } = useTranslation();
   const { orgId } = useScope();
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["mcp-library", orgId], queryFn: () => fetchMcpLibrary(orgId as string), enabled: !!orgId, retry: false });
@@ -125,7 +120,7 @@ export function McpLibrary() {
   useErrorState(!!query.error, "mcp-library");
   const install = useMutation({ mutationFn: (item: McpLibraryItem) => createMcpServer(orgId as string, { ...item, enabled: true, source: "library" }), onSuccess: () => { void client.invalidateQueries({ queryKey: ["mcp-library", orgId] }); void client.invalidateQueries({ queryKey: ["mcp-servers", orgId] }); } });
   return <PageBody><PageLead eyebrow="curated endpoints">Install a reviewed server definition into this organization. OAuth consent remains per user; installation never stores a token.</PageLead>
-    {query.isLoading ? <LoadingGrid count={4} /> : query.error ? <QueryError error={query.error} retry={() => void query.refetch()} /> : <div className="grid gap-3 md:grid-cols-2">{query.data?.map((item) => <article key={item.slug} className="rounded-[10px] border border-[color:var(--border-default)] bg-card p-5"><div className="flex items-start gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-subtle)]"><Boxes className="h-5 w-5" aria-hidden /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="font-semibold">{item.name}</h2><Badge tone="info">{item.transport.replace("_", " ")}</Badge></div><p className="mt-1 text-sm text-muted-foreground">{item.description}</p></div></div><div className="mt-4"><ToolBadges tools={item.tools} /></div><div className="mt-5 flex items-center border-t border-[color:var(--border-subtle)] pt-4"><span className="text-xs text-muted-foreground">{item.required_scopes.length ? `${item.required_scopes.length} OAuth scopes` : "No OAuth scopes"}</span><Button className="ml-auto" variant={item.installed ? "outline" : "default"} disabled={item.installed || install.isPending} onClick={() => install.mutate(item)}>{install.isPending && install.variables?.slug === item.slug && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{item.installed ? "Installed" : "Install"}</Button></div></article>)}</div>}
+    {query.isLoading ? <CardGridSkeleton cards={4} height={190} min={300} /> : query.error ? <LoadError error={query.error} resource={t("errors.resources.mcpLibrary")} onRetry={() => void query.refetch()} /> : <div className="grid gap-3 md:grid-cols-2">{query.data?.map((item) => <article key={item.slug} className="rounded-[10px] border border-[color:var(--border-default)] bg-card p-5"><div className="flex items-start gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-subtle)]"><Boxes className="h-5 w-5" aria-hidden /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="font-semibold">{item.name}</h2><Badge tone="info">{item.transport.replace("_", " ")}</Badge></div><p className="mt-1 text-sm text-muted-foreground">{item.description}</p></div></div><div className="mt-4"><ToolBadges tools={item.tools} /></div><div className="mt-5 flex items-center border-t border-[color:var(--border-subtle)] pt-4"><span className="text-xs text-muted-foreground">{item.required_scopes.length ? `${item.required_scopes.length} OAuth scopes` : "No OAuth scopes"}</span><Button className="ml-auto" variant={item.installed ? "outline" : "default"} disabled={item.installed || install.isPending} onClick={() => install.mutate(item)}>{install.isPending && install.variables?.slug === item.slug && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{item.installed ? "Installed" : "Install"}</Button></div></article>)}</div>}
   </PageBody>;
 }
 
@@ -147,7 +142,7 @@ export function ToolGroups() {
   const [deleteTarget, setDeleteTarget] = React.useState<McpToolGroupRow | null>(null);
   const startDelete = (group: McpToolGroupRow) => { remove.reset(); setDeleteTarget(group); };
   return <PageBody><PageLead eyebrow="governed manifests" action={<Button disabled={!servers.data?.length} onClick={() => setEditing(null)}><Plus className="h-4 w-4" aria-hidden />Create group</Button>}>Bundle exact server/tool pairs into reusable policy manifests. Groups define intended access; project assignment and gateway enforcement remain separate policy work.</PageLead>
-    {groups.isLoading || servers.isLoading ? <LoadingGrid /> : groups.error ? <QueryError error={groups.error} retry={() => void groups.refetch()} /> : !groups.data?.length ? <EmptyState uxTarget="tool-groups" icon={<Puzzle />} title="No tool groups" description={servers.data?.length ? "Create a governed bundle from registered server tools." : "Register MCP servers and declare their tools before creating a group."} actions={servers.data?.length ? <Button onClick={() => setEditing(null)}>Create group</Button> : undefined} /> : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{groups.data.map((group) => <article key={group.id} className="rounded-[10px] border border-[color:var(--border-default)] bg-card p-4"><div className="flex items-center gap-2"><Puzzle className="h-4 w-4 text-[color:var(--red-folk)]" aria-hidden /><h2 className="font-semibold">{group.name}</h2><Badge className="ml-auto" tone={group.enabled ? "success" : "neutral"} dot>{group.enabled ? "enabled" : "paused"}</Badge></div><p className="mt-2 min-h-10 text-xs leading-relaxed text-muted-foreground">{group.description || "No description provided."}</p><div className="mt-3 flex flex-wrap gap-1.5">{group.tools.map((item) => <Badge key={`${item.server_id}/${item.tool}`} tone="outline">{serverName(item.server_id)}/{item.tool}</Badge>)}</div><div className="mt-4 flex justify-end gap-1 border-t border-[color:var(--border-subtle)] pt-3"><Button variant="ghost" disabled={remove.isPending && remove.variables === group.id} onClick={() => startDelete(group)}>{remove.isPending && remove.variables === group.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Delete</Button><Button variant="outline" onClick={() => setEditing(group)}>Configure</Button></div></article>)}</div>}
+    {groups.isLoading || servers.isLoading ? <CardGridSkeleton cards={3} height={190} min={300} /> : groups.error ? <LoadError error={groups.error} resource={t("errors.resources.toolGroups")} onRetry={() => void groups.refetch()} /> : !groups.data?.length ? <EmptyState uxTarget="tool-groups" icon={<Puzzle />} title="No tool groups" description={servers.data?.length ? "Create a governed bundle from registered server tools." : "Register MCP servers and declare their tools before creating a group."} actions={servers.data?.length ? <Button onClick={() => setEditing(null)}>Create group</Button> : undefined} /> : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{groups.data.map((group) => <article key={group.id} className="rounded-[10px] border border-[color:var(--border-default)] bg-card p-4"><div className="flex items-center gap-2"><Puzzle className="h-4 w-4 text-[color:var(--red-folk)]" aria-hidden /><h2 className="font-semibold">{group.name}</h2><Badge className="ml-auto" tone={group.enabled ? "success" : "neutral"} dot>{group.enabled ? "enabled" : "paused"}</Badge></div><p className="mt-2 min-h-10 text-xs leading-relaxed text-muted-foreground">{group.description || "No description provided."}</p><div className="mt-3 flex flex-wrap gap-1.5">{group.tools.map((item) => <Badge key={`${item.server_id}/${item.tool}`} tone="outline">{serverName(item.server_id)}/{item.tool}</Badge>)}</div><div className="mt-4 flex justify-end gap-1 border-t border-[color:var(--border-subtle)] pt-3"><Button variant="ghost" disabled={remove.isPending && remove.variables === group.id} onClick={() => startDelete(group)}>{remove.isPending && remove.variables === group.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Delete</Button><Button variant="outline" onClick={() => setEditing(group)}>Configure</Button></div></article>)}</div>}
     <ConfirmDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)} title={t("pages.tool-groups.confirm.title", { name: deleteTarget?.name })} description={t("pages.tool-groups.confirm.body")} confirmLabel={t("common.delete")} pending={remove.isPending} error={remove.error} onConfirm={() => deleteTarget && remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })} />
     {editing !== undefined && <ToolGroupDialog initial={editing} servers={servers.data ?? []} pending={save.isPending} error={save.error} onClose={() => setEditing(undefined)} onSave={(input) => save.mutate({ initial: editing, input })} />}
   </PageBody>;
@@ -160,6 +155,7 @@ function ToolGroupDialog({ initial, servers, pending, error, onClose, onSave }: 
 }
 
 export function McpSettings() {
+  const { t } = useTranslation();
   const { orgId } = useScope(); const client = useQueryClient();
   const query = useQuery({ queryKey: ["mcp-settings", orgId], queryFn: () => fetchMcpSettings(orgId as string), enabled: !!orgId, retry: false });
 
@@ -167,8 +163,8 @@ export function McpSettings() {
   useScreenReady(!query.isLoading);
   useErrorState(!!query.error, "mcp-settings");
   if (!orgId) return <PageBody><EmptyState uxTarget="mcp-settings-no-org" icon={<Settings2 />} title="Choose an organization" description="MCP defaults are organization scoped." /></PageBody>;
-  if (query.isLoading) return <PageBody><LoadingGrid count={2} /></PageBody>;
-  if (query.error) return <PageBody><QueryError error={query.error} retry={() => void query.refetch()} /></PageBody>;
+  if (query.isLoading) return <PageBody><CardGridSkeleton cards={2} height={190} min={300} /></PageBody>;
+  if (query.error) return <PageBody><LoadError error={query.error} resource={t("errors.resources.mcpSettings")} onRetry={() => void query.refetch()} /></PageBody>;
   return <McpSettingsForm initial={query.data as McpGatewaySettingsRow} onSaved={() => void client.invalidateQueries({ queryKey: ["mcp-settings", orgId] })} />;
 }
 

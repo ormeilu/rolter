@@ -1,11 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
+import { Building2, ScrollText } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 
 import { LoadError } from "@/components/LoadError";
+import { TableSkeleton } from "@/components/LoadingState";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, type TableColumn } from "@/components/ui/table";
@@ -15,6 +19,10 @@ import { useScope } from "@/lib/scope";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const PAGE_SIZE = 25;
+
+// "All", the widest window — anything narrower is a filter the operator chose,
+// so an empty page under it means "nothing matched" rather than "nothing yet"
+const DEFAULT_RANGE = 3;
 
 const RANGES = [
   { label: "Last 24h", hours: 24 },
@@ -87,7 +95,7 @@ export default function AuditLog() {
   const [actor, setActor] = React.useState("");
   const [action, setAction] = React.useState("");
   const [target, setTarget] = React.useState("");
-  const [rangeIdx, setRangeIdx] = React.useState(3);
+  const [rangeIdx, setRangeIdx] = React.useState(DEFAULT_RANGE);
   const [cursors, setCursors] = React.useState<string[]>([]);
   const cursor = cursors[cursors.length - 1];
 
@@ -132,6 +140,13 @@ export default function AuditLog() {
 
   const rows = page.data?.items ?? [];
   const [total, setTotal] = React.useState<number | null>(null);
+  const filtersActive = !!actor || !!action || !!target || rangeIdx !== DEFAULT_RANGE;
+  const clearFilters = () => {
+    setActor("");
+    setAction("");
+    setTarget("");
+    setRangeIdx(DEFAULT_RANGE);
+  };
   React.useEffect(() => {
     if (page.data?.total !== undefined) setTotal(page.data.total);
   }, [page.data]);
@@ -198,7 +213,6 @@ export default function AuditLog() {
 
   return (
     <PageBody>
-      {page.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {page.error && (
         <LoadError
           error={page.error}
@@ -207,9 +221,12 @@ export default function AuditLog() {
         />
       )}
       {!scope.isLoading && !scope.errorKey && !scope.orgId && (
-        <p className="text-sm text-muted-foreground">
-          No org configured yet — pick or create one to view its audit log.
-        </p>
+        <EmptyState
+          uxTarget="audit-log-no-org"
+          icon={<Building2 />}
+          title={t("pages.auditLog.noOrgTitle")}
+          description={t("pages.auditLog.noOrgBody")}
+        />
       )}
 
       {scope.orgId && (
@@ -263,16 +280,39 @@ export default function AuditLog() {
             </div>
           </div>
 
-          <Table
-            columns={columns as unknown as TableColumn<Record<string, unknown>>[]}
-            data={rows as unknown as Record<string, unknown>[]}
-            rowKey="id"
-          />
-
-          {rows.length === 0 && page.isSuccess && (
-            <p className="text-sm text-muted-foreground">
-              No entries match these filters.
-            </p>
+          {/* the placeholder lives in the table so the columns stay on screen
+              and say what a matching entry would have looked like (#1180) */}
+          {page.isLoading ? (
+            <TableSkeleton rows={6} />
+          ) : (
+            <Table
+              columns={columns as unknown as TableColumn<Record<string, unknown>>[]}
+              data={rows as unknown as Record<string, unknown>[]}
+              rowKey="id"
+              empty={
+                <EmptyState
+                  uxTarget="audit-log"
+                  icon={<ScrollText />}
+                  title={
+                    filtersActive
+                      ? t("pages.auditLog.noMatchTitle")
+                      : t("pages.auditLog.emptyTitle")
+                  }
+                  description={
+                    filtersActive
+                      ? t("pages.auditLog.noMatchBody")
+                      : t("pages.auditLog.emptyBody")
+                  }
+                  actions={
+                    filtersActive ? (
+                      <Button variant="outline" onClick={clearFilters}>
+                        {t("common.clearSearch")}
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              }
+            />
           )}
 
           {(rows.length > 0 || cursors.length > 0) && (

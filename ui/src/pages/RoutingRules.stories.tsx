@@ -6,6 +6,7 @@ import {
   Harness,
   cancelConfirmation,
   confirmDestructive,
+  expectSkeleton,
   json,
   pending,
   recording,
@@ -121,6 +122,9 @@ export const Loading: Story = {
       <RoutingRules />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 export const Empty: Story = {

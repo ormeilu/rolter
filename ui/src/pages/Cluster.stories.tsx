@@ -4,7 +4,12 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import Cluster from "./Cluster";
-import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
+import {
+  cancelConfirmation,
+  confirmDestructive,
+  expectSkeleton,
+  recording,
+} from "./story-harness";
 import type { ClusterNodeRow } from "@/lib/api";
 
 const node = (over: Partial<ClusterNodeRow> = {}): ClusterNodeRow => ({
@@ -85,6 +90,9 @@ export const Loaded: Story = {
 
 export const Loading: Story = {
   render: () => <Harness fetchStub={() => new Promise<Response>(() => {})} />,
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 // a single-node deployment that sends no identity headers reports nothing

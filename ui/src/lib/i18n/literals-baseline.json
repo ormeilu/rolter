@@ -81,12 +81,10 @@
     "Remove"
   ],
   "src/pages/AccessProfiles.tsx": [
-    "A profile bundles custom roles and a model policy, then hands the bundle to a user or a whole team.",
     "Add access profile",
     "Delete profile",
     "Description",
     "Name",
-    "No access profiles yet",
     "Read-only access to logs and analytics",
     "Slug",
     "Support engineers"
@@ -98,8 +96,6 @@
     "Cost / Mtok",
     "In flight",
     "Latency",
-    "Loading adaptive routing telemetry",
-    "No fresh adaptive routing telemetry",
     "Observed picks",
     "Reporting gateways",
     "Samples",
@@ -156,10 +152,6 @@
     "Public base URL",
     "Request ID header",
     "x-tenant-id, x-session-id"
-  ],
-  "src/pages/Cluster.tsx": [
-    "No nodes have reported in",
-    "Nodes appear here once a gateway identifies itself on its snapshot poll. A single-node deployment that sends no identity headers stays out of the inventory."
   ],
   "src/pages/Compatibility.tsx": [
     "Anthropic API Version",
@@ -258,7 +250,6 @@
     "system messages"
   ],
   "src/pages/Health.tsx": [
-    "No events in window.",
     "error budget burn"
   ],
   "src/pages/Keys.tsx": [
@@ -273,7 +264,6 @@
     "Key created",
     "Models",
     "Name",
-    "No keys found",
     "Off",
     "Response cache",
     "Search by name…",
@@ -289,7 +279,6 @@
     "Delete budget",
     "Delete rate limit",
     "Limit (USD)",
-    "No budgets for this scope.",
     "Period",
     "Rate limits",
     "Requests per minute (optional)",
@@ -343,7 +332,6 @@
     "Close MCP log details",
     "Failures",
     "Latency",
-    "No MCP tool calls in the last 24h.",
     "Request",
     "Result",
     "Server",
@@ -366,7 +354,6 @@
     "Deleting this server also removes every OAuth grant and token session attached to it. This cannot be undone.",
     "Description",
     "Endpoint URL",
-    "MCP configuration unavailable",
     "Name",
     "No MCP servers registered",
     "No tool groups",
@@ -376,13 +363,9 @@
     "Transport"
   ],
   "src/pages/McpOAuth.tsx": [
-    "A grant appears the first time a user completes the OAuth flow for an MCP server. Nothing is created here — consent is only ever given by the user.",
-    "A session is minted when a user",
     "Expires",
     "Granted",
     "Last used",
-    "No consent granted yet",
-    "No sessions yet",
     "Owner",
     "Revoke consent",
     "Scopes",
@@ -451,7 +434,6 @@
     "Delete price",
     "Input price per Mtok",
     "Model name",
-    "No model prices set yet.",
     "Output price per Mtok",
     "Prices are per million tokens (Mtok); saving upserts by model name.",
     "Save",
@@ -499,9 +481,7 @@
   "src/pages/UserProvisioning.tsx": [
     "Copy provisioning token",
     "Done",
-    "Issue a token, paste it into your identity provider",
     "Name",
-    "No provisioning tokens yet",
     "Okta production",
     "Revoke provisioning token",
     "never used"
@@ -520,7 +500,6 @@
     "Invite user",
     "Method",
     "New password",
-    "No users match.",
     "Org role",
     "Password (optional)",
     "Project id",

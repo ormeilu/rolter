@@ -38,7 +38,8 @@
     "aboutField": "About {{label}}",
     "copyFailed": "Copy failed — the clipboard is unavailable on this page",
     "copyValue": "{{label}}: {{value}}",
-    "moreInfo": "More info"
+    "moreInfo": "More info",
+    "loading": "Loading…"
   },
   "errors": {
     "load": {
@@ -93,7 +94,33 @@
       "analytics": "analytics",
       "requestLogs": "request logs",
       "routes": "routes",
-      "teams": "teams"
+      "teams": "teams",
+      "accessProfiles": "access profiles",
+      "adaptiveSettings": "adaptive routing settings",
+      "adaptiveTelemetry": "adaptive routing telemetry",
+      "alertChannels": "alert channels",
+      "alertHistory": "alert history",
+      "alertRules": "alert rules",
+      "authSessions": "auth sessions",
+      "businessUnits": "business units",
+      "clientSettings": "client settings",
+      "clusterNodes": "cluster nodes",
+      "compatibilitySettings": "compatibility settings",
+      "connectors": "connectors",
+      "customers": "customers",
+      "featureFlags": "feature flags",
+      "logsSettings": "logs settings",
+      "mcpLibrary": "the MCP library",
+      "mcpLogDetail": "this MCP tool call",
+      "mcpLogs": "MCP tool-call logs",
+      "mcpServers": "MCP servers",
+      "mcpSettings": "MCP settings",
+      "modelSettings": "model settings",
+      "oauthGrants": "OAuth grants",
+      "performanceSettings": "performance settings",
+      "roleMembers": "role membership counts",
+      "securitySettings": "security settings",
+      "toolGroups": "tool groups"
     }
   },
   "locale": {
@@ -204,12 +231,16 @@
         "filter": "Unpriced",
         "badge": "no price set",
         "hint": "This model has no price row, so its traffic is recorded as unpriced rather than free. Its spend is missing from totals and budgets until a price is set."
-      }
+      },
+      "emptyTitle": "No models yet",
+      "emptyBody": "A model is the public name clients call. Add one and point it at a provider, or ship it in the config file.",
+      "emptyAction": "Add model",
+      "noMatchTitle": "No models match",
+      "noMatchBody": "Nothing matched the search and origin filters you have on."
     },
     "providers": {
       "search": "Search providers",
       "add": "+ Add provider",
-      "loading": "Loading…",
       "scopeBlocked": "Add/edit/delete is unavailable: {{error}}. Read-only view still works.",
       "noOrg": "No org configured yet — pick or create one to manage providers.",
       "colName": "Name",
@@ -222,7 +253,11 @@
       "deleteTitle": "Delete provider",
       "deleteOne": "Delete provider {{name}}",
       "noMatch": "No providers match.",
-      "deleteHint": "<0>{{name}}</0> will stop being usable as a route target. This cannot be undone."
+      "deleteHint": "<0>{{name}}</0> will stop being usable as a route target. This cannot be undone.",
+      "emptyTitle": "No providers yet",
+      "emptyBody": "A provider is an upstream the gateway can route to. Add one with its API base and credential to start serving traffic.",
+      "noMatchBody": "Nothing matched your search. Clear it to see every provider in this organization.",
+      "noOrgTitle": "Choose an organization"
     },
     "plugins": {
       "eyebrow": "Pipeline workbench",
@@ -305,10 +340,16 @@
         "confirm": "Delete route"
       },
       "targetCount_one": "{{count}} target",
-      "targetCount_other": "{{count}} targets"
+      "targetCount_other": "{{count}} targets",
+      "emptyTitle": "No routes yet",
+      "emptyBody": "A route is the public model name clients call, resolved to one or more upstream targets by its strategy.",
+      "emptyAction": "Add route"
     },
     "pricing": {
-      "unconvertible": "Priced in {{code}}, which has no conversion rate — this model's spend is missing from {{base}} totals and budgets."
+      "unconvertible": "Priced in {{code}}, which has no conversion rate — this model's spend is missing from {{base}} totals and budgets.",
+      "emptyTitle": "No model prices set",
+      "emptyBody": "Without a price a model's traffic is recorded as unpriced, so its spend is missing from totals and budgets.",
+      "emptyAction": "Add price"
     },
     "playground": {
       "groupRoutes": "Routes",
@@ -534,7 +575,12 @@
     "virtualKeys": {
       "explainer": "Virtual keys are the credential clients send to the gateway (sk-rolter-…). Provider keys — the credentials your providers issued to rolter — live on the Providers screen and are never sent by clients.",
       "expiresOn": "expires {{date}}",
-      "noExpiry": "no expiry"
+      "noExpiry": "no expiry",
+      "emptyTitle": "No virtual keys yet",
+      "emptyBody": "A virtual key is the credential your applications send to the gateway. Create one to start authenticating them.",
+      "emptyAction": "Add virtual key",
+      "noMatchTitle": "No keys match",
+      "noMatchBody": "Nothing matched your search. Clear it to see every key in this project."
     },
     "acceptInvite": {
       "invalidLink": "This invitation link is not valid. It may have been used, revoked, or expired — ask whoever invited you for a new one.",
@@ -561,7 +607,8 @@
       },
       "history": {
         "emptyTitle": "No alerts delivered yet",
-        "emptyBody": "Every notification a rule sends to a channel is recorded here, newest first."
+        "emptyBody": "Every notification a rule sends to a channel is recorded here, newest first.",
+        "emptyAction": "Open alert rules"
       },
       "confirm": {
         "channelTitle": "Delete channel {{name}}?",
@@ -578,7 +625,10 @@
         "body": "Request logs stop being shipped to this endpoint immediately, and its delivery history goes with it.",
         "confirm": "Delete connector"
       },
-      "checkedAt": "checked {{time}}"
+      "checkedAt": "checked {{time}}",
+      "emptyTitle": "No connectors yet",
+      "emptyBody": "Add an OTLP/HTTP collector and request logs are mirrored to it — Datadog, Langfuse, or your own stack.",
+      "emptyAction": "Add connector"
     },
     "accessProfiles": {
       "confirm": {
@@ -589,7 +639,10 @@
       "userCount_one": "{{count}} user",
       "userCount_other": "{{count}} users",
       "teamCount_one": "{{count}} team",
-      "teamCount_other": "{{count}} teams"
+      "teamCount_other": "{{count}} teams",
+      "emptyTitle": "No access profiles yet",
+      "emptyBody": "A profile bundles custom roles and a model policy, then hands the bundle to a user or a whole team.",
+      "emptyAction": "Add profile"
     },
     "mcpOAuth": {
       "confirm": {
@@ -600,21 +653,33 @@
       "liveShort_one": "{{count}} live",
       "liveShort_other": "{{count}} live",
       "liveSessions_one": "{{count}} live session",
-      "liveSessions_other": "{{count}} live sessions"
+      "liveSessions_other": "{{count}} live sessions",
+      "noOrgTitle": "Choose an organization",
+      "noOrgBody": "{{resource}} are scoped to one organization. Pick or create one to view them.",
+      "grantsEmptyTitle": "No consent granted yet",
+      "grantsEmptyBody": "A grant appears the first time a user completes the OAuth flow for an MCP server. Nothing is created here — consent is only ever given by the user.",
+      "sessionsEmptyTitle": "No sessions yet",
+      "sessionsEmptyBody": "A session is minted when a user's consent is exchanged for a token. Grant an MCP server access from a client to see one here."
     },
     "cluster": {
       "confirm": {
         "title": "Forget node {{id}}?",
         "body": "The node is dropped from the inventory. If it is still running it reappears on its next snapshot poll.",
         "confirm": "Forget node"
-      }
+      },
+      "emptyTitle": "No nodes have reported in",
+      "emptyBody": "Nodes appear here once a gateway identifies itself on its snapshot poll. A single-node deployment that sends no identity headers stays out of the inventory."
     },
     "costAttribution": {
       "confirm": {
         "title": "Delete {{name}}?",
         "unitBody": "The business unit is removed outright and the spend already attributed to it loses its label. Retire it instead to keep the history.",
         "customerBody": "The customer is removed outright and the spend already attributed to it loses its label. Retire it instead to keep the history."
-      }
+      },
+      "unitEmptyTitle": "No business units yet",
+      "unitEmptyBody": "Business units roll teams up so spend can be attributed to the part of the organisation that incurred it.",
+      "customerEmptyTitle": "No customers yet",
+      "customerEmptyBody": "Customers attribute usage and spend to the people you serve, so it can be billed on or reported per account."
     },
     "guardrailRules": {
       "confirm": {
@@ -630,14 +695,18 @@
     },
     "adaptiveDashboard": {
       "reportingGateways_one": "{{count}} reporting gateway",
-      "reportingGateways_other": "{{count}} reporting gateways"
+      "reportingGateways_other": "{{count}} reporting gateways",
+      "emptyTitle": "No fresh adaptive routing telemetry",
+      "emptyBody": "A gateway appears here after it serves a route on the adaptive strategy and reports to the control plane. Reports older than {{seconds}} seconds are hidden.",
+      "emptyAction": "Review routing rules"
     },
     "govTeams": {
       "created": "created {{date}}"
     },
     "rbac": {
       "memberCount_one": "{{count}} member",
-      "memberCount_other": "{{count}} members"
+      "memberCount_other": "{{count}} members",
+      "membersUnknown": "members unknown"
     },
     "sso": {
       "policy": {
@@ -723,6 +792,74 @@
           "confirm": "Remove mapping"
         }
       }
+    },
+    "auditLog": {
+      "emptyTitle": "No audit entries yet",
+      "emptyBody": "Every change made through the control plane is recorded here — who did it, to what, and when.",
+      "noMatchTitle": "No entries match these filters",
+      "noMatchBody": "Nothing in the selected window matched the actor, action and target you picked.",
+      "noOrgTitle": "Choose an organization",
+      "noOrgBody": "The audit log is scoped to one organization. Pick or create one to view its history."
+    },
+    "complexityRouter": {
+      "emptyTitle": "No routes to give a policy",
+      "emptyBody": "A complexity policy hangs off a route, so create a route first — its input-size tiers are set from here afterwards.",
+      "emptyAction": "Open routing rules",
+      "noPolicyYet": "No policy yet"
+    },
+    "health": {
+      "emptyTitle": "No health events recorded yet",
+      "emptyBody": "Uptime, MTTR and error-budget burn are computed from real traffic. Send a request through the gateway and the first rollup lands here.",
+      "emptyAction": "Open the playground",
+      "noEvents": "No events in window."
+    },
+    "limits": {
+      "budgetsEmptyTitle": "No budgets for this scope",
+      "budgetsEmptyBody": "A budget caps spend for the selected org, team, project or key over a period, and stops requests once it is reached.",
+      "budgetsEmptyAction": "Add budget",
+      "rateLimitsEmptyTitle": "No rate limits for this scope",
+      "rateLimitsEmptyBody": "A rate limit caps requests and tokens per minute for the selected scope, so one client cannot starve the rest.",
+      "rateLimitsEmptyAction": "Add rate limit"
+    },
+    "logs": {
+      "emptyTitle": "Nothing logged yet",
+      "emptyBody": "Every request the gateway serves is recorded here with its model, latency, tokens and cost.",
+      "noMatchTitle": "No requests match these filters",
+      "noMatchBody": "Nothing in the last 24 hours matched the status and models you selected."
+    },
+    "mcpLogs": {
+      "emptyTitle": "No MCP tool calls yet",
+      "emptyBody": "Every tool call the gateway proxies to an MCP server lands here, with its arguments and result redacted to policy.",
+      "noMatchTitle": "No calls match these filters",
+      "noMatchBody": "Nothing in this window matched the status and transport you selected."
+    },
+    "providerGroups": {
+      "emptyTitle": "No provider groups yet",
+      "emptyBody": "A group balances one address across several providers, so clients call the group instead of picking a provider themselves.",
+      "emptyAction": "Add group",
+      "noMatchTitle": "No provider groups match",
+      "noMatchBody": "Nothing matched your search. Clear it to see every group in this organization.",
+      "noOrgTitle": "Choose an organization",
+      "noOrgBody": "Provider groups are scoped to one organization. Pick or create one to manage them."
+    },
+    "teams": {
+      "emptyTitle": "No teams yet",
+      "emptyBody": "A team groups users so a budget and a set of projects can be shared across them.",
+      "emptyAction": "New team"
+    },
+    "userProvisioning": {
+      "emptyTitle": "No provisioning tokens yet",
+      "emptyBody": "Issue a token, paste it into your identity provider's SCIM connector, and it syncs users into this organization. The token is shown once, at creation.",
+      "emptyAction": "Issue token"
+    },
+    "users": {
+      "emptyTitle": "No users yet",
+      "emptyBody": "Invite someone by email and they can sign in, take a role, and be added to teams.",
+      "emptyAction": "Invite user",
+      "noMatchTitle": "No users match",
+      "noMatchBody": "Nothing matched your search and the status tab you are on.",
+      "noOrgTitle": "Choose an organization",
+      "noOrgBody": "Users are managed per organization. Pick or create one to see its members."
     }
   },
   "playground": {

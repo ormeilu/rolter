@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Filter, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Filter, ScrollText, X } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
@@ -10,7 +10,9 @@ import {
   FilterSection,
 } from "@/components/ui/filter-panel";
 import { LoadError } from "@/components/LoadError";
+import { ListSkeleton } from "@/components/LoadingState";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   AnalyticsUnavailableError,
   fetchInvocations,
@@ -115,6 +117,10 @@ export default function Logs() {
   const cost = (row: InvocationRow) =>
     isUnpriced(row) ? null : fmt.currency(num(row.cost_usd), currency);
   const filterCount = (status === "all" ? 0 : 1) + modelSel.length;
+  const clearFilters = () => {
+    setStatus("all");
+    setModelSel([]);
+  };
 
   if (isUnavailable(query.error)) {
     return (
@@ -312,10 +318,27 @@ export default function Logs() {
               />
             </div>
           )}
+          {/* the screen had no loading indicator at all, so a slow clickhouse
+              read looked like a deployment with no traffic (#1180) */}
+          {query.isLoading && (
+            <div className="p-3">
+              <ListSkeleton rows={8} />
+            </div>
+          )}
           {!query.isLoading && !query.error && rows.length === 0 && (
-            <p className="px-4 py-10 text-center text-sm text-muted-foreground">
-              {t("analytics.noRowsYet")}
-            </p>
+            <EmptyState
+              uxTarget="request-logs"
+              icon={<ScrollText />}
+              title={filterCount ? t("pages.logs.noMatchTitle") : t("pages.logs.emptyTitle")}
+              description={filterCount ? t("pages.logs.noMatchBody") : t("pages.logs.emptyBody")}
+              actions={
+                filterCount ? (
+                  <Button variant="outline" onClick={clearFilters}>
+                    {t("common.clearSearch")}
+                  </Button>
+                ) : undefined
+              }
+            />
           )}
         </div>
       </div>

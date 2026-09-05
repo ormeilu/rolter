@@ -1,8 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
+import { HeartPulse } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { LoadError } from "@/components/LoadError";
+import { CardGridSkeleton } from "@/components/LoadingState";
 import { PageBody } from "@/components/screen";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   fetchHealthTimeline,
   fetchMttr,
@@ -25,8 +28,9 @@ function mttrLabel(fmt: Formatters, seconds: number | undefined): string {
 
 // one thin bar per time bucket: red if any failure landed in it, else green
 function Timeline({ buckets }: { buckets: TimelineRow[] }) {
+  const { t } = useTranslation();
   if (buckets.length === 0) {
-    return <p className="text-xs text-muted-foreground">No events in window.</p>;
+    return <span className="text-xs text-muted-foreground">{t("pages.health.noEvents")}</span>;
   }
   return (
     <div className="flex h-8 items-end gap-px">
@@ -89,7 +93,7 @@ export default function Health() {
           {pct(fmt, SLA)}
         </span>
       </div>
-      {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {isLoading && <CardGridSkeleton cards={4} height={218} min={340} />}
       {error && (
         <LoadError
           error={error}
@@ -102,9 +106,22 @@ export default function Health() {
         />
       )}
       {!isLoading && !error && (uptime.data?.length ?? 0) === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No health events recorded yet.
-        </p>
+        // health rollups are a by-product of traffic, so there is nothing to
+        // create here — the honest CTA is the one that produces an event
+        <EmptyState
+          uxTarget="health-rollups"
+          icon={<HeartPulse />}
+          title={t("pages.health.emptyTitle")}
+          description={t("pages.health.emptyBody")}
+          actions={
+            <a
+              href="/playground"
+              className="text-sm font-medium text-foreground underline decoration-[color:var(--border-strong)] underline-offset-4 transition-colors hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {t("pages.health.emptyAction")}
+            </a>
+          }
+        />
       )}
       <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]">
         {uptime.data?.map((row) => {

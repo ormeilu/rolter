@@ -1,0 +1,127 @@
+import type { Meta, StoryObj } from "@storybook/react";
+import { expect, userEvent, waitFor, within } from "storybook/test";
+
+import ProviderGroups from "./ProviderGroups";
+import {
+  Harness,
+  expectEmptyState,
+  expectLoadError,
+  expectSkeleton,
+  json,
+  pending,
+  routes,
+  scoped,
+} from "./story-harness";
+import type { ProviderGroupRow } from "@/lib/api";
+
+const GROUPS: ProviderGroupRow[] = [
+  {
+    id: "g-1",
+    org_id: "org-1",
+    name: "frontier",
+    slug: "frontier",
+    strategy: "least_load",
+    created_at: "2026-03-01T00:00:00Z",
+    members: [
+      { group_id: "g-1", provider_id: "p-1", provider_name: "openai-prod", weight: 3, position: 0 },
+      { group_id: "g-1", provider_id: "p-2", provider_name: "anthropic-eu", weight: 1, position: 1 },
+    ],
+  },
+];
+
+const loaded = routes([
+  ["/provider-groups", () => GROUPS],
+  ["/providers", () => []],
+]);
+
+const meta = {
+  title: "Screens/ProviderGroups",
+  component: ProviderGroups,
+  parameters: { layout: "fullscreen" },
+} satisfies Meta<typeof ProviderGroups>;
+
+export default meta;
+type Story = StoryObj<typeof meta>;
+
+export const Loaded: Story = {
+  render: () => (
+    <Harness fetchStub={loaded}>
+      <ProviderGroups />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("frontier")).toBeVisible());
+    await expect(canvas.getByText("openai-prod ·3")).toBeVisible();
+  },
+};
+
+export const Loading: Story = {
+  render: () => (
+    <Harness fetchStub={pending}>
+      <ProviderGroups />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
+};
+
+/**
+ * The bug #1180 names outright: with no search running the screen still said
+ * "No provider groups match.", blaming a filter the operator never set. The
+ * copy now depends on whether a query is active, and only the search-driven
+ * branch offers to clear one.
+ */
+export const Empty: Story = {
+  render: () => (
+    <Harness fetchStub={routes([["/provider-groups", () => []]])}>
+      <ProviderGroups />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expectEmptyState(canvasElement, /No provider groups yet/, /Add group/);
+    await expect(canvas.queryByText(/No provider groups match/)).not.toBeInTheDocument();
+  },
+};
+
+export const NoSearchMatch: Story = {
+  render: () => (
+    <Harness fetchStub={loaded}>
+      <ProviderGroups />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("frontier")).toBeVisible());
+    await userEvent.type(canvas.getByLabelText("Search provider groups"), "zzz");
+    await waitFor(() =>
+      expect(canvas.getByText(/No provider groups match/)).toBeVisible(),
+    );
+    await expect(canvas.getByRole("button", { name: /Clear search/i })).toBeInTheDocument();
+  },
+};
+
+export const Error_: Story = {
+  name: "Error",
+  render: () => (
+    <Harness fetchStub={scoped(async () => json({ error: { message: "boom" } }, 500))}>
+      <ProviderGroups />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await expectLoadError(canvasElement, /failed to return provider groups/i);
+  },
+};
+
+export const Forbidden: Story = {
+  render: () => (
+    <Harness fetchStub={scoped(async () => json({ error: { message: "forbidden" } }, 403))}>
+      <ProviderGroups />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await expectLoadError(canvasElement, /You do not have access to provider groups/);
+  },
+};

@@ -4,6 +4,7 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { LoadError } from "@/components/LoadError";
+import { TableSkeleton } from "@/components/LoadingState";
 import { CopyButton } from "@/components/CopyButton";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +20,6 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetBody, SheetFooter, SheetHeader } from "@/components/ui/sheet";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Table, type TableColumn } from "@/components/ui/table";
 import {
   createScimToken,
@@ -141,8 +141,7 @@ export default function UserProvisioning() {
   if (scope.isLoading || (tokens.isLoading && !!orgId)) {
     return (
       <PageBody>
-        <Skeleton className="h-9 w-[260px] rounded-md" />
-        <Skeleton className="h-[220px] rounded-lg" />
+        <TableSkeleton rows={4} />
       </PageBody>
     );
   }
@@ -184,20 +183,26 @@ export default function UserProvisioning() {
         <p className="text-sm text-destructive">{(revoke.error as Error).message}</p>
       )}
 
-      {!forbidden &&
-        (rows.length === 0 ? (
-          <EmptyState uxTarget="provisioning-list"
-            icon={<BookUser />}
-            title="No provisioning tokens yet"
-            description="Issue a token, paste it into your identity provider's SCIM connector, and it will sync users into this org. The token is shown once, at creation."
-          />
-        ) : (
-          <Table
-            columns={columns}
-            data={rows as (ScimTokenRow & Record<string, unknown>)[]}
-            rowKey="id"
-          />
-        ))}
+      {!forbidden && (
+        <Table
+          columns={columns}
+          data={rows as (ScimTokenRow & Record<string, unknown>)[]}
+          rowKey="id"
+          empty={
+            <EmptyState
+              uxTarget="provisioning-list"
+              icon={<BookUser />}
+              title={t("pages.userProvisioning.emptyTitle")}
+              description={t("pages.userProvisioning.emptyBody")}
+              actions={
+                <Button disabled={!canManage} onClick={() => setIssueOpen(true)}>
+                  {t("pages.userProvisioning.emptyAction")}
+                </Button>
+              }
+            />
+          }
+        />
+      )}
 
       {orgId && (
         <IssueTokenSheet

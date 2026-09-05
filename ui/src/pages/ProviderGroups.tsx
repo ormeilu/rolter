@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Trash2 } from "lucide-react";
+import { Building2, Layers, Loader2, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
@@ -8,6 +8,7 @@ import {
   type ProviderGroupSheetMode,
 } from "@/components/ProviderGroupSheet";
 import { LoadError } from "@/components/LoadError";
+import { ListSkeleton } from "@/components/LoadingState";
 import { CopyButton } from "@/components/CopyButton";
 import {
   ListHeader,
@@ -20,6 +21,7 @@ import {
 } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   Dialog,
   DialogDescription,
@@ -115,7 +117,6 @@ export default function ProviderGroups() {
         </Button>
       </div>
 
-      {groups.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {groups.error && (
         <LoadError
           error={groups.error}
@@ -129,9 +130,12 @@ export default function ProviderGroups() {
         </p>
       )}
       {!scope.isLoading && !scope.errorKey && !scope.orgId && (
-        <p className="text-sm text-muted-foreground">
-          No org configured yet — pick or create one to manage provider groups.
-        </p>
+        <EmptyState
+          uxTarget="provider-groups-no-org"
+          icon={<Building2 />}
+          title={t("pages.providerGroups.noOrgTitle")}
+          description={t("pages.providerGroups.noOrgBody")}
+        />
       )}
 
       <ListTable>
@@ -152,6 +156,7 @@ export default function ProviderGroups() {
           />
           <span />
         </ListHeader>
+        {groups.isLoading && <ListSkeleton rows={4} className="p-3" />}
         {rows.map((group) => (
           <ListRow key={group.id} grid={GRID}>
             <span className="truncate font-mono text-sm">{group.name}</span>
@@ -202,9 +207,30 @@ export default function ProviderGroups() {
           </ListRow>
         ))}
         {!groups.isLoading && rows.length === 0 && (
-          <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-            No provider groups match.
-          </p>
+          // the old copy said "No provider groups match." with no search
+          // running, which blames a filter the operator never set (#1180)
+          <EmptyState
+            uxTarget="provider-groups"
+            icon={<Layers />}
+            title={q ? t("pages.providerGroups.noMatchTitle") : t("pages.providerGroups.emptyTitle")}
+            description={
+              q ? t("pages.providerGroups.noMatchBody") : t("pages.providerGroups.emptyBody")
+            }
+            actions={
+              q ? (
+                <Button variant="outline" onClick={() => setSearch("")}>
+                  {t("common.clearSearch")}
+                </Button>
+              ) : (
+                <Button
+                  disabled={scopeBlocked || !scope.orgId}
+                  onClick={() => setSheet({ mode: "add" })}
+                >
+                  {t("pages.providerGroups.emptyAction")}
+                </Button>
+              )
+            }
+          />
         )}
       </ListTable>
 

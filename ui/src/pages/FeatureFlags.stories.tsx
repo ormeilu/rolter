@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import FeatureFlags from "./FeatureFlags";
+import { expectSkeleton } from "./story-harness";
 import type { FeatureFlagsDto } from "@/lib/api";
 
 const BASE: FeatureFlagsDto = {
@@ -65,6 +66,9 @@ export const Loaded: Story = {
 // the request never settles, so the skeleton stays up
 export const Loading: Story = {
   render: () => <Harness fetchStub={() => new Promise<Response>(() => {})} />,
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 // a non-superadmin principal gets 403; the screen says why rather than

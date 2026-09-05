@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
+import { PanelSkeleton } from "@/components/LoadingState";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
   fetchRuntimePolicy,
@@ -83,6 +85,7 @@ function validate(form: FormState): string | null {
 // covers upstream retries, timeouts and the bounded admission queue every
 // provider gets its own instance of
 export default function Performance() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const policy = useQuery({
     queryKey: ["runtime-policy"],
@@ -127,18 +130,19 @@ export default function Performance() {
   if (policy.isLoading) {
     return (
       <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
-        {[0, 1, 2].map((i) => (
-          <Skeleton key={i} className="h-[132px] rounded-[10px]" />
-        ))}
+        <PanelSkeleton panels={3} height={132} />
       </div>
     );
   }
   if (policy.isError) {
     return (
-      <p className="p-[22px] text-sm text-muted-foreground">
-        Performance tuning needs superadmin access:{" "}
-        {(policy.error as Error).message}
-      </p>
+      <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
+        <LoadError
+          error={policy.error}
+          resource={t("errors.resources.performanceSettings")}
+          onRetry={() => void policy.refetch()}
+        />
+      </div>
     );
   }
   if (!form) return null;

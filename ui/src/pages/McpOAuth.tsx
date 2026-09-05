@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Loader2, Shield, ShieldOff } from "lucide-react";
+import { Building2, KeyRound, Loader2, Shield, ShieldOff } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { LoadError } from "@/components/LoadError";
+import { TableSkeleton } from "@/components/LoadingState";
 import {
   ListHeader,
   ListRow,
@@ -22,7 +24,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   fetchMcpGrants,
   fetchMcpServers,
@@ -123,29 +124,38 @@ function Scopes({ scopes }: { scopes: string[] }) {
   );
 }
 
-function ForbiddenNote({ noun, error }: { noun: string; error: Error }) {
-  return (
-    <p className="text-sm text-muted-foreground">
-      You do not have access to this org&apos;s {noun}: {error.message}
-    </p>
-  );
+// both screens are org-scoped reads of the same shape, so the three states are
+// shared. `resource` is the already-translated noun LoadError interpolates
+function ForbiddenNote({
+  resource,
+  error,
+  onRetry,
+}: {
+  resource: string;
+  error: unknown;
+  onRetry: () => void;
+}) {
+  return <LoadError error={error} resource={resource} onRetry={onRetry} />;
 }
 
 function LoadingBody() {
   return (
     <PageBody>
-      <Skeleton className="h-9 w-[320px] rounded-md" />
-      <Skeleton className="h-[220px] rounded-lg" />
+      <TableSkeleton rows={5} />
     </PageBody>
   );
 }
 
-function NoOrgNote({ noun }: { noun: string }) {
+function NoOrgNote({ resource }: { resource: string }) {
+  const { t } = useTranslation();
   return (
     <PageBody>
-      <p className="text-sm text-muted-foreground">
-        No org configured yet — pick or create one to view its {noun}.
-      </p>
+      <EmptyState
+        uxTarget="mcp-oauth-no-org"
+        icon={<Building2 />}
+        title={t("pages.mcpOAuth.noOrgTitle")}
+        description={t("pages.mcpOAuth.noOrgBody", { resource })}
+      />
     </PageBody>
   );
 }
@@ -189,7 +199,8 @@ export function OAuthGrants() {
     return counts;
   }, [now, sessions.data]);
 
-  if (!scope.isLoading && !scope.orgId) return <NoOrgNote noun="OAuth grants" />;
+  if (!scope.isLoading && !scope.orgId)
+    return <NoOrgNote resource={t("errors.resources.oauthGrants")} />;
   if (grants.isLoading || scope.isLoading) return <LoadingBody />;
 
   const rows = grants.data ?? [];
@@ -205,7 +216,11 @@ export function OAuthGrants() {
       </TokenNotice>
 
       {grants.isError ? (
-        <ForbiddenNote noun="OAuth grants" error={grants.error as Error} />
+        <ForbiddenNote
+          resource={t("errors.resources.oauthGrants")}
+          error={grants.error}
+          onRetry={() => void grants.refetch()}
+        />
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-3">
@@ -221,10 +236,13 @@ export function OAuthGrants() {
           <ScopeNote noun="grant" />
 
           {rows.length === 0 ? (
-            <EmptyState uxTarget="oauth-grants"
+            // deliberately actionless: consent is only ever given by the user
+            // from a client, so there is no button here that could produce one
+            <EmptyState
+              uxTarget="oauth-grants"
               icon={<Shield />}
-              title="No consent granted yet"
-              description="A grant appears the first time a user completes the OAuth flow for an MCP server. Nothing is created here — consent is only ever given by the user."
+              title={t("pages.mcpOAuth.grantsEmptyTitle")}
+              description={t("pages.mcpOAuth.grantsEmptyBody")}
             />
           ) : (
             <ListTable>
@@ -377,7 +395,8 @@ export function AuthSessions() {
     return map;
   }, [grants.data]);
 
-  if (!scope.isLoading && !scope.orgId) return <NoOrgNote noun="auth sessions" />;
+  if (!scope.isLoading && !scope.orgId)
+    return <NoOrgNote resource={t("errors.resources.authSessions")} />;
   if (sessions.isLoading || scope.isLoading) return <LoadingBody />;
 
   const rows = sessions.data ?? [];
@@ -392,7 +411,11 @@ export function AuthSessions() {
       </TokenNotice>
 
       {sessions.isError ? (
-        <ForbiddenNote noun="auth sessions" error={sessions.error as Error} />
+        <ForbiddenNote
+          resource={t("errors.resources.authSessions")}
+          error={sessions.error}
+          onRetry={() => void sessions.refetch()}
+        />
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-3">
@@ -408,10 +431,11 @@ export function AuthSessions() {
           <ScopeNote noun="session" />
 
           {rows.length === 0 ? (
-            <EmptyState uxTarget="auth-sessions"
+            <EmptyState
+              uxTarget="auth-sessions"
               icon={<KeyRound />}
-              title="No sessions yet"
-              description="A session is minted when a user's consent is exchanged for a token. Grant an MCP server access from a client to see one here."
+              title={t("pages.mcpOAuth.sessionsEmptyTitle")}
+              description={t("pages.mcpOAuth.sessionsEmptyBody")}
             />
           ) : (
             <ListTable>

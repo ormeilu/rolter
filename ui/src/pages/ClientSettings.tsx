@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Plus, Trash2 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
+import { PanelSkeleton } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   fetchClientSettings,
   updateClientSettings,
@@ -86,6 +88,7 @@ function validate(form: FormState, reserved: string[]): string | null {
 // (superadmin only): the base URL the dashboard hands out, and what the gateway
 // does with headers on the upstream leg
 export default function ClientSettings() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const settings = useQuery({
     queryKey: ["client-settings"],
@@ -128,17 +131,19 @@ export default function ClientSettings() {
   if (settings.isLoading) {
     return (
       <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
-        {[0, 1, 2].map((i) => (
-          <Skeleton key={i} className="h-[148px] rounded-[10px]" />
-        ))}
+        <PanelSkeleton panels={3} height={148} />
       </div>
     );
   }
   if (settings.isError) {
     return (
-      <p className="p-[22px] text-sm text-muted-foreground">
-        Client settings need superadmin access: {(settings.error as Error).message}
-      </p>
+      <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
+        <LoadError
+          error={settings.error}
+          resource={t("errors.resources.clientSettings")}
+          onRetry={() => void settings.refetch()}
+        />
+      </div>
     );
   }
   if (!form || !settings.data) return null;

@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
+import { PanelSkeleton } from "@/components/LoadingState";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -74,6 +76,7 @@ function validate(form: FormState): string | null {
 // only). controls how much traffic is sampled, whether raw payloads are
 // captured, what is redacted from them, and how long each is kept (#537)
 export default function LogsSettings() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const settings = useQuery({
     queryKey: ["logging-settings"],
@@ -116,18 +119,19 @@ export default function LogsSettings() {
   if (settings.isLoading) {
     return (
       <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
-        {[0, 1, 2, 3].map((i) => (
-          <Skeleton key={i} className="h-[104px] rounded-[10px]" />
-        ))}
+        <PanelSkeleton panels={4} height={104} />
       </div>
     );
   }
   if (settings.isError) {
     return (
-      <p className="p-[22px] text-sm text-muted-foreground">
-        Logs settings need superadmin access:{" "}
-        {(settings.error as Error).message}
-      </p>
+      <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
+        <LoadError
+          error={settings.error}
+          resource={t("errors.resources.logsSettings")}
+          onRetry={() => void settings.refetch()}
+        />
+      </div>
     );
   }
   if (!form) return null;
