@@ -13,7 +13,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, type TableColumn } from "@/components/ui/table";
-import { fetchAuditLogPage, type AuditLogEntry } from "@/lib/api";
+import { fetchAuditLogPage, fetchUsers, type AuditLogEntry } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
@@ -107,6 +107,14 @@ export default function AuditLog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeIdx, cursor]);
 
+  // the org's accounts, so the actor column can say who rather than the first
+  // eight hex digits of a uuid, and the actor filter can be picked by e-mail
+  const users = useQuery({
+    queryKey: ["users", scope.orgId],
+    queryFn: () => fetchUsers(scope.orgId as string),
+    enabled: !!scope.orgId,
+  });
+  const emailOf = (id: string) => users.data?.find((u) => u.id === id)?.email;
   const actorParam = UUID_RE.test(actor.trim()) ? actor.trim() : undefined;
 
   const page = useQuery({
@@ -162,7 +170,12 @@ export default function AuditLog() {
       key: "actor_user_id",
       header: "Actor",
       mono: true,
-      render: (v) => (v ? String(v).slice(0, 8) : "system"),
+      render: (v) =>
+        v ? (
+          <span title={String(v)}>{emailOf(String(v)) ?? String(v).slice(0, 8)}</span>
+        ) : (
+          "system"
+        ),
     },
     {
       key: "action",
@@ -232,12 +245,29 @@ export default function AuditLog() {
       {scope.orgId && (
         <>
           <div className="flex flex-wrap items-center gap-2">
-            <Input
-              className="w-[280px] font-mono text-xs"
-              placeholder="Actor user id (full UUID)…"
-              value={actor}
-              onChange={(e) => setActor(e.target.value)}
-            />
+            {users.data && users.data.length > 0 ? (
+              <Select
+                className="w-[280px]"
+                aria-label={t("pages.auditLog.actorFilterAria")}
+                value={actor}
+                onChange={(e) => setActor(e.target.value)}
+              >
+                <option value="">{t("pages.auditLog.anyActor")}</option>
+                {users.data.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.email}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              <Input
+                className="w-[280px] font-mono text-xs"
+                aria-label={t("pages.auditLog.actorFilterAria")}
+                placeholder={t("pages.auditLog.actorPlaceholder")}
+                value={actor}
+                onChange={(e) => setActor(e.target.value)}
+              />
+            )}
             <Select
               className="w-52"
               aria-label={t("pages.auditLog.actionFilterAria")}
