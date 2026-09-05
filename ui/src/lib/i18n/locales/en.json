@@ -1284,5 +1284,15 @@
     "ms": "{{value}} ms",
     "unpriced": "—",
     "unpricedHint": "No price is configured for this model, so this request was recorded as unpriced rather than as free."
+  },
+  "toast": {
+    "region": "Notifications",
+    "dismiss": "Dismiss notification",
+    "saved": "Saved",
+    "savedDetail": "{{what}} updated.",
+    "saveFailed": "Could not save {{what}}",
+    "deleted": "{{what}} deleted",
+    "deleteFailed": "Could not delete {{what}}",
+    "created": "{{what}} created"
   }
 }

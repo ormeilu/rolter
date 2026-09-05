@@ -12,6 +12,7 @@ import {
 
 import { LocalePicker } from "@/components/LocalePicker";
 import { OpenModeBanner } from "@/components/OpenModeBanner";
+import { Toaster } from "@/components/ui/toaster";
 import { ScopeSwitcher } from "@/components/ScopeSwitcher";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { ShellSkeleton } from "@/components/ShellSkeleton";
@@ -309,6 +310,7 @@ export default function App() {
     // whatever screen happens to be open (#970)
     <div className="flex h-screen flex-col bg-[color:var(--surface-app)] text-foreground">
       <OpenModeBanner open={isOpenMode()} />
+      <Toaster />
       <div className="flex min-h-0 flex-1">
         <NavSidebar
           groups={navGroups}

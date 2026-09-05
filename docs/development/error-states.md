@@ -95,3 +95,16 @@ A *mutation* that fails is a different surface: it is reported where the action
 was taken, not where the data would have been. For a destructive action that
 means inside the confirmation, which stays open so the message has somewhere to
 live — see [destructive actions](destructive-actions.md).
+
+## One-shot feedback: toasts
+
+Inline messages are for what stays on screen: a field that failed validation, a
+load that failed. Feedback about something that just *happened* — a save that
+went through, a delete the control plane refused, a row toggle that bounced —
+goes through the toast queue (`useToast()` in `ui/src/lib/toast.tsx`, rendered
+once by `<Toaster />` in the shell). A success is a polite `role="status"`
+announcement that dismisses itself; a failure is an assertive `role="alert"`
+that stays longer, carries the control plane's own message as its detail line,
+and can be dismissed by hand. Outside the provider — a story, a test — the hook
+is a no-op, so a screen never has to know whether the shell is around it.
+Use `t("toast.*")` for the titles so every screen says "saved" the same way.
