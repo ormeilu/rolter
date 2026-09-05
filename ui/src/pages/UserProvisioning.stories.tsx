@@ -5,7 +5,7 @@ import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import UserProvisioning from "./UserProvisioning";
 import { expectSkeleton } from "./story-harness";
-import type { ScimTokenRow } from "@/lib/api";
+import type { ScimGroupMappingRow, ScimTokenRow } from "@/lib/api";
 
 const NOW = new Date("2026-07-01T10:00:00Z").toISOString();
 
@@ -32,6 +32,22 @@ const TOKENS: ScimTokenRow[] = [
   }),
 ];
 
+const mapping = (over: Partial<ScimGroupMappingRow> = {}): ScimGroupMappingRow => ({
+  id: "map-1",
+  org_id: ORG.id,
+  group_name: "platform-engineering",
+  team_id: null,
+  project_id: null,
+  role: "member",
+  created_at: NOW,
+  ...over,
+});
+
+const MAPPINGS: ScimGroupMappingRow[] = [
+  mapping(),
+  mapping({ id: "map-2", group_name: "sre-oncall", role: "admin", team_id: "team-1" }),
+];
+
 type FetchStub = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 const json = (body: unknown, status = 200) =>
@@ -43,9 +59,13 @@ const json = (body: unknown, status = 200) =>
 // the screen resolves its org through useScope(), which fetches orgs, teams and
 // projects before the token list is even enabled — so every stub has to route
 // by url rather than answer one shape
-function scoped(tokens: (init?: RequestInit) => Promise<Response>): FetchStub {
+function scoped(
+  tokens: (init?: RequestInit) => Promise<Response>,
+  mappings: (init?: RequestInit) => Promise<Response> = async () => json([]),
+): FetchStub {
   return async (input, init) => {
     const url = String(input);
+    if (url.includes("scim-group-mappings")) return mappings(init);
     if (url.includes("scim-tokens")) return tokens(init);
     if (url.endsWith("/api/v1/orgs")) return json([ORG]);
     if (url.includes("/teams")) return json([{ id: "team-1", org_id: ORG.id, name: "core", slug: "core", created_at: NOW }]);
@@ -193,5 +213,130 @@ export const RevokeExplainsWhatItDoesNotDo: Story = {
     ).toBeVisible();
     await userEvent.click(modal.getByRole("button", { name: "Revoke" }));
     await waitFor(() => expect(canvas.getByText("REVOKED")).toBeVisible());
+  },
+};
+
+// the second half of the screen (#1186): the tokens decide who exists, the
+// mappings decide what they may do. a mapping names its scope, so a team-scoped
+// grant is distinguishable from an org-wide one at a glance
+export const GroupMappingsListed: Story = {
+  render: () => (
+    <Harness
+      fetchStub={scoped(
+        async () => json(TOKENS),
+        async () => json(MAPPINGS),
+      )}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getByText("platform-engineering")).toBeVisible(),
+    );
+    // asserted per row rather than per string: the add form's own selects carry
+    // the same scope and role labels as options
+    await expect(canvas.getByText("platform-engineering").closest("li")).toHaveTextContent(
+      "Whole organization",
+    );
+    const scoped = canvas.getByText("sre-oncall").closest("li");
+    // team-1 is "core" in the scope stub, so the stored id is shown as its name
+    await expect(scoped).toHaveTextContent("core");
+    await expect(scoped).toHaveTextContent("Admin");
+  },
+};
+
+// an org with tokens but no mappings is the trap the screen has to name: the
+// IdP syncs happily and everyone it provisions can still do nothing
+export const GroupMappingsEmpty: Story = {
+  render: () => <Harness fetchStub={scoped(async () => json(TOKENS))} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(
+        canvas.getByText(/every provisioned account joins as a viewer/),
+      ).toBeVisible(),
+    );
+  },
+};
+
+// what the stub recorded, asserted in `play`. a module-level sink rather than a
+// second fetch wrapper: the stub is already the only thing the screen talks to
+const postedMappings: unknown[] = [];
+
+// the scope select is why this is more than a group/role pair — a team-scoped
+// grant has to send the team id, and only the team id
+export const MapGroupPostsTheScopedRole: Story = {
+  render: () => {
+    postedMappings.length = 0;
+    const stub = scoped(
+      async () => json(TOKENS),
+      async (init) => {
+        if (init?.method === "POST") {
+          postedMappings.push(JSON.parse(String(init.body)));
+          return json(
+            mapping({ id: "map-new", group_name: "sre-oncall", role: "admin" }),
+          );
+        }
+        return json(
+          postedMappings.length
+            ? [mapping({ id: "map-new", group_name: "sre-oncall", role: "admin" })]
+            : [],
+        );
+      },
+    );
+    return <Harness fetchStub={stub} />;
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.type(await canvas.findByLabelText("IdP group"), "sre-oncall");
+    await userEvent.selectOptions(
+      canvas.getByLabelText("Where the role applies"),
+      "team:team-1",
+    );
+    await userEvent.selectOptions(canvas.getByLabelText("Role to grant"), "admin");
+    await userEvent.click(canvas.getByRole("button", { name: "Map group" }));
+    await waitFor(() => expect(postedMappings).toHaveLength(1));
+    await expect(postedMappings[0]).toEqual({
+      group_name: "sre-oncall",
+      role: "admin",
+      team_id: "team-1",
+    });
+    await waitFor(() => expect(canvas.getByText("sre-oncall")).toBeVisible());
+  },
+};
+
+const deletedMappings: string[] = [];
+
+// removing a mapping withdraws a role from everyone in the group, so it goes
+// through ConfirmDialog and says so before the DELETE goes out (#1179)
+export const RemoveMappingConfirmsFirst: Story = {
+  render: () => {
+    deletedMappings.length = 0;
+    const stub = scoped(
+      async () => json([]),
+      async (init) => {
+        if (init?.method === "DELETE") {
+          deletedMappings.push("deleted");
+          return new Response(null, { status: 204 });
+        }
+        return json(deletedMappings.length ? [] : [mapping()]);
+      },
+    );
+    return <Harness fetchStub={stub} />;
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      await canvas.findByRole("button", {
+        name: "Remove the mapping for platform-engineering",
+      }),
+    );
+    const modal = within(await within(document.body).findByRole("dialog"));
+    await expect(modal.getByText(/loses Member straight away/)).toBeVisible();
+    await userEvent.click(modal.getByRole("button", { name: "Remove mapping" }));
+    await waitFor(() => expect(deletedMappings).toHaveLength(1));
+    await waitFor(() =>
+      expect(canvas.queryByText("platform-engineering")).toBeNull(),
+    );
   },
 };

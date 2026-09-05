@@ -1,12 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookUser, Loader2, Plus } from "lucide-react";
+import type { TFunction } from "i18next";
+import { BookUser, Loader2, Plus, Trash2, Users } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { LoadError } from "@/components/LoadError";
 import { TableSkeleton } from "@/components/LoadingState";
 import { CopyButton } from "@/components/CopyButton";
-import { PageBody } from "@/components/screen";
+import { PageBody, Pill, RowIconButton } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,21 +21,37 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Sheet, SheetBody, SheetFooter, SheetHeader } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Table, type TableColumn } from "@/components/ui/table";
 import {
+  createScimGroupMapping,
   createScimToken,
+  deleteScimGroupMapping,
+  fetchScimGroupMappings,
   fetchScimTokens,
   revokeScimToken,
   ApiError,
+  ROLES,
   type CreatedScimToken,
+  type ScimGroupMappingRow,
   type ScimTokenRow,
 } from "@/lib/api";
 import { useFormat, type Formatters } from "@/lib/i18n/format";
-import { useScope } from "@/lib/scope";
+import { useScope, type ScopeResult } from "@/lib/scope";
+import { useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const TOKENS_QUERY_KEY = ["scim-tokens"];
+const MAPPINGS_QUERY_KEY = "scim-group-mappings";
+
+// the roles a mapping may grant, mirroring `parse_role` in
+// crates/rolter-control/src/sso.rs, which scim_groups.rs calls verbatim. not
+// /api/v1/roles: that list carries every role the control plane knows about,
+// and offering one the endpoint refuses would build a form that can only fail
+// on submit
+const MAPPABLE_ROLES = ROLES;
 
 // listing, creating and revoking all require Admin on the org. a 403 is a
 // permission answer, not a failure, so it gets its own calm state rather than
@@ -44,6 +62,259 @@ function isForbidden(error: unknown): boolean {
 
 function stamp(fmt: Formatters, iso: string | null): string {
   return (iso ? fmt.dateTime(iso) : "") || "—";
+}
+
+// the label for a role the server sent us, falling back to the raw value so a
+// newer control plane's role is shown rather than rendered as a missing key
+function roleLabel(t: TFunction, role: string): string {
+  return t(`shell.roles.${role}`, { defaultValue: role });
+}
+
+// the scope a mapping grants at, as the reader knows it. the most specific
+// non-null id wins, exactly as `scim_groups.rs` resolves it; an id the current
+// scope selection does not cover is shown raw rather than hidden
+function scopeLabel(
+  t: TFunction,
+  scope: ScopeResult,
+  mapping: ScimGroupMappingRow,
+): string {
+  if (mapping.project_id) {
+    return (
+      scope.projects.find((p) => p.id === mapping.project_id)?.name ??
+      mapping.project_id
+    );
+  }
+  if (mapping.team_id) {
+    return scope.teams.find((x) => x.id === mapping.team_id)?.name ?? mapping.team_id;
+  }
+  return t("pages.userProvisioning.mappings.scopeOrg");
+}
+
+/**
+ * The IdP groups this org turns into roles (#1186).
+ *
+ * A group the IdP pushes through `/scim/v2/Groups` grants nothing on its own —
+ * a provisioned account joins as a viewer and stops there. This is where an
+ * operator says what a group is worth, and the control plane reconciles
+ * everyone in it on the spot rather than at the next sync.
+ *
+ * The scope select offers the org, every team in it, and the projects of the
+ * team the scope switcher currently has selected: those are the ids
+ * `useScope()` has names for, and a mapping may never grant outside its own org
+ * anyway.
+ */
+function GroupMappings({ orgId, canManage }: { orgId: string; canManage: boolean }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const scope = useScope();
+  const toast = useToast();
+
+  const mappings = useQuery({
+    queryKey: [MAPPINGS_QUERY_KEY, orgId],
+    queryFn: () => fetchScimGroupMappings(orgId),
+    retry: false,
+  });
+
+  const rows = mappings.data ?? [];
+
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: [MAPPINGS_QUERY_KEY, orgId] });
+
+  const [group, setGroup] = React.useState("");
+  const [role, setRole] = React.useState<string>(MAPPABLE_ROLES[0]);
+  // "" is the org; otherwise "team:<id>" or "project:<id>"
+  const [target, setTarget] = React.useState("");
+
+  const create = useMutation({
+    mutationFn: () => {
+      const [kind, id] = target.split(":");
+      return createScimGroupMapping(orgId, {
+        group_name: group.trim(),
+        role,
+        team_id: kind === "team" ? id : undefined,
+        project_id: kind === "project" ? id : undefined,
+      });
+    },
+    // the failure stays inline, beside the form that caused it; the success is
+    // what would otherwise be silent, so that is the one that toasts (#1197)
+    onSuccess: (created) => {
+      setGroup("");
+      invalidate();
+      toast.push({
+        tone: "success",
+        title: t("toast.created", { what: created.group_name }),
+      });
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => deleteScimGroupMapping(id),
+    onSuccess: (_void, id) => {
+      invalidate();
+      toast.push({
+        tone: "success",
+        title: t("toast.deleted", {
+          what: rows.find((m) => m.id === id)?.group_name ?? id,
+        }),
+      });
+    },
+  });
+
+  // a mapping is what puts people in a role, so removing one takes access away
+  // from everyone in that group — named and confirmed first (#1179)
+  const [removeTarget, setRemoveTarget] =
+    React.useState<ScimGroupMappingRow | null>(null);
+  const startRemove = (mapping: ScimGroupMappingRow) => {
+    remove.reset();
+    setRemoveTarget(mapping);
+  };
+
+  return (
+    <section className="rounded-[10px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-card)]">
+      <header className="flex items-start gap-3 border-b border-[color:var(--border-subtle)] px-4 py-3">
+        <Users aria-hidden className="mt-0.5 h-4 w-4 flex-none text-muted-foreground" />
+        <div className="min-w-0">
+          <h2 className="text-sm font-medium text-foreground">
+            {t("pages.userProvisioning.mappings.title")}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {t("pages.userProvisioning.mappings.subtitle")}
+          </p>
+        </div>
+      </header>
+
+      <div className="flex flex-col gap-2.5 px-4 py-3.5">
+        {mappings.isLoading && <Skeleton className="h-8 rounded-md" />}
+        {mappings.isError && (
+          <LoadError
+            error={mappings.error}
+            resource={t("errors.resources.scimGroupMappings")}
+            onRetry={() => mappings.refetch()}
+          />
+        )}
+        {!mappings.isLoading && !mappings.isError && rows.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            {t("pages.userProvisioning.mappings.empty")}
+          </p>
+        )}
+
+        {rows.length > 0 && (
+          <ul className="flex flex-col gap-1.5">
+            {rows.map((mapping) => (
+              <li
+                key={mapping.id}
+                className="flex items-center gap-2 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] px-2.5 py-1.5"
+              >
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
+                  {mapping.group_name}
+                </span>
+                <Pill color="var(--text-secondary)" tint="var(--surface-card)">
+                  {scopeLabel(t, scope, mapping)}
+                </Pill>
+                <Badge tone="neutral">{roleLabel(t, mapping.role)}</Badge>
+                <RowIconButton
+                  danger
+                  title={t("pages.userProvisioning.mappings.remove")}
+                  aria-label={t("pages.userProvisioning.mappings.removeNamed", {
+                    group: mapping.group_name,
+                  })}
+                  disabled={remove.isPending}
+                  onClick={() => startRemove(mapping)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </RowIconButton>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            className="h-8 max-w-[220px] flex-1"
+            value={group}
+            onChange={(e) => setGroup(e.target.value)}
+            aria-label={t("pages.userProvisioning.mappings.groupLabel")}
+            placeholder={t("pages.userProvisioning.mappings.groupPlaceholder")}
+          />
+          <Select
+            className="h-8 w-[164px]"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            aria-label={t("pages.userProvisioning.mappings.scopeLabel")}
+          >
+            <option value="">{t("pages.userProvisioning.mappings.scopeOrg")}</option>
+            {scope.teams.length > 0 && (
+              <optgroup label={t("pages.userProvisioning.mappings.scopeTeams")}>
+                {scope.teams.map((team) => (
+                  <option key={team.id} value={`team:${team.id}`}>
+                    {team.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {scope.projects.length > 0 && (
+              <optgroup label={t("pages.userProvisioning.mappings.scopeProjects")}>
+                {scope.projects.map((project) => (
+                  <option key={project.id} value={`project:${project.id}`}>
+                    {project.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </Select>
+          <Select
+            className="h-8 w-[132px]"
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            aria-label={t("pages.userProvisioning.mappings.roleLabel")}
+          >
+            {MAPPABLE_ROLES.map((r) => (
+              <option key={r} value={r}>
+                {roleLabel(t, r)}
+              </option>
+            ))}
+          </Select>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!canManage || !group.trim() || create.isPending}
+            onClick={() => create.mutate()}
+          >
+            {create.isPending && (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+            )}
+            {t("pages.userProvisioning.mappings.add")}
+          </Button>
+        </div>
+        {/* the control plane's own message, never a gloss on it */}
+        {create.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {(create.error as Error).message}
+          </p>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={!!removeTarget}
+        onOpenChange={(open) => !open && setRemoveTarget(null)}
+        title={t("pages.userProvisioning.mappings.confirm.title", {
+          group: removeTarget?.group_name,
+        })}
+        description={t("pages.userProvisioning.mappings.confirm.body", {
+          role: removeTarget ? roleLabel(t, removeTarget.role) : "",
+        })}
+        confirmLabel={t("pages.userProvisioning.mappings.confirm.confirm")}
+        pending={remove.isPending}
+        error={remove.error}
+        onConfirm={() =>
+          removeTarget &&
+          remove.mutate(removeTarget.id, {
+            onSuccess: () => setRemoveTarget(null),
+          })
+        }
+      />
+    </section>
+  );
 }
 
 // SCIM provisioning tokens for /api/v1/orgs/{org}/scim-tokens (#540, #563).
@@ -202,6 +473,12 @@ export default function UserProvisioning() {
             />
           }
         />
+      )}
+
+      {/* the second half of provisioning: who exists comes from /scim/v2/Users,
+          what they may do comes from a mapping written here (#1186) */}
+      {orgId && !forbidden && (
+        <GroupMappings orgId={orgId} canManage={canManage} />
       )}
 
       {orgId && (
