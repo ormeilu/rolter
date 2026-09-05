@@ -415,6 +415,14 @@ function ProviderCard({
             ) : (
               <Badge tone="neutral">{t("pages.sso.providers.disabled")}</Badge>
             )}
+            {/* a provider with no sealed secret cannot complete the token
+                exchange; without this badge the first symptom is a failed
+                login, long after whoever registered it has moved on (#1231) */}
+            {!provider.has_client_secret && (
+              <Badge tone="warning" title={t("pages.sso.providers.noSecretHint")}>
+                {t("pages.sso.providers.noSecret")}
+              </Badge>
+            )}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
             {provider.default_role
@@ -444,6 +452,14 @@ function ProviderCard({
         <Detail
           label={t("pages.sso.providers.clientId")}
           value={provider.client_id}
+        />
+        <Detail
+          label={t("pages.sso.providers.clientSecret")}
+          value={
+            provider.has_client_secret
+              ? t("pages.sso.providers.secretStored")
+              : t("pages.sso.providers.secretMissing")
+          }
         />
         <Detail
           label={t("pages.sso.providers.startUrl")}

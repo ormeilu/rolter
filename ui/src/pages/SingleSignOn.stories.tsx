@@ -31,6 +31,7 @@ const provider = (over: Partial<SsoProviderRow> = {}): SsoProviderRow => ({
   slug: "okta",
   issuer: "https://acme.okta.com",
   client_id: "0oa1b2c3d4",
+  has_client_secret: true,
   scopes: ["openid", "email", "profile"],
   group_claim: "groups",
   default_role: "member",
@@ -192,6 +193,45 @@ export const Loaded: Story = {
     await expect(
       canvas.getByRole("switch", { name: "Single sign-on" }),
     ).toBeChecked();
+  },
+};
+
+/**
+ * #1231: a provider registered without a client secret — or one whose secret
+ * was dropped because `ROLTER_KEK` was unset at the time — cannot complete the
+ * token exchange. The list response says so with `has_client_secret`, so the
+ * card can warn now instead of letting the first failed login be the signal.
+ */
+export const WarnsWhenNoClientSecretIsStored: Story = {
+  render: () => (
+    <Harness
+      fetchStub={api({
+        providers: () => [provider({ has_client_secret: false })],
+      })}
+    >
+      <SingleSignOn />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getByText("No client secret")).toBeVisible(),
+    );
+    await expect(canvas.getByText("Not set")).toBeVisible();
+  },
+};
+
+/** The same card with a secret sealed: no warning, and the row reads "Stored". */
+export const SaysWhenAClientSecretIsStored: Story = {
+  render: () => (
+    <Harness fetchStub={api({ providers: () => [provider()] })}>
+      <SingleSignOn />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("Stored")).toBeVisible());
+    await expect(canvas.queryByText("No client secret")).toBeNull();
   },
 };
 

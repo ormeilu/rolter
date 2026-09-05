@@ -953,6 +953,9 @@
         "add": "Add provider",
         "issuer": "Issuer",
         "clientId": "Client ID",
+        "clientSecret": "Client secret",
+        "secretStored": "Stored",
+        "secretMissing": "Not set",
         "startUrl": "Login URL",
         "copyStartUrl": "Copy login URL",
         "groupClaim": "Group claim",
@@ -962,7 +965,9 @@
         "defaultRole": "Signs in as {{role}} when no group mapping matches.",
         "noDefaultRole": "No default role: a user in no mapped group is refused, rather than admitted with nothing.",
         "delete": "Delete provider",
-        "deleteNamed": "Delete provider {{name}}"
+        "deleteNamed": "Delete provider {{name}}",
+        "noSecret": "No client secret",
+        "noSecretHint": "No client secret is sealed for this provider, so the token exchange will fail at login. Re-register it with a secret, or check that ROLTER_KEK was set when it was created."
       },
       "empty": {
         "title": "No identity provider yet",
