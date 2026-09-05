@@ -380,6 +380,16 @@ pub struct ModelDefaults {
     pub updated_at: DateTime<Utc>,
 }
 
+/// serialize a sealed column as "is there one", never as its bytes. used for
+/// [`SsoProvider::secret_ciphertext`], which is renamed to `has_client_secret`
+/// on the wire (#1231)
+fn is_present<S: serde::Serializer>(
+    value: &Option<Vec<u8>>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.serialize_bool(value.is_some())
+}
+
 /// an OIDC identity provider registered for one org.
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct SsoProvider {
@@ -389,11 +399,18 @@ pub struct SsoProvider {
     pub slug: String,
     pub issuer: String,
     pub client_id: String,
-    /// sealed client secret; never serialized, and read only by the token
-    /// exchange through [`super::repo::SsoRepo::client_secret`]
-    #[serde(skip_serializing)]
+    /// sealed client secret. the bytes are read only by the token exchange,
+    /// through [`super::repo::SsoRepo::client_secret`], and never leave the
+    /// control plane — what is serialized in their place is the derived
+    /// boolean `has_client_secret`, so an operator can see that a secret is
+    /// stored without anything being able to see the secret (#1231). without
+    /// it the first symptom of a provider registered with no secret, or one
+    /// dropped because `ROLTER_KEK` was unset at the time, is a failed token
+    /// exchange at login
+    #[serde(rename = "has_client_secret", serialize_with = "is_present")]
+    #[serde(skip_deserializing)]
     pub secret_ciphertext: Option<Vec<u8>>,
-    #[serde(skip_serializing)]
+    #[serde(skip)]
     pub secret_nonce: Option<Vec<u8>>,
     pub scopes: Vec<String>,
     pub group_claim: String,
@@ -852,4 +869,48 @@ pub struct EffectiveGrant {
     pub project_id: Option<Uuid>,
     pub resource: Option<String>,
     pub action: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider(secret: Option<Vec<u8>>) -> SsoProvider {
+        SsoProvider {
+            id: Uuid::nil(),
+            org_id: Uuid::nil(),
+            name: "Okta".to_string(),
+            slug: "okta".to_string(),
+            issuer: "https://example.okta.com".to_string(),
+            client_id: "client-1".to_string(),
+            secret_nonce: secret.as_ref().map(|_| vec![9u8; 12]),
+            secret_ciphertext: secret,
+            scopes: vec!["openid".to_string()],
+            group_claim: "groups".to_string(),
+            default_role: None,
+            enabled: true,
+            created_at: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch is a valid timestamp"),
+        }
+    }
+
+    #[test]
+    fn sso_provider_reports_a_stored_secret_without_serializing_it() {
+        let json = serde_json::to_value(provider(Some(b"sealed-bytes".to_vec())))
+            .expect("SsoProvider serializes");
+        assert_eq!(json["has_client_secret"], serde_json::json!(true));
+        // the sealed columns themselves must never appear on the wire, under
+        // any name, and neither must their contents (#1231)
+        assert!(json.get("secret_ciphertext").is_none());
+        assert!(json.get("secret_nonce").is_none());
+        assert!(!json.to_string().contains("sealed-bytes"));
+    }
+
+    #[test]
+    fn sso_provider_without_a_secret_says_so() {
+        // the case the dashboard could not see: registered with no secret, or
+        // the secret dropped because ROLTER_KEK was unset at the time. the
+        // first symptom used to be a failed token exchange at login
+        let json = serde_json::to_value(provider(None)).expect("SsoProvider serializes");
+        assert_eq!(json["has_client_secret"], serde_json::json!(false));
+    }
 }

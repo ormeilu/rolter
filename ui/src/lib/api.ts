@@ -3672,9 +3672,11 @@ export const sendUiEvents = (events: UiEvent[]) =>
 /**
  * A registered identity provider, as `SsoProvider` serialises it.
  *
- * `secret_ciphertext` and `secret_nonce` are `#[serde(skip_serializing)]` on
- * the server, so the sealed client secret is not merely redacted — it is
- * absent, and nothing in the payload says whether one was ever stored.
+ * The sealed client secret is absent from the payload — it is never redacted,
+ * it simply never leaves the control plane. What comes in its place is the
+ * derived `has_client_secret` boolean, so the screen can tell a provider that
+ * is ready to exchange tokens from one whose first symptom would otherwise be
+ * a failed login (#1231).
  */
 export interface SsoProviderRow {
   id: string;
@@ -3683,6 +3685,11 @@ export interface SsoProviderRow {
   slug: string;
   issuer: string;
   client_id: string;
+  /**
+   * whether a client secret is sealed in the store. derived on the server from
+   * `secret_ciphertext.is_some()`; the bytes themselves are never serialised.
+   */
+  has_client_secret: boolean;
   scopes: string[];
   /** claim in the id token carrying the user's groups; `groups` by default */
   group_claim: string;

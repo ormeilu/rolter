@@ -58,6 +58,8 @@ Every part of it requires the **admin** role on the org (see [RBAC](/security/rb
   <Step title="Paste the client secret">
     The client secret is sealed with the deployment's key-encryption key the moment it is saved, and it is **never returned** — not on this screen, not through the API. To change it, delete the provider and register it again. Leave the field empty for a public client that relies on PKCE alone.
 
+    The provider card still tells you whether one is stored: the **Client secret** row reads *Stored* or *Not set*, and a provider with none carries a **No client secret** badge. That comes from `has_client_secret` on `GET /api/v1/orgs/{org_id}/sso-providers`, a boolean derived from the sealed column — the secret itself stays where it is. A provider that needs a secret and has none will fail the token exchange at login, so the badge is the warning you want before a user finds it for you.
+
     <Warning>
     Storing a client secret needs `ROLTER_KEK` configured on the control plane. Without it, saving a provider *with* a secret is refused — Rolter will not fall back to storing one in the clear.
     </Warning>
