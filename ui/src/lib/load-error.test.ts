@@ -55,3 +55,23 @@ describe("isRetryable", () => {
     expect(isRetryable("unknown")).toBe(true);
   });
 });
+
+// a store-less control plane 404s every CRUD route: that is deployment shape,
+// and neither a retry nor a sign-in can change it (#1204)
+describe("noStore", () => {
+  it("a control-plane 404 carrying the endpoint code classifies as noStore", () => {
+    const byCode = new ApiError("no such endpoint: /api/v1/orgs", 404, "no_such_endpoint");
+    expect(classifyLoadError(byCode)).toBe("noStore");
+    expect(isRetryable("noStore")).toBe(false);
+    expect(needsSignIn("noStore")).toBe(false);
+  });
+
+  it("an older control plane is recognised by the message alone", () => {
+    const byMessage = new ApiError("no such endpoint: /api/v1/orgs", 404);
+    expect(classifyLoadError(byMessage)).toBe("noStore");
+  });
+
+  it("any other 404 stays unknown", () => {
+    expect(classifyLoadError(new ApiError("not found", 404))).toBe("unknown");
+  });
+});

@@ -685,7 +685,12 @@ fn is_api_path(path: &str) -> bool {
 fn api_not_found(path: &str) -> Response {
     (
         StatusCode::NOT_FOUND,
-        Json(json!({"error": {"message": format!("no such endpoint: {path}")}})),
+        Json(json!({"error": {
+            "message": format!("no such endpoint: {path}"),
+            // stable code so the dashboard can tell "this route is not mounted
+            // on this control plane" (a store-less deployment) from any other 404
+            "code": "no_such_endpoint",
+        }})),
     )
         .into_response()
 }

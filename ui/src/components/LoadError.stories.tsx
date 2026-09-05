@@ -65,6 +65,22 @@ export const OpenModeNoSession: Story = {
   },
 };
 
+/**
+ * A store-less control plane does not mount this endpoint at all (#1204):
+ * the fix is a database, so neither retry nor sign-in is offered.
+ */
+export const NoStore: Story = {
+  args: {
+    error: new ApiError("no such endpoint: /api/v1/orgs", 404, "no_such_endpoint"),
+    onRetry: fn(),
+  },
+  play: async ({ canvas }) => {
+    await expect(await canvas.findByRole("alert")).toHaveTextContent(/ROLTER_DATABASE_URL/);
+    await expect(canvas.queryByRole("button", { name: /try again/i })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /sign in/i })).toBeNull();
+  },
+};
+
 /** `fetch` rejected: the request never reached the control plane at all. */
 export const Unreachable: Story = {
   args: { error: new TypeError("Failed to fetch"), onRetry: fn() },
