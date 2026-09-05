@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.1](https://github.com/rolter-ai/rolter/compare/rolter-control-v0.1.0...rolter-control-v0.1.1) - 2026-09-05
+
+### Bug Fixes
+- *(control)* name the grain of a health rollup and nest targets under their provider ([#1282](https://github.com/rolter-ai/rolter/pull/1282)) by [@ormeilu](https://github.com/ormeilu)
+- *(control)* stop echoing raw ClickHouse errors to the dashboard [#1221] ([#1222](https://github.com/rolter-ai/rolter/pull/1222)) by [@ormeilu](https://github.com/ormeilu)
+- *(gateway)* stamp request logs with the request time, not the batch flush time ([#1223](https://github.com/rolter-ai/rolter/pull/1223)) by [@ormeilu](https://github.com/ormeilu)
+- *(control)* redact every credential from the dashboard's config view [#1212] ([#1216](https://github.com/rolter-ai/rolter/pull/1216)) by [@ormeilu](https://github.com/ormeilu)
+- *(ui)* tell a store-less control plane apart from a generic 404 [#1204] ([#1211](https://github.com/rolter-ai/rolter/pull/1211)) by [@ormeilu](https://github.com/ormeilu)
+- *(control)* parse optional log-window params without failing on empty strings [#1177] ([#1190](https://github.com/rolter-ai/rolter/pull/1190)) by [@ormeilu](https://github.com/ormeilu)
+- *(gateway)* give the fleet one place to decide where request logs go [#929] ([#1174](https://github.com/rolter-ai/rolter/pull/1174)) by [@ormeilu](https://github.com/ormeilu)
+- *(core)* give ProviderConfig a Default so a new field is not a workspace-wide break [#1150] ([#1169](https://github.com/rolter-ai/rolter/pull/1169)) by [@ormeilu](https://github.com/ormeilu)
+
+### Features
+- *(control)* cached update check with a dashboard hint and a cli notice [#902] ([#1294](https://github.com/rolter-ai/rolter/pull/1294)) by [@ormeilu](https://github.com/ormeilu)
+- *(control)* per-budget override for unpriced_policy [#996] ([#1286](https://github.com/rolter-ai/rolter/pull/1286)) by [@ormeilu](https://github.com/ormeilu)
+- *(control)* make payload capture discoverable, on in the dogfood profile ([#1287](https://github.com/rolter-ai/rolter/pull/1287)) by [@ormeilu](https://github.com/ormeilu)
+- *(control)* give the curated MCP library entries their tool and scope lists ([#1284](https://github.com/rolter-ai/rolter/pull/1284)) by [@ormeilu](https://github.com/ormeilu)
+- *(control)* filter /analytics/invocations by business unit and customer ([#1281](https://github.com/rolter-ai/rolter/pull/1281)) by [@ormeilu](https://github.com/ormeilu)
+- *(control)* require a name and an expiry when minting a virtual key [#945] ([#1172](https://github.com/rolter-ai/rolter/pull/1172)) by [@ormeilu](https://github.com/ormeilu)
+- *(control)* carry the security policy to the gateway and enforce it [#1162] ([#1165](https://github.com/rolter-ai/rolter/pull/1165)) by [@ormeilu](https://github.com/ormeilu)
+- *(auth)* throttle and audit failed logins [#1079] ([#1161](https://github.com/rolter-ai/rolter/pull/1161)) by [@ormeilu](https://github.com/ormeilu)
 ## [0.0.11](https://github.com/rolter-ai/rolter/compare/rolter-control-v0.0.10...rolter-control-v0.0.11) - 2026-08-13
 
 ### Bug Fixes

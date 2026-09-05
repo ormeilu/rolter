@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.1](https://github.com/rolter-ai/rolter/compare/rolter-store-v0.1.0...rolter-store-v0.1.1) - 2026-09-05
+
+### Bug Fixes
+- *(core)* give ProviderConfig a Default so a new field is not a workspace-wide break [#1150] ([#1169](https://github.com/rolter-ai/rolter/pull/1169)) by [@ormeilu](https://github.com/ormeilu)
+
+### Features
+- *(control)* per-budget override for unpriced_policy [#996] ([#1286](https://github.com/rolter-ai/rolter/pull/1286)) by [@ormeilu](https://github.com/ormeilu)
+- *(control)* say whether an SSO provider has a client secret stored ([#1278](https://github.com/rolter-ai/rolter/pull/1278)) by [@ormeilu](https://github.com/ormeilu)
+- *(store)* verify and rotate the KEK against the control-plane store [#923] ([#1175](https://github.com/rolter-ai/rolter/pull/1175)) by [@ormeilu](https://github.com/ormeilu)
+- *(control)* require a name and an expiry when minting a virtual key [#945] ([#1172](https://github.com/rolter-ai/rolter/pull/1172)) by [@ormeilu](https://github.com/ormeilu)
+- *(control)* carry the security policy to the gateway and enforce it [#1162] ([#1165](https://github.com/rolter-ai/rolter/pull/1165)) by [@ormeilu](https://github.com/ormeilu)
 ## [0.0.11](https://github.com/rolter-ai/rolter/compare/rolter-store-v0.0.10...rolter-store-v0.0.11) - 2026-08-13
 
 ### Bug Fixes
