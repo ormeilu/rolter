@@ -316,6 +316,35 @@ least one story exercising the discard guard. Where a sheet opens pre-filled
 from the seed", not "is non-empty", and getting that backwards makes an
 untouched form prompt on every close.
 
+#### Components carry stories on the same terms
+
+Not only screens: every component under `ui/src/components/` has a sibling
+`.stories.tsx`, and the states it can be in are what the stories enumerate — a
+sheet gets add/edit, saving, rejected and both answers to the discard guard; a
+primitive gets its variants plus whatever contract it promises (that `Field`
+labels its control, that `Table` keeps its column headers over an empty body,
+that a scroll container is reachable from the keyboard).
+
+Two habits that the run enforces:
+
+- **Wait for the first read.** A component that seeds itself in an effect
+  (`ParamsEditor`, `ModelSheet`, `ProviderGroupSheet`) has not seeded yet when
+  the play function starts — Storybook does not render inside `act`. Open with
+  `findBy*`/`waitFor`, or the assertion races the mount, and an edit typed
+  before the seed lands is overwritten by it.
+- **A stub the story reads back must be created once.** Building a `recording()`
+  in a `useMemo` keyed on a prop whose identity changes per render hands every
+  render a fresh recorder, and the requests the last one saw are thrown away.
+
+The axe pass over the new stories found three real defects rather than story
+bugs, which is the argument for the gate: `ModelSheet`'s collapsible section
+headers were a `div role="button"` wrapping the info hint's own button
+(`nested-interactive`), `ProviderGroupSheet`'s member weights were labelled by
+`title` alone (`label-title-only`), and `StatusRow`'s `colorText` painted its
+label with the solid `--status-*` signal colour, which is below AA as text — the
+`--status-*-text` pair exists for exactly that.
+
+
 ### Full-stack compose smoke
 
 The `compose-smoke` job boots the production-shaped Docker Compose topology

@@ -21,7 +21,7 @@ import {
   type NavGroup,
   type NavItem,
 } from "@/components/ui/nav-sidebar";
-import { BUILT, NAV, leafKeys, useScreenMeta, type NavDef } from "@/lib/nav";
+import { NAV, leafKeys, useScreenMeta, type NavDef } from "@/lib/nav";
 import { logout, ROLES, type MeMembership } from "@/lib/api";
 import { useAuth, type SessionUser } from "@/lib/auth";
 import { useScope } from "@/lib/scope";
@@ -74,14 +74,17 @@ import RoutingRules from "@/pages/RoutingRules";
 import Security from "@/pages/Security";
 import SingleSignOn from "@/pages/SingleSignOn";
 import SkillsRepository from "@/pages/SkillsRepository";
-import Stub from "@/pages/Stub";
 import Teams from "@/pages/Teams";
 import UserProvisioning from "@/pages/UserProvisioning";
 import Users from "@/pages/Users";
 
-// screen key → element for every built screen; anything else in the nav
-// renders the branded stub. keys double as route paths (/<key>).
-const SCREENS: Record<string, React.ReactNode> = {
+// screen key → element, one entry per navigable leaf; keys double as route
+// paths (/<key>). exported so `nav.test.ts` can hold the two lists to each
+// other: the nav used to be allowed to name a screen nobody had built, and the
+// branded `Stub` stood in for it. every leaf has been built for a long time,
+// so the placeholder was unreachable code that only made the gap look filled —
+// the test is what keeps this table complete now that it is gone (#1201).
+export const SCREENS: Record<string, React.ReactNode> = {
   playground: <Playground />,
   plugins: <Plugins />,
   dashboard: <Dashboard />,
@@ -241,7 +244,7 @@ function Screen({ screen, onOpenNav }: { screen: string; onOpenNav: () => void }
       <div className="flex h-full min-h-0 flex-col">
         <ScreenHeader title={title} subtitle={subtitle} onOpenNav={onOpenNav} />
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {BUILT.has(screen) ? SCREENS[screen] : <Stub screen={screen} />}
+          {SCREENS[screen]}
         </div>
       </div>
     </UxScreenProvider>

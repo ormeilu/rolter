@@ -475,33 +475,27 @@ function Section({
 }) {
   return (
     <div className="rounded-[10px] border border-[color:var(--border-subtle)]">
-      {/* a div, not a button: the InfoHint inside is itself a button and
-          nested buttons are invalid HTML (the browser re-parents them) */}
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={onToggle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onToggle();
-          }
-        }}
-        aria-expanded={open}
-        className="flex w-full cursor-pointer items-center gap-2.5 px-[15px] py-[13px] text-left"
-      >
-        <span className="text-sm font-semibold">{title}</span>
-        {info && (
-          <span onClick={(e) => e.stopPropagation()}>
-            <InfoHint text={info} label={`About ${title}`} />
-          </span>
-        )}
-        <ChevronDown
-          className={cn(
-            "ml-auto h-4 w-4 text-[color:var(--text-subtle)] transition-transform duration-[120ms]",
-            open && "rotate-180",
-          )}
-        />
+      {/* the toggle is a real button and the InfoHint sits beside it rather
+          than inside it: this used to be a `div role="button"` wrapping the
+          hint's own button, which is a nested interactive control — invalid
+          HTML that a screen reader announces as one confused thing, and an
+          axe `nested-interactive` failure (#1201) */}
+      <div className="flex w-full items-center gap-2.5 px-[15px]">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 py-[13px] text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <span className="text-sm font-semibold">{title}</span>
+          <ChevronDown
+            className={cn(
+              "ml-auto h-4 w-4 text-[color:var(--text-subtle)] transition-transform duration-[120ms]",
+              open && "rotate-180",
+            )}
+          />
+        </button>
+        {info && <InfoHint text={info} label={`About ${title}`} />}
       </div>
       {open && (
         <div
