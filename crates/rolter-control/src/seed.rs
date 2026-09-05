@@ -23,6 +23,15 @@
 //!
 //! Rows present in the database but absent from the file are not deleted: the
 //! file is the desired state for what it names, not an exhaustive inventory.
+//!
+//! That last rule is why `[logging.payload_capture]` is imported on *presence*
+//! rather than on value (#954). Every other section of the file is a list, so
+//! "absent" and "empty" look the same and mean the same. `logging` is a single
+//! row with `serde` defaults, so a parsed config always carries a
+//! `payload_capture` block whether or not the file wrote one — importing it
+//! unconditionally would turn every re-import into a silent "capture off",
+//! undoing a decision an operator made in the dashboard. The raw TOML is
+//! therefore re-parsed to ask whether the key was actually written.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -32,7 +41,7 @@ use argon2::password_hash::{PasswordHasher, SaltString};
 use argon2::Argon2;
 use rolter_core::{BalancingStrategy, GatewayConfig, PromptTemplate, ProviderKind};
 use rolter_store::postgres::repo::{
-    OrgRepo, ProjectRepo, ProviderRepo, RouteRepo, RouteTargetRepo, TeamRepo,
+    LoggingSettingsRepo, OrgRepo, ProjectRepo, ProviderRepo, RouteRepo, RouteTargetRepo, TeamRepo,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -170,7 +179,52 @@ async fn import_bootstrap_toml(
     path: &Path,
 ) -> anyhow::Result<()> {
     let config = GatewayConfig::load(path)?;
-    import_config(pool, org_id, project_id, &config).await
+    import_config(pool, org_id, project_id, &config).await?;
+    if declares_payload_capture(path)? {
+        import_payload_capture(pool, &config.logging.payload_capture).await?;
+    }
+    Ok(())
+}
+
+/// Whether the file at `path` writes a `[logging.payload_capture]` section of
+/// its own. Parsed from the raw text rather than from [`GatewayConfig`],
+/// which cannot tell a written default from an unwritten one.
+fn declares_payload_capture(path: &Path) -> anyhow::Result<bool> {
+    let text = std::fs::read_to_string(path)?;
+    let value: toml::Value = toml::from_str(&text)?;
+    Ok(value
+        .get("logging")
+        .and_then(|logging| logging.get("payload_capture"))
+        .is_some())
+}
+
+/// Apply the file's payload-capture policy to the single `logging_settings`
+/// row, leaving sampling and retention as they are — those are operational
+/// dials the file has no opinion about.
+async fn import_payload_capture(
+    pool: &PgPool,
+    capture: &rolter_core::PayloadCaptureConfig,
+) -> anyhow::Result<()> {
+    let repo = LoggingSettingsRepo(pool);
+    let current = repo.get().await?;
+    let max_bytes = i32::try_from(capture.max_bytes).unwrap_or(i32::MAX);
+    repo.update(
+        current.sample_rate,
+        capture.enabled,
+        max_bytes,
+        &capture.redact_fields,
+        &capture.models,
+        &capture.virtual_key_ids,
+        current.retention_days,
+        current.payload_retention_hours,
+    )
+    .await?;
+    tracing::info!(
+        enabled = capture.enabled,
+        max_bytes,
+        "imported payload capture policy"
+    );
+    Ok(())
 }
 
 /// Upsert an already-parsed bootstrap config. Split out from
@@ -559,7 +613,7 @@ async fn import_prompt_template(
 
 #[cfg(test)]
 mod tests {
-    use super::{import_bootstrap_toml, import_prompt_template, slugify};
+    use super::{declares_payload_capture, import_bootstrap_toml, import_prompt_template, slugify};
     use rolter_core::{
         Decorator, DecoratorPosition, DecoratorRole, PromptTemplate, TemplateVariable,
     };
@@ -662,6 +716,96 @@ weight = 7
         let providers = ProviderRepo(&pool).list(org_id).await.unwrap();
         assert_eq!(providers.len(), 1);
         assert_eq!(RouteRepo(&pool).list(project_id).await.unwrap().len(), 1);
+    }
+
+    /// #954: presence, not value, is what makes the import touch capture. A
+    /// parsed [`GatewayConfig`] always carries a `payload_capture` block, so
+    /// only the raw text can say whether the operator wrote one.
+    #[test]
+    fn only_a_written_capture_section_counts_as_declared() {
+        let dir = tempdir("declares");
+        let path = dir.join("rolter.toml");
+
+        std::fs::write(&path, "[logging]\nclickhouse_url = \"http://ch:8123\"\n").unwrap();
+        assert!(
+            !declares_payload_capture(&path).unwrap(),
+            "a logging section without capture must not count as declaring one"
+        );
+
+        std::fs::write(&path, "[[providers]]\nname = \"a\"\nkind = \"openai\"\n").unwrap();
+        assert!(
+            !declares_payload_capture(&path).unwrap(),
+            "a file with no logging section at all must not count"
+        );
+
+        // written and off is still written: turning capture *off* through the
+        // file has to be applicable too
+        std::fs::write(&path, "[logging.payload_capture]\nenabled = false\n").unwrap();
+        assert!(declares_payload_capture(&path).unwrap());
+
+        std::fs::write(&path, "[logging.payload_capture]\nenabled = true\n").unwrap();
+        assert!(declares_payload_capture(&path).unwrap());
+    }
+
+    /// The dogfood profile turns capture on through the import file, and the
+    /// gateway only sees that once it reaches `logging_settings` — the row the
+    /// snapshot is built from. A file that says nothing must leave the row
+    /// exactly as the dashboard left it.
+    #[tokio::test]
+    async fn a_declared_capture_policy_lands_in_logging_settings() {
+        let Some(pool) = scratch_db("capture").await else {
+            return;
+        };
+        let (org_id, project_id) = bootstrap_org(&pool).await;
+        let settings = rolter_store::postgres::repo::LoggingSettingsRepo(&pool);
+
+        let dir = tempdir("capture");
+        let path = dir.join("rolter.toml");
+        std::fs::write(
+            &path,
+            r#"
+[logging.payload_capture]
+enabled = true
+max_bytes = 32768
+redact_fields = ["authorization", "api_key"]
+models = ["gpt-4o"]
+"#,
+        )
+        .unwrap();
+        import_bootstrap_toml(&pool, org_id, project_id, &path)
+            .await
+            .unwrap();
+
+        let row = settings.get().await.unwrap();
+        assert!(row.payload_capture_enabled, "capture never reached the row");
+        assert_eq!(row.payload_capture_max_bytes, 32768);
+        assert_eq!(
+            row.payload_capture_redact_fields,
+            vec!["authorization".to_string(), "api_key".to_string()]
+        );
+        assert_eq!(row.payload_capture_models, vec!["gpt-4o".to_string()]);
+        // sampling and retention are operational dials the file has no opinion
+        // about, so the import leaves them where they were
+        let sample_rate = row.sample_rate;
+        let retention_days = row.retention_days;
+
+        // a file that never mentions capture must not silently switch it off
+        std::fs::write(
+            &path,
+            "[[providers]]\nname = \"openai-primary\"\nkind = \"openai\"\napi_base = \"https://api.openai.com\"\n",
+        )
+        .unwrap();
+        import_bootstrap_toml(&pool, org_id, project_id, &path)
+            .await
+            .unwrap();
+
+        let row = settings.get().await.unwrap();
+        assert!(
+            row.payload_capture_enabled,
+            "a file silent about capture turned it off"
+        );
+        assert_eq!(row.sample_rate, sample_rate);
+        assert_eq!(row.retention_days, retention_days);
     }
 
     /// The upsert must not reach into `provider_keys`: a key rotated through

@@ -195,6 +195,23 @@ function LogsSettingsScreen() {
             onCheckedChange={(v) => set({ captureEnabled: v })}
           />
         </div>
+        {/* what this switch actually does, said where it is thrown rather than
+            three cards further down (#954). the numbers come from the live form
+            state, so the summary reflects the edit in progress — including one
+            that has not been saved yet */}
+        <p
+          role="note"
+          className="rounded-[8px] border border-dashed border-[color:var(--border-default)] bg-[color:var(--surface-subtle)] p-3 text-xs leading-relaxed text-muted-foreground"
+        >
+          {capture
+            ? t("pages.logsSettings.captureOnSummary", {
+                bytes: form.maxBytes || "0",
+                hours: form.payloadRetentionHours || "0",
+                redacted: splitList(form.redactFields).join(", ") || t("pages.logsSettings.nothing"),
+                models: splitList(form.models).join(", ") || t("pages.logsSettings.everyModel"),
+              })
+            : t("pages.logsSettings.captureOffSummary")}
+        </p>
         {/* a disabled fieldset rather than a dimmed div: the input inside
             already carries `disabled`, and fading a live div drags its label and
             hint below 4.5:1 while telling assistive tech nothing (#1181) */}

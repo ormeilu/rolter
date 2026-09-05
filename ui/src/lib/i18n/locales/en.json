@@ -1099,7 +1099,11 @@
       "businessUnit": "Business unit",
       "customer": "Customer",
       "filterBusinessUnits": "Filter business units",
-      "filterCustomers": "Filter customers"
+      "filterCustomers": "Filter customers",
+      "payloadAbsent": "No payload stored for this request. Either payload capture was off when it ran, its model or key falls outside the capture allow-list, or the payload's retention window has already passed — payloads are kept for less time than the log row itself.",
+      "payloadCaptureOff": "No payload stored: payload capture is currently off, so prompt and completion bodies are not retained for any request.",
+      "payloadCaptureOnButAbsent": "Payload capture is on, but nothing was stored for this request: its model or key may fall outside the capture allow-list, or the payload's {{hours}}h retention window has already passed.",
+      "payloadSettingsLink": "Open log settings"
     },
     "mcpLogs": {
       "emptyTitle": "No MCP tool calls yet",
@@ -1173,6 +1177,12 @@
     },
     "mcpSettings": {
       "defaultTransport": "Default transport"
+    },
+    "logsSettings": {
+      "captureOffSummary": "Nothing is stored: no prompt or completion text is retained for any request. Log metadata — model, tokens, cost, latency, status — is unaffected and keeps flowing.",
+      "captureOnSummary": "Stored: the raw prompt and completion body of each matching request, truncated at {{bytes}} bytes, kept for {{hours}} hours and then deleted. Redacted before writing: {{redacted}}. Models captured: {{models}}.",
+      "everyModel": "every model",
+      "nothing": "nothing"
     }
   },
   "playground": {
