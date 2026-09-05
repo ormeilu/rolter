@@ -215,6 +215,31 @@ fn validate_filter(value: Option<&str>, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Build the keyset-paginated event list query.
+///
+/// The cursor bound parses with `parseDateTime64BestEffortOrZero`: an absent
+/// cursor binds `cursor_ts` to `''`, and ClickHouse evaluates the strict parse
+/// of that constant even though the `= ''` disjunct already short-circuits the
+/// predicate, failing the whole query with "Cannot read DateTime: neither Date
+/// nor Time was parsed successfully" — every first page failed (#1177). The
+/// `= ''` guard stays, so pagination semantics are unchanged.
+fn list_events_sql() -> String {
+    format!(
+        "select ts, event_id, server, tool, transport, status, latency_ms, org_id, team_id, project_id, \
+                virtual_key_id, user_id, request_id, trace_id, error \
+         from mcp_tool_call_logs where {WHERE_WINDOW} \
+           and ({{server:String}} = '' or server = {{server:String}}) \
+           and ({{tool:String}} = '' or tool = {{tool:String}}) \
+           and ({{transport:String}} = '' or transport = {{transport:String}}) \
+           and ({{status:String}} = '' or status = {{status:String}}) \
+           and ({{key:String}} = '' or virtual_key_id = {{key:String}}) \
+           and ({{user:String}} = '' or user_id = {{user:String}}) \
+           and ({{cursor_ts:String}} = '' or ts < parseDateTime64BestEffortOrZero({{cursor_ts:String}}) \
+                or (ts = parseDateTime64BestEffortOrZero({{cursor_ts:String}}) and event_id < {{cursor_event_id:String}})) \
+         order by ts desc, event_id desc limit {{limit:UInt32}} format JSON"
+    )
+}
+
 async fn list_events(
     principal: Principal,
     State(state): State<ControlState>,
@@ -254,20 +279,7 @@ async fn list_events(
         Err(response) => return response,
     };
     let limit = clamp_limit(q.limit);
-    let sql = format!(
-        "select ts, event_id, server, tool, transport, status, latency_ms, org_id, team_id, project_id, \
-                virtual_key_id, user_id, request_id, trace_id, error \
-         from mcp_tool_call_logs where {WHERE_WINDOW} \
-           and ({{server:String}} = '' or server = {{server:String}}) \
-           and ({{tool:String}} = '' or tool = {{tool:String}}) \
-           and ({{transport:String}} = '' or transport = {{transport:String}}) \
-           and ({{status:String}} = '' or status = {{status:String}}) \
-           and ({{key:String}} = '' or virtual_key_id = {{key:String}}) \
-           and ({{user:String}} = '' or user_id = {{user:String}}) \
-           and ({{cursor_ts:String}} = '' or ts < parseDateTime64BestEffort({{cursor_ts:String}}) \
-                or (ts = parseDateTime64BestEffort({{cursor_ts:String}}) and event_id < {{cursor_event_id:String}})) \
-         order by ts desc, event_id desc limit {{limit:UInt32}} format JSON"
-    );
+    let sql = list_events_sql();
     let mut params = window_params(&WindowQuery {
         since: q.since,
         until: q.until,
@@ -411,6 +423,36 @@ mod tests {
         );
         assert!(captured.contains("[REDACTED]"));
         assert!(!captured.contains("secret"));
+    }
+
+    #[test]
+    fn list_query_never_strict_parses_an_absent_cursor() {
+        // an absent cursor binds `cursor_ts` to ''; clickhouse still evaluates
+        // the parse of that constant, so a strict parse failed every first page
+        // with "Cannot read DateTime" (#1177)
+        let sql = list_events_sql();
+        assert!(!sql.contains("parseDateTime64BestEffort("));
+        // two for the shared window bounds, two for the keyset cursor
+        assert_eq!(sql.matches("parseDateTime64BestEffortOrZero(").count(), 4);
+        // the short-circuit guard stays, so keyset pagination is unchanged
+        assert!(sql.contains("{cursor_ts:String} = '' or ts < "));
+        assert!(sql.contains("and event_id < {cursor_event_id:String}"));
+    }
+
+    #[test]
+    fn list_query_binds_every_filter_as_a_param() {
+        let sql = list_events_sql();
+        for param in [
+            "{server:String}",
+            "{tool:String}",
+            "{transport:String}",
+            "{status:String}",
+            "{key:String}",
+            "{user:String}",
+            "{limit:UInt32}",
+        ] {
+            assert!(sql.contains(param), "missing bound param {param}");
+        }
     }
 
     #[test]
