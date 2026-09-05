@@ -25,8 +25,11 @@ const BASELINE_PATH = join(ROOT, "src", "lib", "i18n", "literals-baseline.json")
 // the stories test the catalogs instead of the component. `story-harness.tsx`
 // is the fixture those stories share — it sits under `pages/` without being a
 // screen, and it says so in its own header comment, so it skips too.
-const SCANNED = ["src/components/**/*.tsx", "src/pages/**/*.tsx"];
-const SKIP = /\.(stories|test)\.tsx$|(^|\/)story-harness\.tsx$/;
+// `src/lib` is scanned too: `scope.ts` rendered English straight into the
+// shell for months while the gate looked only at components and pages (#1200).
+// the i18n machinery itself and the tests are the exceptions
+const SCANNED = ["src/components/**/*.tsx", "src/pages/**/*.tsx", "src/lib/**/*.{ts,tsx}", "src/App.tsx"];
+const SKIP = /\.(stories|test)\.tsx?$|(^|\/)story-harness\.tsx$|^src\/lib\/i18n\//;
 
 const found: Literal[] = [];
 for (const pattern of SCANNED) {
