@@ -12,6 +12,7 @@ import {
 import { LoadError } from "@/components/LoadError";
 import { ListSkeleton } from "@/components/LoadingState";
 import { Button } from "@/components/ui/button";
+import { CodeBlock } from "@/components/ui/code-block";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Sheet, SheetBody, SheetHeader } from "@/components/ui/sheet";
 import {
@@ -25,6 +26,7 @@ import {
   type InvocationRow,
 } from "@/lib/api";
 import { useIsSuperadmin } from "@/lib/can";
+import type { CodeLanguage } from "@/lib/code";
 import { useCurrencyCode } from "@/lib/currency";
 import { useScope } from "@/lib/scope";
 import { useFormat } from "@/lib/i18n/format";
@@ -243,7 +245,7 @@ export default function Logs() {
         />
       </div>
       {selected.error && (
-        <DrawerBlock label="Error" content={selected.error} />
+        <DrawerBlock label="Error" content={selected.error} language="log" />
       )}
       <PayloadBlock label="Request" raw={selected.request_payload} />
       <PayloadBlock label="Response" raw={selected.response_payload} />
@@ -574,7 +576,9 @@ function PayloadBlock({ label, raw }: { label: string; raw: string | undefined }
     staleTime: 60_000,
   });
 
-  if (body !== null) return <DrawerBlock label={label} content={body} />;
+  if (body !== null) {
+    return <DrawerBlock label={label} content={body} language={payloadLanguage(raw)} />;
+  }
 
   const captureOff = settings.data ? !settings.data.payload_capture_enabled : undefined;
   const reason =
@@ -613,6 +617,19 @@ function pretty(raw: string | undefined): string | null {
   }
 }
 
+// a logged payload is JSON when it parses as JSON, and opaque text when it does
+// not — a multipart upload, a truncated body, or the "logging is off" notice.
+// highlighting the second as JSON would invent structure that is not there
+function payloadLanguage(raw: string | undefined): CodeLanguage {
+  if (!raw) return "text";
+  try {
+    JSON.parse(raw);
+    return "json";
+  } catch {
+    return "text";
+  }
+}
+
 function DrawerStat({
   label,
   value,
@@ -634,15 +651,25 @@ function DrawerStat({
   );
 }
 
-function DrawerBlock({ label, content }: { label: string; content: string }) {
+function DrawerBlock({
+  label,
+  content,
+  language,
+}: {
+  label: string;
+  content: string;
+  language: CodeLanguage;
+}) {
   return (
     <div>
       <div className="mb-1.5 text-[0.6875rem] uppercase tracking-[0.06em] text-[color:var(--text-subtle)]">
         {label}
       </div>
-      <pre className="overflow-x-auto whitespace-pre-wrap rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] p-3 font-mono text-xs text-[color:var(--text-secondary)]">
-        {content}
-      </pre>
+      {/* the payload is the reason the drawer was opened: it reads through the
+          shared code block, so a malformed field is visible rather than hidden
+          in a wall of monospace (#949). soft-wrapped, because the drawer is
+          narrow and a body line is long */}
+      <CodeBlock value={content} language={language} label={label} wrap />
     </div>
   );
 }

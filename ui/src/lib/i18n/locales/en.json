@@ -666,7 +666,6 @@
         "title": "OpenTelemetry Collector config",
         "where": "This is the document your collector runs. Rolter exports once, to that one collector; the config below is what fans what it receives out to every enabled connector, each pipeline with its own sampling and auth.",
         "endpoint": "GET /api/v1/connectors/collector-config",
-        "copy": "Copy collector config",
         "emptyTitle": "Nothing to deliver yet",
         "emptyBody": "With no connectors the config renders no exporters and no pipelines, so a collector running it would deliver nothing. Add a connector first.",
         "deploy": "Save it as the collector's config file — infra/otel/collector.compose.yaml in the docker/docker-compose.observability.yml overlay — or point the collector straight at the URL above with --config and reload it on a schedule."
@@ -1198,7 +1197,8 @@
       "saved": "Saved ✓",
       "hint": "A rolter virtual key, minted on the Virtual Keys screen. Not a provider key — those are configured on the provider and are never sent by clients."
     },
-    "snippet": "Code snippet"
+    "snippet": "Code snippet",
+    "rawOutput": "Show raw text"
   },
   "providerSheet": {
     "apiBase": {
@@ -1641,5 +1641,16 @@
     "needsRole": "Requires the {{role}} role",
     "needsSuperadmin": "Requires a superadmin",
     "needsPermission": "Your role does not permit this"
+  },
+  "code": {
+    "region": "{{language}} code",
+    "regionNamed": "{{label}} — {{language}} code",
+    "copy": "Copy code",
+    "copyNamed": "Copy {{label}}"
+  },
+  "markdown": {
+    "codeBlock": "Code block",
+    "table": "Table",
+    "imageBlocked": "Images in model output are not loaded"
   }
 }
