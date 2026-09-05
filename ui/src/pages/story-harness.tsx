@@ -233,30 +233,53 @@ export function sheet(): HTMLElement {
  * Every request the stub was given, so a story can assert the DELETE actually
  * left rather than that a row vanished from a fixture it controls (#1179).
  */
+export interface RecordedCall {
+  method: string;
+  url: string;
+  /** the request body as sent, when there was one */
+  body?: string;
+}
+
 export interface Recorder {
   stub: FetchStub;
-  calls: { method: string; url: string }[];
+  calls: RecordedCall[];
   /** wait for a request with `method` whose URL contains `fragment` */
   expectSent: (method: string, fragment: string) => Promise<void>;
   /** assert none was sent — the half a "cancel" test exists to check */
   expectNotSent: (method: string, fragment: string) => void;
+  /**
+   * Wait for a matching request and return its parsed JSON body.
+   *
+   * Asserting the *body* is the difference between "the screen sent a PUT" and
+   * "the screen sent the attribution the operator picked": a mutation that
+   * fires with the wrong payload passes every url-only assertion (#1193).
+   */
+  expectSentBody: (method: string, fragment: string) => Promise<unknown>;
 }
 
 export function recording(handler: FetchStub): Recorder {
-  const calls: { method: string; url: string }[] = [];
-  const sent = (method: string, fragment: string) =>
-    calls.some((c) => c.method === method && c.url.includes(fragment));
+  const calls: RecordedCall[] = [];
+  const match = (method: string, fragment: string) =>
+    calls.find((c) => c.method === method && c.url.includes(fragment));
   return {
     stub: async (input, init) => {
-      calls.push({ method: (init?.method ?? "GET").toUpperCase(), url: String(input) });
+      calls.push({
+        method: (init?.method ?? "GET").toUpperCase(),
+        url: String(input),
+        body: typeof init?.body === "string" ? init.body : undefined,
+      });
       return handler(input, init);
     },
     calls,
     expectSent: async (method, fragment) => {
-      await waitFor(() => expect(sent(method, fragment)).toBe(true));
+      await waitFor(() => expect(match(method, fragment)).toBeDefined());
     },
     expectNotSent: (method, fragment) => {
-      expect(sent(method, fragment)).toBe(false);
+      expect(match(method, fragment)).toBeUndefined();
+    },
+    expectSentBody: async (method, fragment) => {
+      await waitFor(() => expect(match(method, fragment)?.body).toBeDefined());
+      return JSON.parse(match(method, fragment)!.body as string) as unknown;
     },
   };
 }

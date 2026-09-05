@@ -104,6 +104,53 @@ export function KeyModelsField({
   );
 }
 
+/**
+ * The per-key response-cache override.
+ *
+ * Three states, not a switch: "inherit" is the absence of a decision and is
+ * what a key gets when nobody made one, while "off" and "on" both override the
+ * route. Collapsing that to a boolean would turn "I did not choose" into "I
+ * chose no".
+ */
+export function KeyCacheField({
+  value,
+  onChange,
+}: {
+  value: CacheMode;
+  onChange: (value: CacheMode) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Field label={t("keyMint.cache")} hint={t("keyMint.cacheHint")}>
+      <Select
+        aria-label={t("keyMint.cache")}
+        value={value}
+        onChange={(e) => onChange(e.target.value as CacheMode)}
+      >
+        <option value="inherit">{t("keyMint.cacheInherit")}</option>
+        <option value="off">{t("keyMint.cacheOff")}</option>
+        <option value="on">{t("keyMint.cacheOn")}</option>
+      </Select>
+    </Field>
+  );
+}
+
+/** the three states `cache` can be in on the wire: null, false, true */
+export type CacheMode = "inherit" | "off" | "on";
+
+export function cacheMode(cache: boolean | null | undefined): CacheMode {
+  if (cache === true) return "on";
+  if (cache === false) return "off";
+  return "inherit";
+}
+
+/** `null` is the wire value for "inherit", which is not the same as `false` */
+export function parseCacheMode(value: string): boolean | null {
+  if (value === "on") return true;
+  if (value === "off") return false;
+  return null;
+}
+
 /** split a comma-separated allow-list into the array the API takes */
 export function parseModels(text: string): string[] {
   return text
@@ -120,10 +167,13 @@ export function parseModels(text: string): string[] {
 export function KeyReachSummary({
   project,
   models,
+  providers = [],
   ttl,
 }: {
   project: string;
   models: string[];
+  /** provider slugs the key is narrowed to; empty is every provider */
+  providers?: string[];
   ttl: string;
 }) {
   const { t } = useTranslation();
@@ -142,6 +192,14 @@ export function KeyReachSummary({
             : t("keyMint.reach.someModels", {
                 count: models.length,
                 models: models.join(", "),
+              })}
+        </li>
+        <li>
+          {providers.length === 0
+            ? t("keyMint.reach.allProviders")
+            : t("keyMint.reach.someProviders", {
+                count: providers.length,
+                providers: providers.join(", "),
               })}
         </li>
         <li>

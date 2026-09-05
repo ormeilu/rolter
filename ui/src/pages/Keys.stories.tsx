@@ -10,14 +10,106 @@ import {
   expectSkeleton,
   json,
   pending,
+  recording,
   scoped,
   sheet,
   type FetchStub,
+  type Recorder,
   withConfirm,
 } from "./story-harness";
-import type { VirtualKeyRow } from "@/lib/api";
+import type {
+  BusinessUnitRow,
+  CustomerRow,
+  ProviderRow,
+  VirtualKeyRow,
+} from "@/lib/api";
 import { formattersFor } from "@/lib/i18n/format";
 import { atMobile, atTablet, expectNoHorizontalOverflow } from "@/lib/story-viewport";
+
+const UNIT_ID = "aaaaaaaa-0000-0000-0000-000000000001";
+const CUSTOMER_ID = "bbbbbbbb-0000-0000-0000-000000000001";
+
+const UNITS: BusinessUnitRow[] = [
+  {
+    id: UNIT_ID,
+    org_id: "org-1",
+    name: "Platform Engineering",
+    slug: "platform-engineering",
+    retired_at: null,
+    created_at: "2026-01-05T10:00:00Z",
+  },
+];
+
+const CUSTOMERS: CustomerRow[] = [
+  {
+    id: CUSTOMER_ID,
+    org_id: "org-1",
+    business_unit_id: UNIT_ID,
+    name: "Acme Corp",
+    slug: "acme-corp",
+    retired_at: null,
+    created_at: "2026-02-05T10:00:00Z",
+  },
+  // owned by no unit, so it pairs with whichever unit is chosen
+  {
+    id: "bbbbbbbb-0000-0000-0000-000000000002",
+    org_id: "org-1",
+    business_unit_id: null,
+    name: "Globex",
+    slug: "globex",
+    retired_at: null,
+    created_at: "2026-04-05T10:00:00Z",
+  },
+];
+
+const PROVIDERS: ProviderRow[] = [
+  {
+    id: "prov-1",
+    org_id: "org-1",
+    name: "OpenAI",
+    slug: "openai",
+    kind: "openai",
+    api_base: "https://api.openai.com/v1",
+    egress_proxies: [],
+    created_at: "2026-01-01T00:00:00Z",
+  },
+  {
+    id: "prov-2",
+    org_id: "org-1",
+    name: "Anthropic",
+    slug: "anthropic",
+    kind: "anthropic",
+    api_base: "https://api.anthropic.com",
+    egress_proxies: [],
+    created_at: "2026-01-01T00:00:00Z",
+  },
+];
+
+/** the three org-scoped lookups the attribution editor reads */
+const lookups = (url: string): Response | null => {
+  if (url.includes("/business-units")) return json(UNITS);
+  if (url.includes("/customers")) return json(CUSTOMERS);
+  if (url.includes("/providers")) return json(PROVIDERS);
+  return null;
+};
+
+/**
+ * A stub that answers the lookups and every mutation, and records what was
+ * sent. The recorder is held in a module-scope slot the story's `play` reads:
+ * `render` always runs first, and asserting on the request body is the only way
+ * to tell "a PUT left" from "the right PUT left".
+ */
+let sent: Recorder;
+const recorded = (row: VirtualKeyRow): FetchStub => {
+  sent = recording(
+    scoped(async (input, init) => {
+      if (init?.method === "POST") return json({ ...row, key: "sk-rolter-once" }, 201);
+      if (init?.method === "PUT") return json(row);
+      return lookups(String(input)) ?? json(KEYS);
+    }),
+  );
+  return sent.stub;
+};
 
 const KEYS: VirtualKeyRow[] = [
   {
@@ -27,9 +119,9 @@ const KEYS: VirtualKeyRow[] = [
     key_prefix: "sk-rolter-backend",
     name: "backend service",
     models: ["gpt-4o", "claude-sonnet"],
-    providers: [],
+    providers: ["openai"],
     created_by: null,
-    business_unit_id: null,
+    business_unit_id: UNIT_ID,
     customer_id: null,
     disabled: false,
     expires_at: null,
@@ -55,7 +147,11 @@ const KEYS: VirtualKeyRow[] = [
 ];
 
 const withKeys = (keys: VirtualKeyRow[], status = 200): FetchStub =>
-  scoped(async () => json(status === 200 ? keys : { error: { message: "forbidden" } }, status));
+  scoped(
+    async (input) =>
+      lookups(String(input)) ??
+      json(status === 200 ? keys : { error: { message: "forbidden" } }, status),
+  );
 
 const meta = {
   title: "Screens/Keys",
@@ -122,10 +218,10 @@ export const Forbidden: Story = {
 export const CreatesAKey: Story = {
   render: () => (
     <Harness
-      fetchStub={scoped(async (_input, init) =>
+      fetchStub={scoped(async (input, init) =>
         init?.method === "POST"
           ? json({ ...KEYS[0], key: "sk-rolter-plaintext-shown-once" }, 201)
-          : json(KEYS),
+          : (lookups(String(input)) ?? json(KEYS)),
       )}
     >
       <Keys />
@@ -235,7 +331,12 @@ export const RowExpiryUsesTheSameDateFormatAsTheMintPreview: Story = {
   },
 };
 
-/** The six-column key list scrolls inside its border rather than the page. */
+/**
+ * The key list scrolls inside its border rather than dragging the page with
+ * it. #1193 added a seventh column (attribution), so the row is wider than the
+ * viewport at 375px by design — the assertion is that the *page* does not
+ * scroll, not that the table fits.
+ */
 export const Mobile: Story = {
   ...atMobile,
   render: () => (
@@ -261,5 +362,174 @@ export const Tablet: Story = {
     const canvas = within(canvasElement);
     await canvas.findByText("backend service");
     await expectNoHorizontalOverflow();
+  },
+};
+
+/**
+ * #1193: the row is where an operator sees whether a key's spend has a home.
+ * The two dimensions are badged separately because they answer different
+ * questions — which part of us spent it, and which customer it was for.
+ */
+export const RowsShowWhereSpendIsCharged: Story = {
+  render: () => (
+    <Harness fetchStub={withKeys(KEYS)}>
+      <Keys />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("Platform Engineering")).toBeVisible();
+    // the unattributed key is not badged "Unattributed": attribution is
+    // optional, and a chip on every row would read as a warning about it
+    await expect(canvas.queryByText("Unattributed")).toBeNull();
+  },
+};
+
+/**
+ * The PUT the whole feature turns on. Asserting the body rather than that a
+ * request left is the point: an editor that sends the wrong ids satisfies every
+ * url-only assertion while charging the spend to the wrong unit.
+ */
+export const EditingAKeySendsTheAttributionPut: Story = {
+  render: () => (
+    <Harness fetchStub={recorded(KEYS[1])}>
+      <Keys />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("revoked laptop");
+    await userEvent.click(
+      await canvas.findByRole("button", { name: /Edit key revoked laptop/i }),
+    );
+    const form = sheet();
+    // save stays disabled until something actually moves — re-saving an
+    // untouched sheet must not write or audit anything
+    await expect(within(form).getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.selectOptions(within(form).getByLabelText("Business unit"), UNIT_ID);
+    await userEvent.selectOptions(within(form).getByLabelText("Customer"), CUSTOMER_ID);
+    await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+
+    await expect(await sent.expectSentBody("PUT", "/attribution")).toEqual({
+      business_unit_id: UNIT_ID,
+      customer_id: CUSTOMER_ID,
+    });
+    // the allow-list never moved, so its endpoint is left alone
+    sent.expectNotSent("PUT", "/providers");
+  },
+};
+
+/**
+ * Clearing an attribution has to be expressible. The server reads an omitted
+ * field as "leave unchanged", so the editor always sends both dimensions and
+ * `null` is how an operator says "charge this to nobody".
+ */
+export const ClearingAnAttributionSendsNull: Story = {
+  render: () => (
+    <Harness fetchStub={recorded(KEYS[0])}>
+      <Keys />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("backend service");
+    await userEvent.click(
+      await canvas.findByRole("button", { name: /Edit key backend service/i }),
+    );
+    const form = sheet();
+    // seeded from the row, so the editor opens on the truth rather than blank
+    await expect(within(form).getByLabelText("Business unit")).toHaveValue(UNIT_ID);
+    await userEvent.selectOptions(
+      within(form).getByLabelText("Business unit"),
+      "__unattributed__",
+    );
+    await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+
+    await expect(await sent.expectSentBody("PUT", "/attribution")).toEqual({
+      business_unit_id: null,
+      customer_id: null,
+    });
+  },
+};
+
+/** the provider allow-list goes to its own endpoint, and only when it moved */
+export const NarrowingTheProviderAllowListSendsItsOwnPut: Story = {
+  render: () => (
+    <Harness fetchStub={recorded(KEYS[1])}>
+      <Keys />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("revoked laptop");
+    await userEvent.click(
+      await canvas.findByRole("button", { name: /Edit key revoked laptop/i }),
+    );
+    const form = sheet();
+    await userEvent.click(within(form).getByRole("checkbox", { name: "Anthropic" }));
+    await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+
+    await expect(await sent.expectSentBody("PUT", "/providers")).toEqual({
+      providers: ["anthropic"],
+    });
+    sent.expectNotSent("PUT", "/attribution");
+  },
+};
+
+/**
+ * The create sheet carries the same controls. `POST /virtual-keys` takes the
+ * allow-list but not the attribution, so a key created with one is pointed at
+ * it by a follow-up PUT rather than losing the choice silently.
+ */
+export const CreatingWithAnAttributionFollowsUpWithThePut: Story = {
+  render: () => (
+    <Harness fetchStub={recorded(KEYS[0])}>
+      <Keys />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await clickWhenEnabled(canvasElement, /add virtual key/i);
+    const form = sheet();
+    await userEvent.type(within(form).getByLabelText("Name"), "ci runner");
+    await userEvent.click(within(form).getByRole("checkbox", { name: "OpenAI" }));
+    await userEvent.selectOptions(within(form).getByLabelText("Business unit"), UNIT_ID);
+    await userEvent.click(within(form).getByRole("button", { name: "Create" }));
+
+    const posted = (await sent.expectSentBody("POST", "/virtual-keys")) as {
+      providers: string[];
+    };
+    await expect(posted.providers).toEqual(["openai"]);
+    await expect(await sent.expectSentBody("PUT", "/attribution")).toEqual({
+      business_unit_id: UNIT_ID,
+      customer_id: null,
+    });
+  },
+};
+
+/**
+ * The server rejects a customer already owned by a different business unit, so
+ * the editor only ever offers pairings it will accept. A customer that belongs
+ * to no unit fits under any of them.
+ */
+export const OnlyCustomersThatFitTheChosenUnitAreOffered: Story = {
+  render: () => (
+    <Harness fetchStub={withKeys(KEYS)}>
+      <Keys />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("revoked laptop");
+    await userEvent.click(
+      await canvas.findByRole("button", { name: /Edit key revoked laptop/i }),
+    );
+    const form = sheet();
+    const customer = within(form).getByLabelText("Customer");
+    // with no unit chosen, every customer is reachable
+    await expect(within(customer).getByText("Acme Corp")).toBeInTheDocument();
+    await userEvent.selectOptions(within(form).getByLabelText("Business unit"), UNIT_ID);
+    // Acme belongs to that unit and Globex to none, so both still fit
+    await expect(within(customer).getByText("Acme Corp")).toBeInTheDocument();
+    await expect(within(customer).getByText("Globex")).toBeInTheDocument();
   },
 };

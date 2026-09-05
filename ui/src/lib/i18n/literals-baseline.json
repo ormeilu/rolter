@@ -253,21 +253,13 @@
     "error budget burn"
   ],
   "src/pages/Keys.tsx": [
-    "Cache",
     "Copy key prefix",
     "Create virtual key",
     "Delete key",
     "Delete virtual key",
     "Done",
-    "Inherit route setting",
-    "Key",
     "Key created",
-    "Models",
-    "Name",
-    "Off",
-    "Response cache",
     "Search by name…",
-    "Status",
     "The plaintext key is shown once, right after creation — copy it then",
     "all models"
   ],

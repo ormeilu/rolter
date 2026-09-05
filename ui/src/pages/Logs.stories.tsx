@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import Logs from "./Logs";
 import {
@@ -13,7 +13,12 @@ import {
   scoped,
   type FetchStub,
 } from "./story-harness";
-import type { InvocationRow, ModelPriceRow } from "@/lib/api";
+import type {
+  BusinessUnitRow,
+  CustomerRow,
+  InvocationRow,
+  ModelPriceRow,
+} from "@/lib/api";
 import { formattersFor } from "@/lib/i18n/format";
 import { atMobile, atTablet, expectNoHorizontalOverflow } from "@/lib/story-viewport";
 
@@ -31,6 +36,8 @@ const row = (over: Partial<InvocationRow>): InvocationRow => ({
   team_id: "team-1",
   project_id: "project-1",
   virtual_key_id: "vk-1",
+  business_unit_id: "",
+  customer_id: "",
   model: "gpt-4o",
   provider: "openai",
   target: "openai/gpt-4o",
@@ -47,8 +54,6 @@ const row = (over: Partial<InvocationRow>): InvocationRow => ({
   latency_ms: 842,
   ttft_ms: 120,
   error: "",
-  business_unit_id: "",
-  customer_id: "",
   ...over,
 });
 
@@ -70,13 +75,41 @@ const PRICES: ModelPriceRow[] = [
   },
 ];
 
+const UNIT: BusinessUnitRow = {
+  id: "unit-1",
+  org_id: "org-1",
+  name: "Platform Engineering",
+  slug: "platform-engineering",
+  retired_at: null,
+  created_at: "2026-01-05T10:00:00Z",
+};
+
+const CUSTOMER: CustomerRow = {
+  id: "cust-1",
+  org_id: "org-1",
+  business_unit_id: "unit-1",
+  name: "Acme Corp",
+  slug: "acme-corp",
+  retired_at: null,
+  created_at: "2026-02-05T10:00:00Z",
+};
+
 const withLogs = (rows: InvocationRow[], base = "USD"): FetchStub =>
   routes([
     ["/api/v1/analytics/invocations", () => ({ data: rows })],
     ["/api/v1/model-prices", () => PRICES],
     ["/api/v1/currency", () => ({ base, codes: [base], rates: {} })],
     ["/api/v1/models", () => []],
+    ["/business-units", () => [UNIT]],
+    ["/customers", () => [CUSTOMER]],
   ]);
+
+// one attributed request and one that never named a unit, so a filter has
+// something to actually remove
+const ATTRIBUTED: InvocationRow[] = [
+  row({ request_id: "req-attributed", business_unit_id: "unit-1", customer_id: "cust-1" }),
+  row({ request_id: "req-orphan", model: "internal-llama", provider: "vllm" }),
+];
 
 const meta = {
   title: "Screens/Logs",
@@ -216,5 +249,96 @@ export const Tablet: Story = {
     const canvas = within(canvasElement);
     await canvas.findAllByText(fmt.dateTimeMs(PRICED_AT));
     await expectNoHorizontalOverflow();
+  },
+};
+
+/**
+ * #1193: a request log that records which business unit paid for a call, and
+ * then cannot be read by it, is a column nobody can use. The rail filters on
+ * both governance dimensions.
+ */
+export const FiltersByBusinessUnit: Story = {
+  render: () => (
+    <Harness fetchStub={withLogs(ATTRIBUTED)}>
+      <Logs />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findAllByText("gpt-4o")).toHaveLength(1);
+    await expect(await canvas.findByText("internal-llama")).toBeInTheDocument();
+
+    await userEvent.click(canvas.getByRole("button", { name: /Filters/ }));
+    await userEvent.click(
+      await canvas.findByRole("button", { name: "Business unit" }),
+    );
+    await userEvent.click(
+      await canvas.findByRole("checkbox", { name: "Platform Engineering" }),
+    );
+
+    // only the attributed row survives; the unattributed one is not "cheap",
+    // it is charged to nobody, and a business-unit report must not include it
+    await waitFor(() => expect(canvas.queryByText("internal-llama")).toBeNull());
+    await expect(canvas.getAllByText("gpt-4o")).toHaveLength(1);
+  },
+};
+
+/** the same rail, on the customer dimension */
+export const FiltersByCustomer: Story = {
+  render: () => (
+    <Harness fetchStub={withLogs(ATTRIBUTED)}>
+      <Logs />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("internal-llama");
+    await userEvent.click(canvas.getByRole("button", { name: /Filters/ }));
+    await userEvent.click(await canvas.findByRole("button", { name: "Customer" }));
+    await userEvent.click(await canvas.findByRole("checkbox", { name: "Acme Corp" }));
+    await waitFor(() => expect(canvas.queryByText("internal-llama")).toBeNull());
+  },
+};
+
+/**
+ * A filter that narrows only the page in front of you must say so. The
+ * invocations endpoint searches by model, key and status; attribution is
+ * applied client-side, and implying otherwise would make an operator read a
+ * partial answer as a complete one.
+ */
+export const TheAttributionFilterSaysWhatItSearches: Story = {
+  render: () => (
+    <Harness fetchStub={withLogs(ATTRIBUTED)}>
+      <Logs />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("internal-llama");
+    await userEvent.click(canvas.getByRole("button", { name: /Filters/ }));
+    await userEvent.click(
+      await canvas.findByRole("button", { name: "Business unit" }),
+    );
+    await expect(
+      await canvas.findByText(/searched by model, key and status only/),
+    ).toBeVisible();
+  },
+};
+
+/** the detail drawer names the unit and the customer, not their uuids */
+export const DetailDrawerNamesTheAttribution: Story = {
+  render: () => (
+    <Harness fetchStub={withLogs(ATTRIBUTED)}>
+      <Logs />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      await canvas.findByRole("button", { name: /Open request details for gpt-4o/i }),
+    );
+    const drawer = within(await canvas.findByRole("complementary", { name: "Details" }));
+    await expect(drawer.getByText("Platform Engineering")).toBeVisible();
+    await expect(drawer.getByText("Acme Corp")).toBeVisible();
   },
 };

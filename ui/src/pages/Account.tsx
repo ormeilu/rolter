@@ -6,14 +6,18 @@ import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   DEFAULT_KEY_TTL_DAYS,
+  KeyCacheField,
   KeyExpiryField,
   KeyModelsField,
   KeyNameField,
   KeyReachSummary,
   keyNameProblem,
+  parseCacheMode,
   parseModels,
   ttlToDays,
+  type CacheMode,
 } from "@/components/KeyMintFields";
+import { KeyProvidersField } from "@/components/KeyAttributionFields";
 import { LoadError } from "@/components/LoadError";
 import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
@@ -39,6 +43,7 @@ import {
   AnalyticsUnavailableError,
   deleteMyKey,
   fetchMyKeys,
+  fetchProviders,
   isOpenModeNoSession,
   fetchMyUsage,
   mintMyKey,
@@ -46,6 +51,7 @@ import {
   type MintedKey,
   type MyUsageRow,
   type OwnedKeyRow,
+  type ProviderRow,
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
@@ -99,6 +105,16 @@ export default function Account() {
 
   const usageUnavailable = usage.error instanceof AnalyticsUnavailableError;
   const selfServiceUnavailable = isOpenModeNoSession(keys.error);
+
+  // the provider allow-list needs the org's providers, which a plain member may
+  // not be allowed to read. `retry: false` and an empty list on failure, so the
+  // mint sheet drops the control rather than blocking on a 403 it cannot fix
+  const providers = useQuery({
+    queryKey: ["providers", scope.orgId],
+    queryFn: () => fetchProviders(scope.orgId as string),
+    enabled: !!scope.orgId,
+    retry: false,
+  });
 
   return (
     <PageBody>
@@ -172,6 +188,7 @@ export default function Account() {
           projectLabel={
             scope.projects.find((p) => p.id === scope.projectId)?.name
           }
+          providers={providers.data ?? []}
           onMinted={(m) => {
             invalidate();
             setMinted(m);
@@ -329,24 +346,30 @@ function MintKeyDialog({
   onOpenChange,
   projectId,
   projectLabel,
+  providers,
   onMinted,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string;
   projectLabel?: string;
+  providers: ProviderRow[];
   onMinted: (m: MintedKey) => void;
 }) {
   const { t } = useTranslation();
   const [name, setName] = React.useState("");
   const [modelsText, setModelsText] = React.useState("");
   const [ttl, setTtl] = React.useState(String(DEFAULT_KEY_TTL_DAYS));
+  const [providerSel, setProviderSel] = React.useState<string[]>([]);
+  const [cache, setCache] = React.useState<CacheMode>("inherit");
 
   React.useEffect(() => {
     if (open) {
       setName("");
       setModelsText("");
       setTtl(String(DEFAULT_KEY_TTL_DAYS));
+      setProviderSel([]);
+      setCache("inherit");
     }
   }, [open]);
 
@@ -358,6 +381,8 @@ function MintKeyDialog({
       mintMyKey(projectId, {
         name: name.trim(),
         models,
+        providers: providerSel,
+        cache: parseCacheMode(cache),
         expires_in_days: ttlToDays(ttl),
       }),
     onSuccess: (m) => {
@@ -372,7 +397,7 @@ function MintKeyDialog({
       onOpenChange={onOpenChange}
       title={t("account.keys.mint.title")}
       subtitle={t("account.keys.mint.subtitle", { project })}
-      dirty={Boolean(name || modelsText)}
+      dirty={Boolean(name || modelsText || providerSel.length) || cache !== "inherit"}
       errorMessage={mint.isError ? (mint.error as Error).message : undefined}
       saveLabel={t("account.keys.mint.save")}
       canSave={keyNameProblem(name) === null}
@@ -382,8 +407,19 @@ function MintKeyDialog({
       <div className="space-y-3">
         <KeyNameField value={name} onChange={setName} />
         <KeyExpiryField value={ttl} onChange={setTtl} />
+        <KeyCacheField value={cache} onChange={setCache} />
         <KeyModelsField value={modelsText} onChange={setModelsText} />
-        <KeyReachSummary project={project} models={models} ttl={ttl} />
+        <KeyProvidersField
+          providers={providers}
+          selected={providerSel}
+          onChange={setProviderSel}
+        />
+        <KeyReachSummary
+          project={project}
+          models={models}
+          providers={providerSel}
+          ttl={ttl}
+        />
       </div>
     </EditorSheet>
   );

@@ -13,21 +13,37 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetBody, SheetFooter, SheetHeader } from "@/components/ui/sheet";
 import {
+  AnalyticsUnavailableError,
   createBusinessUnit,
   createCustomer,
   deleteBusinessUnit,
   deleteCustomer,
+  fetchAttributionSpend,
   fetchBusinessUnits,
   fetchCustomers,
   updateBusinessUnit,
   updateCustomer,
+  type AttributionSpendRow,
   type BusinessUnitRow,
   type CustomerRow,
 } from "@/lib/api";
+import { useCurrencyCode } from "@/lib/currency";
+import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
+
+// the window the spend column reports, matching the Dashboard's: one figure on
+// two screens has to mean the same thing, or the totals disagree for a reason
+// nobody can see
+const SPEND_WINDOW = { since: new Date(Date.now() - 86_400_000).toISOString() };
+
+const num = (v: number | string | undefined): number => Number(v ?? 0);
+
+/** the unattributed bucket comes back with an empty id, not a sentinel uuid */
+const UNATTRIBUTED_ID = "";
 
 // the server's slug rule, mirrored so a bad value is caught before the round
 // trip. slugs are the stable attribution identity, not a display name
@@ -188,6 +204,131 @@ function Editor({
   );
 }
 
+/**
+ * What the window cost, and how much of it nobody claimed.
+ *
+ * The unattributed figure is given the same weight as the total on purpose: a
+ * chargeback report that lists five units and quietly omits a sixth of the
+ * spend is worse than one that admits the hole, and the hole is the number an
+ * operator acts on.
+ */
+function SpendStrip({
+  rows,
+  loading,
+  error,
+  onRetry,
+}: {
+  rows: AttributionSpendRow[];
+  loading: boolean;
+  error: unknown;
+  onRetry: () => void;
+}) {
+  const { t } = useTranslation();
+  const fmt = useFormat();
+  const currency = useCurrencyCode();
+
+  // the calm not-configured note the Dashboard shows, in the one strip that
+  // needs ClickHouse — the governance list itself is postgres-backed and keeps
+  // working without it
+  if (error instanceof AnalyticsUnavailableError) {
+    return (
+      <div className="rounded-[10px] border border-[color:var(--border-default)]">
+        <EmptyState
+          uxTarget="cost-attribution-spend"
+          title={t("pages.dashboard.notConfiguredTitle")}
+          description={t("pages.dashboard.notConfiguredBody")}
+        />
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <LoadError
+        error={error}
+        resource={t("errors.resources.attributionSpend")}
+        onRetry={onRetry}
+      />
+    );
+  }
+  if (loading) return <Skeleton height={72} radius={10} />;
+
+  const total = rows.reduce((sum, r) => sum + num(r.cost_usd), 0);
+  const unattributed = rows
+    .filter((r) => r.id === UNATTRIBUTED_ID)
+    .reduce((sum, r) => sum + num(r.cost_usd), 0);
+  const share = total > 0 ? unattributed / total : 0;
+
+  return (
+    <div className="flex flex-wrap items-end gap-x-10 gap-y-3 rounded-[10px] border border-[color:var(--border-default)] bg-card px-4 py-3">
+      <SpendFigure
+        label={t("pages.costAttribution.spendWindow")}
+        value={fmt.currency(total, currency)}
+      />
+      <SpendFigure
+        label={t("pages.costAttribution.spendAttributed")}
+        value={fmt.currency(total - unattributed, currency)}
+      />
+      <SpendFigure
+        label={t("pages.costAttribution.spendUnattributed")}
+        value={fmt.currency(unattributed, currency)}
+        note={
+          unattributed > 0
+            ? t("pages.costAttribution.spendUnattributedShare", {
+                share: fmt.percent(share, 1),
+              })
+            : undefined
+        }
+      />
+    </div>
+  );
+}
+
+function SpendFigure({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string;
+  note?: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted-foreground">
+        {label}
+      </span>
+      <span className="font-mono text-lg leading-none text-foreground">{value}</span>
+      {note && (
+        <span className="text-[0.6875rem] text-[color:var(--text-subtle)]">{note}</span>
+      )}
+    </div>
+  );
+}
+
+/** the spend line on one unit's or customer's card */
+function CardSpend({ row }: { row?: AttributionSpendRow }) {
+  const { t } = useTranslation();
+  const fmt = useFormat();
+  const currency = useCurrencyCode();
+  if (!row) {
+    return (
+      <div className="font-mono text-xs text-[color:var(--text-subtle)]">
+        {t("pages.costAttribution.noSpend")}
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="font-mono text-base leading-none text-foreground">
+        {fmt.currency(num(row.cost_usd), currency)}
+      </span>
+      <span className="text-xs text-muted-foreground">
+        {t("pages.costAttribution.cardRequests", { count: num(row.requests) })}
+      </span>
+    </div>
+  );
+}
+
 // shared list shell: both screens are the same CRUD over an org-scoped
 // collection, differing only in the business-unit assignment column
 function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
@@ -208,6 +349,10 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
   mutating,
   mutationError,
   disabled,
+  spend,
+  spendLoading,
+  spendError,
+  onRetrySpend,
 }: {
   kind: "unit" | "customer";
   rows: T[];
@@ -228,6 +373,12 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
   mutating: boolean;
   mutationError?: Error;
   disabled: boolean;
+  /** window spend keyed by the dimension's own id; the empty id is the
+   *  unattributed bucket, which has no card of its own */
+  spend: AttributionSpendRow[];
+  spendLoading: boolean;
+  spendError: unknown;
+  onRetrySpend: () => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = React.useState(false);
@@ -265,6 +416,7 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
   const plural = kind === "unit" ? "business units" : "customers";
   const unitName = (id: string | null) =>
     units.find((u) => u.id === id)?.name ?? null;
+  const spendById = new Map(spend.map((row) => [row.id, row]));
 
   if (isLoading) {
     return (
@@ -307,6 +459,13 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
         </Button>
       </div>
 
+      <SpendStrip
+        rows={spend}
+        loading={spendLoading}
+        error={spendError}
+        onRetry={onRetrySpend}
+      />
+
       {rows.length === 0 ? (
         <EmptyState
           uxTarget="cost-attribution"
@@ -347,6 +506,7 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
                   </div>
                   <RetiredBadge retiredAt={row.retired_at} />
                 </div>
+                <CardSpend row={spendById.get(row.id)} />
                 {kind === "customer" && (
                   <div className="text-xs text-muted-foreground">
                     {assigned ? (
@@ -443,6 +603,13 @@ export function BusinessUnits() {
     enabled: !!orgId,
     retry: false,
   });
+  // spend for the window, unattributed bucket included: the strip's whole job
+  // is to show what the cards below it do not account for
+  const spend = useQuery({
+    queryKey: ["analytics", "by-attribution", "business_unit"],
+    queryFn: () => fetchAttributionSpend(SPEND_WINDOW, "business_unit", true),
+    retry: false,
+  });
 
 
   // UX stream (#805); screen key comes from the enclosing UxScreenProvider
@@ -505,6 +672,10 @@ export function BusinessUnits() {
       deleting={remove.isPending}
       deleteError={remove.error}
       resetDelete={() => remove.reset()}
+      spend={spend.data ?? []}
+      spendLoading={spend.isLoading}
+      spendError={spend.error}
+      onRetrySpend={() => void spend.refetch()}
     />
   );
 }
@@ -519,6 +690,11 @@ export function Customers() {
     queryKey: ["customers", orgId],
     queryFn: () => fetchCustomers(orgId as string),
     enabled: !!orgId,
+    retry: false,
+  });
+  const spend = useQuery({
+    queryKey: ["analytics", "by-attribution", "customer"],
+    queryFn: () => fetchAttributionSpend(SPEND_WINDOW, "customer", true),
     retry: false,
   });
 
@@ -596,6 +772,10 @@ export function Customers() {
       deleting={remove.isPending}
       deleteError={remove.error}
       resetDelete={() => remove.reset()}
+      spend={spend.data ?? []}
+      spendLoading={spend.isLoading}
+      spendError={spend.error}
+      onRetrySpend={() => void spend.refetch()}
     />
   );
 }

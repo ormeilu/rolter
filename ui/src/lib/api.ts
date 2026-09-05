@@ -320,6 +320,47 @@ export function fetchAnalyticsByModel(
   ).then((r) => r.data);
 }
 
+/** the governance dimension `by-attribution` groups on */
+export type AttributionDimension = "business_unit" | "customer";
+
+/**
+ * One bucket of the cost-attribution rollup. `id` is the business unit's or
+ * customer's uuid, and is the empty string for the unattributed bucket — the
+ * spend recorded against keys nobody pointed at a unit or a customer.
+ */
+export interface AttributionSpendRow {
+  id: string;
+  requests: number | string;
+  tokens: number | string;
+  prompt_tokens: number | string;
+  completion_tokens: number | string;
+  cost_usd: number | string;
+  errors: number | string;
+}
+
+/**
+ * Spend and usage grouped by business unit or customer over the window.
+ *
+ * The unattributed bucket is off by default on the server, because a chargeback
+ * report is skewed by an empty row. The dashboard asks for it anyway: a unit
+ * list that adds up to less than the deployment spent is a report with a hole
+ * in it, and the hole is the thing worth seeing.
+ */
+export function fetchAttributionSpend(
+  window: AnalyticsWindow = {},
+  dimension: AttributionDimension = "business_unit",
+  includeUnattributed = true,
+): Promise<AttributionSpendRow[]> {
+  const params = new URLSearchParams();
+  if (window.since) params.set("since", window.since);
+  if (window.until) params.set("until", window.until);
+  params.set("dimension", dimension);
+  if (includeUnattributed) params.set("include_unattributed", "true");
+  return getAnalytics<DataEnvelope<AttributionSpendRow>>(
+    `/api/v1/analytics/by-attribution?${params.toString()}`,
+  ).then((r) => r.data);
+}
+
 // one row of the `request_logs` table: a single gateway invocation. numeric
 // columns may arrive as strings from ClickHouse JSON, so coerce when rendering.
 export interface InvocationRow {
@@ -1177,6 +1218,8 @@ export interface CreateVirtualKeyInput {
   /** required — see MintKeyInput; the same rule applies on the admin path */
   name: string;
   models?: string[];
+  /** upstream provider allow-list, by slug; empty permits every provider */
+  providers?: string[];
   cache?: boolean | null;
   /** key lifetime in days; omitted means "never expires" */
   expires_in_days?: number;
@@ -1213,6 +1256,43 @@ export function setVirtualKeyCache(
   return sendJson<VirtualKeyRow>("PUT", `/api/v1/virtual-keys/${id}/cache`, {
     cache,
   });
+}
+
+/**
+ * Narrow a key to a set of upstream providers, by slug. An empty list restores
+ * the permissive default rather than locking the key out of everything.
+ */
+export function setVirtualKeyProviders(
+  id: string,
+  providers: string[],
+): Promise<VirtualKeyRow> {
+  return sendJson<VirtualKeyRow>(
+    "PUT",
+    `/api/v1/virtual-keys/${id}/providers`,
+    { providers },
+  );
+}
+
+/**
+ * Point a key's spend at a business unit and/or a customer.
+ *
+ * Both fields follow the server's three-state contract: omit to leave
+ * unchanged, `null` to clear, a uuid to set. The editor always sends both, so
+ * clearing one dimension is a thing the operator can actually do — omitting a
+ * field they emptied would silently keep the old attribution.
+ */
+export function setVirtualKeyAttribution(
+  id: string,
+  attribution: {
+    business_unit_id?: string | null;
+    customer_id?: string | null;
+  },
+): Promise<VirtualKeyRow> {
+  return sendJson<VirtualKeyRow>(
+    "PUT",
+    `/api/v1/virtual-keys/${id}/attribution`,
+    attribution,
+  );
 }
 
 export function deleteVirtualKey(id: string): Promise<void> {
