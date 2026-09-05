@@ -142,12 +142,17 @@ function MemberEditor({
             ))}
           </Select>
           <Input
+            aria-label="Upstream model"
             value={m.upstream_model}
             onChange={(e) => update(i, { upstream_model: e.target.value })}
             placeholder="passthrough"
             className="font-mono"
           />
+          {/* the grid's column captions above are not `<label>`s, so each cell
+              names itself — a `title` alone is a hidden label and nothing a
+              screen reader announces reliably */}
           <Input
+            aria-label="Relative weight"
             type="number"
             min={1}
             value={m.weight}
@@ -347,8 +352,18 @@ export function ProviderGroupSheet({
           </Field>
         )}
 
-        <Field label="Strategy" hint="how requests are balanced across member providers">
-          <Select value={draft.strategy} onChange={(e) => set({ strategy: e.target.value })}>
+        <Field
+          label="Strategy"
+          hint="how requests are balanced across member providers"
+          // two children, so Field cannot tell which one the label means — the
+          // hint below the select is the other one
+          htmlFor="provider-group-strategy"
+        >
+          <Select
+            id="provider-group-strategy"
+            value={draft.strategy}
+            onChange={(e) => set({ strategy: e.target.value })}
+          >
             {strategyOptions(draft.strategy).map((s) => (
               <option key={s} value={s}>
                 {s}

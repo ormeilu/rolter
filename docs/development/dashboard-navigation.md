@@ -71,3 +71,17 @@ would fight the pointer.
 Stories: `Resizable`, `DraggedNarrow`, `DraggedWide` and
 `CollapsedHasNoSplitter` in `nav-sidebar.stories.tsx` cover the bounds, the
 keyboard path, the ARIA contract and the collapsed case.
+
+## Every leaf is a screen
+
+`NAV` in `ui/src/lib/nav.tsx` names the entries; `SCREENS` in `ui/src/App.tsx`
+maps each navigable leaf key to the element rendered at `/<key>`. The two are
+one list written twice, and `ui/src/lib/nav.test.ts` holds them to each other:
+a nav entry with no screen, or a screen no entry reaches, fails there.
+
+Until #1201 that invariant was assumed rather than checked. `App` looked the key
+up in a `BUILT` set and fell back to a branded `Stub` screen ("TODO — we'll come
+back to this screen") for anything missing. Every leaf had been built long
+before, so the fallback rendered nowhere — dead code that still advertised that
+the rail was allowed to point at a screen which does not exist. Both the set and
+the placeholder are gone; the test is what keeps the table complete.

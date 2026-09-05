@@ -38,6 +38,10 @@ extend-ignore-re = [
   # words (e.g. "ba" inside "3ba8d7"). they authenticate against a script on
   # loopback and are checked in so the fleet is reproducible
   "vllm-local-3ba8d7",
+  # "temperture": the misspelt param in the ParamsEditor story that asserts an
+  # unrecognised key is warned about and still saved. correcting it would
+  # delete the story's subject
+  "temperture",
   # SigNoz's own dashboard schema misspells this field. the provisioned
   # dashboards (#956) are parsed by SigNoz, not by us — correcting the spelling
   # would make the import silently drop the setting

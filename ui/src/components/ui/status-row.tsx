@@ -31,6 +31,20 @@ const COLORS: Record<StatusKind, string> = {
   idle: "var(--text-subtle)",
 };
 
+// the diamond and the label want different tokens. the solid `--status-*` is a
+// signal colour, legible as a 10px glyph and below AA as text on the dark
+// surface — `colorText` used to paint the label with it, which axe fails
+// (#1201). the `-text` pair is exactly the lifted variant for this
+const LABEL_COLORS: Record<StatusKind, string> = {
+  pending: "var(--status-warning-text)",
+  running: "var(--status-info-text)",
+  success: "var(--status-success-text)",
+  error: "var(--status-danger-text)",
+  warning: "var(--status-warning-text)",
+  info: "var(--status-info-text)",
+  idle: "var(--text-secondary)",
+};
+
 export function StatusRow({
   status = "idle",
   label,
@@ -64,7 +78,7 @@ export function StatusRow({
       </span>
       <span
         className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-xs uppercase tracking-wide"
-        style={colorText ? { color } : undefined}
+        style={colorText ? { color: LABEL_COLORS[status] ?? LABEL_COLORS.idle } : undefined}
       >
         {label}
       </span>

@@ -1469,9 +1469,6 @@
     "navLabel": "Main navigation",
     "userMenuLabel": "Account and scope"
   },
-  "stub": {
-    "todo": "TODO — we'll come back to this screen"
-  },
   "providers": {
     "unserved": {
       "title_one": "{{count}} config entry is not being served to gateways",
