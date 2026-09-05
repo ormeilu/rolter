@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
 import { PageBody } from "@/components/screen";
+import { Skeleton } from "@/components/ui/skeleton";
 import { fetchMemberships } from "@/lib/api";
 import { RBAC_RESOURCES, RBAC_ROLES } from "@/lib/mock";
 import { useScope } from "@/lib/scope";
@@ -45,6 +47,16 @@ export default function Rbac() {
         </span>
       </div>
 
+      {memberships.error && (
+        // the matrix below is the control API's static contract, so it stays on
+        // screen: only the per-role member counts came from this request
+        <LoadError
+          error={memberships.error}
+          resource={t("errors.resources.roleMembers")}
+          onRetry={() => void memberships.refetch()}
+        />
+      )}
+
       <div className="overflow-hidden rounded-[10px] border border-[color:var(--border-subtle)]">
         <div
           className="grid items-end gap-3 border-b border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] px-4 py-[11px]"
@@ -56,11 +68,21 @@ export default function Rbac() {
           {RBAC_ROLES.map((r) => (
             <div key={r.key} className="flex flex-col gap-0.5">
               <span className="text-sm font-semibold capitalize">{r.label}</span>
-              <span className="text-[10px] text-[color:var(--text-subtle)]">
-                {memberships.isError
-                  ? "—"
-                  : t("pages.rbac.memberCount", { count: memberCount(r.key) })}
-              </span>
+              {memberships.isLoading ? (
+                <Skeleton
+                  width={56}
+                  height={10}
+                  radius={3}
+                  role="status"
+                  aria-label={t("common.loading")}
+                />
+              ) : (
+                <span className="text-[10px] text-[color:var(--text-subtle)]">
+                  {memberships.isError
+                    ? t("pages.rbac.membersUnknown")
+                    : t("pages.rbac.memberCount", { count: memberCount(r.key) })}
+                </span>
+              )}
             </div>
           ))}
         </div>

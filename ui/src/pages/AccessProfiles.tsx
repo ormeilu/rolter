@@ -4,6 +4,8 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { LoadError } from "@/components/LoadError";
+import { CardGridSkeleton } from "@/components/LoadingState";
 import { PageBody, Pill } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import {
@@ -162,20 +164,25 @@ export default function AccessProfiles() {
         </Button>
       </div>
 
-      {profiles.isLoading && (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      )}
+      {profiles.isLoading && <CardGridSkeleton cards={3} height={196} min={380} />}
       {profiles.isError && (
-        <p className="text-sm text-muted-foreground">
-          Access profiles need admin access: {(profiles.error as Error).message}
-        </p>
+        <LoadError
+          error={profiles.error}
+          resource={t("errors.resources.accessProfiles")}
+          onRetry={() => void profiles.refetch()}
+        />
       )}
       {profiles.data && profiles.data.length === 0 && (
         <EmptyState
           icon={<Shield className="size-5" />}
-          title="No access profiles yet"
-          description="A profile bundles custom roles and a model policy, then hands the bundle to a user or a whole team."
+          title={t("pages.accessProfiles.emptyTitle")}
+          description={t("pages.accessProfiles.emptyBody")}
           uxTarget="access-profiles"
+          actions={
+            <Button disabled={!orgId} onClick={startCreate}>
+              {t("pages.accessProfiles.emptyAction")}
+            </Button>
+          }
         />
       )}
 

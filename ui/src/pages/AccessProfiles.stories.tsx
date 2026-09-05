@@ -4,7 +4,12 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import AccessProfiles from "./AccessProfiles";
-import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
+import {
+  cancelConfirmation,
+  confirmDestructive,
+  expectSkeleton,
+  recording,
+} from "./story-harness";
 import type { AccessProfileRow } from "@/lib/api";
 
 const ORG = "11111111-1111-1111-1111-111111111111";
@@ -119,8 +124,7 @@ export const Loading: Story = {
     <Harness fetchStub={stub(() => new Promise<Response>(() => {}))} />
   ),
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await waitFor(() => expect(canvas.getByText("Loading…")).toBeVisible());
+    await expectSkeleton(canvasElement);
   },
 };
 
@@ -208,7 +212,7 @@ export const Error_: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() =>
-      expect(canvas.getByText(/need admin access/)).toBeVisible(),
+      expect(canvas.getByText(/You do not have access to access profiles/)).toBeVisible(),
     );
   },
 };

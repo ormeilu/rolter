@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
+import { PanelSkeleton } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
   fetchAdaptiveRoutingPolicy,
@@ -71,6 +73,7 @@ function validate(form: FormState): string | null {
 // (superadmin only). only the ratio between the weights matters — the blend is
 // a weighted sum of signals each scored in [0, 1] (#544, #565)
 export default function AdaptiveSettings() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const policy = useQuery({
     queryKey: ["adaptive-routing-policy"],
@@ -111,18 +114,19 @@ export default function AdaptiveSettings() {
   if (policy.isLoading) {
     return (
       <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
-        {[0, 1, 2].map((i) => (
-          <Skeleton key={i} className="h-[112px] rounded-[10px]" />
-        ))}
+        <PanelSkeleton panels={3} height={112} />
       </div>
     );
   }
   if (policy.isError) {
     return (
-      <p className="p-[22px] text-sm text-muted-foreground">
-        Adaptive routing settings need superadmin access:{" "}
-        {(policy.error as Error).message}
-      </p>
+      <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
+        <LoadError
+          error={policy.error}
+          resource={t("errors.resources.adaptiveSettings")}
+          onRetry={() => void policy.refetch()}
+        />
+      </div>
     );
   }
   if (!form) return null;

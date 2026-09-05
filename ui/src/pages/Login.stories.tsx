@@ -2,7 +2,13 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
 
 import Login from "./Login";
-import { Harness, StaleSession, json, type FetchStub } from "./story-harness";
+import {
+  Harness,
+  StaleSession,
+  expectSkeleton,
+  json,
+  type FetchStub,
+} from "./story-harness";
 import { AuthProvider } from "@/lib/auth";
 
 /**
@@ -159,9 +165,9 @@ export const SessionExpired: Story = {
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("status")).toHaveTextContent(
-      /session expired/i,
-    );
+    // by text, not by role: the form's own loading region is a `status` too
+    // while /auth/methods is in flight
+    await expect(await canvas.findByText(/session expired/i)).toBeVisible();
     // and the way back in is right there, not behind a reload
     await expect(canvas.getByRole("button", { name: /sign in/i })).toBeVisible();
   },
@@ -200,13 +206,64 @@ export const ExpiredNoticeYieldsToLoginError: Story = {
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("status")).toHaveTextContent(
-      /session expired/i,
-    );
+    await expect(await canvas.findByText(/session expired/i)).toBeVisible();
     await signIn(canvasElement);
     await expect(await canvas.findByRole("alert")).toHaveTextContent(
       /do not match an account/i,
     );
     await expect(canvas.queryByRole("status")).toBeNull();
+  },
+};
+
+/**
+ * `/auth/methods` has not answered yet.
+ *
+ * The screen used to assume password login was on while the answer was in
+ * flight, so an SSO-only deployment flashed a password form and then took it
+ * away — half the operators who saw it had started typing (#1180). The form is
+ * held until the deployment has said what it offers.
+ */
+export const Loading: Story = {
+  render: () => (
+    <Harness fetchStub={() => new Promise<Response>(() => {})}>
+      <AuthProvider>
+        <Login />
+      </AuthProvider>
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expectSkeleton(canvasElement);
+    await expect(canvas.queryByLabelText(/^password/i)).not.toBeInTheDocument();
+    // the branding and the heading are not deployment-dependent, so they stay
+    await expect(canvas.getByRole("heading")).toBeVisible();
+  },
+};
+
+/**
+ * The SSO-only deployment the flash was worst on: once the answer lands there
+ * is no password field at all, only the identity provider.
+ */
+export const SsoOnlyNeverShowsAPasswordField: Story = {
+  render: () => (
+    <Harness
+      fetchStub={async (input) =>
+        String(input).includes("/auth/methods")
+          ? json({
+              password: false,
+              sso: [{ slug: "okta", name: "Okta", start_url: "/api/v1/auth/sso/okta" }],
+            })
+          : json({})
+      }
+    >
+      <AuthProvider>
+        <Login />
+      </AuthProvider>
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByRole("link", { name: /Okta/ })).toBeVisible();
+    await expect(canvas.queryByLabelText(/^password/i)).not.toBeInTheDocument();
   },
 };

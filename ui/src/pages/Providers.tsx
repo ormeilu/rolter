@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2, Loader2 } from "lucide-react";
+import { Building2, Plug, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 import { Trans, useTranslation } from "react-i18next";
 
@@ -8,6 +8,7 @@ import {
   type ProviderSheetMode,
 } from "@/components/ProviderSheet";
 import { LoadError } from "@/components/LoadError";
+import { ListSkeleton } from "@/components/LoadingState";
 import { UnservedConfigNotice } from "@/components/UnservedConfigNotice";
 import {
   ListHeader,
@@ -18,6 +19,7 @@ import {
 } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   Dialog,
   DialogDescription,
@@ -120,11 +122,6 @@ export default function Providers() {
         </Button>
       </div>
 
-      {providers.isLoading && (
-        <p className="text-sm text-muted-foreground">
-          {t("pages.providers.loading")}
-        </p>
-      )}
       {providers.error && (
         <LoadError
           error={providers.error}
@@ -138,9 +135,12 @@ export default function Providers() {
         </p>
       )}
       {!scope.isLoading && !scope.errorKey && !scope.orgId && (
-        <p className="text-sm text-muted-foreground">
-          {t("pages.providers.noOrg")}
-        </p>
+        <EmptyState
+          uxTarget="providers-no-org"
+          icon={<Building2 />}
+          title={t("pages.providers.noOrgTitle")}
+          description={t("pages.providers.noOrg")}
+        />
       )}
 
       <ListTable>
@@ -152,6 +152,7 @@ export default function Providers() {
           <span>{t("pages.providers.colKeyEnv")}</span>
           <span />
         </ListHeader>
+        {providers.isLoading && <ListSkeleton rows={4} className="p-3" />}
         {rows.map((provider) => (
           <ListRow key={provider.id} grid={GRID}>
             <span className="truncate font-mono text-sm">{provider.name}</span>
@@ -198,9 +199,26 @@ export default function Providers() {
           </ListRow>
         ))}
         {!providers.isLoading && rows.length === 0 && (
-          <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-            {t("pages.providers.noMatch")}
-          </p>
+          <EmptyState
+            uxTarget="providers"
+            icon={<Plug />}
+            title={q ? t("pages.providers.noMatch") : t("pages.providers.emptyTitle")}
+            description={q ? t("pages.providers.noMatchBody") : t("pages.providers.emptyBody")}
+            actions={
+              q ? (
+                <Button variant="outline" onClick={() => setSearch("")}>
+                  {t("common.clearSearch")}
+                </Button>
+              ) : (
+                <Button
+                  disabled={scopeBlocked || !scope.orgId}
+                  onClick={() => setSheet({ mode: "add" })}
+                >
+                  {t("pages.providers.add")}
+                </Button>
+              )
+            }
+          />
         )}
       </ListTable>
 

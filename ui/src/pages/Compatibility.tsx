@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
+import { PanelSkeleton } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   fetchCompatibilityPolicy,
   updateCompatibilityPolicy,
@@ -44,6 +46,7 @@ function validate(form: FormState): string | null {
 // (superadmin only). these are the values applied when a request is translated
 // between the OpenAI and Anthropic wire formats (#546)
 export default function Compatibility() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const policy = useQuery({
     queryKey: ["compatibility-policy"],
@@ -80,18 +83,19 @@ export default function Compatibility() {
   if (policy.isLoading) {
     return (
       <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
-        {[0, 1].map((i) => (
-          <Skeleton key={i} className="h-[112px] rounded-[10px]" />
-        ))}
+        <PanelSkeleton panels={2} height={112} />
       </div>
     );
   }
   if (policy.isError) {
     return (
-      <p className="p-[22px] text-sm text-muted-foreground">
-        Compatibility settings need superadmin access:{" "}
-        {(policy.error as Error).message}
-      </p>
+      <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
+        <LoadError
+          error={policy.error}
+          resource={t("errors.resources.compatibilitySettings")}
+          onRetry={() => void policy.refetch()}
+        />
+      </div>
     );
   }
   if (!form) return null;

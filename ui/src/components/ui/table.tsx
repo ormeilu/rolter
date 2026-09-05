@@ -18,6 +18,15 @@ export interface TableProps<T> extends React.HTMLAttributes<HTMLDivElement> {
   data: T[];
   hover?: boolean;
   rowKey?: keyof T;
+  /**
+   * What to show instead of the rows when `data` is empty (#1180).
+   *
+   * Without it the table renders its header over nothing at all, which reads
+   * as a screen that is still loading rather than one that loaded and found
+   * no rows. Rendered in a single full-width cell so the placeholder stays
+   * inside the table's border instead of floating beneath it.
+   */
+  empty?: React.ReactNode;
 }
 
 const ALIGN: Record<string, string> = {
@@ -31,6 +40,7 @@ export function Table<T extends Record<string, unknown>>({
   data = [],
   hover = true,
   rowKey,
+  empty,
   className,
   ...props
 }: TableProps<T>) {
@@ -61,6 +71,13 @@ export function Table<T extends Record<string, unknown>>({
           </tr>
         </thead>
         <tbody>
+          {data.length === 0 && empty && (
+            <tr>
+              <td colSpan={columns.length} className="p-0">
+                {empty}
+              </td>
+            </tr>
+          )}
           {data.map((row, i) => (
             <tr
               key={rowKey ? String(row[rowKey]) : i}

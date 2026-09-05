@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Loader2 } from "lucide-react";
+import { Gauge, Plus, Trash2, Loader2, Wallet } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { LoadError } from "@/components/LoadError";
+import { CardGridSkeleton } from "@/components/LoadingState";
 import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +16,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -208,7 +210,7 @@ export default function Limits() {
             Add budget
           </Button>
         </div>
-        {budgets.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {budgets.isLoading && <CardGridSkeleton cards={3} height={152} min={280} />}
         {budgets.error && (
           <LoadError
             error={budgets.error}
@@ -217,7 +219,17 @@ export default function Limits() {
           />
         )}
         {!budgets.isLoading && scopeId && budgets.data?.length === 0 && (
-          <p className="text-sm text-muted-foreground">No budgets for this scope.</p>
+          <EmptyState
+            uxTarget="budgets"
+            icon={<Wallet />}
+            title={t("pages.limits.budgetsEmptyTitle")}
+            description={t("pages.limits.budgetsEmptyBody")}
+            actions={
+              <Button disabled={!scopeId} onClick={() => setAddBudgetOpen(true)}>
+                {t("pages.limits.budgetsEmptyAction")}
+              </Button>
+            }
+          />
         )}
         <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
           {budgets.data?.map((budget) => (
@@ -249,9 +261,7 @@ export default function Limits() {
             Add rate limit
           </Button>
         </div>
-        {rateLimits.isLoading && (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        )}
+        {rateLimits.isLoading && <CardGridSkeleton cards={3} height={152} min={280} />}
         {rateLimits.error && (
           <LoadError
             error={rateLimits.error}
@@ -260,9 +270,17 @@ export default function Limits() {
           />
         )}
         {!rateLimits.isLoading && scopeId && rateLimits.data?.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            No rate limits for this scope.
-          </p>
+          <EmptyState
+            uxTarget="rate-limits"
+            icon={<Gauge />}
+            title={t("pages.limits.rateLimitsEmptyTitle")}
+            description={t("pages.limits.rateLimitsEmptyBody")}
+            actions={
+              <Button disabled={!scopeId} onClick={() => setAddRateLimitOpen(true)}>
+                {t("pages.limits.rateLimitsEmptyAction")}
+              </Button>
+            }
+          />
         )}
         <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
           {rateLimits.data?.map((limit) => (

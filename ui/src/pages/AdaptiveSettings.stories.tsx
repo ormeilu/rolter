@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import AdaptiveSettings from "./AdaptiveSettings";
+import { expectSkeleton } from "./story-harness";
 import type { AdaptiveRoutingPolicyDto } from "@/lib/api";
 
 const BASE: AdaptiveRoutingPolicyDto = {
@@ -68,6 +69,9 @@ export const Loaded: Story = {
 
 export const Loading: Story = {
   render: () => <Harness fetchStub={() => new Promise<Response>(() => {})} />,
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 // a deployment where nothing is on the adaptive strategy yet

@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
+import { PanelSkeleton } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -60,6 +63,7 @@ const fromDto = (dto: SecuritySettingsDto): FormState => ({
 // (superadmin only). dashboard secret is write-only: the server seals it and
 // reports only whether one is configured.
 export default function Security() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const settings = useQuery({
     queryKey: ["security-settings"],
@@ -103,15 +107,20 @@ export default function Security() {
 
   if (settings.isLoading) {
     return (
-      <p className="p-[22px] text-sm text-muted-foreground">Loading…</p>
+      <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
+        <PanelSkeleton panels={3} height={148} />
+      </div>
     );
   }
   if (settings.isError) {
     return (
-      <p className="p-[22px] text-sm text-muted-foreground">
-        Security settings need superadmin access:{" "}
-        {(settings.error as Error).message}
-      </p>
+      <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
+        <LoadError
+          error={settings.error}
+          resource={t("errors.resources.securitySettings")}
+          onRetry={() => void settings.refetch()}
+        />
+      </div>
     );
   }
   if (!form) return null;

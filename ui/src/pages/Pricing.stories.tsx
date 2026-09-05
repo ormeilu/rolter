@@ -2,7 +2,18 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, within } from "storybook/test";
 
 import Pricing from "./Pricing";
-import { Harness, clickWhenEnabled, pending, routes, sheet } from "./story-harness";
+import {
+  Harness,
+  clickWhenEnabled,
+  expectEmptyState,
+  expectLoadError,
+  expectSkeleton,
+  json,
+  pending,
+  routes,
+  scoped,
+  sheet,
+} from "./story-harness";
 import type { CurrencySettings, ModelPriceRow } from "@/lib/api";
 
 const price = (
@@ -74,6 +85,9 @@ export const Loading: Story = {
       <Pricing />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 export const Empty: Story = {
@@ -83,8 +97,32 @@ export const Empty: Story = {
     </Harness>
   ),
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/no model prices set yet/i)).toBeInTheDocument();
+    // the placeholder now says what an unpriced model costs the operator, and
+    // carries the control that fixes it
+    await expectEmptyState(canvasElement, /No model prices set/, /Add price/);
+  },
+};
+
+export const Error_: Story = {
+  name: "Error",
+  render: () => (
+    <Harness fetchStub={scoped(async () => json({ error: { message: "boom" } }, 500))}>
+      <Pricing />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await expectLoadError(canvasElement, /failed to return model prices/i);
+  },
+};
+
+export const Forbidden: Story = {
+  render: () => (
+    <Harness fetchStub={scoped(async () => json({ error: { message: "forbidden" } }, 403))}>
+      <Pricing />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await expectLoadError(canvasElement, /You do not have access to model prices/);
   },
 };
 

@@ -1,13 +1,15 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Trash2 } from "lucide-react";
+import { Loader2, Route, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EditorSheet } from "@/components/EditorSheet";
 import { LoadError } from "@/components/LoadError";
+import { CardGridSkeleton } from "@/components/LoadingState";
 import { PageBody, StatusDot } from "@/components/screen";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -105,12 +107,25 @@ export default function RoutingRules() {
         </Button>
       </div>
 
-      {routes.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {routes.isLoading && <CardGridSkeleton cards={3} height={196} min={360} />}
       {routes.error && (
         <LoadError
           error={routes.error}
           resource={t("errors.resources.routes")}
           onRetry={() => void routes.refetch()}
+        />
+      )}
+      {routes.data && routes.data.length === 0 && (
+        <EmptyState
+          uxTarget="routes"
+          icon={<Route />}
+          title={t("pages.routing.emptyTitle")}
+          description={t("pages.routing.emptyBody")}
+          actions={
+            <Button disabled={!scope.projectId} onClick={() => setAddOpen(true)}>
+              {t("pages.routing.emptyAction")}
+            </Button>
+          }
         />
       )}
       <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(360px,1fr))]">

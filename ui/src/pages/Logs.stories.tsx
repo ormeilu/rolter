@@ -2,7 +2,17 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, within } from "storybook/test";
 
 import Logs from "./Logs";
-import { Harness, json, pending, routes, scoped, type FetchStub } from "./story-harness";
+import {
+  Harness,
+  expectEmptyState,
+  expectLoadError,
+  expectSkeleton,
+  json,
+  pending,
+  routes,
+  scoped,
+  type FetchStub,
+} from "./story-harness";
 import type { InvocationRow, ModelPriceRow } from "@/lib/api";
 import { formattersFor } from "@/lib/i18n/format";
 
@@ -128,14 +138,24 @@ export const Empty: Story = {
       <Logs />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    // no filter is set, so this is "the gateway has served nothing yet" rather
+    // than "your filters excluded everything" (#1180)
+    await expectEmptyState(canvasElement, /Nothing logged yet/);
+  },
 };
 
+// the screen had no loading indicator at all: a slow ClickHouse read was
+// indistinguishable from a deployment that had served nothing (#1180)
 export const Loading: Story = {
   render: () => (
     <Harness fetchStub={pending}>
       <Logs />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 export const Failed: Story = {
@@ -146,4 +166,19 @@ export const Failed: Story = {
       <Logs />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    await expectLoadError(canvasElement, /failed to return request logs/i);
+  },
+};
+
+// a 403 is not a 500: retrying cannot fix a permission, so no retry is offered
+export const Forbidden: Story = {
+  render: () => (
+    <Harness fetchStub={scoped(async () => json({ error: { message: "forbidden" } }, 403))}>
+      <Logs />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await expectLoadError(canvasElement, /You do not have access to request logs/);
+  },
 };

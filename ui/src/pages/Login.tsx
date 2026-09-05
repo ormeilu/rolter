@@ -3,8 +3,10 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { LocalePicker } from "@/components/LocalePicker";
+import { FormSkeleton } from "@/components/LoadingState";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, getAuthMethods, login, type AuthMethods } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
@@ -44,6 +46,11 @@ export default function Login() {
     };
   }, []);
 
+  // `methods` is null until /api/v1/auth/methods answers. Treating null as
+  // "password is on" flashed the password form on every SSO-only deployment
+  // and then swapped it out — the operator saw a field they must not use, and
+  // half of them started typing into it (#1180)
+  const resolved = methods !== null;
   const showPassword = methods?.password !== false;
   const providers = methods?.sso ?? [];
 
@@ -110,7 +117,13 @@ export default function Login() {
               {t("auth.sessionExpired")}
             </p>
           )}
-          {showPassword && (
+          {!resolved && (
+            <>
+              <FormSkeleton fields={2} />
+              <Skeleton height={36} radius={8} />
+            </>
+          )}
+          {resolved && showPassword && (
           <form
             className="flex flex-col gap-4"
             onSubmit={(e) => {
@@ -181,6 +194,7 @@ export default function Login() {
             </Button>
           </form>
           )}
+          {resolved && (
           <div
             className={
               showPassword
@@ -212,6 +226,7 @@ export default function Login() {
               <LocalePicker />
             </span>
           </div>
+          )}
         </div>
       </div>
     </div>

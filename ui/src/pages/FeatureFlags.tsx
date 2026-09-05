@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
+import { PanelSkeleton } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
   fetchFeatureFlags,
@@ -59,6 +61,7 @@ const toValues = (dto: FeatureFlagsDto): FeatureFlagValues =>
 // deployment and rejects enabling them, so those render as unavailable rather
 // than as a switch that silently does nothing (#535)
 export default function FeatureFlags() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const flags = useQuery({
     queryKey: ["feature-flags"],
@@ -91,18 +94,19 @@ export default function FeatureFlags() {
   if (flags.isLoading) {
     return (
       <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
-        {FEATURE_FLAG_KEYS.map((key) => (
-          <Skeleton key={key} className="h-[86px] rounded-[10px]" />
-        ))}
+        <PanelSkeleton panels={FEATURE_FLAG_KEYS.length} height={86} />
       </div>
     );
   }
   if (flags.isError) {
     return (
-      <p className="p-[22px] text-sm text-muted-foreground">
-        Feature flags need superadmin access:{" "}
-        {(flags.error as Error).message}
-      </p>
+      <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
+        <LoadError
+          error={flags.error}
+          resource={t("errors.resources.featureFlags")}
+          onRetry={() => void flags.refetch()}
+        />
+      </div>
     );
   }
   if (!form) return null;

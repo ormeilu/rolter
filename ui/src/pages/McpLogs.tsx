@@ -1,10 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { Wrench, X } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
+import { FormSkeleton, TableSkeleton } from "@/components/LoadingState";
 import { ListHeader, ListRow, ListTable, PageBody, Pill } from "@/components/screen";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Select } from "@/components/ui/select";
 import {
   AnalyticsUnavailableError,
@@ -34,6 +37,7 @@ const GRID = "150px 1.1fr 1.3fr 130px 110px 90px";
 // clickhouse-backed MCP tool-call log explorer: summary KPIs, filterable
 // cursor-paginated table, and a per-event detail drawer with redacted payloads
 export default function McpLogs() {
+  const { t } = useTranslation();
   const [status, setStatus] = React.useState("");
   const [transport, setTransport] = React.useState("");
   const [cursors, setCursors] = React.useState<string[]>([]);
@@ -85,6 +89,15 @@ export default function McpLogs() {
 
   const resetPaging = () => setCursors([]);
   const rows = logs.data?.data ?? [];
+  // a filtered page that came back empty is a different answer from a
+  // deployment that has never seen an MCP call, and only one of them is fixed
+  // by clearing something
+  const filtersActive = !!status || !!transport || cursors.length > 0;
+  const clearFilters = () => {
+    setStatus("");
+    setTransport("");
+    resetPaging();
+  };
 
   return (
     <PageBody className="h-full min-h-0">
@@ -153,21 +166,32 @@ export default function McpLogs() {
 
       <div className="flex min-h-0 flex-1 gap-3.5">
         <div className="min-w-0 flex-1">
-          {logs.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+          {logs.isLoading && <TableSkeleton rows={6} />}
           {logs.isError && !unavailable && (
-            <div className="space-y-1">
-              <p className="text-sm text-muted-foreground">
-                Couldn't load MCP tool-call logs.
-              </p>
-              {/* the raw message stays, de-emphasised: an operator needs it to
-                  diagnose, but it should not be the whole message they see */}
-              <p className="text-xs text-muted-foreground/70">
-                {(logs.error as Error).message}
-              </p>
-            </div>
+            <LoadError
+              error={logs.error}
+              resource={t("errors.resources.mcpLogs")}
+              onRetry={() => void logs.refetch()}
+            />
           )}
           {rows.length === 0 && logs.isSuccess && (
-            <p className="text-sm text-muted-foreground">No MCP tool calls in the last 24h.</p>
+            <EmptyState
+              uxTarget="mcp-logs"
+              icon={<Wrench />}
+              title={
+                filtersActive ? t("pages.mcpLogs.noMatchTitle") : t("pages.mcpLogs.emptyTitle")
+              }
+              description={
+                filtersActive ? t("pages.mcpLogs.noMatchBody") : t("pages.mcpLogs.emptyBody")
+              }
+              actions={
+                filtersActive ? (
+                  <Button variant="outline" onClick={clearFilters}>
+                    {t("common.clearSearch")}
+                  </Button>
+                ) : undefined
+              }
+            />
           )}
           {rows.length > 0 && (
             <ListTable className="max-h-full overflow-y-auto">
@@ -277,9 +301,13 @@ function DetailDrawer({ eventId, onClose }: { eventId: string; onClose: () => vo
           <X className="h-4 w-4" />
         </button>
       </div>
-      {detail.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {detail.isLoading && <FormSkeleton fields={3} />}
       {detail.isError && (
-        <p className="text-sm text-muted-foreground">{(detail.error as Error).message}</p>
+        <LoadError
+          error={detail.error}
+          resource={t("errors.resources.mcpLogDetail")}
+          onRetry={() => void detail.refetch()}
+        />
       )}
       {d && (
         <>

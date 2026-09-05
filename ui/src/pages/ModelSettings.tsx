@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { LoadError } from "@/components/LoadError";
+import { PanelSkeleton } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
   fetchModelDefaults,
@@ -69,6 +71,7 @@ const hasAnyDefault = (form: FormState) =>
 // (superadmin only). they only ever fill a gap: a parameter the client sent is
 // never overwritten, which is what makes this safe to turn on mid-flight
 export default function ModelSettings() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const defaults = useQuery({
     queryKey: ["model-defaults"],
@@ -108,17 +111,19 @@ export default function ModelSettings() {
   if (defaults.isLoading) {
     return (
       <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
-        {[0, 1].map((i) => (
-          <Skeleton key={i} className="h-[152px] rounded-[10px]" />
-        ))}
+        <PanelSkeleton panels={2} height={152} />
       </div>
     );
   }
   if (defaults.isError) {
     return (
-      <p className="p-[22px] text-sm text-muted-foreground">
-        Model settings need superadmin access: {(defaults.error as Error).message}
-      </p>
+      <div className="mx-auto flex max-w-[840px] flex-col gap-3.5 p-[22px]">
+        <LoadError
+          error={defaults.error}
+          resource={t("errors.resources.modelSettings")}
+          onRetry={() => void defaults.refetch()}
+        />
+      </div>
     );
   }
   if (!form) return null;

@@ -4,11 +4,12 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { LoadError } from "@/components/LoadError";
+import { TableSkeleton } from "@/components/LoadingState";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Table, type TableColumn } from "@/components/ui/table";
 import {
   fetchClusterNodes,
@@ -162,17 +163,19 @@ export default function Cluster() {
   if (nodes.isLoading) {
     return (
       <PageBody>
-        <Skeleton className="h-9 w-[260px] rounded-md" />
-        <Skeleton className="h-[220px] rounded-lg" />
+        <TableSkeleton rows={4} />
       </PageBody>
     );
   }
   if (nodes.isError) {
     return (
-      <p className="p-[22px] text-sm text-muted-foreground">
-        Cluster inventory needs superadmin access:{" "}
-        {(nodes.error as Error).message}
-      </p>
+      <PageBody>
+        <LoadError
+          error={nodes.error}
+          resource={t("errors.resources.clusterNodes")}
+          onRetry={() => void nodes.refetch()}
+        />
+      </PageBody>
     );
   }
 
@@ -206,19 +209,22 @@ export default function Cluster() {
         }
       />
 
-      {rows.length === 0 ? (
-        <EmptyState uxTarget="cluster-nodes"
-          icon={<Network />}
-          title="No nodes have reported in"
-          description="Nodes appear here once a gateway identifies itself on its snapshot poll. A single-node deployment that sends no identity headers stays out of the inventory."
-        />
-      ) : (
-        <Table
-          columns={columns}
-          data={rows as (ClusterNodeRow & Record<string, unknown>)[]}
-          rowKey="id"
-        />
-      )}
+      {/* the placeholder rides inside the table rather than replacing it: the
+          column headers name what a node row would carry, which is the answer
+          to "empty compared with what?" (#1180) */}
+      <Table
+        columns={columns}
+        data={rows as (ClusterNodeRow & Record<string, unknown>)[]}
+        rowKey="id"
+        empty={
+          <EmptyState
+            uxTarget="cluster-nodes"
+            icon={<Network />}
+            title={t("pages.cluster.emptyTitle")}
+            description={t("pages.cluster.emptyBody")}
+          />
+        }
+      />
     </PageBody>
   );
 }

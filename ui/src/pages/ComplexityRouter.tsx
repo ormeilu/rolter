@@ -1,10 +1,14 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeftRight, Plus, Trash2 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { EditorSheet } from "@/components/EditorSheet";
+import { LoadError } from "@/components/LoadError";
+import { CardGridSkeleton } from "@/components/LoadingState";
 import { PageBody, Pill } from "@/components/screen";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import {
@@ -22,6 +26,7 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 // re-routed to the tier's model; the catch-all tier (no ceiling) closes the
 // policy. validated server-side against configured route names.
 export default function ComplexityRouter() {
+  const { t } = useTranslation();
   const fmt = useFormat();
   const scope = useScope();
   const routes = useQuery({
@@ -58,7 +63,32 @@ export default function ComplexityRouter() {
         measured by input bytes and routed to the matching tier
       </span>
 
-      {routes.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {routes.isLoading && <CardGridSkeleton cards={3} height={196} min={380} />}
+      {routes.error && (
+        <LoadError
+          error={routes.error}
+          resource={t("errors.resources.routes")}
+          onRetry={() => void routes.refetch()}
+        />
+      )}
+      {!routes.isLoading && !routes.error && withPolicy.length === 0 && (
+        // a complexity policy hangs off a route, so with no routes there is
+        // nothing on this screen to create — the CTA points where it is made
+        <EmptyState
+          uxTarget="complexity-routes"
+          icon={<ArrowLeftRight />}
+          title={t("pages.complexityRouter.emptyTitle")}
+          description={t("pages.complexityRouter.emptyBody")}
+          actions={
+            <a
+              href="/routing-rules"
+              className="text-sm font-medium text-foreground underline decoration-[color:var(--border-strong)] underline-offset-4 transition-colors hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {t("pages.complexityRouter.emptyAction")}
+            </a>
+          }
+        />
+      )}
       <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(380px,1fr))]">
         {configured.map(({ route, tiers }) => (
           <div
@@ -81,18 +111,20 @@ export default function ComplexityRouter() {
               </Pill>
             </div>
             <div className="flex flex-col gap-1.5">
-              {tiers.map((t) => (
+              {/* renamed off `t`: the screen now translates its own copy, and a
+                  tier shadowing the translator is a trap for the next edit */}
+              {tiers.map((tier) => (
                 <div
-                  key={t.name}
+                  key={tier.name}
                   className="flex items-center gap-2 rounded-[8px] bg-[color:var(--surface-subtle)] px-2.5 py-1.5 font-mono text-xs"
                 >
-                  <span className="text-[color:var(--text-secondary)]">{t.name}</span>
+                  <span className="text-[color:var(--text-secondary)]">{tier.name}</span>
                   <span className="text-[color:var(--text-subtle)]">
-                    {t.max_input_bytes === null || t.max_input_bytes === undefined
+                    {tier.max_input_bytes === null || tier.max_input_bytes === undefined
                       ? "catch-all"
-                      : `≤ ${formatBytes(fmt, t.max_input_bytes)}`}
+                      : `≤ ${formatBytes(fmt, tier.max_input_bytes)}`}
                   </span>
-                  <span className="ml-auto truncate text-muted-foreground">→ {t.route}</span>
+                  <span className="ml-auto truncate text-muted-foreground">→ {tier.route}</span>
                 </div>
               ))}
             </div>
@@ -108,7 +140,7 @@ export default function ComplexityRouter() {
       {unconfigured.length > 0 && (
         <>
           <div className="mt-2 text-[0.6875rem] uppercase tracking-[0.07em] text-[color:var(--text-subtle)]">
-            No policy yet
+            {t("pages.complexityRouter.noPolicyYet")}
           </div>
           <div className="flex flex-wrap gap-2.5">
             {unconfigured.map(({ route }) => (

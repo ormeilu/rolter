@@ -15,6 +15,7 @@ import {
 } from "@/components/KeyMintFields";
 
 import { LoadError } from "@/components/LoadError";
+import { ListSkeleton } from "@/components/LoadingState";
 import { CopyButton } from "@/components/CopyButton";
 import { EditorSheet } from "@/components/EditorSheet";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -141,7 +142,6 @@ export default function Keys() {
         </div>
       </div>
 
-      {keys.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {keys.error && (
         <LoadError
           error={keys.error}
@@ -164,6 +164,7 @@ export default function Keys() {
           <span>Status</span>
           <span />
         </ListHeader>
+        {keys.isLoading && <ListSkeleton rows={4} className="p-3" />}
         {rows.map((key) => (
           <ListRow key={key.id} grid={GRID} style={{ opacity: key.disabled ? 0.55 : 1 }}>
             <div className="min-w-0">
@@ -224,7 +225,28 @@ export default function Keys() {
           </ListRow>
         ))}
         {!keys.isLoading && rows.length === 0 && (
-          <EmptyState uxTarget="virtual-keys" icon={<Key />} title="No keys found" description="Create a virtual key to authenticate your applications." />
+          <EmptyState
+            uxTarget="virtual-keys"
+            icon={<Key />}
+            title={search ? t("pages.virtualKeys.noMatchTitle") : t("pages.virtualKeys.emptyTitle")}
+            description={
+              search ? t("pages.virtualKeys.noMatchBody") : t("pages.virtualKeys.emptyBody")
+            }
+            actions={
+              search ? (
+                <Button variant="outline" onClick={() => setSearch("")}>
+                  {t("common.clearSearch")}
+                </Button>
+              ) : (
+                <Button
+                  disabled={scopeBlocked || !scope.projectId}
+                  onClick={() => setAddOpen(true)}
+                >
+                  {t("pages.virtualKeys.emptyAction")}
+                </Button>
+              )
+            }
+          />
         )}
       </ListTable>
       <div className="flex items-center justify-between px-0.5 text-xs text-muted-foreground">

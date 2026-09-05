@@ -5,6 +5,7 @@ import { expect, userEvent, waitFor } from "storybook/test";
 
 import type { AdaptiveRoutingTelemetryDto } from "@/lib/api";
 import AdaptiveDashboard from "./AdaptiveDashboard";
+import { expectSkeleton } from "./story-harness";
 
 type FetchStub = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -169,6 +170,9 @@ export const Loaded: Story = {
 
 export const Loading: Story = {
   render: () => <Harness fetchStub={() => new Promise<Response>(() => {})} />,
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 export const Empty: Story = {
@@ -197,7 +201,7 @@ export const Forbidden: Story = {
   play: async ({ canvas }) => {
     await waitFor(() =>
       expect(canvas.getByRole("alert")).toHaveTextContent(
-        "Unable to load adaptive routing telemetry",
+        /You do not have access to adaptive routing telemetry/,
       ),
     );
   },

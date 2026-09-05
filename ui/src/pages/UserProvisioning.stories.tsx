@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import UserProvisioning from "./UserProvisioning";
+import { expectSkeleton } from "./story-harness";
 import type { ScimTokenRow } from "@/lib/api";
 
 const NOW = new Date("2026-07-01T10:00:00Z").toISOString();
@@ -97,6 +98,9 @@ export const Loaded: Story = {
 
 export const Loading: Story = {
   render: () => <Harness fetchStub={() => new Promise<Response>(() => {})} />,
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 export const Empty: Story = {
@@ -142,8 +146,9 @@ export const IssueRevealsTheSecretOnce: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    // the empty placeholder repeats the toolbar action, so both are on screen
     await userEvent.click(
-      await canvas.findByRole("button", { name: /Issue token/ }),
+      (await canvas.findAllByRole("button", { name: /Issue token/ }))[0],
     );
     // sheets portal to document.body, so the panel is not under the canvas root
     const sheet = within(await within(document.body).findByRole("dialog"));

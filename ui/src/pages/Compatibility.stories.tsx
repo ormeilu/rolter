@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import Compatibility from "./Compatibility";
+import { expectSkeleton } from "./story-harness";
 import type { CompatibilityPolicyDto } from "@/lib/api";
 
 const BASE: CompatibilityPolicyDto = {
@@ -58,6 +59,9 @@ export const Loaded: Story = {
 
 export const Loading: Story = {
   render: () => <Harness fetchStub={() => new Promise<Response>(() => {})} />,
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 // a non-superadmin principal gets 403

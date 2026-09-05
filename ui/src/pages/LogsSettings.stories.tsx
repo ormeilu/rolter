@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import LogsSettings from "./LogsSettings";
+import { expectSkeleton } from "./story-harness";
 import type { LoggingSettingsDto } from "@/lib/api";
 
 const BASE: LoggingSettingsDto = {
@@ -83,6 +84,9 @@ export const CaptureDisabled: Story = {
 // the request never settles, so the skeleton stays up
 export const Loading: Story = {
   render: () => <Harness fetchStub={() => new Promise<Response>(() => {})} />,
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
 };
 
 // a non-superadmin principal gets 403

@@ -77,7 +77,8 @@ anything about the session in localStorage.
 
 **An empty result is not a failure.** A successful request returning zero rows
 renders an empty state. Routing it here would tell an operator something is
-broken when nothing is.
+broken when nothing is. The placeholder for that, and the one for a request
+still in flight, are in [loading and empty states](loading-and-empty-states.md).
 
 **The control plane's own message is never swallowed.** `LoadError` prints it
 beneath the summary. The dashboard's classification is a helpful gloss, not a

@@ -3,6 +3,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { AuthProvider } from "@/lib/auth";
+import en from "@/lib/i18n/locales/en.json";
 
 // Shared fetch-stub harness for screen stories (#879).
 //
@@ -157,6 +158,70 @@ export async function clickWhenEnabled(
   const button = await canvas.findByRole("button", { name });
   await waitFor(() => expect(button).toBeEnabled());
   await userEvent.click(button);
+}
+
+/**
+ * The label every shared skeleton shape carries (#1180).
+ *
+ * Asserting on the label rather than a class name keeps the story tied to what
+ * a screen reader is told, which is the part that has to stay true. Read out
+ * of the catalog rather than written out again, so rewording the copy cannot
+ * leave the stories asserting a string the dashboard no longer renders.
+ */
+export const LOADING_LABEL = en.common.loading;
+
+/** Assert the screen is standing in a skeleton for content it does not have yet. */
+export async function expectSkeleton(canvasElement: HTMLElement): Promise<void> {
+  const canvas = within(canvasElement);
+  await waitFor(() =>
+    expect(canvas.getAllByLabelText(LOADING_LABEL).length).toBeGreaterThan(0),
+  );
+}
+
+/**
+ * Assert a `LoadError` is on screen and says `says`.
+ *
+ * `getAllByRole` rather than `getByRole`: a screen can carry a second alert —
+ * a failed mutation, a warning banner — and the story should not become
+ * order-dependent on that.
+ */
+export async function expectLoadError(
+  canvasElement: HTMLElement,
+  says: RegExp,
+): Promise<void> {
+  const canvas = within(canvasElement);
+  // a screen whose query retries before it gives up needs longer than the
+  // 1s default — Logs runs its own retry policy over the shared one
+  await waitFor(
+    () =>
+      expect(
+        canvas.getAllByRole("alert").some((a) => says.test(a.textContent ?? "")),
+      ).toBe(true),
+    { timeout: 6000 },
+  );
+}
+
+/** The `forbidden` LoadError, which is what a non-superadmin gets. */
+export async function expectForbidden(canvasElement: HTMLElement): Promise<void> {
+  await expectLoadError(canvasElement, /You do not have access to/);
+}
+
+/**
+ * Assert an empty state with `title` is on screen, and that it offers `cta`.
+ *
+ * A placeholder that names nothing to do next is half an empty state — the CTA
+ * is the half #1180 was filed over.
+ */
+export async function expectEmptyState(
+  canvasElement: HTMLElement,
+  title: RegExp,
+  cta?: RegExp,
+): Promise<void> {
+  const canvas = within(canvasElement);
+  await waitFor(() => expect(canvas.getByText(title)).toBeVisible());
+  // `getAll`: most screens carry the same action in the toolbar as well, and
+  // the placeholder repeating it there is the point, not a duplicate
+  if (cta) await expect(canvas.getAllByRole("button", { name: cta }).length).toBeGreaterThan(0);
 }
 
 /** The open editor sheet. Sheets portal to the body, not into the canvas. */
