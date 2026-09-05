@@ -1,4 +1,4 @@
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, X } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
@@ -19,7 +19,8 @@ export function CopyButton({
   className?: string;
 }) {
   const { t } = useTranslation();
-  const [copied, setCopied] = React.useState(false);
+  const [state, setState] = React.useState<"idle" | "copied" | "failed">("idle");
+  const copied = state === "copied";
   const copyLabel = label ?? t("common.copy");
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -30,15 +31,23 @@ export function CopyButton({
   }, []);
 
   const copy = async () => {
+    if (timer.current) clearTimeout(timer.current);
     try {
       await navigator.clipboard.writeText(value);
-      setCopied(true);
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1200);
+      setState("copied");
     } catch {
-      // clipboard unavailable (e.g. insecure context): leave state untouched
+      // the clipboard api is withheld on an insecure origin (a plain http
+      // dashboard on a lan): say so instead of a button that does nothing
+      setState("failed");
     }
+    timer.current = setTimeout(() => setState("idle"), 1600);
   };
+  const title =
+    state === "copied"
+      ? t("common.copied")
+      : state === "failed"
+        ? t("common.copyFailed")
+        : copyLabel;
 
   return (
     <Button
@@ -47,14 +56,19 @@ export function CopyButton({
       variant="ghost"
       className={className}
       onClick={copy}
-      aria-label={`${copyLabel}: ${value}`}
-      title={copied ? t("common.copied") : copyLabel}
+      aria-label={t("common.copyValue", { label: copyLabel, value })}
+      title={title}
     >
       {copied ? (
         <Check className="h-3.5 w-3.5" />
+      ) : state === "failed" ? (
+        <X className="h-3.5 w-3.5 text-[color:var(--status-danger)]" />
       ) : (
         <Copy className="h-3.5 w-3.5" />
       )}
+      <span aria-live="polite" className="sr-only">
+        {state === "idle" ? "" : title}
+      </span>
     </Button>
   );
 }

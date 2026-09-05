@@ -71,17 +71,11 @@
     "Upstream model",
     "Weight"
   ],
-  "src/components/ui/dialog.tsx": [
-    "Close"
-  ],
   "src/components/ui/info-hint.tsx": [
     "More info"
   ],
   "src/components/ui/line-chart.tsx": [
     "time series chart"
-  ],
-  "src/components/ui/sheet.tsx": [
-    "Close"
   ],
   "src/components/ui/table.tsx": [
     "extends React.HTMLAttributes"

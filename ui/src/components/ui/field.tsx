@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { InfoHint } from "@/components/ui/info-hint";
 import { cn } from "@/lib/utils";
@@ -18,6 +19,12 @@ export interface FieldProps extends React.HTMLAttributes<HTMLDivElement> {
   info?: React.ReactNode;
 }
 
+interface ControlProps {
+  id?: string;
+  "aria-describedby"?: string;
+  "aria-invalid"?: boolean | "true" | "false";
+}
+
 export function Field({
   label,
   htmlFor,
@@ -33,13 +40,27 @@ export function Field({
   // and `getByLabelText` could not find it either. Generate the id here and put
   // it on the child, so the association is the default rather than something
   // each of ~200 call sites has to remember.
+  const { t } = useTranslation();
   const generated = React.useId();
+  const messageId = React.useId();
   const single = React.Children.count(children) === 1 ? children : null;
-  const control = React.isValidElement<{ id?: string }>(single) ? single : null;
+  const control = React.isValidElement<ControlProps>(single) ? single : null;
   const controlId = htmlFor ?? control?.props.id ?? (control ? generated : undefined);
+  // the error or hint below the control is tied to it as its description, and
+  // an error also flips aria-invalid, so a screen reader hears both the state
+  // and the reason rather than a control that silently refuses to submit
+  const message = error ?? hint;
+  const described: ControlProps = {};
+  if (control && !control.props.id && !htmlFor) described.id = controlId;
+  if (message && control && !control.props["aria-describedby"]) {
+    described["aria-describedby"] = messageId;
+  }
+  if (error && control && control.props["aria-invalid"] === undefined) {
+    described["aria-invalid"] = true;
+  }
   const labelled =
-    control && !control.props.id && !htmlFor
-      ? React.cloneElement(control, { id: controlId })
+    control && Object.keys(described).length > 0
+      ? React.cloneElement(control, described)
       : children;
 
   return (
@@ -49,14 +70,18 @@ export function Field({
           <label htmlFor={controlId} className="text-sm font-medium leading-none">
             {label}
           </label>
-          {info && <InfoHint text={info} label={`About ${label}`} />}
+          {info && <InfoHint text={info} label={t("common.aboutField", { label })} />}
         </div>
       )}
       {labelled}
       {error ? (
-        <p className="text-xs text-destructive">{error}</p>
+        <p id={messageId} role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
       ) : hint ? (
-        <p className="text-xs text-muted-foreground">{hint}</p>
+        <p id={messageId} className="text-xs text-muted-foreground">
+          {hint}
+        </p>
       ) : null}
     </div>
   );

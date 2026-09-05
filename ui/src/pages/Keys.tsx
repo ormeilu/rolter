@@ -393,6 +393,7 @@ function CreatedKeyDialog({
   created: CreatedVirtualKey | null;
   onOpenChange: (open: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = React.useState(false);
 
   React.useEffect(() => {
@@ -421,7 +422,13 @@ function CreatedKeyDialog({
       <div className="space-y-2 rounded-md border border-dashed border-border bg-muted p-3">
         <div className="flex items-center justify-between gap-2">
           <code className="break-all text-sm">{created?.key}</code>
-          <Button size="sm" variant="outline" onClick={copy}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={copy}
+            aria-label={copied ? t("common.copied") : t("common.copy")}
+            title={copied ? t("common.copied") : t("common.copy")}
+          >
             {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
           </Button>
         </div>

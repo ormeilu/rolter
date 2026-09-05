@@ -48,6 +48,7 @@ export function Table<T extends Record<string, unknown>>({
             {columns.map((c) => (
               <th
                 key={c.key}
+                scope="col"
                 className={cn(
                   "whitespace-nowrap border-b border-[color:var(--border-default)] bg-[color:var(--surface-subtle)] px-4 py-2 text-xs font-medium text-muted-foreground",
                   c.align ? ALIGN[c.align] : "text-left",

@@ -34,7 +34,10 @@
     "filters": "Filters",
     "hideFilters": "Hide filters",
     "search": "Search…",
-    "viewDocs": "View docs"
+    "viewDocs": "View docs",
+    "aboutField": "About {{label}}",
+    "copyFailed": "Copy failed — the clipboard is unavailable on this page",
+    "copyValue": "{{label}}: {{value}}"
   },
   "errors": {
     "load": {
@@ -924,7 +927,9 @@
     "openMode": {
       "title": "Control plane is unauthenticated.",
       "body": "No admin token is set, so every request to this control plane is served as superadmin — anyone who can reach it can read keys and change providers, routing and budgets. Set ROLTER_ADMIN_TOKEN to close it."
-    }
+    },
+    "navLabel": "Main navigation",
+    "userMenuLabel": "Account and scope"
   },
   "stub": {
     "todo": "TODO — we'll come back to this screen"
@@ -1012,6 +1017,7 @@
   "analytics": {
     "noRowsYet": "No requests logged in this window. Either nothing was served, or the gateways are not writing to ClickHouse — an unconfigured destination looks exactly like a quiet deployment.",
     "details": "Details",
-    "mcpDetails": "MCP call details"
+    "mcpDetails": "MCP call details",
+    "openDetails": "Open request details for {{model}}"
   }
 }

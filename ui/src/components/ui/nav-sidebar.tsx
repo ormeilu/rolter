@@ -274,6 +274,7 @@ export function NavSidebar({
   return (
     <nav
       ref={navRef}
+      aria-label={t("shell.navLabel")}
       style={showHandle ? { width } : undefined}
       className={cn(
         "relative flex h-full flex-col gap-3 border-r border-[color:var(--border-subtle)] bg-[color:var(--surface-app)] px-2 py-3",
@@ -436,6 +437,8 @@ export function NavSidebar({
         >
           {userMenu && userOpen && (
             <div
+              role="dialog"
+              aria-label={t("shell.userMenuLabel")}
               className={cn(
                 "absolute bottom-[calc(100%+6px)] z-40 rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-elevated)] py-1.5 shadow-lg",
                 collapsed ? "left-0 w-[260px]" : "inset-x-0",
@@ -446,7 +449,7 @@ export function NavSidebar({
           )}
           <button
             onClick={() => (userMenu ? setUserOpen((v) => !v) : user.onClick?.())}
-            aria-haspopup={userMenu ? "menu" : undefined}
+            aria-haspopup={userMenu ? "dialog" : undefined}
             aria-expanded={userMenu ? userOpen : undefined}
             title={collapsed && typeof user.name === "string" ? user.name : undefined}
             className={cn(

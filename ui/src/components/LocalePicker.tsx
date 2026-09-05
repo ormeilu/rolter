@@ -44,6 +44,31 @@ export function LocalePicker({ collapsed = false }: { collapsed?: boolean }) {
     if (locale !== active) void setLocale(locale);
   };
 
+  // a menu owes the keyboard arrow navigation and an initial focus; the list
+  // is short enough that Home/End are the two edges of the same loop
+  const menuRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const items = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]');
+    const current = Array.from(items ?? []).find((el) => el.getAttribute("aria-checked") === "true");
+    (current ?? items?.[0])?.focus();
+  }, [open]);
+  const onMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? [],
+    );
+    if (items.length === 0) return;
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    let next: number | null = null;
+    if (e.key === "ArrowDown") next = (at + 1) % items.length;
+    else if (e.key === "ArrowUp") next = (at - 1 + items.length) % items.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = items.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    items[next].focus();
+  };
+
   return (
     <div ref={ref} className="relative">
       <button
@@ -51,7 +76,7 @@ export function LocalePicker({ collapsed = false }: { collapsed?: boolean }) {
         onClick={() => setOpen((v) => !v)}
         title={t("locale.change")}
         aria-label={t("locale.change")}
-        aria-haspopup="listbox"
+        aria-haspopup="menu"
         aria-expanded={open}
         className={cn(
           "flex items-center gap-1 rounded-md p-1.5 text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -64,35 +89,36 @@ export function LocalePicker({ collapsed = false }: { collapsed?: boolean }) {
         )}
       </button>
       {open && (
-        <ul
-          role="listbox"
+        <div
+          ref={menuRef}
+          role="menu"
           aria-label={t("locale.label")}
+          onKeyDown={onMenuKeyDown}
           className="absolute bottom-[calc(100%+6px)] left-0 z-40 min-w-[150px] rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-elevated)] py-1 shadow-lg"
         >
           {LOCALES.map((locale) => {
             const selected = locale === active;
             return (
-              <li key={locale}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  lang={locale}
-                  onClick={() => choose(locale)}
-                  className={cn(
-                    "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-[color:var(--surface-hover)]",
-                    selected ? "text-foreground" : "text-[color:var(--text-secondary)]",
-                  )}
-                >
-                  <span className="min-w-0 flex-1 truncate">{LOCALE_NAMES[locale]}</span>
-                  {selected && (
-                    <Check aria-hidden className="h-3.5 w-3.5 flex-none text-[color:var(--red-folk)]" />
-                  )}
-                </button>
-              </li>
+              <button
+                key={locale}
+                type="button"
+                role="menuitemradio"
+                aria-checked={selected}
+                lang={locale}
+                onClick={() => choose(locale)}
+                className={cn(
+                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-[color:var(--surface-hover)] focus-visible:outline-none focus-visible:bg-[color:var(--surface-hover)]",
+                  selected ? "text-foreground" : "text-[color:var(--text-secondary)]",
+                )}
+              >
+                <span className="min-w-0 flex-1 truncate">{LOCALE_NAMES[locale]}</span>
+                {selected && (
+                  <Check aria-hidden className="h-3.5 w-3.5 flex-none text-[color:var(--red-folk)]" />
+                )}
+              </button>
             );
           })}
-        </ul>
+        </div>
       )}
     </div>
   );
