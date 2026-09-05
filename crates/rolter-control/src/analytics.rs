@@ -187,8 +187,14 @@ pub(crate) fn window_params(q: &WindowQuery) -> Vec<(String, String)> {
 
 /// The shared `where` clause. Empty since/until fall back to a default range so
 /// callers can omit either bound.
-pub(crate) const WHERE_WINDOW: &str = "ts >= if({since:String} = '', now64(3) - interval 7 day, parseDateTime64BestEffort({since:String})) \
-     and ts < if({until:String} = '', now64(3), parseDateTime64BestEffort({until:String}))";
+///
+/// The parse is the `OrZero` variant on purpose: ClickHouse constant-folds both
+/// branches of `if` over constant arguments, so the strict
+/// `parseDateTime64BestEffort('')` throws "Cannot read DateTime" before the
+/// empty-string branch is ever selected (#1177). With `OrZero` the failed parse
+/// yields an unused epoch value and the `if` still picks the default bound.
+pub(crate) const WHERE_WINDOW: &str = "ts >= if({since:String} = '', now64(3) - interval 7 day, parseDateTime64BestEffortOrZero({since:String})) \
+     and ts < if({until:String} = '', now64(3), parseDateTime64BestEffortOrZero({until:String}))";
 
 pub fn router() -> Router<crate::ControlState> {
     Router::new()
@@ -411,6 +417,37 @@ pub struct InvocationsQuery {
     pub(crate) offset: Option<u32>,
 }
 
+/// Build the per-invocation list query for a whitelisted `status_expr`.
+///
+/// All user-supplied values are passed as ClickHouse params; the only spliced
+/// text is the status predicate, which `status_predicate` whitelists.
+///
+/// The two payload columns carry explicit aliases because ClickHouse names an
+/// unaliased qualified column `payload.request_payload` in its JSON output,
+/// while the dashboard reads `request_payload` / `response_payload` and would
+/// otherwise always fall back to "payload logging is off" (#1177).
+fn invocations_sql(status_expr: &str) -> String {
+    format!(
+        "select ts, request_id, trace_id, org_id, team_id, project_id, virtual_key_id, \
+                business_unit_id, customer_id, \
+                model, provider, target, variant, status, stream, cache_hit, cache_read_tokens, cache_write_tokens, \
+                prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, ttft_ms, error, \
+                payload.request_payload as request_payload, payload.response_payload as response_payload \
+         from request_logs \
+         left join ( \
+             select request_id, argMax(request_payload, ts) as request_payload, \
+                    argMax(response_payload, ts) as response_payload \
+             from request_payloads group by request_id \
+         ) as payload using (request_id) \
+         where {WHERE_WINDOW} \
+           and ({{model:String}} = '' or model = {{model:String}}) \
+           and ({{key:String}} = '' or virtual_key_id = {{key:String}}) \
+           and {status_expr} \
+         order by ts desc \
+         limit {{limit:UInt32}} offset {{offset:UInt32}} format JSON"
+    )
+}
+
 /// Individual gateway invocations, newest first. Returns every persisted column
 /// of `request_logs` plus any short-retention raw payload row, so the dashboard
 /// can render both the list row and its optional detail bodies.
@@ -432,27 +469,7 @@ async fn invocations(
     };
     let limit = clamp_limit(q.limit);
     let offset = q.offset.unwrap_or(0);
-    // all user-supplied values are passed as clickhouse params; the only spliced
-    // text is the status predicate, which is whitelisted above.
-    let sql = format!(
-        "select ts, request_id, trace_id, org_id, team_id, project_id, virtual_key_id, \
-                business_unit_id, customer_id, \
-                model, provider, target, variant, status, stream, cache_hit, cache_read_tokens, cache_write_tokens, \
-                prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, ttft_ms, error, \
-                payload.request_payload, payload.response_payload \
-         from request_logs \
-         left join ( \
-             select request_id, argMax(request_payload, ts) as request_payload, \
-                    argMax(response_payload, ts) as response_payload \
-             from request_payloads group by request_id \
-         ) as payload using (request_id) \
-         where {WHERE_WINDOW} \
-           and ({{model:String}} = '' or model = {{model:String}}) \
-           and ({{key:String}} = '' or virtual_key_id = {{key:String}}) \
-           and {status_expr} \
-         order by ts desc \
-         limit {{limit:UInt32}} offset {{offset:UInt32}} format JSON"
-    );
+    let sql = invocations_sql(status_expr);
     let mut params = window_params(&WindowQuery {
         since: q.since.clone(),
         until: q.until.clone(),
@@ -499,6 +516,45 @@ mod tests {
         // anything else is rejected, so it can never be spliced into SQL
         assert_eq!(bucket_fn("day; drop table request_logs"), None);
         assert_eq!(bucket_fn(""), None);
+    }
+
+    #[test]
+    fn window_bounds_never_strict_parse_an_optional_bound() {
+        // clickhouse constant-folds both branches of `if`, so a strict parse of
+        // an empty since/until aborts the whole query before the default branch
+        // is ever selected (#1177)
+        assert!(!WHERE_WINDOW.contains("parseDateTime64BestEffort("));
+        assert_eq!(
+            WHERE_WINDOW
+                .matches("parseDateTime64BestEffortOrZero(")
+                .count(),
+            2
+        );
+        // the empty-string guards stay, so the defaults are unchanged
+        assert!(WHERE_WINDOW.contains("if({since:String} = '', now64(3) - interval 7 day"));
+        assert!(WHERE_WINDOW.contains("if({until:String} = '', now64(3)"));
+    }
+
+    #[test]
+    fn invocations_sql_aliases_the_payload_columns() {
+        let sql = invocations_sql(status_predicate("all").expect("all is whitelisted"));
+        // an unaliased qualified column is named `payload.request_payload` in
+        // clickhouse's JSON output, which the dashboard never reads (#1177)
+        assert!(!sql.contains("payload.request_payload, payload.response_payload"));
+        assert!(sql.contains("payload.request_payload as request_payload"));
+        assert!(sql.contains("payload.response_payload as response_payload"));
+    }
+
+    #[test]
+    fn invocations_sql_binds_filters_as_params_and_splices_only_the_status() {
+        let sql = invocations_sql(status_predicate("error").expect("error is whitelisted"));
+        assert!(sql.contains("and status >= 400"));
+        assert!(sql.contains("{model:String}"));
+        assert!(sql.contains("{key:String}"));
+        assert!(sql.contains("{limit:UInt32}"));
+        assert!(sql.contains("{offset:UInt32}"));
+        // the shared window clause is inlined, so it must be empty-safe here too
+        assert!(!sql.contains("parseDateTime64BestEffort("));
     }
 
     #[test]
