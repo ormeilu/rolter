@@ -19,8 +19,8 @@ const ARROWS: Record<string, string> = {
 };
 
 const DELTA_TONE: Record<string, string> = {
-  up: "text-emerald-400",
-  down: "text-red-400",
+  up: "text-[color:var(--status-success-text)]",
+  down: "text-[color:var(--status-danger-text)]",
   flat: "text-muted-foreground",
 };
 

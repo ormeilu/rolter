@@ -9,6 +9,12 @@
 
 @layer base {
   :root {
+    /* the theme is dark and there is no light one, so say so to the UA: this is
+       what paints scrollbars, form controls and the canvas dark. it replaces the
+       `.dark` class the html tag used to carry for `darkMode: ["class"]`, which
+       no rule keyed off any more (#1199) */
+    color-scheme: dark;
+
     /* shadcn contract (space-separated HSL) — graphite/zinc, dark by default */
     --background: 240 5% 7%; /* #111113 surface-base */
     --foreground: 0 0% 98%; /* #fafafa */
@@ -52,11 +58,29 @@
     --red-tint: rgba(255, 64, 23, 0.12);
     --red-tint-strong: rgba(255, 64, 23, 0.18);
 
-    /* status */
+    /* status — the fill hues: dots, bars, tints, borders */
     --status-success: #16a34a;
     --status-warning: #f59e0b;
     --status-info: #3b82f6;
     --status-danger: #e53935;
+
+    /* status text-on-dark counterparts (#1199). the fill hues are tuned to
+       carry a shape, not a glyph: on --surface-base #16a34a clears AA only
+       just, and #3b82f6 / #e53935 miss 4.5:1 outright once the text sits on
+       the matching /15 tint. each -text token is its fill hue with the same
+       oklch hue and chroma and the lightness lifted until it clears 4.5:1
+       both on #111113 and on its own tint, with headroom:
+         success 6.55:1 on base / 5.48:1 on tint
+         warning 8.78:1 / 6.84:1  (already clear, so it equals the fill hue)
+         info    6.54:1 / 5.53:1
+         danger  6.30:1 / 5.55:1
+       colour a status *label* with these; colour a status *shape* with the
+       fill hue above. there is no light theme, so no tailwind `dark` variant
+       either — see docs/development/dashboard-theme.md */
+    --status-success-text: #2bae55;
+    --status-warning-text: var(--status-warning);
+    --status-info-text: #5897ff;
+    --status-danger-text: #ff5f55;
 
     /* surfaces + translucent borders (the borders do the work, not shadows) */
     --surface-app: var(--zinc-900);

@@ -3,7 +3,12 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-// tones mirror the Rolter Design System Badge (7 tones + optional leading dot)
+// tones mirror the Rolter Design System Badge (7 tones + optional leading dot).
+// every tone reads its colour from the design tokens: the /15 tint comes off
+// the status fill hue, the label off the matching --status-*-text token that is
+// contrast-checked against both the tint and --surface-base (#1199). the theme
+// is dark-only, so there are no tailwind `dark` variants here — see
+// docs/development/dashboard-theme.md
 const badgeVariants = cva(
   "inline-flex items-center gap-1 h-5 px-2 rounded-sm border text-[0.625rem] font-medium leading-none whitespace-nowrap",
   {
@@ -12,13 +17,14 @@ const badgeVariants = cva(
         neutral: "border-border bg-muted text-muted-foreground",
         outline: "border-border bg-transparent text-muted-foreground",
         success:
-          "border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+          "border-transparent bg-[color:var(--status-success)]/15 text-[color:var(--status-success-text)]",
         warning:
-          "border-transparent bg-amber-500/15 text-amber-600 dark:text-amber-400",
-        danger: "border-transparent bg-destructive/15 text-destructive",
-        info: "border-transparent bg-blue-500/15 text-blue-600 dark:text-blue-400",
-        accent:
-          "border-transparent bg-orange-500/15 text-orange-600 dark:text-orange-400",
+          "border-transparent bg-[color:var(--status-warning)]/15 text-[color:var(--status-warning-text)]",
+        danger:
+          "border-transparent bg-[color:var(--status-danger)]/15 text-[color:var(--status-danger-text)]",
+        info: "border-transparent bg-[color:var(--status-info)]/15 text-[color:var(--status-info-text)]",
+        // accent is not a status: it borrows the folkloric red thread
+        accent: "border-transparent bg-[color:var(--red-tint)] text-[color:var(--red-500)]",
       },
     },
     defaultVariants: { tone: "neutral" },

@@ -297,7 +297,7 @@ export function ParamsEditor(props: EditProps | CreateProps) {
                 {unknown && (
                   <AlertTriangle
                     aria-label="Unrecognized param key"
-                    className="pointer-events-none absolute right-2 top-2 h-3.5 w-3.5 text-amber-500"
+                    className="pointer-events-none absolute right-2 top-2 h-3.5 w-3.5 text-[color:var(--status-warning)]"
                   />
                 )}
               </div>
@@ -385,7 +385,7 @@ export function ParamsEditor(props: EditProps | CreateProps) {
       </div>
 
       {unknownKeys.length > 0 && (
-        <p className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-500">
+        <p className="flex items-start gap-1.5 text-xs text-[color:var(--status-warning-text)]">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             Not a standard OpenAI/Anthropic param: {unknownKeys.join(", ")}. Saved
