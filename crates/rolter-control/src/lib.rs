@@ -1439,15 +1439,59 @@ async fn list_roles() -> Json<Value> {
 
 async fn get_config(State(state): State<ControlState>) -> Json<GatewayConfig> {
     let mut config = state.store.load().await.unwrap_or_default();
-    // this endpoint feeds the dashboard; upstream credentials stay between the
-    // store and the gateway (via the token-guarded snapshot endpoint)
+    redact_config_for_dashboard(&mut config);
+    Json(config)
+}
+
+/// Strip everything a caller of the dashboard's config view must not learn.
+///
+/// This endpoint sits on the open router, so it answers without a session or
+/// the admin token. It used to blank only the provider credentials, and shipped
+/// the rest of the snapshot as-is: the plaintext of every `[[virtual_keys]]`
+/// entry from `rolter.toml`, every live MCP OAuth access token, the peppered
+/// digests of the database keys, and any userinfo embedded in the ClickHouse
+/// or egress-proxy URLs. Secrets stay between the store and the gateway, which
+/// reads the token-guarded `/internal/snapshot` instead.
+fn redact_config_for_dashboard(config: &mut GatewayConfig) {
+    const REDACTED: &str = "[redacted]";
     for provider in &mut config.providers {
         provider.api_key = None;
         for key in &mut provider.api_keys {
             key.key = None;
         }
+        provider.egress_proxy = provider.egress_proxy.as_deref().map(strip_userinfo);
+        for proxy in &mut provider.egress_proxies {
+            *proxy = strip_userinfo(proxy);
+        }
     }
-    Json(config)
+    for provider in &mut config.provider_defaults {
+        provider.api_key = None;
+        for key in &mut provider.api_keys {
+            key.key = None;
+        }
+    }
+    for key in &mut config.virtual_keys {
+        key.key = REDACTED.to_string();
+    }
+    for key in &mut config.db_virtual_keys {
+        key.key_hash.clear();
+    }
+    // the dashboard never reads these; the gateway takes them from the snapshot
+    config.mcp_oauth_sessions.clear();
+    config.logging.clickhouse_url = config.logging.clickhouse_url.as_deref().map(strip_userinfo);
+}
+
+/// `scheme://user:pass@host/…` -> `scheme://host/…`; anything unparsable is
+/// returned untouched, since a URL the gateway could not use leaks nothing.
+fn strip_userinfo(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(mut parsed) if !parsed.username().is_empty() || parsed.password().is_some() => {
+            let _ = parsed.set_username("");
+            let _ = parsed.set_password(None);
+            parsed.to_string()
+        }
+        _ => url.to_string(),
+    }
 }
 
 /// What the dashboard needs to know about a provider kind to configure it.
@@ -1866,6 +1910,80 @@ mod pool_config_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // the dashboard config view answers without a session: nothing in it may
+    // be a credential, however it got there
+    #[test]
+    fn dashboard_config_carries_no_secrets() {
+        use rolter_core::config::{
+            McpOAuthSessionConfig, ProviderConfig, VirtualKeyConfig, VirtualKeyRecord,
+        };
+        let mut config = GatewayConfig::default();
+        config.providers.push(ProviderConfig {
+            name: "p".into(),
+            api_key: Some("sk-live".into()),
+            egress_proxy: Some("http://user:pw@proxy.internal:3128".into()),
+            egress_proxies: vec!["socks5://u:p@edge:1080".into()],
+            ..Default::default()
+        });
+        config.virtual_keys.push(VirtualKeyConfig {
+            key: "sk-rolter-plaintext".into(),
+            ..Default::default()
+        });
+        // the record and the session have no Default; parse the smallest
+        // JSON that carries the secret instead of spelling every field out
+        config.db_virtual_keys.push(
+            serde_json::from_value::<VirtualKeyRecord>(json!({"key_hash": "deadbeef", "id": "k"}))
+                .unwrap(),
+        );
+        config.mcp_oauth_sessions.push(
+            serde_json::from_value::<McpOAuthSessionConfig>(json!({
+                "id": "s", "server_id": "srv", "user_id": "u",
+                "expires_at": "2030-01-01T00:00:00Z", "access_token": "ya29.secret"
+            }))
+            .unwrap(),
+        );
+        config.logging.clickhouse_url = Some("http://ch:pass@clickhouse:8123".into());
+
+        redact_config_for_dashboard(&mut config);
+
+        let json = serde_json::to_string(&config).unwrap();
+        for secret in [
+            "sk-live",
+            "sk-rolter-plaintext",
+            "deadbeef",
+            "ya29.secret",
+            "user:pw",
+            "u:p@",
+            "ch:pass",
+        ] {
+            // the message names the seed, not the serialised document: a
+            // failing run must not print the very thing it is guarding
+            assert!(
+                !json.contains(secret),
+                "a seeded secret survived redaction (seed #{})",
+                secret.len()
+            );
+        }
+        assert_eq!(
+            config.providers[0].egress_proxy.as_deref(),
+            Some("http://proxy.internal:3128/")
+        );
+        assert!(config.mcp_oauth_sessions.is_empty());
+        assert_eq!(
+            config.logging.clickhouse_url.as_deref(),
+            Some("http://clickhouse:8123/")
+        );
+    }
+
+    #[test]
+    fn strip_userinfo_leaves_plain_urls_alone() {
+        assert_eq!(
+            strip_userinfo("http://clickhouse:8123"),
+            "http://clickhouse:8123"
+        );
+        assert_eq!(strip_userinfo("not a url"), "not a url");
+    }
 
     /// A scratch `ui_dir`, removed when the guard drops. No `tempfile` in this
     /// crate's dev-dependencies, and one directory is not worth adding one.
