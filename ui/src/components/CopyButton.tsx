@@ -62,7 +62,7 @@ export function CopyButton({
       {copied ? (
         <Check className="h-3.5 w-3.5" />
       ) : state === "failed" ? (
-        <X className="h-3.5 w-3.5 text-[color:var(--status-danger)]" />
+        <X className="h-3.5 w-3.5 text-[color:var(--status-danger-text)]" />
       ) : (
         <Copy className="h-3.5 w-3.5" />
       )}

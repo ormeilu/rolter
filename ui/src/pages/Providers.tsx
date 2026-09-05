@@ -193,7 +193,7 @@ export default function Providers() {
                   name: provider.name,
                 })}
                 onClick={() => setDeleteTarget(provider)}
-                className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -248,7 +248,7 @@ export default function Providers() {
           </DialogDescription>
         </DialogHeader>
         {removeProvider.isError && (
-          <p className="text-xs text-destructive">
+          <p className="text-xs text-[color:var(--status-danger-text)]">
             {(removeProvider.error as Error).message}
           </p>
         )}

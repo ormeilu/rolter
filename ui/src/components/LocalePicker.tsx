@@ -113,7 +113,7 @@ export function LocalePicker({ collapsed = false }: { collapsed?: boolean }) {
               >
                 <span className="min-w-0 flex-1 truncate">{LOCALE_NAMES[locale]}</span>
                 {selected && (
-                  <Check aria-hidden className="h-3.5 w-3.5 flex-none text-[color:var(--red-folk)]" />
+                  <Check aria-hidden className="h-3.5 w-3.5 flex-none text-[color:var(--red-folk-text)]" />
                 )}
               </button>
             );

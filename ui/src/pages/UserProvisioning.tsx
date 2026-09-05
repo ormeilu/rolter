@@ -288,7 +288,7 @@ function GroupMappings({ orgId, canManage }: { orgId: string; canManage: boolean
         </div>
         {/* the control plane's own message, never a gloss on it */}
         {create.isError && (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-sm text-[color:var(--status-danger-text)]">
             {(create.error as Error).message}
           </p>
         )}
@@ -451,7 +451,7 @@ export default function UserProvisioning() {
         />
       )}
       {revoke.isError && (
-        <p className="text-sm text-destructive">{(revoke.error as Error).message}</p>
+        <p className="text-sm text-[color:var(--status-danger-text)]">{(revoke.error as Error).message}</p>
       )}
 
       {!forbidden && (
@@ -580,7 +580,7 @@ function IssueTokenSheet({
                 <CopyButton value={issued.secret} label="Copy provisioning token" />
               </div>
             </div>
-            <p className="text-sm font-medium text-[color:var(--status-warning)]">
+            <p className="text-sm font-medium text-[color:var(--status-warning-text)]">
               This is the only time this token is shown. Rolter stores a hash of
               it and cannot display or recover it again — if you lose it, issue a
               new token and revoke this one.
@@ -612,7 +612,7 @@ function IssueTokenSheet({
               do.
             </p>
             {create.isError && (
-              <p className="text-sm text-destructive">
+              <p className="text-sm text-[color:var(--status-danger-text)]">
                 {(create.error as Error).message}
               </p>
             )}

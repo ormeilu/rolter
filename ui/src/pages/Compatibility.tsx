@@ -158,14 +158,14 @@ export default function Compatibility() {
       )}
 
       <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-[color:var(--border-subtle)] bg-background py-3">
-        {localError && <span className="text-xs text-destructive">{localError}</span>}
+        {localError && <span className="text-xs text-[color:var(--status-danger-text)]">{localError}</span>}
         {!localError && save.isError && (
-          <span className="text-xs text-destructive">
+          <span className="text-xs text-[color:var(--status-danger-text)]">
             {(save.error as Error).message}
           </span>
         )}
         {saved && (
-          <span className="text-xs text-[color:var(--status-success)]">
+          <span className="text-xs text-[color:var(--status-success-text)]">
             Compatibility settings updated.
           </span>
         )}

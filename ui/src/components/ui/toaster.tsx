@@ -28,6 +28,10 @@ export function Toaster() {
   return (
     <div
       className="pointer-events-none fixed bottom-4 right-4 z-[90] flex w-[min(380px,calc(100vw-2rem))] flex-col gap-2"
+      // a bare <div> may not carry aria-label at all — the role has to support
+      // a name, and the APG pattern for a toast stack is a named region around
+      // the live regions rather than on them (#1181)
+      role="region"
       aria-label={t("toast.region")}
     >
       <div role="status" aria-live="polite" className="contents">

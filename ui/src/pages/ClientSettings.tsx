@@ -269,7 +269,7 @@ export default function ClientSettings() {
               <button
                 type="button"
                 aria-label={`Remove injected header ${i + 1}`}
-                className="flex h-8 w-8 flex-none items-center justify-center rounded-md text-[color:var(--text-subtle)] transition-colors hover:text-[color:var(--status-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex h-8 w-8 flex-none items-center justify-center rounded-md text-[color:var(--text-subtle)] transition-colors hover:text-[color:var(--status-danger-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 onClick={() =>
                   set({ injected: form.injected.filter((r) => r.id !== row.id) })
                 }
@@ -314,12 +314,12 @@ export default function ClientSettings() {
       </section>
 
       <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-[color:var(--border-subtle)] bg-background py-3">
-        {localError && <span className="text-xs text-destructive">{localError}</span>}
+        {localError && <span className="text-xs text-[color:var(--status-danger-text)]">{localError}</span>}
         {!localError && save.isError && (
-          <span className="text-xs text-destructive">{(save.error as Error).message}</span>
+          <span className="text-xs text-[color:var(--status-danger-text)]">{(save.error as Error).message}</span>
         )}
         {saved && (
-          <span className="text-xs text-[color:var(--status-success)]">
+          <span className="text-xs text-[color:var(--status-success-text)]">
             Client settings updated.
           </span>
         )}
@@ -336,7 +336,10 @@ function Snippet({ base }: { base: string }) {
   const code = `curl ${base}/v1/chat/completions \\\n  -H "Authorization: Bearer $ROLTER_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"fake-llm","messages":[{"role":"user","content":"ping"}]}'`;
   return (
     <div className="relative rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] p-3">
-      <pre className="overflow-x-auto whitespace-pre font-mono text-[0.6875rem] leading-relaxed text-[color:var(--text-secondary)]">
+      <pre
+        tabIndex={0}
+        className="overflow-x-auto whitespace-pre font-mono text-[0.6875rem] leading-relaxed text-[color:var(--text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
         {code}
       </pre>
       <button
@@ -356,7 +359,7 @@ function Snippet({ base }: { base: string }) {
         }}
       >
         {copied ? (
-          <Check className="h-3.5 w-3.5 text-[color:var(--status-success)]" />
+          <Check className="h-3.5 w-3.5 text-[color:var(--status-success-text)]" />
         ) : (
           <Copy className="h-3.5 w-3.5" />
         )}

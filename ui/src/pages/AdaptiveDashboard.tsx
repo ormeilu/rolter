@@ -230,7 +230,7 @@ export default function AdaptiveDashboard() {
                             </time>
                           </div>
 
-                          <div aria-label={`${node.node_id} decision modes`}>
+                          <div role="group" aria-label={`${node.node_id} decision modes`}>
                             <div
                               className="flex h-2 overflow-hidden rounded-full bg-[color:var(--surface-subtle)]"
                               aria-hidden="true"
@@ -269,7 +269,10 @@ export default function AdaptiveDashboard() {
                               No target signals were included in this report.
                             </p>
                           ) : (
-                            <div className="overflow-x-auto rounded-lg border border-[color:var(--border-subtle)]">
+                            <div
+                              tabIndex={0}
+                              className="overflow-x-auto rounded-lg border border-[color:var(--border-subtle)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            >
                               <table className="w-full min-w-[760px] border-collapse text-sm">
                                 <caption className="sr-only">
                                   Target signals reported by {node.node_id}

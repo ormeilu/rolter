@@ -180,7 +180,14 @@ export default function LogsSettings() {
             onCheckedChange={(v) => set({ captureEnabled: v })}
           />
         </div>
-        <div className="flex flex-col gap-1.5" style={{ opacity: capture ? 1 : 0.55 }}>
+        {/* a disabled fieldset rather than a dimmed div: the input inside
+            already carries `disabled`, and fading a live div drags its label and
+            hint below 4.5:1 while telling assistive tech nothing (#1181) */}
+        <fieldset
+          className="flex min-w-0 flex-col gap-1.5"
+          disabled={!capture}
+          style={{ opacity: capture ? 1 : 0.55 }}
+        >
           <label htmlFor="logs-max-bytes" className="text-xs font-medium text-[color:var(--text-secondary)]">
             Max bytes per payload
           </label>
@@ -196,7 +203,7 @@ export default function LogsSettings() {
           <span className="text-[0.6875rem] text-[color:var(--text-subtle)]">
             Anything longer is truncated. Maximum 1048576 (1 MiB).
           </span>
-        </div>
+        </fieldset>
       </section>
 
       <ListCard
@@ -263,14 +270,14 @@ export default function LogsSettings() {
       </section>
 
       <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-[color:var(--border-subtle)] bg-background py-3">
-        {localError && <span className="text-xs text-destructive">{localError}</span>}
+        {localError && <span className="text-xs text-[color:var(--status-danger-text)]">{localError}</span>}
         {!localError && save.isError && (
-          <span className="text-xs text-destructive">
+          <span className="text-xs text-[color:var(--status-danger-text)]">
             {(save.error as Error).message}
           </span>
         )}
         {saved && (
-          <span className="text-xs text-[color:var(--status-success)]">
+          <span className="text-xs text-[color:var(--status-success-text)]">
             Logs settings updated.
           </span>
         )}
@@ -301,8 +308,9 @@ function ListCard({
   onChange: (v: string) => void;
 }) {
   return (
-    <section
-      className="flex flex-col gap-2.5 rounded-[10px] border border-[color:var(--border-subtle)] p-4"
+    <fieldset
+      className="flex min-w-0 flex-col gap-2.5 rounded-[10px] border border-[color:var(--border-subtle)] p-4"
+      disabled={disabled}
       style={{ opacity: disabled ? 0.55 : 1 }}
     >
       <div>
@@ -317,6 +325,6 @@ function ListCard({
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
       />
-    </section>
+    </fieldset>
   );
 }

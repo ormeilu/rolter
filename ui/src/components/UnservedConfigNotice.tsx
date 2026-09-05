@@ -18,7 +18,7 @@ export function UnservedConfigNotice({ problems }: { problems: string[] }) {
       <div className="flex items-center gap-2">
         <AlertTriangle
           aria-hidden
-          className="h-4 w-4 flex-none text-[color:var(--status-warning)]"
+          className="h-4 w-4 flex-none text-[color:var(--status-warning-text)]"
         />
         <p className="text-sm font-medium text-foreground">
           {t("providers.unserved.title", { count: problems.length })}
@@ -28,7 +28,7 @@ export function UnservedConfigNotice({ problems }: { problems: string[] }) {
         {problems.map((problem) => (
           <li
             key={problem}
-            className="list-disc text-sm text-muted-foreground marker:text-[color:var(--status-warning)]"
+            className="list-disc text-sm text-muted-foreground marker:text-[color:var(--status-warning-text)]"
           >
             {problem}
           </li>

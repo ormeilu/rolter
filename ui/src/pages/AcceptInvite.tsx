@@ -69,7 +69,7 @@ export default function AcceptInvite({ token }: { token: string }) {
           <div className="flex items-center gap-3">
             <img src="/logo-mark.svg" alt="" className="h-10 w-10" />
             <span className="font-mono text-[22px] font-semibold tracking-tight">
-              rolter<span className="text-[color:var(--red-folk)]">.</span>
+              rolter<span className="text-[color:var(--red-folk-text)]">.</span>
             </span>
           </div>
 
@@ -127,19 +127,19 @@ export default function AcceptInvite({ token }: { token: string }) {
                   />
                 </label>
                 {mismatch && (
-                  <p role="alert" className="text-xs text-destructive">
+                  <p role="alert" className="text-xs text-[color:var(--status-danger-text)]">
                     {t("pages.acceptInvite.mismatch")}
                   </p>
                 )}
                 {error != null && (
-                  <p role="alert" className="text-xs text-destructive">
+                  <p role="alert" className="text-xs text-[color:var(--status-danger-text)]">
                     {error}
                   </p>
                 )}
                 <Button
                   type="submit"
                   disabled={!ready}
-                  className="w-full bg-brand text-white hover:bg-brand-hover"
+                  className="w-full bg-brand-folk text-white hover:bg-brand-press"
                 >
                   {pending ? (
                     <>

@@ -98,7 +98,7 @@ export default function Login() {
           <div className="flex items-center gap-3">
             <img src="/logo-mark.svg" alt="" className="h-10 w-10" />
             <span className="font-mono text-[22px] font-semibold tracking-tight">
-              rolter<span className="text-[color:var(--red-folk)]">.</span>
+              rolter<span className="text-[color:var(--red-folk-text)]">.</span>
             </span>
           </div>
           <div className="flex flex-col gap-1">
@@ -172,7 +172,7 @@ export default function Login() {
             {error && (
               <p
                 role="alert"
-                className="rounded-md border border-[color:var(--status-danger)]/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                className="rounded-md border border-[color:var(--status-danger)]/40 bg-destructive/10 px-3 py-2 text-sm text-[color:var(--status-danger-text)]"
               >
                 {error}
               </p>
@@ -180,7 +180,7 @@ export default function Login() {
             <Button
               type="submit"
               disabled={pending}
-              className="w-full bg-brand text-white hover:bg-brand-hover"
+              className="w-full bg-brand-folk text-white hover:bg-brand-press"
             >
               {pending ? (
                 <>

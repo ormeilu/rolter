@@ -93,7 +93,7 @@ export default function GuardrailProviders() {
     <div className="mx-auto flex max-w-[1120px] flex-col gap-5 p-[22px]">
       <div className="flex flex-col gap-3 border-b border-[color:var(--border-subtle)] pb-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="font-mono text-[0.6875rem] uppercase tracking-[0.16em] text-[color:var(--status-danger)]">
+          <p className="font-mono text-[0.6875rem] uppercase tracking-[0.16em] text-[color:var(--status-danger-text)]">
             External enforcement
           </p>
           <h1 className="mt-1 text-xl font-semibold tracking-tight">
@@ -112,7 +112,7 @@ export default function GuardrailProviders() {
       {active && (
         <section className="flex items-center gap-3 rounded-[10px] border border-[color:var(--status-success)]/30 bg-[color:var(--status-success)]/5 p-4">
           <PlugZap
-            className="h-5 w-5 text-[color:var(--status-success)]"
+            className="h-5 w-5 text-[color:var(--status-success-text)]"
             aria-hidden
           />
           <div>
@@ -401,13 +401,13 @@ function ProviderDialog({
           />
         </div>
         {form.failure_mode === "fail_open" && (
-          <p className="rounded-lg bg-[color:var(--status-warning)]/10 p-3 text-xs text-[color:var(--status-warning)]">
+          <p className="rounded-lg bg-[color:var(--status-warning)]/10 p-3 text-xs text-[color:var(--status-warning-text)]">
             Fail-open favors availability: traffic continues if this provider
             times out or errors.
           </p>
         )}
         {error && (
-          <p role="alert" className="text-xs text-destructive">
+          <p role="alert" className="text-xs text-[color:var(--status-danger-text)]">
             {error}
           </p>
         )}

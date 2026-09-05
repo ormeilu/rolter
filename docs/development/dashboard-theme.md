@@ -38,15 +38,27 @@ Each status hue ships as a pair, and picking the wrong half is a contrast bug:
 | `--status-success` / `--status-warning` / `--status-info` / `--status-danger` | fills: dots, bars, chart series, `/15` tints, borders |
 | `--status-success-text` / `--status-warning-text` / `--status-info-text` / `--status-danger-text` | text: badge labels, inline warnings, delta figures |
 
-The fill hues are tuned to carry a shape. As *text* on `--surface-base`
-(`#111113`) they are marginal or fail outright — `--status-info` is 4.34:1 on
-its own `/15` tint and `--status-danger` is 3.93:1, both under the 4.5:1 WCAG AA
+The fill hues are tuned to carry a shape. As *text* they are marginal or fail
+outright — `--status-info` is 4.34:1 on its own `/15` tint over
+`--surface-base` and `--status-danger` is 3.93:1, both under the 4.5:1 WCAG AA
 floor for body text. Each `-text` token is the same OKLCH hue and chroma with
-the lightness lifted until it clears 4.5:1 on both `#111113` and its own tint,
-with headroom (success 5.48:1 on tint, warning 6.84:1, info 5.53:1, danger
-5.55:1). `--status-warning-text` equals `--status-warning`, because the amber
-already cleared; it exists so a component author never has to know which hue
-happens to pass.
+the lightness lifted until it clears 4.5:1. `--status-warning-text` equals
+`--status-warning`, because the amber already cleared; it exists so a component
+author never has to know which hue happens to pass.
+
+**Check every surface, not just the base one.** A `/15` tint gets lighter with
+the surface under it, so a Badge on a card, in a sheet, or on a selected row
+sits on a different background than the same Badge on the page. The tokens were
+first tuned against `#111113` alone, and axe found what that leaves behind: a
+`success` Badge on `--surface-subtle` was 4.23:1 (#1181). The recorded number is
+now the worst of eight — each of the four surfaces, bare and tinted:
+
+| Token | Value | Worst ratio |
+|---|---|---|
+| `--status-success-text` | `#38c163` | 5.21:1 (tint over `--surface-subtle`) |
+| `--status-warning-text` | `#f59e0b` | 5.22:1 |
+| `--status-info-text` | `#6ba1ff` | 4.79:1 |
+| `--status-danger-text` | `#ff6f66` | 4.78:1 |
 
 The `Badge` component in `ui/src/components/ui/badge.tsx` is the reference
 implementation: `/15` tint off the fill hue, label off the matching `-text`
@@ -54,6 +66,69 @@ token. Its `AllTones` story asserts the computed label colour still resolves to
 the token, so a tone that drifts back to a raw palette colour fails the story
 tests.
 
-When you add a status hue, add both halves, check the ratio against `#111113`
-*and* against the tint the text will sit on, and record the numbers in the
-comment beside the token.
+When you add a status hue, add both halves, check the ratio against all four
+surfaces *and* against the tint the text will sit on, and record the worst
+number in the comment beside the token.
+
+## The same split applies outside the status hues
+
+Three more pairs exist for the same reason, and the rule is identical: the
+darker half carries a shape, the lighter half carries a glyph.
+
+| Shape | Glyph | Why |
+|---|---|---|
+| `--zinc-500` (`#71717a`) | `--text-subtle` → `--zinc-450` (`#93939e`) | `#71717a` is 3.90:1 on `--surface-base` and 3.08:1 on the `--surface-subtle` list-header band. `#93939e` is 6.20:1 / 4.90:1 |
+| `--red-folk` (`#b41d21`) | `--red-folk-text` (`#ff5a3c`) | the вышивка red is 2.82:1 on the base surface — an ornament hue. The text half is 6.09:1 on base, 4.81:1 on `--surface-subtle` |
+| `--destructive` (`#b41d21`) | `--status-danger-text` | `--destructive` is a *surface*: `bg-destructive`, `border-destructive/30`, `bg-destructive/5`. It used to be `#e53935`, which carries `--destructive-foreground` at only 4.05:1 |
+
+`text-destructive` is therefore gone from the dashboard: a destructive *label*
+reads `text-[color:var(--status-danger-text)]`. `--danger-text` is an alias of
+the same token.
+
+## Never dim a live region with `opacity`
+
+Container opacity fades the glyphs toward the page background while the
+background itself does not move, so a 0.55 wrapper takes `--text-muted` from
+7.36:1 to about 3.0:1 and tells assistive technology nothing at all. Two
+replacements cover every case the dashboard had:
+
+- a **form group gated behind a toggle** becomes `<fieldset disabled>`. The
+  controls inside already carried `disabled`, so this is simply the truth; axe
+  skips contrast inside a disabled fieldset, and the browser stops the fields
+  from taking input for a feature that is off.
+- an **inactive row or card** — a disabled key, a blocked account, a retired
+  business unit — gets a quieter band (`bg-[color:var(--surface-subtle)]/60`)
+  instead. The state is already spelled out by the switch or badge in the row;
+  the fade was only ever decoration, and it cost the row its legibility.
+
+## Every story is an accessibility test
+
+`ui/.storybook/test-runner.ts` runs axe over the whole document after each
+story's play function, and fails the story on any **serious** or **critical**
+violation (`wcag2a`, `wcag2aa`, `best-practice`; only `document-title` and
+`html-has-lang` are off, because that iframe is Storybook's own). Adding a
+story therefore adds a contrast and a semantics check for whatever it renders,
+in every state it renders — empty, loading and error included.
+
+A failure looks like this:
+
+```
+● Screens/Keys › Loaded › smoke-test
+  1 accessibility violation was detected
+```
+
+with the detail printed above it as two tables: the first names the rule
+(`color-contrast`, `button-name`, `label`, …) and the second gives the CSS
+selector and the offending HTML. Reproduce a single story with
+
+```bash
+cd ui && bun run build-storybook
+python3 -m http.server 6199 --directory storybook-static &
+bun run test-storybook --url http://127.0.0.1:6199 -- -t "Keys"
+```
+
+Read the rule, not the pixel count: `color-contrast` names the exact foreground,
+background and ratio it measured, and the fix is nearly always a token swap from
+this page rather than a new colour. A story may opt out with
+`parameters: { a11y: { disable: true } }`, but it has to say why beside it — no
+story in the dashboard currently needs to.

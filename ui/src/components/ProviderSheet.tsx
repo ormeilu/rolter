@@ -63,13 +63,13 @@ function TestOutcome({ result }: { result: ProviderTestResult }) {
     >
       <div className="flex items-center gap-1.5 font-medium">
         {outcome === "ok" && (
-          <CheckCircle2 className="size-3.5 text-[color:var(--status-success)]" />
+          <CheckCircle2 className="size-3.5 text-[color:var(--status-success-text)]" />
         )}
         {outcome === "answered" && (
-          <AlertTriangle className="size-3.5 text-[color:var(--status-warning)]" />
+          <AlertTriangle className="size-3.5 text-[color:var(--status-warning-text)]" />
         )}
         {outcome === "failed" && (
-          <XCircle className="size-3.5 text-[color:var(--status-danger)]" />
+          <XCircle className="size-3.5 text-[color:var(--status-danger-text)]" />
         )}
         <span>
           {outcome === "ok"
@@ -292,9 +292,12 @@ export function ProviderSheet({
           <Field
             label={t("providerSheet.fields.slug")}
             hint={t("providerSheet.fields.slugHint")}
+            // the child here is a row, not the control, so Field cannot find
+            // the input to hang the id on — say which one the label means
+            htmlFor="provider-slug"
           >
             <div className="flex items-center gap-2">
-              <Input value={draft.slug} readOnly disabled className="font-mono" />
+              <Input id="provider-slug" value={draft.slug} readOnly disabled className="font-mono" />
               {provider && <CopyButton value={`${provider.slug}/`} label={t("providerSheet.fields.copyPrefix")} />}
             </div>
           </Field>
@@ -330,7 +333,7 @@ export function ProviderSheet({
             <p
               className={
                 baseDoublesV1
-                  ? "mt-1.5 text-xs text-destructive"
+                  ? "mt-1.5 text-xs text-[color:var(--status-danger-text)]"
                   : "mt-1.5 text-xs text-muted-foreground"
               }
             >
@@ -339,7 +342,7 @@ export function ProviderSheet({
             </p>
           )}
           {baseDoublesV1 && (
-            <p className="mt-1 text-xs text-destructive">
+            <p className="mt-1 text-xs text-[color:var(--status-danger-text)]">
               {t("providerSheet.apiBase.doubled")}
             </p>
           )}
@@ -384,13 +387,13 @@ export function ProviderSheet({
 
       <SheetFooter>
         {save.isError && (
-          <p className="px-[22px] pt-2.5 text-xs text-destructive">
+          <p className="px-[22px] pt-2.5 text-xs text-[color:var(--status-danger-text)]">
             {(save.error as Error).message}
           </p>
         )}
         {test.data && <TestOutcome result={test.data} />}
         {test.isError && (
-          <p className="px-[22px] pt-2.5 text-xs text-destructive">
+          <p className="px-[22px] pt-2.5 text-xs text-[color:var(--status-danger-text)]">
             {(test.error as Error).message}
           </p>
         )}

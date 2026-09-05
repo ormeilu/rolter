@@ -12,7 +12,7 @@ export default function Stub({ screen }: { screen: string }) {
   return (
     <div className="flex min-h-full items-center justify-center p-10">
       <div className="flex max-w-[460px] flex-col items-center gap-[18px] text-center">
-        <span className="flex h-[52px] w-[52px] items-center justify-center rounded-[14px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] text-[color:var(--red-folk)]">
+        <span className="flex h-[52px] w-[52px] items-center justify-center rounded-[14px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] text-[color:var(--red-folk-text)]">
           <Sparkles className="h-5 w-5" />
         </span>
         <div>
@@ -20,7 +20,7 @@ export default function Stub({ screen }: { screen: string }) {
           <p className="text-sm text-muted-foreground">{subtitle}</p>
         </div>
         <div className="vyshivka-rule h-2 w-[140px] opacity-85" />
-        <span className="inline-flex items-center rounded-full bg-[color:var(--status-warning)]/10 px-3 py-[5px] font-mono text-xs text-[color:var(--status-warning)]">
+        <span className="inline-flex items-center rounded-full bg-[color:var(--status-warning)]/10 px-3 py-[5px] font-mono text-xs text-[color:var(--status-warning-text)]">
           {t("stub.todo")}
         </span>
         <div className="mt-0.5 flex gap-2.5">

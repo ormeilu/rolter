@@ -138,7 +138,7 @@ export default function Security() {
         <div className="flex items-start gap-4">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium">Password protect the dashboard</span>
+              <span id="security-auth-label" className="text-sm font-medium">Password protect the dashboard</span>
               <Badge tone="info">BETA</Badge>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
@@ -146,9 +146,20 @@ export default function Security() {
               secret-manager reference or a managed secret stored encrypted.
             </p>
           </div>
-          <Switch checked={form.authEnabled} onCheckedChange={(v) => set({ authEnabled: v })} />
+          <Switch
+            checked={form.authEnabled}
+            aria-labelledby="security-auth-label"
+            onCheckedChange={(v) => set({ authEnabled: v })}
+          />
         </div>
-        <div className="flex flex-col gap-1.5" style={{ opacity: disabledAuth ? 0.55 : 1 }}>
+        {/* a disabled fieldset rather than a dimmed div: the inputs inside
+            already carry `disabled`, and fading a live div drags its labels and
+            hints below 4.5:1 while telling assistive tech nothing (#1181) */}
+        <fieldset
+          className="flex min-w-0 flex-col gap-1.5"
+          disabled={disabledAuth}
+          style={{ opacity: disabledAuth ? 0.55 : 1 }}
+        >
           <label htmlFor="security-credential-ref" className="text-xs font-medium text-[color:var(--text-secondary)]">
             Credential reference
           </label>
@@ -159,8 +170,12 @@ export default function Security() {
             placeholder="vault://secrets/rolter-dashboard"
             onChange={(e) => set({ credentialRef: e.target.value })}
           />
-        </div>
-        <div className="flex flex-col gap-1.5" style={{ opacity: disabledAuth ? 0.55 : 1 }}>
+        </fieldset>
+        <fieldset
+          className="flex min-w-0 flex-col gap-1.5"
+          disabled={disabledAuth}
+          style={{ opacity: disabledAuth ? 0.55 : 1 }}
+        >
           <label htmlFor="security-managed-secret" className="text-xs font-medium text-[color:var(--text-secondary)]">
             Managed secret
           </label>
@@ -177,7 +192,7 @@ export default function Security() {
           <span className="text-[0.6875rem] text-[color:var(--text-subtle)]">
             Write-only: the secret is encrypted server-side and never shown again.
           </span>
-        </div>
+        </fieldset>
       </section>
 
       <ToggleCard
@@ -217,12 +232,12 @@ export default function Security() {
 
       <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-[color:var(--border-subtle)] bg-background py-3">
         {save.isError && (
-          <span className="text-xs text-destructive">
+          <span className="text-xs text-[color:var(--status-danger-text)]">
             {(save.error as Error).message}
           </span>
         )}
         {saved && (
-          <span className="text-xs text-[color:var(--status-success)]">
+          <span className="text-xs text-[color:var(--status-success-text)]">
             Security settings updated.
           </span>
         )}
@@ -251,7 +266,7 @@ function ToggleCard({
         <span className="text-sm font-medium">{title}</span>
         <p className="mt-1 text-sm text-muted-foreground">{desc}</p>
       </div>
-      <Switch checked={checked} onCheckedChange={onChange} />
+      <Switch checked={checked} onCheckedChange={onChange} aria-label={title} />
     </section>
   );
 }

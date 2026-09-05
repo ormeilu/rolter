@@ -25,11 +25,11 @@ import { BELOW_LG, useMediaQuery } from "@/lib/use-media-query";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const STATUS_TONE: Record<string, [string, string]> = {
-  success: ["var(--status-success)", "rgba(22,163,74,.14)"],
-  error: ["var(--status-danger)", "var(--red-tint)"],
-  timeout: ["var(--status-warning)", "rgba(245,158,11,.14)"],
-  auth_denied: ["var(--status-danger)", "var(--red-tint)"],
-  transport_error: ["var(--status-warning)", "rgba(245,158,11,.14)"],
+  success: ["var(--status-success-text)", "rgba(22,163,74,.14)"],
+  error: ["var(--status-danger-text)", "var(--red-tint)"],
+  timeout: ["var(--status-warning-text)", "rgba(245,158,11,.14)"],
+  auth_denied: ["var(--status-danger-text)", "var(--red-tint)"],
+  transport_error: ["var(--status-warning-text)", "rgba(245,158,11,.14)"],
 };
 
 const statusTone = (s: string) => STATUS_TONE[s] ?? ["var(--text-secondary)", "var(--surface-subtle)"];
@@ -116,6 +116,7 @@ export default function McpLogs() {
       <div className="flex items-center gap-2.5">
         <Select
           className="w-[160px]"
+          aria-label={t("pages.mcpLogs.statusFilterAria")}
           value={status}
           onChange={(e) => {
             setStatus(e.target.value);
@@ -131,6 +132,7 @@ export default function McpLogs() {
         </Select>
         <Select
           className="w-[180px]"
+          aria-label={t("pages.mcpLogs.transportFilterAria")}
           value={transport}
           onChange={(e) => {
             setTransport(e.target.value);
@@ -307,7 +309,7 @@ function DetailDrawer({ eventId, onClose }: { eventId: string; onClose: () => vo
             <DrawerStat label="Request" value={d.request_id || "—"} />
             <DrawerStat label="Trace" value={d.trace_id || "—"} />
           </div>
-          {d.error && <p className="text-xs text-destructive">{d.error}</p>}
+          {d.error && <p className="text-xs text-[color:var(--status-danger-text)]">{d.error}</p>}
           {pretty(d.arguments) && <DrawerBlock label="Arguments" body={pretty(d.arguments)!} />}
           {pretty(d.result) && <DrawerBlock label="Result" body={pretty(d.result)!} />}
         </>
@@ -369,7 +371,10 @@ function DrawerBlock({ label, body }: { label: string; body: string }) {
       <div className="mb-1 text-[0.6875rem] uppercase tracking-[0.05em] text-[color:var(--text-subtle)]">
         {label}
       </div>
-      <pre className="max-h-[220px] overflow-auto rounded-[8px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] p-2.5 font-mono text-[0.6875rem] leading-relaxed text-[color:var(--text-secondary)]">
+      <pre
+        tabIndex={0}
+        className="max-h-[220px] overflow-auto rounded-[8px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] p-2.5 font-mono text-[0.6875rem] leading-relaxed text-[color:var(--text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
         {body}
       </pre>
     </div>

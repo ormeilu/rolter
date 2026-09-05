@@ -741,7 +741,6 @@
     "Set a password now",
     "Shown once and not recoverable after you close this dialog.",
     "Status",
-    "Superadmin (full cross-org access)",
     "Team",
     "User",
     "at least 8 characters if set; blank leaves an SSO-only account",

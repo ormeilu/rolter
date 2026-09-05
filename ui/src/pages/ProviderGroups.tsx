@@ -199,7 +199,7 @@ export default function ProviderGroups() {
                 title="Delete provider group"
                 aria-label={`Delete provider group ${group.name}`}
                 onClick={() => setDeleteTarget(group)}
-                className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -254,7 +254,7 @@ export default function ProviderGroups() {
           </DialogDescription>
         </DialogHeader>
         {removeGroup.isError && (
-          <p className="text-xs text-destructive">{(removeGroup.error as Error).message}</p>
+          <p className="text-xs text-[color:var(--status-danger-text)]">{(removeGroup.error as Error).message}</p>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => setDeleteTarget(null)}>

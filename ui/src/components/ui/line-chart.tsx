@@ -17,6 +17,13 @@ interface LineChartProps {
    * chart still refuses to draw an axis it has nothing to put against.
    */
   emptyState?: React.ReactNode;
+  /**
+   * Accessible name for the graphic. `role="img"` promises a name, and axe
+   * fails the story when there is none (#1181); a chart the caller does not
+   * name is treated as decorative instead, because the heading and the figures
+   * beside it already carry the fact. Pass a translated string.
+   */
+  label?: string;
 }
 
 const DEFAULT_COLORS = ["var(--red-folk)", "var(--zinc-300)", "var(--status-info)"];
@@ -32,6 +39,7 @@ export function LineChart({
   height = 180,
   formatValue,
   emptyState,
+  label,
 }: LineChartProps) {
   const width = 640;
   // the left gutter holds the y-axis labels, and the horizontal padding has to
@@ -81,8 +89,7 @@ export function LineChart({
     <svg
       viewBox={`0 0 ${width} ${height}`}
       className="h-full w-full"
-      role="img"
-      aria-label="time series chart"
+      {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
     >
       {/* horizontal gridlines, each with the value it sits at */}
       {ticks.map((t) => {

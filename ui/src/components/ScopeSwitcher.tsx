@@ -221,7 +221,7 @@ function ScopeRow({
           aria-label={t(keys.remove)}
           title={t(keys.remove)}
           onClick={onDelete}
-          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-[color:var(--status-danger-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -288,7 +288,7 @@ function CreateScopeDialog({
           />
         </Field>
         {create.isError && (
-          <p className="text-xs text-destructive">{(create.error as Error).message}</p>
+          <p className="text-xs text-[color:var(--status-danger-text)]">{(create.error as Error).message}</p>
         )}
       </div>
       <DialogFooter>
@@ -341,7 +341,7 @@ function DeleteScopeDialog({
         </DialogDescription>
       </DialogHeader>
       {remove.isError && (
-        <p className="text-xs text-destructive">{(remove.error as Error).message}</p>
+        <p className="text-xs text-[color:var(--status-danger-text)]">{(remove.error as Error).message}</p>
       )}
       <DialogFooter>
         <Button variant="outline" onClick={() => onOpenChange(false)}>

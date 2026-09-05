@@ -130,7 +130,9 @@ export default function Users() {
   };
 
   const GRID = "1.7fr 1.4fr 110px 1fr 110px";
-  const AVATARS = ["#c0392b", "#2e7d5b", "#3d6fb4", "#8e5aa8", "#b8860b", "#6b7280"];
+  // avatar chips carry white initials, so every entry clears 4.5:1 against
+  // #ffffff — the gold used to be #b8860b at 3.25:1 (#1181)
+  const AVATARS = ["#c0392b", "#2e7d5b", "#3d6fb4", "#8e5aa8", "#8a6508", "#6b7280"];
 
   return (
     <PageBody>
@@ -199,7 +201,13 @@ export default function Users() {
           const grants = byUser.get(user.id) ?? [];
           const initials = user.email.slice(0, 2).toUpperCase();
           return (
-            <ListRow key={user.id} grid={GRID} style={{ opacity: active ? 1 : 0.55 }}>
+            <ListRow
+              key={user.id}
+              grid={GRID}
+              // a blocked account reads as a quieter band, not as faded text
+              // — container opacity takes every glyph under 4.5:1 (#1181)
+              className={active ? undefined : "bg-[color:var(--surface-subtle)]/60"}
+            >
               <div className="flex min-w-0 items-center gap-2.5">
                 <span
                   className="flex h-8 w-8 flex-none items-center justify-center rounded-full font-mono text-[11px] font-semibold text-white"
@@ -211,7 +219,7 @@ export default function Users() {
                   <div className="flex items-center gap-1.5">
                     <span className="truncate font-mono text-sm">{user.email}</span>
                     {user.is_superadmin && (
-                      <span className="flex-none rounded-[3px] border border-[color:var(--red-folk)] px-1 text-[9px] uppercase tracking-[0.06em] text-[color:var(--red-folk)]">
+                      <span className="flex-none rounded-[3px] border border-[color:var(--red-folk)] px-1 text-[9px] uppercase tracking-[0.06em] text-[color:var(--red-folk-text)]">
                         super
                       </span>
                     )}
@@ -227,7 +235,7 @@ export default function Users() {
                 <span
                   className="inline-flex items-center gap-[5px] rounded-full px-[9px] py-0.5 text-[11px] font-semibold capitalize"
                   style={{
-                    color: active ? "var(--status-success)" : "var(--status-danger)",
+                    color: active ? "var(--status-success-text)" : "var(--status-danger-text)",
                     background: active ? "rgba(22,163,74,.14)" : "rgba(229,57,53,.14)",
                   }}
                 >
@@ -488,6 +496,7 @@ function EditUserDialog({
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
   const [email, setEmail] = React.useState(user.email);
   const [password, setPassword] = React.useState("");
   const [isSuperadmin, setIsSuperadmin] = React.useState(user.is_superadmin);
@@ -549,8 +558,12 @@ function EditUserDialog({
           />
         </Field>
         <label className="flex items-center gap-2 text-sm">
-          <Switch checked={isSuperadmin} onCheckedChange={setIsSuperadmin} />
-          Superadmin (full cross-org access)
+          <Switch
+            checked={isSuperadmin}
+            aria-labelledby="user-superadmin-label"
+            onCheckedChange={setIsSuperadmin}
+          />
+          <span id="user-superadmin-label">{t("pages.users.superadmin")}</span>
         </label>
 
         <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3">
@@ -570,12 +583,12 @@ function EditUserDialog({
             </div>
           ) : (
             <div className="space-y-2">
-              <p className="text-xs text-destructive">
+              <p className="text-xs text-[color:var(--status-danger-text)]">
                 Delete <span className="font-mono">{user.email}</span>? This
                 can't be undone.
               </p>
               {remove.isError && (
-                <p className="text-xs text-destructive">
+                <p className="text-xs text-[color:var(--status-danger-text)]">
                   {(remove.error as Error).message}
                 </p>
               )}

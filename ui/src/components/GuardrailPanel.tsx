@@ -8,7 +8,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export function GuardrailLoading() {
   return (
-    <div className="grid gap-3 md:grid-cols-2" aria-label="Loading guardrails">
+    // `aria-label` on a bare <div> is prohibited — role="status" is what a
+    // skeleton region actually is, and it supports a name (#1181)
+    <div role="status" className="grid gap-3 md:grid-cols-2" aria-label="Loading guardrails">
       {[0, 1, 2].map((item) => (
         <Skeleton key={item} width="100%" height={172} radius={10} />
       ))}
@@ -38,7 +40,7 @@ export function GuardrailEmpty({
 export function GuardrailError({ message, retry }: { message: string; retry: () => void }) {
   return (
     <div className="rounded-[10px] border border-[color:var(--status-danger)]/30 bg-[color:var(--status-danger)]/5 p-5">
-      <p className="text-sm font-medium text-[color:var(--status-danger)]">
+      <p className="text-sm font-medium text-[color:var(--status-danger-text)]">
         Guardrail registry unavailable
       </p>
       <p className="mt-1 text-sm text-muted-foreground">{message}</p>

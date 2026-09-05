@@ -196,7 +196,7 @@ function MenuRow({
       className={cn(
         "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-[color:var(--surface-hover)] [&>svg]:h-4 [&>svg]:w-4 [&>svg]:flex-none",
         danger
-          ? "text-[color:var(--text-secondary)] hover:text-[color:var(--status-danger)]"
+          ? "text-[color:var(--text-secondary)] hover:text-[color:var(--status-danger-text)]"
           : "text-foreground",
       )}
     >

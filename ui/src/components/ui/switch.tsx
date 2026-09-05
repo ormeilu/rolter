@@ -2,11 +2,22 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-export interface SwitchProps
-  extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "onChange"> {
+// the track has no text in it, so nothing gives the button an accessible name
+// on its own — and a wrapping <label> does not help either: `label` names form
+// controls, never a `role="switch"` button. axe reported this as `button-name`
+// on 18 stories (#1181). requiring one of the two aria props in the type is
+// what stops the twentieth call site from regressing it
+type SwitchLabel =
+  | { "aria-label": string; "aria-labelledby"?: never }
+  | { "aria-labelledby": string; "aria-label"?: never };
+
+export type SwitchProps = Omit<
+  React.ButtonHTMLAttributes<HTMLButtonElement>,
+  "onChange" | "aria-label" | "aria-labelledby"
+> & {
   checked: boolean;
   onCheckedChange?: (checked: boolean) => void;
-}
+} & SwitchLabel;
 
 // minimal switch primitive (no radix dependency); mirrors the Rolter Design
 // System Switch — track + thumb, brand-red when on

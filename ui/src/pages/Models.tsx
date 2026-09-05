@@ -344,7 +344,7 @@ export default function Models() {
               {r.providerName}
             </span>
             <div>
-              <Pill color="var(--status-info)" tint="rgba(59,130,246,.14)">
+              <Pill color="var(--status-info-text)" tint="rgba(59,130,246,.14)">
                 {r.strategy}
               </Pill>
             </div>
@@ -360,7 +360,7 @@ export default function Models() {
                 </Pill>
               ) : (
                 <Pill
-                  color="var(--status-success)"
+                  color="var(--status-success-text)"
                   tint="rgba(22,163,74,.14)"
                   border="color-mix(in srgb, var(--status-success) 32%, transparent)"
                 >
@@ -393,7 +393,7 @@ export default function Models() {
                   aria-label={`Delete model ${r.name}`}
                   disabled={removeModel.isPending && deleteTarget?.model === r.entry.model}
                   onClick={() => setDeleteTarget(r.entry)}
-                  className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
+                  className="flex flex-none rounded-[6px] border border-[color:var(--border-subtle)] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--status-danger)] hover:text-[color:var(--status-danger-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
                 >
                   {removeModel.isPending && deleteTarget?.model === r.entry.model ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                 </button>
@@ -452,7 +452,7 @@ export default function Models() {
           </DialogDescription>
         </DialogHeader>
         {removeModel.isError && (
-          <p className="text-xs text-destructive">{(removeModel.error as Error).message}</p>
+          <p className="text-xs text-[color:var(--status-danger-text)]">{(removeModel.error as Error).message}</p>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => setDeleteTarget(null)}>

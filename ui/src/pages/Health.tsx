@@ -128,7 +128,10 @@ export default function Health() {
           const key = `${row.provider}::${row.target_id}`;
           const breached = row.sla_breached === 1;
           const m = mttrByTarget.get(key);
+          // the dot carries a shape, the pill beside it carries a label: two
+          // halves of the same status hue, per docs/development/dashboard-theme.md
           const dot = breached ? "var(--status-danger)" : "var(--status-success)";
+          const label = breached ? "var(--status-danger-text)" : "var(--status-success-text)";
           return (
             <div
               key={key}
@@ -148,7 +151,7 @@ export default function Health() {
                 <span
                   className="ml-auto rounded-[6px] px-2 py-[3px] font-mono text-[0.6875rem] uppercase tracking-[0.05em]"
                   style={{
-                    color: dot,
+                    color: label,
                     background: breached ? "rgba(229,57,53,.14)" : "rgba(22,163,74,.14)",
                   }}
                 >
@@ -160,7 +163,7 @@ export default function Health() {
                   <span
                     className={cn(
                       "font-mono text-2xl font-medium leading-none",
-                      breached && "text-destructive",
+                      breached && "text-[color:var(--status-danger-text)]",
                     )}
                   >
                     {pct(fmt, row.uptime)}
@@ -206,7 +209,7 @@ export default function Health() {
                   style={{
                     color:
                       row.error_budget_burn > 1
-                        ? "var(--status-danger)"
+                        ? "var(--status-danger-text)"
                         : "var(--text-secondary)",
                   }}
                 >

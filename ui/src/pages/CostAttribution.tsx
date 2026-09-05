@@ -33,6 +33,7 @@ import {
 import { useCurrencyCode } from "@/lib/currency";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
+import { cn } from "@/lib/utils";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // the window the spend column reports, matching the Dashboard's: one figure on
@@ -185,7 +186,7 @@ function Editor({
             </Select>
           </Field>
         )}
-        {error && <p className="text-xs text-destructive">{error}</p>}
+        {error && <p className="text-xs text-[color:var(--status-danger-text)]">{error}</p>}
       </SheetBody>
       <SheetFooter>
         <div className="flex justify-end gap-2 px-[22px] py-3.5">
@@ -452,7 +453,7 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
         {/* the confirmation carries the delete's own failure, so the banner
             stands down while it is open rather than saying it twice */}
         {mutationError && !deleteTarget && (
-          <span className="text-xs text-destructive">{mutationError.message}</span>
+          <span className="text-xs text-[color:var(--status-danger-text)]">{mutationError.message}</span>
         )}
         <Button className="ml-auto" disabled={disabled} onClick={startCreate}>
           + New {noun}
@@ -494,8 +495,12 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
             return (
               <div
                 key={row.id}
-                className="flex flex-col gap-3 rounded-[10px] border border-[color:var(--border-default)] bg-card p-4"
-                style={{ opacity: row.retired_at ? 0.6 : 1 }}
+                // a retired unit reads as a quieter card, not as faded text:
+                // container opacity takes every glyph under 4.5:1 (#1181)
+                className={cn(
+                  "flex flex-col gap-3 rounded-[10px] border border-[color:var(--border-default)] p-4",
+                  row.retired_at ? "bg-[color:var(--surface-subtle)]/60" : "bg-card",
+                )}
               >
                 <div className="flex items-start gap-2.5">
                   <div className="min-w-0 flex-1">
@@ -540,7 +545,7 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="ml-auto text-destructive"
+                    className="ml-auto text-[color:var(--status-danger-text)]"
                     disabled={disabled || mutating}
                     onClick={() => startDelete(row)}
                   >

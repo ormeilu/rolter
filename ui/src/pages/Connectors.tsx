@@ -33,9 +33,11 @@ import {
 import { useFormat } from "@/lib/i18n/format";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
+// `[label, tint]`: the label colour is the -text half of the hue, because a
+// health pill is a glyph on a tint rather than a shape (#1181)
 const HEALTH_TONE: Record<string, [string, string]> = {
-  healthy: ["var(--status-success)", "rgba(22,163,74,.14)"],
-  unhealthy: ["var(--status-danger)", "var(--red-tint)"],
+  healthy: ["var(--status-success-text)", "rgba(22,163,74,.14)"],
+  unhealthy: ["var(--status-danger-text)", "var(--red-tint)"],
   unknown: ["var(--text-secondary)", "var(--surface-subtle)"],
 };
 
@@ -246,6 +248,7 @@ export default function Connectors() {
                 <Switch
                   checked={c.enabled}
                   disabled={toggle.isPending}
+                  aria-label={t("pages.connectors.toggleAria", { name: c.name })}
                   onCheckedChange={() => toggle.mutate(c)}
                 />
               </div>
@@ -257,7 +260,7 @@ export default function Connectors() {
                   <StatusDot color={tone[0]} className="h-1.5 w-1.5" />
                   {c.health_status}
                 </Pill>
-                <Pill color="var(--status-info)" tint="rgba(59,130,246,.14)">
+                <Pill color="var(--status-info-text)" tint="rgba(59,130,246,.14)">
                   {Math.round(c.sampling_rate * 100)}% sampled
                 </Pill>
                 {c.auth_secret_configured && (
@@ -267,14 +270,14 @@ export default function Connectors() {
                 )}
               </div>
               {c.health_error && (
-                <p className="text-xs text-destructive">{c.health_error}</p>
+                <p className="text-xs text-[color:var(--status-danger-text)]">{c.health_error}</p>
               )}
               {/* the probe's own verdict, which the row only picks up after the
                   invalidated list comes back. saying why delivery failed at the
                   moment the operator pressed the button is the whole point of
                   the test (#1178) */}
               {test.data && test.variables === c.id && !test.data.delivered && (
-                <p className="text-xs text-destructive">
+                <p className="text-xs text-[color:var(--status-danger-text)]">
                   {t("pages.connectors.testFailed", {
                     message: test.data.health_error ?? test.data.health_status,
                   })}
@@ -305,7 +308,7 @@ export default function Connectors() {
                   aria-label={`Delete connector ${c.name}`}
                   disabled={remove.isPending && remove.variables === c.id}
                   onClick={() => startDelete(c)}
-                  className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
+                  className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger-text)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
                 >
                   {remove.isPending && remove.variables === c.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                 </button>
@@ -315,7 +318,7 @@ export default function Connectors() {
         })}
       </div>
       {(test.isError || (remove.isError && !deleteTarget)) && (
-        <p className="text-xs text-destructive">
+        <p className="text-xs text-[color:var(--status-danger-text)]">
           {((test.error ?? remove.error) as Error).message}
         </p>
       )}

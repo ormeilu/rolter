@@ -240,6 +240,7 @@ export default function AuditLog() {
             />
             <Select
               className="w-52"
+              aria-label={t("pages.auditLog.actionFilterAria")}
               value={action}
               onChange={(e) => setAction(e.target.value)}
             >
@@ -252,6 +253,7 @@ export default function AuditLog() {
             </Select>
             <Select
               className="w-44"
+              aria-label={t("pages.auditLog.targetFilterAria")}
               value={target}
               onChange={(e) => setTarget(e.target.value)}
             >
@@ -346,7 +348,10 @@ export default function AuditLog() {
           )}
 
           {expanded && (
-            <pre className="max-h-64 overflow-auto rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-subtle)] p-3 text-xs">
+            <pre
+              tabIndex={0}
+              className="max-h-64 overflow-auto rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-subtle)] p-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
               {JSON.stringify(rows.find((e) => e.id === expanded)?.detail, null, 2)}
             </pre>
           )}

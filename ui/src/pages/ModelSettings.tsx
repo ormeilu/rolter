@@ -219,12 +219,12 @@ export default function ModelSettings() {
       </p>
 
       <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-[color:var(--border-subtle)] bg-background py-3">
-        {localError && <span className="text-xs text-destructive">{localError}</span>}
+        {localError && <span className="text-xs text-[color:var(--status-danger-text)]">{localError}</span>}
         {!localError && save.isError && (
-          <span className="text-xs text-destructive">{(save.error as Error).message}</span>
+          <span className="text-xs text-[color:var(--status-danger-text)]">{(save.error as Error).message}</span>
         )}
         {saved && (
-          <span className="text-xs text-[color:var(--status-success)]">
+          <span className="text-xs text-[color:var(--status-success-text)]">
             Model defaults updated.
           </span>
         )}
@@ -253,9 +253,12 @@ function Card({
         <span className="text-sm font-medium">{title}</span>
         <p className="mt-1 text-sm text-muted-foreground">{desc}</p>
       </div>
-      <div className="flex flex-wrap gap-4" style={{ opacity: dimmed ? 0.55 : 1 }}>
+      {/* a disabled fieldset rather than a dimmed div: every control inside
+          already carries `disabled`, and fading a live div drags its labels and
+          hints below 4.5:1 while telling assistive tech nothing (#1181) */}
+      <fieldset className="flex min-w-0 flex-wrap gap-4" disabled={dimmed} style={{ opacity: dimmed ? 0.55 : 1 }}>
         {children}
-      </div>
+      </fieldset>
     </section>
   );
 }

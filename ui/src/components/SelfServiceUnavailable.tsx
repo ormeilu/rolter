@@ -16,7 +16,7 @@ export function SelfServiceUnavailable() {
     <div className="flex items-start gap-3 rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--red-tint)] p-4">
       <ShieldAlert
         aria-hidden
-        className="mt-0.5 h-4 w-4 flex-none text-[color:var(--status-danger)]"
+        className="mt-0.5 h-4 w-4 flex-none text-[color:var(--status-danger-text)]"
       />
       <div className="min-w-0 space-y-1">
         <p className="text-sm font-medium text-foreground">
