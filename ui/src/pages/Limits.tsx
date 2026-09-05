@@ -182,7 +182,7 @@ export default function Limits() {
               ))}
             </Select>
           </Field>
-          <Field label="Scope id" hint={`uuid of the ${scopeType}`}>
+          <Field label="Scope" hint={t("pages.limits.scopeHint", { type: t(`pages.limits.scopeTypes.${scopeType}`) })}>
             {scopeType === "org" && scope.orgs.length > 0 ? (
               <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
                 <option value="">Select an org</option>

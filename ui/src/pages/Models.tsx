@@ -54,6 +54,7 @@ interface CatalogRow {
   entry: EffectiveModelDto;
   route: RouteRow | null;
   providerName: string;
+  targetCount: number;
   strategy: string;
   origin: "config" | "db";
   locked: boolean;
@@ -149,7 +150,10 @@ export default function Models() {
 
   const rows: CatalogRow[] = (models.data ?? []).map((entry) => {
     const route = routeByModel.get(entry.model) ?? null;
-    const target = route ? targetsByRoute.get(route.id)?.[0] : undefined;
+    const targets = route ? (targetsByRoute.get(route.id) ?? []) : [];
+    // the first target names the provider column; a route spread over several
+    // providers says so instead of pretending it lives on one
+    const target = targets[0];
     const price = prices.data?.find((p) => p.model === entry.model);
     const policy = route?.param_policy as Record<string, unknown> | undefined;
     const deny = Array.isArray(policy?.deny) ? (policy.deny as unknown[]) : [];
@@ -157,7 +161,10 @@ export default function Models() {
       name: entry.model,
       entry,
       route,
-      providerName: providerName(target?.provider_id),
+      providerName:
+        targets.length > 1
+          ? t("pages.models.providerCount", { first: providerName(target?.provider_id), count: targets.length - 1 })
+          : providerName(target?.provider_id),
       strategy: entry.strategy,
       origin: entry.source === "config" ? "config" : "db",
       locked: policy?.mode === "deny" || deny.length > 0,
@@ -168,6 +175,7 @@ export default function Models() {
       outPrice: price ? fmt.currency(Number(price.output_per_mtok), price.currency) : "—",
       priced: pricesKnown ? !!price : null,
       weight: target ? String(target.weight) : "—",
+      targetCount: targets.length,
     };
   });
 

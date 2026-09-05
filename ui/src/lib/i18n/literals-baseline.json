@@ -176,7 +176,6 @@
     "Window (seconds)"
   ],
   "src/pages/AuditLog.tsx": [
-    "Actor user id (full UUID)…",
     "All actions",
     "All targets",
     "Next",
@@ -381,7 +380,6 @@
     "Rate limits",
     "Requests per minute (optional)",
     "Scope",
-    "Scope id",
     "Scope type",
     "Select a project",
     "Select a team",
