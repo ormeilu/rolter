@@ -1086,10 +1086,28 @@
       "tierRouteAria": "Маршрут для этого уровня"
     },
     "health": {
-      "emptyTitle": "Событий состояния пока нет",
-      "emptyBody": "Аптайм, MTTR и расход бюджета ошибок считаются по реальному трафику. Отправьте запрос через шлюз — и здесь появится первая сводка.",
+      "closed": "замкнут",
       "emptyAction": "Открыть песочницу",
-      "noEvents": "В этом интервале событий нет."
+      "emptyBody": "Аптайм, MTTR и расход бюджета ошибок считаются по реальному трафику. Отправьте запрос через шлюз — и здесь появится первая сводка.",
+      "emptyTitle": "Событий состояния пока нет",
+      "errorBudget": "расход бюджета ошибок",
+      "failures": "Отказы",
+      "failuresShort_few": "{{count}} отказа",
+      "failuresShort_many": "{{count}} отказов",
+      "failuresShort_one": "{{count}} отказ",
+      "failuresShort_other": "{{count}} отказа",
+      "grainDerived": "сводка по целям",
+      "grainProvider": "по пробам · {{sources}}",
+      "incidents": "Инциденты",
+      "mttr": "MTTR",
+      "noEvents": "В этом интервале событий нет.",
+      "subtitle": "Предохранители, аптайм и расход бюджета ошибок по провайдерам — за 7 дней, цель SLA {{sla}}",
+      "targets_few": "{{count}} цели",
+      "targets_many": "{{count}} целей",
+      "targets_one": "{{count}} цель",
+      "targets_other": "{{count}} цели",
+      "tripped": "разомкнут",
+      "uptimeMeta": "аптайм · событий: {{events}}"
     },
     "limits": {
       "budgetsEmptyTitle": "Для этой области бюджетов нет",

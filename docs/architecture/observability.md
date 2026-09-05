@@ -608,6 +608,38 @@ Read-only, window-bounded rollups over `provider_health_events`, served by the c
 - `GET /api/v1/health/mttr` — per provider/target mean time to recovery (`mttr_seconds`) and incident count, computed from downtime episodes (a run of non-`ok` events bounded by `ok`).
 - `GET /api/v1/health/timeline?bucket=hour|day|week|month` — bucketed ok/error/timeout counts per provider/target for the failure timeline (default bucket `hour`).
 
+#### Two grains, and why they are never summed
+
+The three rollups group by `(provider, target_id)`, and `target_id` means two
+different things depending on the `source` that wrote the row. A `probe` or
+`status_page` event watches the provider as a whole and carries the provider's
+own name as its `target_id`; a `passive` event is derived from one completed
+request and carries that request's real target. Both grains therefore land in
+the same rollup, describing the same provider, with numbers that are not
+comparable — a probe fires every `probe_interval_secs` regardless of traffic,
+while a passive observation only exists because a request happened.
+
+Every row consequently reports a **`grain`**: `provider` when `target_id` is
+the provider itself, `target` when it is one route through it. `uptime` also
+returns `sources`, the sorted distinct `source` values behind the row.
+
+Reading the numbers:
+
+- A `provider` row answers *"is this provider reachable at all, right now?"*.
+  Its instant is the last probe or status-page poll, and its denominator is the
+  number of polls in the window.
+- A `target` row answers *"what did real traffic through this route see?"*.
+  Its instant is the last request that used it, and its denominator is the
+  number of requests in the window.
+
+The two are never added together. The dashboard renders one card per provider,
+headlined by the `provider` row when there is one, with the `target` rows
+nested inside it; a provider with no probes configured has no `provider` row,
+so the card sums its `target` rows — which is sound, because every request went
+through exactly one of them — and labels the headline as a roll-up. Before
+#1257 the screen laid every row out as a peer card, so a single dead provider
+appeared several times over with contradictory failure counts.
+
 ## Health
 
 - `GET /healthz` on both binaries for liveness probes.

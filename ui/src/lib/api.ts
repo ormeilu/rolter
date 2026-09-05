@@ -464,9 +464,21 @@ export function fetchRoles(): Promise<string[]> {
 
 // provider stability rollups over provider_health_events (ROL-198)
 
+/**
+ * Which grain a health rollup row describes: `provider` for probe and
+ * status-page observations, which watch the provider as a whole, `target` for
+ * passive observations of one route through it. The two are never summed —
+ * they count different things — so the screen nests targets under a provider
+ * instead of laying them out as peers (#1257).
+ */
+export type HealthGrain = "provider" | "target";
+
 export interface UptimeRow {
   provider: string;
   target_id: string;
+  grain: HealthGrain;
+  /** the distinct event sources behind this row, e.g. `["passive", "probe"]` */
+  sources: string[];
   events: number;
   ok: number;
   errors: number;
@@ -481,6 +493,7 @@ export interface UptimeRow {
 export interface MttrRow {
   provider: string;
   target_id: string;
+  grain: HealthGrain;
   mttr_seconds: number;
   incidents: number;
 }
@@ -489,6 +502,7 @@ export interface TimelineRow {
   bucket: string;
   provider: string;
   target_id: string;
+  grain: HealthGrain;
   events: number;
   ok: number;
   errors: number;
