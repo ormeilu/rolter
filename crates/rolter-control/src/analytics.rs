@@ -248,15 +248,26 @@ pub(crate) fn client_or_503(state: &crate::ControlState) -> Result<&ClickHouseCl
 pub(crate) fn run(rows: anyhow::Result<Vec<Value>>) -> Response {
     match rows {
         Ok(data) => Json(json!({ "data": data })).into_response(),
-        Err(err) => {
-            tracing::warn!(error = %err, "analytics query failed");
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({"error": {"message": err.to_string()}})),
-            )
-                .into_response()
-        }
+        Err(err) => query_failed("analytics query failed", &err),
     }
+}
+
+/// The response for a ClickHouse query that did not come back.
+///
+/// The database's own message carries the full SQL, the table layout and its
+/// host, and it used to be echoed verbatim into the dashboard (#1221). The
+/// operator gets a stable sentence plus a `code` the UI can key on; the detail
+/// goes to the control-plane log, which is where a query failure is debugged.
+pub(crate) fn query_failed(
+    what: &'static str,
+    err: &(impl std::fmt::Display + ?Sized),
+) -> Response {
+    tracing::warn!(error = %err, "{what}");
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(json!({"error": {"message": what, "code": "analytics_query_failed"}})),
+    )
+        .into_response()
 }
 
 /// Totals over the window: request count, tokens, cost, error count, avg latency.
@@ -635,5 +646,30 @@ mod tests {
         assert_eq!(clamp_limit(Some(0)), 1);
         assert_eq!(clamp_limit(Some(25)), 25);
         assert_eq!(clamp_limit(Some(10_000)), 200);
+    }
+}
+
+#[cfg(test)]
+mod query_failed_tests {
+    use super::query_failed;
+    use axum::body::to_bytes;
+
+    // the database's message is for the log, never for the browser
+    #[tokio::test]
+    async fn the_response_carries_no_database_detail() {
+        let err = anyhow::anyhow!(
+            "clickhouse query failed (400 Bad Request): SELECT ts FROM request_logs WHERE host = 10.0.0.9"
+        );
+        let response = query_failed("analytics query failed", &err);
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_GATEWAY);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["message"], "analytics query failed");
+        assert_eq!(json["error"]["code"], "analytics_query_failed");
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            !text.contains("request_logs") && !text.contains("10.0.0.9"),
+            "{text}"
+        );
     }
 }

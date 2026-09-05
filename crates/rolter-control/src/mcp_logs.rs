@@ -13,7 +13,9 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::analytics::{clamp_limit, client_or_503, window_params, WindowQuery, WHERE_WINDOW};
+use crate::analytics::{
+    clamp_limit, client_or_503, query_failed, window_params, WindowQuery, WHERE_WINDOW,
+};
 use crate::crud::{ApiError, ApiResult};
 use crate::rbac::{authorize_superadmin, Principal};
 use crate::rbac_matrix::superadmin_cap;
@@ -332,11 +334,7 @@ async fn list_events(
             });
             Json(json!({"data": data, "next_cursor": next_cursor})).into_response()
         }
-        Err(error) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"error": {"message": error.to_string()}})),
-        )
-            .into_response(),
+        Err(error) => query_failed("mcp log query failed", &error),
     }
 }
 
@@ -371,11 +369,7 @@ async fn event_detail(
             Some(row) => Json(row).into_response(),
             None => StatusCode::NOT_FOUND.into_response(),
         },
-        Err(error) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"error": {"message": error.to_string()}})),
-        )
-            .into_response(),
+        Err(error) => query_failed("mcp log query failed", &error),
     }
 }
 
@@ -399,11 +393,7 @@ async fn summary(
     );
     match ch.query(&sql, &window_params(&q)).await {
         Ok(data) => Json(json!({"data": data})).into_response(),
-        Err(error) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"error": {"message": error.to_string()}})),
-        )
-            .into_response(),
+        Err(error) => query_failed("mcp log query failed", &error),
     }
 }
 
