@@ -125,7 +125,8 @@
       "securitySettings": "security settings",
       "toolGroups": "tool groups",
       "rbacMatrix": "the permission matrix",
-      "attributionSpend": "attribution spend"
+      "attributionSpend": "attribution spend",
+      "customRoles": "custom roles"
     }
   },
   "locale": {
@@ -681,7 +682,43 @@
       "teamCount_other": "{{count}} teams",
       "emptyTitle": "No access profiles yet",
       "emptyBody": "A profile bundles custom roles and a model policy, then hands the bundle to a user or a whole team.",
-      "emptyAction": "Add profile"
+      "emptyAction": "Add profile",
+      "summary_one": "{{count}} profile · reusable permission bundles",
+      "summary_other": "{{count}} profiles · reusable permission bundles",
+      "add": "+ Add profile",
+      "unassigned": "Not assigned to anyone yet",
+      "detailUnavailable": "What this profile carries is unavailable",
+      "roleCount_one": "{{count}} custom role",
+      "roleCount_other": "{{count}} custom roles",
+      "policyNone": "No model or route policy",
+      "policyCount_one": "{{count}} policy pattern",
+      "policyCount_other": "{{count}} policy patterns",
+      "editProfile": "Edit {{name}}",
+      "deleteProfile": "Delete {{name}}",
+      "createTitle": "New access profile",
+      "editTitle": "Edit {{name}}",
+      "sheetSubtitle": "A profile bundles custom roles and a model policy. Assign it to a user or a team and everyone it reaches picks up both.",
+      "fieldName": "Name",
+      "namePlaceholder": "Support engineers",
+      "fieldSlug": "Slug",
+      "slugHint": "Derived from the name when left blank, and never renamed afterwards",
+      "slugPlaceholder": "support-engineers",
+      "fieldDescription": "Description",
+      "descriptionPlaceholder": "Read-only access to logs and analytics",
+      "rolesLabel": "Custom roles",
+      "rolesHint": "Composed at organization scope, so the role applies across every team and project in it. A profile may only carry roles from its own org.",
+      "rolesEmpty": "This organization has no custom roles yet. Define one on Roles & Permissions first.",
+      "roleExtends": "extends {{role}}",
+      "policyLabel": "Model and route policy",
+      "policyHint": "One pattern per line: an exact name, or a trailing-* prefix glob. Deny always beats allow.",
+      "allowHint": "Leave empty for no restriction",
+      "denyHint": "Blocked even when a rule above allows it",
+      "allowedModels": "Allowed models",
+      "deniedModels": "Denied models",
+      "allowedRoutes": "Allowed routes",
+      "deniedRoutes": "Denied routes",
+      "save": "Save profile",
+      "create": "Create profile"
     },
     "mcpCatalog": {
       "oauth": {
@@ -827,7 +864,59 @@
       "cellTitle": "{{action}} — {{state}}",
       "legendSuperadmin": "Superadmin only",
       "legendGranted": "Granted by a custom role",
-      "legendNa": "No such action"
+      "legendNa": "No such action",
+      "tabs": {
+        "matrix": "Permission matrix",
+        "custom": "Custom roles"
+      },
+      "baseRoles": {
+        "viewer": "Viewer — read only",
+        "member": "Member — day-to-day work",
+        "admin": "Admin — full control of the scope"
+      },
+      "custom": {
+        "intro": "An org-defined role is one of the built-in three plus the exact resource:action pairs it should also allow. A grant only ever widens: nothing the base role already permits can be taken away by one.",
+        "add": "+ New role",
+        "emptyTitle": "No custom roles yet",
+        "emptyBody": "Define a role once, compose it into an access profile, and hand that profile to a user or a whole team.",
+        "emptyAction": "New role",
+        "extends": "extends {{role}}",
+        "grantCount_one": "{{count}} grant",
+        "grantCount_other": "{{count}} grants",
+        "noGrants": "No explicit grants — the base role alone",
+        "usedBy": "Composed into {{profiles}}",
+        "usedByNone": "Not composed into any profile",
+        "editRole": "Edit {{name}}",
+        "deleteRole": "Delete {{name}}",
+        "createTitle": "New custom role",
+        "editTitle": "Edit {{name}}",
+        "sheetSubtitle": "Pick the built-in role it extends, then tick the exact pairs it should also allow.",
+        "fieldName": "Name",
+        "namePlaceholder": "Support engineer",
+        "fieldSlug": "Slug",
+        "slugHint": "Derived from the name when left blank, and never renamed afterwards",
+        "slugPlaceholder": "support-engineer",
+        "fieldDescription": "Description",
+        "descriptionPlaceholder": "Read everything, mint keys for one customer",
+        "fieldBaseRole": "Base role",
+        "baseRoleHint": "The floor this role starts from. Every grant below is on top of it.",
+        "grantsLabel": "Grants",
+        "grantsHint": "One row per resource the deployment guards, straight from the capability table the control plane enforces with.",
+        "filterPlaceholder": "Filter resources",
+        "noResources": "No resource matches that filter.",
+        "grantCell": "{{action}} on {{resource}}",
+        "superadminHint": "Deployment-wide actions are superadmin-only and no custom role can grant them.",
+        "unknownCarried_one": "{{count}} grant names a resource this build does not define. It allows nothing, and saving keeps it as it is.",
+        "unknownCarried_other": "{{count}} grants name resources this build does not define. They allow nothing, and saving keeps them as they are.",
+        "save": "Save role",
+        "create": "Create role",
+        "confirm": {
+          "title": "Delete custom role {{name}}?",
+          "body": "Everyone holding it through an access profile loses the pairs it grants. The base role they already had is untouched.",
+          "referenced": "It is still composed into {{profiles}}. Detach it there first — the control plane refuses the delete until you do.",
+          "confirm": "Delete role"
+        }
+      }
     },
     "sso": {
       "policy": {

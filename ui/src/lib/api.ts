@@ -731,6 +731,93 @@ export interface CustomerRow {
 }
 
 // ---------------------------------------------------------------------------
+// org-defined roles (#534, crates/rolter-control/src/access_control.rs): a base
+// role plus the explicit `(resource, action)` pairs it also allows. A grant only
+// ever widens what the base role already permitted, and none can reach a
+// superadmin capability — deployment-wide policy has no org to define a role in,
+// so granting it from inside a tenant would be a way out of that tenant.
+
+export interface CustomRoleRow {
+  id: string;
+  org_id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  /** the built-in role this one extends: `admin` | `member` | `viewer` */
+  base_role: Role;
+  created_at: string;
+  updated_at: string;
+}
+
+/** one stored `(resource, action)` pair a custom role grants */
+export interface CustomRoleGrantRow {
+  id: string;
+  role_id: string;
+  resource: string;
+  action: RbacAction;
+}
+
+/**
+ * What every custom-role read and write returns.
+ *
+ * The role is `#[serde(flatten)]`ed on the rust side, so its own fields sit
+ * beside `grants` rather than under a `role` key.
+ */
+export interface CustomRoleDetail extends CustomRoleRow {
+  grants: CustomRoleGrantRow[];
+}
+
+/** a grant as it is written; the server assigns the id */
+export interface CustomRoleGrantInput {
+  resource: string;
+  action: RbacAction;
+}
+
+export function fetchCustomRoles(orgId: string): Promise<CustomRoleRow[]> {
+  return getJson<CustomRoleRow[]>(`/api/v1/orgs/${orgId}/custom-roles`);
+}
+
+export function createCustomRole(
+  orgId: string,
+  input: {
+    name: string;
+    slug?: string;
+    description?: string | null;
+    /** omitted defaults to `viewer` server-side */
+    base_role?: Role;
+    grants?: CustomRoleGrantInput[];
+  },
+): Promise<CustomRoleDetail> {
+  return sendJson<CustomRoleDetail>(
+    "POST",
+    `/api/v1/orgs/${orgId}/custom-roles`,
+    input,
+  );
+}
+
+// `grants` absent leaves the stored set alone; present replaces it wholesale, so
+// an editor that sends a grid has to send every pair it means to keep — including
+// the ones this build's capability table no longer defines
+export function updateCustomRole(
+  id: string,
+  input: {
+    name?: string;
+    description?: string | null;
+    base_role?: Role;
+    grants?: CustomRoleGrantInput[];
+  },
+): Promise<CustomRoleDetail> {
+  return sendJson<CustomRoleDetail>("PUT", `/api/v1/custom-roles/${id}`, input);
+}
+
+// 409 for as long as any access profile still composes the role: detaching is an
+// audited profile update, so nobody's access changes without a record that names
+// the profile it changed
+export function deleteCustomRole(id: string): Promise<void> {
+  return sendJson<void>("DELETE", `/api/v1/custom-roles/${id}`);
+}
+
+// ---------------------------------------------------------------------------
 // access profiles (#534 / #830): reusable permission bundles handed to users or
 // whole teams. the merged model/route policy they carry is enforced on the
 // gateway, not just reported — see ADR-0023
@@ -762,28 +849,90 @@ export interface AccessProfileAssignmentRow {
   created_at: string;
 }
 
+/**
+ * One `(custom role, scope)` pair inside a profile.
+ *
+ * Scope follows the same most-specific-non-null convention as a membership: a
+ * project pins the role to that project, a team to every project under it, and
+ * an org to the whole tenant.
+ */
+export interface AccessProfileRoleRow {
+  id: string;
+  profile_id: string;
+  role_id: string;
+  org_id: string | null;
+  team_id: string | null;
+  project_id: string | null;
+  created_at: string;
+}
+
+/** the profile plus everything hanging off it, `#[serde(flatten)]`ed as above */
+export interface AccessProfileDetail extends AccessProfileRow {
+  roles: AccessProfileRoleRow[];
+  assignments: AccessProfileAssignmentRow[];
+  /** null until a policy has been written for the profile */
+  policy: AccessProfilePolicy | null;
+}
+
+/** a composition as it is written: a role, and the scope it applies at */
+export interface AccessProfileRoleInput {
+  role_id: string;
+  org_id?: string;
+  team_id?: string;
+  project_id?: string;
+}
+
+export interface AccessProfilePolicyInput {
+  allowed_models: string[];
+  denied_models: string[];
+  allowed_routes: string[];
+  denied_routes: string[];
+}
+
 export function fetchAccessProfiles(
   orgId: string,
 ): Promise<AccessProfileRow[]> {
   return getJson<AccessProfileRow[]>(`/api/v1/orgs/${orgId}/access-profiles`);
 }
 
+// the one call that answers "what does this profile actually carry": the roles
+// composed into it, everyone it reaches, and the policy `setAccessProfilePolicy`
+// wrote — none of which the list endpoint can show back
+export function fetchAccessProfile(id: string): Promise<AccessProfileDetail> {
+  return getJson<AccessProfileDetail>(`/api/v1/access-profiles/${id}`);
+}
+
+// a profile is created whole: the roles it composes and the policy it carries go
+// in the same request, so it is never assignable in a half-written state
 export function createAccessProfile(
   orgId: string,
-  input: { name: string; slug?: string; description?: string | null },
-): Promise<AccessProfileRow> {
-  return sendJson<AccessProfileRow>(
+  input: {
+    name: string;
+    slug?: string;
+    description?: string | null;
+    roles?: AccessProfileRoleInput[];
+    policy?: AccessProfilePolicyInput;
+  },
+): Promise<AccessProfileDetail> {
+  return sendJson<AccessProfileDetail>(
     "POST",
     `/api/v1/orgs/${orgId}/access-profiles`,
     input,
   );
 }
 
+// `roles` absent leaves the composition alone, present replaces it wholesale —
+// which is also how a role is detached before it can be deleted
 export function updateAccessProfile(
   id: string,
-  input: { name?: string; description?: string | null },
-): Promise<AccessProfileRow> {
-  return sendJson<AccessProfileRow>(
+  input: {
+    name?: string;
+    description?: string | null;
+    roles?: AccessProfileRoleInput[];
+    policy?: AccessProfilePolicyInput;
+  },
+): Promise<AccessProfileDetail> {
+  return sendJson<AccessProfileDetail>(
     "PUT",
     `/api/v1/access-profiles/${id}`,
     input,
