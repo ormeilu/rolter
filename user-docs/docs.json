@@ -127,7 +127,8 @@
               "api/mcp",
               "api/models",
               "api/health-and-metrics",
-              "api/ui-events"
+              "api/ui-events",
+              "api/version"
             ]
           }
         ]
