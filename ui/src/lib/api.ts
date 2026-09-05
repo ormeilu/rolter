@@ -153,6 +153,20 @@ async function getJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+/// the same request as `getJson` for an endpoint that answers with a document
+/// rather than a record — the collector config is `application/yaml`, and
+/// parsing it would only be a step towards printing it again
+async function getText(url: string): Promise<string> {
+  const headers = authHeaders();
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    const err = await apiError(res);
+    noteUnauthorized(url, "Authorization" in headers, err);
+    throw err;
+  }
+  return res.text();
+}
+
 /// extract the control api's `{"error": {"message": ..., "code": ...}}` body
 /// when present, falling back to the raw status text
 async function apiError(res: Response): Promise<ApiError> {
@@ -2548,6 +2562,20 @@ export function testConnector(id: string): Promise<{
     health_status: string;
     health_checked_at: string;
   }>("POST", `/api/v1/connectors/${id}/test`);
+}
+
+/**
+ * The OpenTelemetry Collector configuration rendered from the enabled
+ * connectors (`crates/rolter-control/src/collector_config.rs`).
+ *
+ * A YAML document, not JSON: the collector's `confmap` HTTP provider reads it
+ * verbatim from `--config=http://...`. ADR-0026 put the per-destination
+ * fan-out in the collector rather than in the data plane, so this document is
+ * the delivery path — the connectors are only the rows it is rendered from.
+ * Superadmin-only, like the rest of the connector surface.
+ */
+export function fetchCollectorConfig(): Promise<string> {
+  return getText("/api/v1/connectors/collector-config");
 }
 
 // ---------------------------------------------------------------------------

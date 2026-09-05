@@ -105,6 +105,7 @@
       "businessUnits": "business units",
       "clientSettings": "client settings",
       "clusterNodes": "cluster nodes",
+      "collectorConfig": "the collector config",
       "compatibilitySettings": "compatibility settings",
       "connectors": "connectors",
       "customers": "customers",
@@ -620,6 +621,16 @@
       }
     },
     "connectors": {
+      "collectorConfig": {
+        "open": "Collector config",
+        "title": "OpenTelemetry Collector config",
+        "where": "This is the document your collector runs. Rolter exports once, to that one collector; the config below is what fans what it receives out to every enabled connector, each pipeline with its own sampling and auth.",
+        "endpoint": "GET /api/v1/connectors/collector-config",
+        "copy": "Copy collector config",
+        "emptyTitle": "Nothing to deliver yet",
+        "emptyBody": "With no connectors the config renders no exporters and no pipelines, so a collector running it would deliver nothing. Add a connector first.",
+        "deploy": "Save it as the collector's config file — infra/otel/collector.compose.yaml in the docker/docker-compose.observability.yml overlay — or point the collector straight at the URL above with --config and reload it on a schedule."
+      },
       "confirm": {
         "title": "Delete connector {{name}}?",
         "body": "Request logs stop being shipped to this endpoint immediately, and its delivery history goes with it.",
