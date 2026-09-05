@@ -157,6 +157,17 @@ export function ListRow({
   );
 }
 
+// card grids use `[grid-template-columns:repeat(auto-fill,minmax(min(Npx,100%),1fr))]`:
+// the inner min() caps the column minimum at the container width, so a 380px
+// card does not force a 375px screen to scroll sideways (#1242)
+// the row above a list: a description, a search box, a filter or two and the
+// create button pushed to the end with `ml-auto`. it wraps, so a 375px screen
+// stacks the button under the search instead of scrolling the page sideways
+// (#1242); thirteen screens used to hand-write the same non-wrapping row
+export function Toolbar({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("flex flex-wrap items-center gap-3", className)} {...props} />;
+}
+
 // tiny asc/desc/off sorter for the grid tables
 export function useSort<K extends string>() {
   const [sort, setSort] = React.useState<{ col: K | null; dir: "asc" | "desc" | null }>({

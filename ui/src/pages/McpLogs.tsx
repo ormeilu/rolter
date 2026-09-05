@@ -113,7 +113,7 @@ export default function McpLogs() {
         <McpStat label="p95 latency" value={latencyStat(summary.data?.p95_latency_ms)} />
       </div>
 
-      <div className="flex items-center gap-2.5">
+      <div className="flex flex-wrap items-center gap-2.5">
         <Select
           className="w-[160px]"
           aria-label={t("pages.mcpLogs.statusFilterAria")}

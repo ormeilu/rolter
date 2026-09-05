@@ -164,7 +164,7 @@ export default function Account() {
         </p>
       )}
 
-      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
+      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr))]">
         {keys.data?.map((key) => (
           <KeyCard
             key={key.id}

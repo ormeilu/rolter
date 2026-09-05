@@ -8,7 +8,7 @@ import { CopyButton } from "@/components/CopyButton";
 import { EditorSheet } from "@/components/EditorSheet";
 import { LoadError } from "@/components/LoadError";
 import { CardGridSkeleton, PanelSkeleton } from "@/components/LoadingState";
-import { PageBody, Pill, StatusDot } from "@/components/screen";
+import { PageBody, Pill, StatusDot, Toolbar } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -187,7 +187,7 @@ export default function Connectors() {
 
   return (
     <PageBody>
-      <div className="flex items-center gap-3">
+      <Toolbar>
         <span className="text-sm text-muted-foreground">
           {connectors.data?.length ?? 0} connectors · OTLP/HTTP sinks for request logs
         </span>
@@ -203,7 +203,7 @@ export default function Connectors() {
           {t("pages.connectors.collectorConfig.open")}
         </Button>
         <Button onClick={() => setAddOpen(true)}>+ Add connector</Button>
-      </div>
+      </Toolbar>
 
       {connectors.isLoading && <CardGridSkeleton cards={3} height={186} min={380} />}
       {/* the endpoint is superadmin-only, so a non-superadmin lands on the
@@ -229,7 +229,7 @@ export default function Connectors() {
           }
         />
       )}
-      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(380px,1fr))]">
+      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(380px,100%),1fr))]">
         {(connectors.data ?? []).map((c) => {
           const tone = healthTone(c.health_status);
           return (

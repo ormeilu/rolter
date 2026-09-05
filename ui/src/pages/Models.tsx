@@ -17,6 +17,7 @@ import {
   SortLabel,
   StatusDot,
   useSort,
+  Toolbar,
 } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -211,7 +212,7 @@ export default function Models() {
 
   return (
     <PageBody>
-      <div className="flex items-center gap-3">
+      <Toolbar>
         <SearchInput
           placeholder="Search models"
           value={search}
@@ -227,7 +228,7 @@ export default function Models() {
         >
           + Add model
         </Button>
-      </div>
+      </Toolbar>
 
       <div className="flex flex-wrap items-center gap-2.5">
         {(

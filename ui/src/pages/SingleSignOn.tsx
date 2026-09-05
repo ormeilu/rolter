@@ -728,7 +728,7 @@ export default function SingleSignOn() {
             }
           />
         ) : (
-          <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(420px,1fr))]">
+          <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr))]">
             {rows.map((provider) => (
               <ProviderCard
                 key={provider.id}

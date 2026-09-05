@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { LoadError } from "@/components/LoadError";
 import { CardGridSkeleton } from "@/components/LoadingState";
 import { EditorSheet } from "@/components/EditorSheet";
-import { PageBody } from "@/components/screen";
+import { PageBody, Toolbar } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -74,7 +74,7 @@ export default function Pricing() {
 
   return (
     <PageBody>
-      <div className="flex items-center gap-3">
+      <Toolbar>
         <span className="text-sm text-muted-foreground">
           {prices.data?.length ?? 0} models · per-million-token pricing · currency set per model
         </span>
@@ -88,7 +88,7 @@ export default function Pricing() {
           <Plus className="h-4 w-4" />
           Add price
         </Button>
-      </div>
+      </Toolbar>
 
       {prices.isLoading && <CardGridSkeleton cards={4} height={152} min={300} />}
       {prices.error && (
@@ -117,7 +117,7 @@ export default function Pricing() {
         />
       )}
 
-      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(300px,1fr))]">
+      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr))]">
         {prices.data?.map((price) => (
           <div
             key={price.id}

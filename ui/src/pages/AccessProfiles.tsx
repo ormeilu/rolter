@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { LoadError } from "@/components/LoadError";
 import { CardGridSkeleton } from "@/components/LoadingState";
-import { PageBody, Pill } from "@/components/screen";
+import { PageBody, Pill, Toolbar } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -155,14 +155,14 @@ export default function AccessProfiles() {
 
   return (
     <PageBody>
-      <div className="flex items-center gap-3">
+      <Toolbar>
         <span className="text-sm text-muted-foreground">
           {profiles.data?.length ?? 0} profiles · reusable permission bundles
         </span>
         <Button className="ml-auto" disabled={!orgId} onClick={startCreate}>
           + Add profile
         </Button>
-      </div>
+      </Toolbar>
 
       {profiles.isLoading && <CardGridSkeleton cards={3} height={196} min={380} />}
       {profiles.isError && (
@@ -186,7 +186,7 @@ export default function AccessProfiles() {
         />
       )}
 
-      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(380px,1fr))]">
+      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(380px,100%),1fr))]">
         {(profiles.data ?? []).map((profile) => (
           <ProfileCard
             key={profile.id}

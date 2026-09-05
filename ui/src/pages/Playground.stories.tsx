@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, waitFor, within } from "storybook/test";
 
 import Playground from "./Playground";
+import { atMobile, expectNoHorizontalOverflow } from "@/lib/story-viewport";
 
 const KEY_STORAGE = "rolter.playground.key";
 
@@ -149,5 +150,19 @@ export const RejectedKeySaysSo: Story = {
       expect(canvas.getByText(/Could not read the gateway's model list/)).toBeVisible(),
     );
     await expect(canvas.queryByText(/Showing configured routes/)).toBeNull();
+  },
+};
+
+// the model picker row and the composer wrap on a phone (#1242)
+export const Mobile: Story = {
+  ...atMobile,
+  render: () => (
+    <Harness playgroundKey="rolter-test-key" fetchStub={stubFor(async () => json(GATEWAY_MODELS))} />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvasElement.querySelector("select")).toBeTruthy());
+    void canvas;
+    await expectNoHorizontalOverflow();
   },
 };

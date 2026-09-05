@@ -16,6 +16,7 @@ import {
   withConfirm,
 } from "./story-harness";
 import type { BudgetRow, RateLimitRow, VirtualKeyRow } from "@/lib/api";
+import { atMobile, expectNoHorizontalOverflow } from "@/lib/story-viewport";
 
 const BUDGETS: BudgetRow[] = [
   {
@@ -226,5 +227,20 @@ export const CreatesARateLimit: Story = {
     await userEvent.type(within(form).getByLabelText("Requests per minute (optional)"), "300");
     await userEvent.click(within(form).getByRole("button", { name: "Create" }));
     await expectSheetClosed();
+  },
+};
+
+// the toolbars and budget headers wrap instead of pushing the page sideways (#1242)
+export const Mobile: Story = {
+  ...atMobile,
+  render: () => (
+    <Harness fetchStub={loaded}>
+      <Limits />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByRole("button", { name: /add budget/i });
+    await expectNoHorizontalOverflow();
   },
 };

@@ -488,7 +488,7 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
           }
         />
       ) : (
-        <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(300px,1fr))]">
+        <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr))]">
           {rows.map((row) => {
             const assigned =
               "business_unit_id" in row ? unitName(row.business_unit_id) : null;
