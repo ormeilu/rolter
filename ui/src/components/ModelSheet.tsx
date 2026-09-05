@@ -1381,7 +1381,7 @@ export function ModelSheet({
             </a>
           </div>
           {currencyUnconvertible && (
-            <p className="text-xs text-amber-600 dark:text-amber-500">
+            <p className="text-xs text-[color:var(--status-warning-text)]">
               {t("modelSheet.currencyUnconvertible", {
                 code: cur,
                 base: currency.data?.base ?? "",

@@ -52,6 +52,7 @@
 - [Dashboard localization (i18n)](development/i18n.md)
 - [Dashboard error states](development/error-states.md)
 - [Dashboard navigation rail](development/dashboard-navigation.md)
+- [Dashboard theme](development/dashboard-theme.md)
 - [Commit conventions](development/commit-conventions.md)
 - [Issue tracking](development/issue-tracking.md)
 - [Merge protection on master](development/merge-protection.md)

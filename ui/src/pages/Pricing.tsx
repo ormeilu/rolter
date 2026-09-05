@@ -121,7 +121,7 @@ export default function Pricing() {
               )}
             </div>
             {!isConvertible(currency.data, price.currency) && (
-              <p className="text-xs text-amber-600 dark:text-amber-500">
+              <p className="text-xs text-[color:var(--status-warning-text)]">
                 {t("pages.pricing.unconvertible", {
                   code: price.currency,
                   base: currency.data?.base ?? "",

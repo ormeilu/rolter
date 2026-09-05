@@ -41,7 +41,7 @@ function Timeline({ buckets }: { buckets: TimelineRow[] }) {
             title={`${b.bucket}: ${b.ok} ok, ${b.errors} error, ${b.timeouts} timeout`}
             className={cn(
               "w-1.5 flex-1 rounded-sm",
-              down ? "bg-destructive" : "bg-emerald-500/70",
+              down ? "bg-destructive" : "bg-[color:var(--status-success)]/70",
             )}
             style={{ height: down ? "100%" : "40%" }}
           />
