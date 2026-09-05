@@ -51,6 +51,7 @@ import {
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -110,6 +111,7 @@ export default function PromptRepository() {
   const scope = useScope();
   const queryClient = useQueryClient();
   const { t } = useTranslation();
+  const toast = useToast();
   // the scope hook names a catalog key rather than carrying english copy
   const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
   const [selectedId, setSelectedId] = React.useState<string>();
@@ -120,10 +122,6 @@ export default function PromptRepository() {
   const [renameOpen, setRenameOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [rollbackVersion, setRollbackVersion] = React.useState<number>();
-  const [notice, setNotice] = React.useState<string>();
-  // the partial-save notice is a warning rather than a success, and the tone
-  // can no longer be recovered by substring-matching a translated sentence
-  const [noticeIsWarning, setNoticeIsWarning] = React.useState(false);
 
   const templates = useQuery({
     queryKey: ["prompt-templates", scope.orgId],
@@ -206,7 +204,14 @@ export default function PromptRepository() {
       );
       setSelectedId(template.id);
       setCreateOpen(false);
-      setNotice(t("pages.promptRepo.created"));
+      toast.push({ tone: "success", title: t("pages.promptRepo.created") });
+    },
+    onError: (error, input) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: input.name }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -234,15 +239,29 @@ export default function PromptRepository() {
         queryKey: ["prompt-template-scopes", selectedId, version.version],
       });
       setSelectedVersion(version.version);
-      setNotice(
+      // a version that saved but could not take its scopes is not a clean
+      // success: it is announced assertively so it is read, not glanced at
+      toast.push(
         scopeError
-          ? t("pages.promptRepo.draftSavedScopeError", {
-              version: version.version,
-              error: scopeError.message,
-            })
-          : t("pages.promptRepo.draftSaved", { version: version.version }),
+          ? {
+              tone: "error",
+              title: t("pages.promptRepo.draftSavedScopeError", {
+                version: version.version,
+                error: scopeError.message,
+              }),
+            }
+          : {
+              tone: "success",
+              title: t("pages.promptRepo.draftSaved", { version: version.version }),
+            },
       );
-      setNoticeIsWarning(!!scopeError);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: selected?.name ?? "" }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -255,7 +274,14 @@ export default function PromptRepository() {
         (current = []) => current.map((item) => (item.id === template.id ? template : item)),
       );
       setRenameOpen(false);
-      setNotice(t("pages.promptRepo.renamed"));
+      toast.push({ tone: "success", title: t("pages.promptRepo.renamed") });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: selected?.name ?? "" }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -263,18 +289,25 @@ export default function PromptRepository() {
     mutationFn: () => deletePromptTemplate(selectedId as string),
     onSuccess: async () => {
       const removedId = selectedId;
+      const what = selected?.name ?? "";
       // drop the selection before the list refetches so the workbench never
       // renders against a template the control plane no longer has
       setSelectedId(undefined);
       setSelectedVersion(undefined);
       setDeleteOpen(false);
-      setNotice(undefined);
-      setNoticeIsWarning(false);
       queryClient.setQueryData<PromptTemplateRow[]>(
         ["prompt-templates", scope.orgId],
         (current = []) => current.filter((item) => item.id !== removedId),
       );
       await queryClient.invalidateQueries({ queryKey: ["prompt-templates", scope.orgId] });
+      toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.deleteFailed", { what: selected?.name ?? "" }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -285,7 +318,17 @@ export default function PromptRepository() {
         ["prompt-templates", scope.orgId],
         (current = []) => current.map((item) => (item.id === template.id ? template : item)),
       );
-      setNotice(t("pages.promptRepo.publishedNotice", { version: template.published_version }));
+      toast.push({
+        tone: "success",
+        title: t("pages.promptRepo.publishedNotice", { version: template.published_version }),
+      });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: selected?.name ?? "" }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -297,7 +340,17 @@ export default function PromptRepository() {
         (current = []) => current.map((item) => (item.id === template.id ? template : item)),
       );
       setRollbackVersion(undefined);
-      setNotice(t("pages.promptRepo.rolledBack", { version: template.published_version }));
+      toast.push({
+        tone: "success",
+        title: t("pages.promptRepo.rolledBack", { version: template.published_version }),
+      });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: selected?.name ?? "" }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -345,15 +398,9 @@ export default function PromptRepository() {
             virtualKeys={keys.data ?? []}
             orgId={scope.orgId}
             projectId={scope.projectId}
-            notice={notice}
-            noticeIsWarning={noticeIsWarning}
             pending={saveDraft.isPending || publish.isPending}
             error={(saveDraft.error ?? publish.error) as Error | null}
-            onDraftChange={(next) => {
-              setDraft(next);
-              setNotice(undefined);
-              setNoticeIsWarning(false);
-            }}
+            onDraftChange={setDraft}
             onSamplesChange={setSamples}
             onSave={() => saveDraft.mutate()}
             onPublish={(version) => publish.mutate(version)}
@@ -487,8 +534,6 @@ function PromptWorkbench({
   virtualKeys,
   orgId,
   projectId,
-  notice,
-  noticeIsWarning,
   pending,
   error,
   onDraftChange,
@@ -506,8 +551,6 @@ function PromptWorkbench({
   virtualKeys: { id: string; name?: string | null; key_prefix: string }[];
   orgId?: string;
   projectId?: string;
-  notice?: string;
-  noticeIsWarning?: boolean;
   pending: boolean;
   error: Error | null;
   onDraftChange: (draft: Draft) => void;
@@ -554,7 +597,6 @@ function PromptWorkbench({
           {baseVersion && <span className="text-muted-foreground">{t("pages.promptRepo.editingFrom", { version: baseVersion.version })}</span>}
           {problemText && <span role="alert" className="text-[color:var(--status-danger-text)]">{problemText}</span>}
           {error && <span role="alert" className="text-[color:var(--status-danger-text)]">{error.message}</span>}
-          {notice && <span role="status" className={noticeIsWarning ? "text-[color:var(--status-warning-text)]" : "text-[color:var(--status-success-text)]"}>{notice}</span>}
         </div>
       </header>
 

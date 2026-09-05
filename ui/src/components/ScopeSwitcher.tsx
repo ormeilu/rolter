@@ -23,6 +23,7 @@ import {
   deleteTeam,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 
 type Level = "org" | "team" | "project";
 
@@ -252,6 +253,7 @@ function CreateScopeDialog({
   onCreated: (level: Level, id: string) => void;
 }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [name, setName] = React.useState("");
   const open = !!level;
 
@@ -266,7 +268,17 @@ function CreateScopeDialog({
       return createProject(teamId as string, { name });
     },
     onSuccess: (row) => {
+      // the dialog closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push({ tone: "success", title: t("toast.created", { what: row.name }) });
       if (level) onCreated(level, row.id);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: name }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -314,6 +326,7 @@ function DeleteScopeDialog({
   onDeleted: () => void;
 }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const remove = useMutation({
     mutationFn: async () => {
       if (!target) return;
@@ -321,7 +334,20 @@ function DeleteScopeDialog({
       if (target.level === "team") return deleteTeam(target.id);
       return deleteProject(target.id);
     },
-    onSuccess: onDeleted,
+    onSuccess: () => {
+      toast.push({
+        tone: "success",
+        title: t("toast.deleted", { what: target?.name ?? "" }),
+      });
+      onDeleted();
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.deleteFailed", { what: target?.name ?? "" }),
+        detail: errorDetail(error),
+      });
+    },
   });
 
   return (

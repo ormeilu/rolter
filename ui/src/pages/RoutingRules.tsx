@@ -28,6 +28,7 @@ import { StrategyHint } from "@/components/StrategyHint";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { strategyOptions, strategyTone } from "@/lib/strategies";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const TARGET_BARS = ["var(--red-folk)", "var(--zinc-400)", "var(--status-info)", "var(--status-success)"];
@@ -38,6 +39,7 @@ export default function RoutingRules() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const scope = useScope();
 
   const routes = useQuery({
@@ -222,10 +224,23 @@ export default function RoutingRules() {
         confirmLabel={t("pages.routing.confirm.confirm")}
         pending={remove.isPending}
         error={remove.error}
-        onConfirm={() =>
-          deleteTarget &&
-          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
-        }
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          const what = deleteTarget.model;
+          remove.mutate(deleteTarget.id, {
+            onSuccess: () => {
+              setDeleteTarget(null);
+              toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+            },
+            onError: (error) => {
+              toast.push({
+                tone: "error",
+                title: t("toast.deleteFailed", { what }),
+                detail: errorDetail(error),
+              });
+            },
+          });
+        }}
       />
 
       {scope.projectId && (
@@ -254,6 +269,8 @@ function AddRouteDialog({
   providers: { id: string; name: string }[];
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
+  const toast = useToast();
   const [model, setModel] = React.useState("");
   const [strategy, setStrategy] = React.useState<string>(STRATEGIES[0]);
   const [providerId, setProviderId] = React.useState("");
@@ -280,8 +297,18 @@ function AddRouteDialog({
       }
     },
     onSuccess: () => {
+      // the dialog closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push({ tone: "success", title: t("toast.created", { what: model }) });
       onDone();
       onOpenChange(false);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: model }),
+        detail: errorDetail(error),
+      });
     },
   });
 

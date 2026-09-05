@@ -27,6 +27,7 @@ import {
   upsertModelPrice,
   type ModelPriceRow,
 } from "@/lib/api";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const PRICES_QUERY_KEY = ["model-prices"];
@@ -35,6 +36,7 @@ const PRICES_QUERY_KEY = ["model-prices"];
 // keyed on `model`, so add and edit share one dialog/mutation.
 export default function Pricing() {
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const prices = useQuery({
     queryKey: PRICES_QUERY_KEY,
@@ -204,8 +206,19 @@ export default function Pricing() {
             disabled={removePrice.isPending}
             onClick={() => {
               if (!deleteTarget) return;
-              removePrice.mutate(deleteTarget.model, {
-                onSuccess: () => setDeleteTarget(null),
+              const what = deleteTarget.model;
+              removePrice.mutate(what, {
+                onSuccess: () => {
+                  setDeleteTarget(null);
+                  toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+                },
+                onError: (error) => {
+                  toast.push({
+                    tone: "error",
+                    title: t("toast.deleteFailed", { what }),
+                    detail: errorDetail(error),
+                  });
+                },
               });
             }}
           >
@@ -228,6 +241,8 @@ function UpsertPriceDialog({
   existing: ModelPriceRow | null;
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
+  const toast = useToast();
   const [model, setModel] = React.useState("");
   const [inputPerMtok, setInputPerMtok] = React.useState("0");
   const [outputPerMtok, setOutputPerMtok] = React.useState("0");
@@ -254,8 +269,26 @@ function UpsertPriceDialog({
         currency,
       }),
     onSuccess: () => {
+      // the dialog closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push(
+        existing
+          ? {
+              tone: "success",
+              title: t("toast.saved"),
+              detail: t("toast.savedDetail", { what: model }),
+            }
+          : { tone: "success", title: t("toast.created", { what: model }) },
+      );
       onDone();
       onOpenChange(false);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: model }),
+        detail: errorDetail(error),
+      });
     },
   });
 

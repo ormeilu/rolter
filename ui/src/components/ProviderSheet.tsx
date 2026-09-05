@@ -10,6 +10,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Sheet, SheetBody, SheetFooter, SheetHeader } from "@/components/ui/sheet";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useFormTelemetry } from "@/lib/ux-react";
 import {
   apiBaseDoublesV1,
@@ -210,6 +211,8 @@ export function ProviderSheet({
   // what I have typed work". that is the honest question — the credential is
   // sealed and never leaves the server, so the form could not test a draft key
   // without shipping it somewhere first
+  const toast = useToast();
+
   const test = useMutation({ mutationFn: () => testProvider(provider!.id) });
 
   const save = useMutation({
@@ -237,10 +240,28 @@ export function ProviderSheet({
     },
     onSuccess: (created) => {
       ux.saved();
+      // the sheet closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push(
+        mode === "add"
+          ? { tone: "success", title: t("toast.created", { what: created.name }) }
+          : {
+              tone: "success",
+              title: t("toast.saved"),
+              detail: t("toast.savedDetail", { what: created.name }),
+            },
+      );
       onDone(created);
       onOpenChange(false);
     },
-    onError: () => ux.failed(),
+    onError: (error) => {
+      ux.failed();
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: draft.name }),
+        detail: errorDetail(error),
+      });
+    },
   });
 
   const title = mode === "add" ? "Add provider" : `Edit ${provider?.name ?? ""}`;

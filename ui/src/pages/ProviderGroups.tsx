@@ -37,12 +37,14 @@ import {
   type ProviderGroupRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const GRID = "1.2fr 1fr 1.2fr 2fr 108px";
 
 export default function ProviderGroups() {
   const { t } = useTranslation();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const scope = useScope();
   // the scope hook names a catalog key rather than carrying english copy
@@ -266,8 +268,19 @@ export default function ProviderGroups() {
             disabled={removeGroup.isPending}
             onClick={() => {
               if (!deleteTarget) return;
+              const what = deleteTarget.name;
               removeGroup.mutate(deleteTarget.id, {
-                onSuccess: () => setDeleteTarget(null),
+                onSuccess: () => {
+                  setDeleteTarget(null);
+                  toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+                },
+                onError: (error) => {
+                  toast.push({
+                    tone: "error",
+                    title: t("toast.deleteFailed", { what }),
+                    detail: errorDetail(error),
+                  });
+                },
               });
             }}
           >

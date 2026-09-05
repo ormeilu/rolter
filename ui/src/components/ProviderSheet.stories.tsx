@@ -4,7 +4,9 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { ProviderSheet } from "./ProviderSheet";
+import { Toaster } from "./ui/toaster";
 import type { ProviderRow, ProviderTestResult } from "@/lib/api";
+import { ToastProvider } from "@/lib/toast";
 
 const PROVIDER: ProviderRow = {
   id: "prov-1",
@@ -307,5 +309,34 @@ export const StrippingKindWantsV1InTheBase: Story = {
       await canvas.findByText("https://api.mistral.ai/v1/chat/completions"),
     ).toBeVisible();
     await expect(canvas.queryByText(/remove the trailing/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * The save outcome, which the sheet itself cannot report: it closes the moment
+ * the write lands, taking any inline confirmation with it (#1197).
+ *
+ * The toast renders inside the story canvas while the sheet portals onto the
+ * body, so the two are queried through different roots.
+ */
+export const SavingAnnouncesTheOutcome: Story = {
+  render: () => (
+    <ToastProvider>
+      <Harness
+        fetchStub={async (input) => {
+          if (String(input).includes("/provider-kinds")) return json(KINDS);
+          return json(PROVIDER);
+        }}
+      />
+      <Toaster />
+    </ToastProvider>
+  ),
+  play: async ({ canvasElement }) => {
+    await userEvent.click(await screen().findByRole("button", { name: "Save provider" }));
+    const canvas = within(canvasElement);
+    const status = await waitFor(() => canvas.getByRole("status"));
+    // the card fades in, so visibility is awaited rather than asserted at once
+    await waitFor(() => expect(within(status).getByText("Saved")).toBeVisible());
+    await expect(within(status).getByText(/openai-primary updated/)).toBeInTheDocument();
   },
 };

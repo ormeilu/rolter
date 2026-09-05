@@ -31,6 +31,7 @@ import {
   type ConnectorRow,
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // `[label, tint]`: the label colour is the -text half of the hue, because a
@@ -156,6 +157,7 @@ export default function Connectors() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const connectors = useQuery({
     queryKey: ["connectors"],
     queryFn: fetchConnectors,
@@ -171,6 +173,14 @@ export default function Connectors() {
   const toggle = useMutation({
     mutationFn: (c: ConnectorRow) => updateConnector(c.id, { ...asInput(c), enabled: !c.enabled }),
     onSuccess: invalidate,
+    // a switch that bounced back reads as nothing having happened (#1197)
+    onError: (error, c) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: c.name }),
+        detail: errorDetail(error),
+      });
+    },
   });
   const test = useMutation({ mutationFn: testConnector, onSuccess: invalidate });
   const remove = useMutation({ mutationFn: deleteConnector, onSuccess: invalidate });
@@ -331,10 +341,23 @@ export default function Connectors() {
         confirmLabel={t("pages.connectors.confirm.confirm")}
         pending={remove.isPending}
         error={remove.error}
-        onConfirm={() =>
-          deleteTarget &&
-          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
-        }
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          const what = deleteTarget.name;
+          remove.mutate(deleteTarget.id, {
+            onSuccess: () => {
+              setDeleteTarget(null);
+              toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+            },
+            onError: (error) => {
+              toast.push({
+                tone: "error",
+                title: t("toast.deleteFailed", { what }),
+                detail: errorDetail(error),
+              });
+            },
+          });
+        }}
       />
 
       <CollectorConfigDialog
@@ -357,6 +380,8 @@ function AddConnectorDialog({
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
+  const toast = useToast();
   const [name, setName] = React.useState("");
   const [endpoint, setEndpoint] = React.useState("");
   const [sampling, setSampling] = React.useState("100");
@@ -382,8 +407,18 @@ function AddConnectorDialog({
         ...(secret.trim() ? { managed_auth_secret: secret } : {}),
       }),
     onSuccess: () => {
+      // the sheet closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push({ tone: "success", title: t("toast.created", { what: name }) });
       onDone();
       onOpenChange(false);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: name }),
+        detail: errorDetail(error),
+      });
     },
   });
 

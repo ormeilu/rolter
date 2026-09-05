@@ -1,8 +1,15 @@
 import type { Meta, StoryObj } from "@storybook/react";
-import { expect, waitFor, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import Security from "./Security";
-import { Harness, expectLoadError, expectSkeleton, json } from "./story-harness";
+import {
+  Harness,
+  Toasted,
+  expectLoadError,
+  expectSkeleton,
+  expectToast,
+  json,
+} from "./story-harness";
 import type { SecuritySettingsDto } from "@/lib/api";
 import { atMobile, atTablet, expectNoHorizontalOverflow } from "@/lib/story-viewport";
 
@@ -87,6 +94,35 @@ export const Error_: Story = {
     // the control plane's own words survive rather than being swallowed
     await expect(canvas.getByText(/pool timed out/)).toBeVisible();
     await expect(canvas.getByRole("button", { name: /Try again/ })).toBeInTheDocument();
+  },
+};
+
+/**
+ * A save that went through used to be a line of text in the footer that the
+ * next keystroke wiped. It is a toast now, so it survives the sheet, the
+ * scroll and the operator looking away (#1197).
+ */
+export const SavesChanges: Story = {
+  render: () => (
+    <Harness
+      fetchStub={async (_input, init) =>
+        init?.method === "PUT"
+          ? json({ ...BASE, ...JSON.parse(String(init.body)) })
+          : json(BASE)
+      }
+    >
+      <Toasted>
+        <Security />
+      </Toasted>
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const origins = await canvas.findByDisplayValue("https://app.example.com");
+    await userEvent.clear(origins);
+    await userEvent.type(origins, "https://console.example.com");
+    await userEvent.click(canvas.getByRole("button", { name: "Save Changes" }));
+    await expectToast(canvasElement, /security settings updated/i);
   },
 };
 

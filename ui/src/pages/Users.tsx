@@ -45,6 +45,7 @@ import {
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // admin surface for the user/team lifecycle (ROL-223): invite accounts into the
@@ -60,6 +61,7 @@ export default function Users() {
   const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
   const orgId = scope.orgId;
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const users = useQuery({
     queryKey: ["users", orgId],
@@ -107,7 +109,21 @@ export default function Users() {
   const toggleActive = useMutation({
     mutationFn: (user: UserRow) =>
       updateUser(user.id, { deactivated: !user.deactivated_at ? true : false }),
-    onSuccess: invalidate,
+    onSuccess: (_result, user) => {
+      invalidate();
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: user.email }),
+      });
+    },
+    onError: (error, user) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: user.email }),
+        detail: errorDetail(error),
+      });
+    },
   });
 
   const q = search.trim().toLowerCase();
@@ -346,6 +362,8 @@ function InviteUserDialog({
   orgId: string;
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
+  const toast = useToast();
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [role, setRole] = React.useState<string>("member");
@@ -384,10 +402,18 @@ function InviteUserDialog({
     },
     onSuccess: (accept_url) => {
       onDone();
+      toast.push({ tone: "success", title: t("toast.created", { what: email.trim() }) });
       // the link is shown once and never recoverable, so the dialog stays open
       // until it has been copied somewhere
       if (accept_url) setLink(accept_url);
       else onOpenChange(false);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: email.trim() }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -498,6 +524,7 @@ function EditUserDialog({
   onDone: () => void;
 }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [email, setEmail] = React.useState(user.email);
   const [password, setPassword] = React.useState("");
   const [isSuperadmin, setIsSuperadmin] = React.useState(user.is_superadmin);
@@ -512,16 +539,38 @@ function EditUserDialog({
           isSuperadmin !== user.is_superadmin ? isSuperadmin : undefined,
       }),
     onSuccess: () => {
+      // the sheet closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: user.email }),
+      });
       onDone();
       onOpenChange(false);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: user.email }),
+        detail: errorDetail(error),
+      });
     },
   });
 
   const remove = useMutation({
     mutationFn: () => deleteUser(user.id),
     onSuccess: () => {
+      toast.push({ tone: "success", title: t("toast.deleted", { what: user.email }) });
       onDone();
       onOpenChange(false);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.deleteFailed", { what: user.email }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -633,6 +682,8 @@ function AddRoleDialog({
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
+  const toast = useToast();
   const [scopeType, setScopeType] =
     React.useState<(typeof MEMBERSHIP_SCOPE_TYPES)[number]>("org");
   const [teamId, setTeamId] = React.useState<string>(teams[0]?.id ?? "");
@@ -653,8 +704,22 @@ function AddRoleDialog({
         role,
       }),
     onSuccess: () => {
+      // the sheet closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: user.email }),
+      });
       onDone();
       onOpenChange(false);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: user.email }),
+        detail: errorDetail(error),
+      });
     },
   });
 

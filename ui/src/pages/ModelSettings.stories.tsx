@@ -4,7 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import ModelSettings from "./ModelSettings";
-import { expectSkeleton } from "./story-harness";
+import { Toasted, expectSkeleton, expectToast } from "./story-harness";
 import type { ModelDefaultsDto } from "@/lib/api";
 
 const BASE: ModelDefaultsDto = {
@@ -49,7 +49,9 @@ function Harness({ fetchStub }: { fetchStub: FetchStub }) {
   );
   return (
     <QueryClientProvider client={client}>
-      <ModelSettings />
+      <Toasted>
+        <ModelSettings />
+      </Toasted>
     </QueryClientProvider>
   );
 }
@@ -145,9 +147,7 @@ export const SavesChanges: Story = {
     await userEvent.clear(tokens);
     await userEvent.type(tokens, "4096");
     await userEvent.click(canvas.getByRole("button", { name: "Save Changes" }));
-    await waitFor(() =>
-      expect(canvas.getByText("Model defaults updated.")).toBeVisible(),
-    );
+    await expectToast(canvasElement, /model settings updated/i);
     await expect(canvas.getByLabelText("Max tokens")).toHaveValue("4096");
   },
 };

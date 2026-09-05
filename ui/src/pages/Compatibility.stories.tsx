@@ -4,7 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import Compatibility from "./Compatibility";
-import { expectSkeleton } from "./story-harness";
+import { Toasted, expectSkeleton, expectToast } from "./story-harness";
 import type { CompatibilityPolicyDto } from "@/lib/api";
 
 const BASE: CompatibilityPolicyDto = {
@@ -39,7 +39,9 @@ function Harness({ fetchStub }: { fetchStub: FetchStub }) {
   );
   return (
     <QueryClientProvider client={client}>
-      <Compatibility />
+      <Toasted>
+        <Compatibility />
+      </Toasted>
     </QueryClientProvider>
   );
 }
@@ -123,9 +125,7 @@ export const SavesChanges: Story = {
     await userEvent.clear(tokens);
     await userEvent.type(tokens, "8192");
     await userEvent.click(canvas.getByRole("button", { name: "Save Changes" }));
-    await waitFor(() =>
-      expect(canvas.getByText("Compatibility settings updated.")).toBeVisible(),
-    );
+    await expectToast(canvasElement, /compatibility settings updated/i);
     await expect(canvas.getByLabelText("Default max tokens")).toHaveValue("8192");
   },
 };

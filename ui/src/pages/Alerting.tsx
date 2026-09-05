@@ -30,6 +30,7 @@ import {
   type AlertRuleRow,
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // `[label, tint]`: the label colour is the -text half of the hue, because a
@@ -49,6 +50,7 @@ const stateTone = (state: string) => STATE_TONE[state] ?? STATE_TONE.unknown;
 export function AlertChannels() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const channels = useQuery({ queryKey: ["alert-channels"], queryFn: fetchAlertChannels, retry: false });
 
   // UX stream (#805); screen key comes from the enclosing UxScreenProvider
@@ -60,6 +62,15 @@ export function AlertChannels() {
     mutationFn: (c: AlertChannelRow) =>
       updateAlertChannel(c.id, { name: c.name, endpoint: c.endpoint, enabled: !c.enabled }),
     onSuccess: invalidate,
+    // a switch that went through says so by staying flipped; one that
+    // bounced back says nothing at all without this (#1197)
+    onError: (error, c) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: c.name }),
+        detail: errorDetail(error),
+      });
+    },
   });
   const remove = useMutation({ mutationFn: deleteAlertChannel, onSuccess: invalidate });
 
@@ -157,10 +168,23 @@ export function AlertChannels() {
         confirmLabel={t("pages.alerting.confirm.channelConfirm")}
         pending={remove.isPending}
         error={remove.error}
-        onConfirm={() =>
-          deleteTarget &&
-          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
-        }
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          const what = deleteTarget.name;
+          remove.mutate(deleteTarget.id, {
+            onSuccess: () => {
+              setDeleteTarget(null);
+              toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+            },
+            onError: (error) => {
+              toast.push({
+                tone: "error",
+                title: t("toast.deleteFailed", { what }),
+                detail: errorDetail(error),
+              });
+            },
+          });
+        }}
       />
 
       <AddChannelDialog open={addOpen} onOpenChange={setAddOpen} onDone={invalidate} />
@@ -177,6 +201,8 @@ function AddChannelDialog({
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
+  const toast = useToast();
   const [name, setName] = React.useState("");
   const [endpoint, setEndpoint] = React.useState("");
   const [secret, setSecret] = React.useState("");
@@ -198,8 +224,18 @@ function AddChannelDialog({
         ...(secret.trim() ? { managed_secret: secret } : {}),
       }),
     onSuccess: () => {
+      // the sheet closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push({ tone: "success", title: t("toast.created", { what: name }) });
       onDone();
       onOpenChange(false);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: name }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -248,6 +284,7 @@ export function AlertRules() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const rules = useQuery({ queryKey: ["alert-rules"], queryFn: fetchAlertRules, retry: false });
 
   // UX stream (#805); screen key comes from the enclosing UxScreenProvider
@@ -258,6 +295,8 @@ export function AlertRules() {
 
   const channelName = (id: string | null) =>
     channels.data?.find((c) => c.id === id)?.name ?? "—";
+  // the evaluate action is fired by id, and the toast names the rule
+  const ruleName = (id: string) => rules.data?.find((r) => r.id === id)?.name ?? id;
 
   const asInput = (r: AlertRuleRow) => ({
     name: r.name,
@@ -270,8 +309,32 @@ export function AlertRules() {
   const toggle = useMutation({
     mutationFn: (r: AlertRuleRow) => updateAlertRule(r.id, { ...asInput(r), enabled: !r.enabled }),
     onSuccess: invalidate,
+    // a switch that bounced back reads as nothing having happened (#1197)
+    onError: (error, r) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: r.name }),
+        detail: errorDetail(error),
+      });
+    },
   });
-  const evaluate = useMutation({ mutationFn: evaluateAlertRule, onSuccess: invalidate });
+  const evaluate = useMutation({
+    mutationFn: evaluateAlertRule,
+    onSuccess: (_result, id) => {
+      invalidate();
+      toast.push({
+        tone: "success",
+        title: t("pages.alerting.rules.evaluated", { name: ruleName(id) }),
+      });
+    },
+    onError: (error, id) => {
+      toast.push({
+        tone: "error",
+        title: t("pages.alerting.rules.evaluateFailed", { name: ruleName(id) }),
+        detail: errorDetail(error),
+      });
+    },
+  });
   const remove = useMutation({ mutationFn: deleteAlertRule, onSuccess: invalidate });
 
   const [addOpen, setAddOpen] = React.useState(false);
@@ -390,10 +453,23 @@ export function AlertRules() {
         confirmLabel={t("pages.alerting.confirm.ruleConfirm")}
         pending={remove.isPending}
         error={remove.error}
-        onConfirm={() =>
-          deleteTarget &&
-          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
-        }
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          const what = deleteTarget.name;
+          remove.mutate(deleteTarget.id, {
+            onSuccess: () => {
+              setDeleteTarget(null);
+              toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+            },
+            onError: (error) => {
+              toast.push({
+                tone: "error",
+                title: t("toast.deleteFailed", { what }),
+                detail: errorDetail(error),
+              });
+            },
+          });
+        }}
       />
 
       <AddRuleDialog
@@ -428,6 +504,8 @@ function AddRuleDialog({
   channels: AlertChannelRow[];
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
+  const toast = useToast();
   const [name, setName] = React.useState("");
   const [signal, setSignal] = React.useState<string>(ALERT_SIGNALS[0]);
   const [threshold, setThreshold] = React.useState("0.05");
@@ -456,8 +534,18 @@ function AddRuleDialog({
         enabled: true,
       }),
     onSuccess: () => {
+      // the sheet closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push({ tone: "success", title: t("toast.created", { what: name }) });
       onDone();
       onOpenChange(false);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: name }),
+        detail: errorDetail(error),
+      });
     },
   });
 

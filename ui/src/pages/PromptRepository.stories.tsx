@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import PromptRepository from "./PromptRepository";
+import { Toasted, expectToast } from "./story-harness";
 import type {
   PromptTemplateRow,
   PromptTemplateScopeRow,
@@ -130,7 +131,7 @@ function Harness({ fetchStub }: { fetchStub: FetchStub }) {
   React.useEffect(() => () => {
     if (original.current) globalThis.fetch = original.current;
   }, []);
-  return <QueryClientProvider client={client}><div className="h-screen bg-[color:var(--surface-app)]"><PromptRepository /></div></QueryClientProvider>;
+  return <QueryClientProvider client={client}><Toasted><div className="h-screen bg-[color:var(--surface-app)]"><PromptRepository /></div></Toasted></QueryClientProvider>;
 }
 
 const meta = {
@@ -166,12 +167,12 @@ export const Error: Story = {
 
 export const RendersSamplesAndSavesDraft: Story = {
   render: () => <Harness fetchStub={loadedStub()} />,
-  play: async ({ canvas }) => {
+  play: async ({ canvas, canvasElement }) => {
     const sample = await canvas.findByRole("textbox", { name: "Sample value for customer_name" });
     await userEvent.type(sample, "Aster Labs");
     await expect(canvas.getByText(/You support Aster Labs/)).toBeVisible();
     await userEvent.click(canvas.getByRole("button", { name: /Save as new draft/ }));
-    await waitFor(() => expect(canvas.getByText(/Draft v3 saved/)).toBeVisible());
+    await expectToast(canvasElement, /Draft v3 saved/);
   },
 };
 
@@ -198,7 +199,7 @@ export const RenamesTemplateKeepingSlug: Story = {
     await userEvent.clear(name);
     await userEvent.type(name, "Support desk");
     await userEvent.click(dialog.getByRole("button", { name: "Save details" }));
-    await waitFor(() => expect(canvas.getByText("Template details updated.")).toBeVisible());
+    await expectToast(canvasElement, /Template details updated/);
   },
 };
 

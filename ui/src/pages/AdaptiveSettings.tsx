@@ -16,6 +16,7 @@ import {
   MAX_EXPLORATION_RATIO,
   type AdaptiveRoutingPolicyDto,
 } from "@/lib/api";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 interface FormState {
@@ -75,6 +76,7 @@ function validate(form: FormState): string | null {
 export default function AdaptiveSettings() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const policy = useQuery({
     queryKey: ["adaptive-routing-policy"],
     queryFn: fetchAdaptiveRoutingPolicy,
@@ -87,7 +89,6 @@ export default function AdaptiveSettings() {
   useErrorState(!!policy.error, "adaptive-settings");
 
   const [form, setForm] = React.useState<FormState | null>(null);
-  const [saved, setSaved] = React.useState(false);
   React.useEffect(() => {
     if (policy.data && form === null) {
       setForm(fromDto(policy.data));
@@ -106,8 +107,22 @@ export default function AdaptiveSettings() {
       }),
     onSuccess: (dto) => {
       queryClient.setQueryData(["adaptive-routing-policy"], dto);
+      // the cached write alone left every other reader of this key on the
+      // value it already had; the refetch is what makes the save stick (#1197)
+      void queryClient.invalidateQueries({ queryKey: ["adaptive-routing-policy"] });
       setForm(fromDto(dto));
-      setSaved(true);
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: t("errors.resources.adaptiveSettings") }),
+      });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: t("errors.resources.adaptiveSettings") }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -133,7 +148,6 @@ export default function AdaptiveSettings() {
 
   const set = (patch: Partial<FormState>) => {
     setForm((f) => (f ? { ...f, ...patch } : f));
-    setSaved(false);
   };
   const localError = validate(form);
   const affected = policy.data?.affected_routes ?? [];
@@ -243,16 +257,6 @@ export default function AdaptiveSettings() {
 
       <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-[color:var(--border-subtle)] bg-background py-3">
         {localError && <span className="text-xs text-[color:var(--status-danger-text)]">{localError}</span>}
-        {!localError && save.isError && (
-          <span className="text-xs text-[color:var(--status-danger-text)]">
-            {(save.error as Error).message}
-          </span>
-        )}
-        {saved && (
-          <span className="text-xs text-[color:var(--status-success-text)]">
-            Adaptive routing settings updated.
-          </span>
-        )}
         <Button
           disabled={save.isPending || localError !== null}
           onClick={() => save.mutate(form)}

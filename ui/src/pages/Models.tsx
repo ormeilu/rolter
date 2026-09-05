@@ -41,6 +41,7 @@ import {
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -75,6 +76,7 @@ interface CatalogRow {
 // the unified add/edit/view model sheet
 export default function Models() {
   const { t } = useTranslation();
+  const toast = useToast();
   const fmt = useFormat();
   const queryClient = useQueryClient();
   const scope = useScope();
@@ -464,8 +466,19 @@ export default function Models() {
             disabled={removeModel.isPending}
             onClick={() => {
               if (!deleteTarget) return;
-              removeModel.mutate(deleteTarget.model, {
-                onSuccess: () => setDeleteTarget(null),
+              const what = deleteTarget.model;
+              removeModel.mutate(what, {
+                onSuccess: () => {
+                  setDeleteTarget(null);
+                  toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+                },
+                onError: (error) => {
+                  toast.push({
+                    tone: "error",
+                    title: t("toast.deleteFailed", { what }),
+                    detail: errorDetail(error),
+                  });
+                },
               });
             }}
           >

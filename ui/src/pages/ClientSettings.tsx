@@ -13,6 +13,7 @@ import {
   updateClientSettings,
   type ClientSettingsDto,
 } from "@/lib/api";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // injected headers are edited as an ordered list rather than an object so a
@@ -90,6 +91,7 @@ function validate(form: FormState, reserved: string[]): string | null {
 export default function ClientSettings() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const settings = useQuery({
     queryKey: ["client-settings"],
     queryFn: fetchClientSettings,
@@ -102,7 +104,6 @@ export default function ClientSettings() {
   useErrorState(!!settings.error, "client-settings");
 
   const [form, setForm] = React.useState<FormState | null>(null);
-  const [saved, setSaved] = React.useState(false);
   React.useEffect(() => {
     if (settings.data && form === null) {
       setForm(fromDto(settings.data));
@@ -123,8 +124,22 @@ export default function ClientSettings() {
       }),
     onSuccess: (dto) => {
       queryClient.setQueryData(["client-settings"], dto);
+      // the cached write alone left every other reader of this key on the
+      // value it already had; the refetch is what makes the save stick (#1197)
+      void queryClient.invalidateQueries({ queryKey: ["client-settings"] });
       setForm(fromDto(dto));
-      setSaved(true);
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: t("errors.resources.clientSettings") }),
+      });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: t("errors.resources.clientSettings") }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -151,7 +166,6 @@ export default function ClientSettings() {
   const dto = settings.data;
   const set = (patch: Partial<FormState>) => {
     setForm((f) => (f ? { ...f, ...patch } : f));
-    setSaved(false);
   };
   const localError = validate(form, dto.reserved);
   // what a client would actually type; falls back to this dashboard's origin
@@ -315,14 +329,6 @@ export default function ClientSettings() {
 
       <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-[color:var(--border-subtle)] bg-background py-3">
         {localError && <span className="text-xs text-[color:var(--status-danger-text)]">{localError}</span>}
-        {!localError && save.isError && (
-          <span className="text-xs text-[color:var(--status-danger-text)]">{(save.error as Error).message}</span>
-        )}
-        {saved && (
-          <span className="text-xs text-[color:var(--status-success-text)]">
-            Client settings updated.
-          </span>
-        )}
         <Button disabled={save.isPending || localError !== null} onClick={() => save.mutate(form)}>
           {save.isPending ? "Saving…" : "Save Changes"}
         </Button>

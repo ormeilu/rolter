@@ -32,6 +32,7 @@ import {
 } from "@/lib/api";
 import { useCurrencyCode } from "@/lib/currency";
 import { useFormat } from "@/lib/i18n/format";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
@@ -598,6 +599,8 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
 
 // business units: roll teams up into cost-attributed units (#539, #563)
 export function BusinessUnits() {
+  const { t } = useTranslation();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const scope = useScope();
   const orgId = scope.orgId as string | undefined;
@@ -631,7 +634,17 @@ export function BusinessUnits() {
         name: f.name.trim(),
         slug: f.slug.trim() || undefined,
       }),
-    onSuccess: invalidate,
+    onSuccess: (_result, f) => {
+      invalidate();
+      toast.push({ tone: "success", title: t("toast.created", { what: f.name.trim() }) });
+    },
+    onError: (error, f) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: f.name.trim() }),
+        detail: errorDetail(error),
+      });
+    },
   });
   const update = useMutation({
     mutationFn: ({ form, row }: { form: EditorState; row: BusinessUnitRow }) =>
@@ -640,16 +653,54 @@ export function BusinessUnits() {
         slug: form.slug.trim() || undefined,
         allow_slug_change: form.allowSlugChange,
       }),
-    onSuccess: invalidate,
+    onSuccess: (_result, { form }) => {
+      invalidate();
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: form.name.trim() }),
+      });
+    },
+    onError: (error, { form }) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: form.name.trim() }),
+        detail: errorDetail(error),
+      });
+    },
   });
   const retire = useMutation({
     mutationFn: ({ row, retired }: { row: BusinessUnitRow; retired: boolean }) =>
       updateBusinessUnit(row.id, { retired }),
-    onSuccess: invalidate,
+    onSuccess: (_result, { row }) => {
+      invalidate();
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: row.name }),
+      });
+    },
+    onError: (error, { row }) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: row.name }),
+        detail: errorDetail(error),
+      });
+    },
   });
   const remove = useMutation({
     mutationFn: (row: BusinessUnitRow) => deleteBusinessUnit(row.id),
-    onSuccess: invalidate,
+    onSuccess: (_result, row) => {
+      invalidate();
+      toast.push({ tone: "success", title: t("toast.deleted", { what: row.name }) });
+    },
+    onError: (error, row) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.deleteFailed", { what: row.name }),
+        detail: errorDetail(error),
+      });
+    },
   });
 
   return (
@@ -687,6 +738,8 @@ export function BusinessUnits() {
 
 // customers: attribute usage and spend to the org's own customers (#539, #563)
 export function Customers() {
+  const { t } = useTranslation();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const scope = useScope();
   const orgId = scope.orgId as string | undefined;
@@ -727,7 +780,17 @@ export function Customers() {
         business_unit_id:
           f.businessUnitId === UNASSIGNED ? null : f.businessUnitId,
       }),
-    onSuccess: invalidate,
+    onSuccess: (_result, f) => {
+      invalidate();
+      toast.push({ tone: "success", title: t("toast.created", { what: f.name.trim() }) });
+    },
+    onError: (error, f) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: f.name.trim() }),
+        detail: errorDetail(error),
+      });
+    },
   });
   const update = useMutation({
     mutationFn: ({ form, row }: { form: EditorState; row: CustomerRow }) =>
@@ -740,16 +803,54 @@ export function Customers() {
         business_unit_id:
           form.businessUnitId === UNASSIGNED ? null : form.businessUnitId,
       }),
-    onSuccess: invalidate,
+    onSuccess: (_result, { form }) => {
+      invalidate();
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: form.name.trim() }),
+      });
+    },
+    onError: (error, { form }) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: form.name.trim() }),
+        detail: errorDetail(error),
+      });
+    },
   });
   const retire = useMutation({
     mutationFn: ({ row, retired }: { row: CustomerRow; retired: boolean }) =>
       updateCustomer(row.id, { retired }),
-    onSuccess: invalidate,
+    onSuccess: (_result, { row }) => {
+      invalidate();
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: row.name }),
+      });
+    },
+    onError: (error, { row }) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: row.name }),
+        detail: errorDetail(error),
+      });
+    },
   });
   const remove = useMutation({
     mutationFn: (row: CustomerRow) => deleteCustomer(row.id),
-    onSuccess: invalidate,
+    onSuccess: (_result, row) => {
+      invalidate();
+      toast.push({ tone: "success", title: t("toast.deleted", { what: row.name }) });
+    },
+    onError: (error, row) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.deleteFailed", { what: row.name }),
+        detail: errorDetail(error),
+      });
+    },
   });
 
   return (

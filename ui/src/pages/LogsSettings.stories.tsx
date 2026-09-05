@@ -4,7 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import LogsSettings from "./LogsSettings";
-import { expectSkeleton } from "./story-harness";
+import { Toasted, expectSkeleton, expectToast } from "./story-harness";
 import type { LoggingSettingsDto } from "@/lib/api";
 
 const BASE: LoggingSettingsDto = {
@@ -44,7 +44,9 @@ function Harness({ fetchStub }: { fetchStub: FetchStub }) {
   );
   return (
     <QueryClientProvider client={client}>
-      <LogsSettings />
+      <Toasted>
+        <LogsSettings />
+      </Toasted>
     </QueryClientProvider>
   );
 }
@@ -134,9 +136,7 @@ export const SavesSampleRateAsFraction: Story = {
     await userEvent.clear(rate);
     await userEvent.type(rate, "10");
     await userEvent.click(canvas.getByRole("button", { name: "Save Changes" }));
-    await waitFor(() =>
-      expect(canvas.getByText("Logs settings updated.")).toBeVisible(),
-    );
+    await expectToast(canvasElement, /logs settings updated/i);
     // the response echoes the stored fraction, which renders back as percent
     await expect(canvas.getByLabelText("Sample rate percent")).toHaveValue("10");
   },

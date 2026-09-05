@@ -631,7 +631,9 @@
         "emptyBody": "Add a threshold or anomaly rule and Rolter evaluates it against gateway analytics every minute.",
         "emptyBodyNoChannel": "Add a channel first, then a rule that delivers to it. Rules without a channel evaluate but never notify.",
         "add": "Add rule",
-        "toggleAria": "Enable {{name}}"
+        "toggleAria": "Enable {{name}}",
+        "evaluated": "Rule {{name}} evaluated",
+        "evaluateFailed": "Could not evaluate {{name}}"
       },
       "history": {
         "emptyTitle": "No alerts delivered yet",
@@ -927,7 +929,6 @@
         "ssoLabel": "Single sign-on",
         "ssoHint": "Members sign in through a registered identity provider. The sign-in screen shows one button per enabled provider.",
         "save": "Save policy",
-        "saved": "Policy saved.",
         "bothOff": "At least one sign-in method has to stay on — both off is an outage, not a policy."
       },
       "providers": {
@@ -1044,7 +1045,13 @@
       "selectBusinessUnit": "Select a business unit",
       "selectCustomer": "Select a customer",
       "budgetsHint": "Spend caps per org, team, project, virtual key, business unit, or customer",
-      "rateLimitsHint": "Requests- and tokens-per-minute caps per scope"
+      "rateLimitsHint": "Requests- and tokens-per-minute caps per scope",
+      "budgetNoun": "the budget",
+      "rateLimitNoun": "the rate limit",
+      "budgetCreated": "Budget created",
+      "budgetDeleted": "Budget deleted",
+      "rateLimitCreated": "Rate limit created",
+      "rateLimitDeleted": "Rate limit deleted"
     },
     "logs": {
       "emptyTitle": "Nothing logged yet",

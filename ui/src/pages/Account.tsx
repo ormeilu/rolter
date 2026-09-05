@@ -55,6 +55,7 @@ import {
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // end-user self-service panel (ROL-224): view/rotate/delete the virtual keys you
@@ -63,6 +64,7 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 export default function Account() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const scope = useScope();
 
   const keys = useQuery({ queryKey: ["my-keys"], queryFn: fetchMyKeys });
@@ -221,8 +223,19 @@ export default function Account() {
             disabled={removeKey.isPending}
             onClick={() => {
               if (!deleteTarget) return;
+              const what = deleteTarget.name ?? deleteTarget.key_prefix;
               removeKey.mutate(deleteTarget.id, {
-                onSuccess: () => setDeleteTarget(null),
+                onSuccess: () => {
+                  setDeleteTarget(null);
+                  toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+                },
+                onError: (error) => {
+                  toast.push({
+                    tone: "error",
+                    title: t("toast.deleteFailed", { what }),
+                    detail: errorDetail(error),
+                  });
+                },
               });
             }}
           >

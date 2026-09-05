@@ -37,6 +37,7 @@ import {
 import { useCurrencyCode } from "@/lib/currency";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // budgets and rate limits share a scope (scope_type + scope_id), so this
@@ -45,6 +46,7 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 // manage org/team/virtual-key scoped limits.
 export default function Limits() {
   const { t } = useTranslation();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const scope = useScope();
   // the scope hook names a catalog key rather than carrying english copy
@@ -115,12 +117,32 @@ export default function Limits() {
 
   const removeBudget = useMutation({
     mutationFn: (id: string) => deleteBudget(id),
-    onSuccess: invalidateBudgets,
+    onSuccess: () => {
+      invalidateBudgets();
+      toast.push({ tone: "success", title: t("pages.limits.budgetDeleted") });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.deleteFailed", { what: t("pages.limits.budgetNoun") }),
+        detail: errorDetail(error),
+      });
+    },
   });
 
   const removeRateLimit = useMutation({
     mutationFn: (id: string) => deleteRateLimit(id),
-    onSuccess: invalidateRateLimits,
+    onSuccess: () => {
+      invalidateRateLimits();
+      toast.push({ tone: "success", title: t("pages.limits.rateLimitDeleted") });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.deleteFailed", { what: t("pages.limits.rateLimitNoun") }),
+        detail: errorDetail(error),
+      });
+    },
   });
 
   const [addBudgetOpen, setAddBudgetOpen] = React.useState(false);
@@ -439,6 +461,8 @@ function AddBudgetDialog({
   scopeId: string;
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
+  const toast = useToast();
   const [limitUsd, setLimitUsd] = React.useState("100");
   const [period, setPeriod] = React.useState("30d");
 
@@ -458,8 +482,18 @@ function AddBudgetDialog({
         period,
       }),
     onSuccess: () => {
+      // the dialog closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push({ tone: "success", title: t("pages.limits.budgetCreated") });
       onDone();
       onOpenChange(false);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: t("pages.limits.budgetNoun") }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -507,6 +541,8 @@ function AddRateLimitDialog({
   scopeId: string;
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
+  const toast = useToast();
   const [rpm, setRpm] = React.useState("");
   const [tpm, setTpm] = React.useState("");
 
@@ -526,8 +562,18 @@ function AddRateLimitDialog({
         tpm: tpm.trim() ? Number(tpm) : undefined,
       }),
     onSuccess: () => {
+      // the dialog closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push({ tone: "success", title: t("pages.limits.rateLimitCreated") });
       onDone();
       onOpenChange(false);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: t("pages.limits.rateLimitNoun") }),
+        detail: errorDetail(error),
+      });
     },
   });
 
