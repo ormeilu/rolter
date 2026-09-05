@@ -46,6 +46,8 @@ const row = (over: Partial<InvocationRow>): InvocationRow => ({
   latency_ms: 842,
   ttft_ms: 120,
   error: "",
+  business_unit_id: "",
+  customer_id: "",
   ...over,
 });
 

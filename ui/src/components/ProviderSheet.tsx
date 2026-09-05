@@ -170,6 +170,19 @@ export function ProviderSheet({
     staleTime: Infinity,
     retry: false,
   });
+  // the picker is built from the deployment's own list, not from the bundled
+  // constant: a kind the backend gained and the constant had not (#1178 found
+  // `gemini_interactions`) was otherwise unselectable. PROVIDER_KINDS stays as
+  // the fallback for a control plane that cannot answer, and the current draft
+  // kind is always offered so editing a provider never silently rewrites it
+  const kindOptions = React.useMemo(() => {
+    const known = kinds.data?.length
+      ? kinds.data.map((k) => k.kind)
+      : [...PROVIDER_KINDS];
+    return known.includes(draft.kind) || !draft.kind
+      ? known
+      : [draft.kind, ...known];
+  }, [kinds.data, draft.kind]);
   // default to the openai-shaped rule: it is the default kind, and it is the
   // one the old static ".../v1" placeholder got wrong
   const baseIncludesV1 =
@@ -289,7 +302,7 @@ export function ProviderSheet({
 
         <Field label={t("providerSheet.fields.kind")}>
           <Select value={draft.kind} onChange={(e) => set({ kind: e.target.value })}>
-            {PROVIDER_KINDS.map((k) => (
+            {kindOptions.map((k) => (
               <option key={k} value={k}>
                 {k}
               </option>

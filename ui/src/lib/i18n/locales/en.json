@@ -120,7 +120,8 @@
       "performanceSettings": "performance settings",
       "roleMembers": "role membership counts",
       "securitySettings": "security settings",
-      "toolGroups": "tool groups"
+      "toolGroups": "tool groups",
+      "rbacMatrix": "the permission matrix"
     }
   },
   "locale": {
@@ -628,7 +629,8 @@
       "checkedAt": "checked {{time}}",
       "emptyTitle": "No connectors yet",
       "emptyBody": "Add an OTLP/HTTP collector and request logs are mirrored to it — Datadog, Langfuse, or your own stack.",
-      "emptyAction": "Add connector"
+      "emptyAction": "Add connector",
+      "testFailed": "Delivery failed: {{message}}"
     },
     "accessProfiles": {
       "confirm": {
@@ -706,7 +708,45 @@
     "rbac": {
       "memberCount_one": "{{count}} member",
       "memberCount_other": "{{count}} members",
-      "membersUnknown": "members unknown"
+      "membersUnknown": "members unavailable",
+      "intro": "Every guarded route names one resource:action pair, and the control plane serves this table from the same list it enforces with — so a cell here is the rule, not a description of it.",
+      "resourceColumn": "Resource",
+      "roleCount_one": "{{count}} role",
+      "roleCount_other": "{{count}} roles",
+      "resourceCount_one": "{{count}} resource",
+      "resourceCount_other": "{{count}} resources",
+      "viaAccessProfiles": "granted by access profile",
+      "unknownGrants_one": "{{count}} grant on a custom role names a resource this build does not define. It allows nothing.",
+      "unknownGrants_other": "{{count}} grants on custom roles name resources this build does not define. They allow nothing.",
+      "scopes": {
+        "deployment": "Deployment-wide",
+        "org": "Organization",
+        "team": "Team",
+        "project": "Project"
+      },
+      "actions": {
+        "read": "Read",
+        "create": "Create",
+        "update": "Update",
+        "delete": "Delete"
+      },
+      "letters": {
+        "read": "R",
+        "create": "C",
+        "update": "U",
+        "delete": "D"
+      },
+      "states": {
+        "allowed": "allowed",
+        "granted": "granted by this custom role",
+        "superadmin": "superadmin only",
+        "denied": "denied",
+        "na": "not applicable"
+      },
+      "cellTitle": "{{action}} — {{state}}",
+      "legendSuperadmin": "Superadmin only",
+      "legendGranted": "Granted by a custom role",
+      "legendNa": "No such action"
     },
     "sso": {
       "policy": {
@@ -819,7 +859,19 @@
       "budgetsEmptyAction": "Add budget",
       "rateLimitsEmptyTitle": "No rate limits for this scope",
       "rateLimitsEmptyBody": "A rate limit caps requests and tokens per minute for the selected scope, so one client cannot starve the rest.",
-      "rateLimitsEmptyAction": "Add rate limit"
+      "rateLimitsEmptyAction": "Add rate limit",
+      "scopeTypes": {
+        "org": "Organization",
+        "team": "Team",
+        "project": "Project",
+        "virtual_key": "Virtual key",
+        "business_unit": "Business unit",
+        "customer": "Customer"
+      },
+      "selectBusinessUnit": "Select a business unit",
+      "selectCustomer": "Select a customer",
+      "budgetsHint": "Spend caps per org, team, project, virtual key, business unit, or customer",
+      "rateLimitsHint": "Requests- and tokens-per-minute caps per scope"
     },
     "logs": {
       "emptyTitle": "Nothing logged yet",

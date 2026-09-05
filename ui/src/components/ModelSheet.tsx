@@ -203,6 +203,83 @@ function blankDraft(providerId: string): ModelDraft {
   };
 }
 
+/**
+ * Seed the draft from a route's stored `advanced` blob (#1178).
+ *
+ * `RouteRow.advanced` is an `AdvancedModelConfig` (rolter-core), written by
+ * `setRouteAdvanced` and read back by nothing until now: the catalog metadata,
+ * limits, headers and visibility a route already carried opened as blank
+ * fields, so re-saving quietly proposed clearing them.
+ *
+ * Every field is optional on the backend, so each one is read defensively —
+ * an object shaped by an older or newer release must still seed what it can.
+ */
+function seedAdvanced(draft: ModelDraft, advanced: Record<string, unknown>) {
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const num = (v: unknown) => (typeof v === "number" ? String(v) : "");
+  const strings = (v: unknown) =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  const obj = (v: unknown): Record<string, unknown> =>
+    v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+
+  if (MODALITIES.includes(advanced.model_type as Modality)) {
+    draft.modality = advanced.model_type as Modality;
+    draft.caps = defaultCaps(draft.modality);
+  }
+  const capabilities = strings(advanced.capabilities);
+  if (capabilities.length) {
+    for (const key of Object.keys(draft.caps) as (keyof Caps)[]) {
+      draft.caps[key] = capabilities.includes(key);
+    }
+  }
+  draft.params = paramDefs(draft.modality, draft.caps.reasoning);
+  draft.baseUrl = str(advanced.base_url);
+  draft.description = str(advanced.description);
+
+  const pricing = obj(advanced.pricing);
+  draft.price.cacheWrite = num(pricing.cache_write_per_mtok);
+  draft.price.perRequest = num(pricing.image_per_unit);
+
+  const limits = obj(advanced.limits);
+  draft.net.rpm = num(limits.rpm);
+  draft.net.tpm = num(limits.tpm);
+  draft.net.concurrency = num(limits.concurrency);
+  // the backend stores whole seconds; the field is milliseconds
+  draft.net.timeoutMs =
+    typeof limits.timeout_secs === "number" ? String(limits.timeout_secs * 1000) : "";
+  draft.net.retries = num(limits.retries);
+  draft.net.context = num(limits.context_window);
+  draft.net.maxOutput = num(limits.output_tokens);
+  draft.net.insecureTls = advanced.insecure_tls === true;
+  draft.net.allowAdditional = Object.keys(obj(advanced.additional_fields)).length > 0;
+
+  const locked = new Set(strings(advanced.locked_headers));
+  draft.headers = Object.entries(obj(advanced.headers)).map(([key, value]) => ({
+    key,
+    value: typeof value === "string" ? value : String(value),
+    locked: locked.has(key),
+  }));
+  // "every header locked" and "none locked" are the two the sheet can round-trip
+  // exactly; anything in between is the manual mode it already has for that
+  draft.headerMode = draft.headers.length === 0
+    ? "manual"
+    : draft.headers.every((h) => h.locked)
+      ? "lockAll"
+      : draft.headers.some((h) => h.locked)
+        ? "manual"
+        : "unlockAll";
+
+  const visibility = obj(advanced.visibility);
+  draft.rbac.minRole = str(visibility.minimum_role) || draft.rbac.minRole;
+  draft.rbac.teams = strings(visibility.allowed_team_ids);
+  draft.rbac.vkeys = strings(visibility.allowed_key_ids);
+  draft.rbac.users = strings(visibility.allowed_user_ids);
+  draft.rbac.visibility =
+    draft.rbac.teams.length + draft.rbac.vkeys.length + draft.rbac.users.length > 0
+      ? "restricted"
+      : "public";
+}
+
 // seed draft params/lock-mode from a stored route's params + override policy
 // (the same shapes ParamsEditor reads/writes: allow/deny base + deny list)
 function seedParams(
@@ -721,6 +798,7 @@ export function ModelSheet({
       d.upstreamName = target?.upstream_model || route.model;
       d.alias = target?.upstream_model ? route.model : "";
       d.enabled = route.enabled;
+      seedAdvanced(d, route.advanced ?? {});
       d.net.weight = target ? String(target.weight) : "100";
       seedParams(d, route.params ?? {}, route.param_policy ?? {});
       const price = prices.data?.find((p) => p.model === route.model);

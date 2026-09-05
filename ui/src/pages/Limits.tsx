@@ -26,6 +26,8 @@ import {
   deleteBudget,
   deleteRateLimit,
   fetchBudgets,
+  fetchBusinessUnits,
+  fetchCustomers,
   fetchRateLimits,
   fetchVirtualKeys,
   SCOPE_TYPES,
@@ -62,6 +64,21 @@ export default function Limits() {
     queryKey: ["virtual-keys", scope.projectId],
     queryFn: () => fetchVirtualKeys(scope.projectId as string),
     enabled: scopeType === "virtual_key" && !!scope.projectId,
+  });
+
+  // the two governance dimensions a key's spend rolls up to (#539). they are
+  // org-scoped rather than part of the org/team/project chain useScope walks,
+  // so each is its own query, fetched only when that scope is picked
+  const businessUnits = useQuery({
+    queryKey: ["business-units", scope.orgId],
+    queryFn: () => fetchBusinessUnits(scope.orgId as string),
+    enabled: scopeType === "business_unit" && !!scope.orgId,
+  });
+
+  const customers = useQuery({
+    queryKey: ["customers", scope.orgId],
+    queryFn: () => fetchCustomers(scope.orgId as string),
+    enabled: scopeType === "customer" && !!scope.orgId,
   });
 
 
@@ -136,9 +153,9 @@ export default function Limits() {
                 setScopeId(e.target.value === "project" ? scope.projectId ?? "" : "");
               }}
             >
-              {SCOPE_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
+              {SCOPE_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {t(`pages.limits.scopeTypes.${type}`)}
                 </option>
               ))}
             </Select>
@@ -180,6 +197,26 @@ export default function Limits() {
                   </option>
                 ))}
               </Select>
+            ) : scopeType === "business_unit" &&
+              businessUnits.data &&
+              businessUnits.data.length > 0 ? (
+              <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
+                <option value="">{t("pages.limits.selectBusinessUnit")}</option>
+                {businessUnits.data.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name}
+                  </option>
+                ))}
+              </Select>
+            ) : scopeType === "customer" && customers.data && customers.data.length > 0 ? (
+              <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
+                <option value="">{t("pages.limits.selectCustomer")}</option>
+                {customers.data.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </Select>
             ) : (
               <Input
                 value={scopeId}
@@ -197,7 +234,7 @@ export default function Limits() {
           <div className="flex flex-col gap-0.5">
             <h2 className="text-base font-medium">Budgets</h2>
             <span className="text-xs text-muted-foreground">
-              Spend caps per org, team, project, or virtual key
+              {t("pages.limits.budgetsHint")}
             </span>
           </div>
           <Button
@@ -248,7 +285,7 @@ export default function Limits() {
           <div className="flex flex-col gap-0.5">
             <h2 className="text-base font-medium">Rate limits</h2>
             <span className="text-xs text-muted-foreground">
-              Requests- and tokens-per-minute caps per scope
+              {t("pages.limits.rateLimitsHint")}
             </span>
           </div>
           <Button

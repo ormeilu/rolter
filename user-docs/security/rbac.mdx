@@ -68,6 +68,22 @@ Rolter publishes its own permission table, so you never have to keep a copy in s
 
 Both read the same table the control plane enforces with, so the answer is never a guess: a request that `effective` says you cannot make returns `403` if you make it anyway.
 
+### Reading it in the dashboard
+
+**Roles & Permissions** renders `GET /api/v1/rbac/matrix` directly, so the grid on screen is the deployment's own rule set rather than a copy of it. One row per resource, grouped by the scope the resource lives under (deployment-wide, organization, team, project); one column per role, with the built-in three first and your org's custom roles after them, ordered by the base role each extends.
+
+Each cell carries four chips — read, create, update, delete — and each chip says one of four things:
+
+| Chip | Means |
+| --- | --- |
+| Filled | The role's rank clears the minimum, or the action needs no membership at all. |
+| Faded | Denied. The role exists at this scope but is not senior enough. |
+| Amber | Superadmin only. No org role reaches it, and no custom grant can either. |
+| `–` | The action does not exist for that resource — an audit log is append-only, an org has no update route. Nobody can perform it, including a superadmin, so it is not a denial. |
+| Blue | Granted explicitly by that custom role, on top of its base role. |
+
+Member counts under the built-in columns come from the org's live memberships. Custom roles have none: they are handed out through [access profiles](#custom-roles-and-access-profiles), not memberships, and the column says so. A custom role naming a `resource:action` this build does not define is reported above the grid — it grants nothing, and an operator who downgraded Rolter should be able to see why a role went quiet.
+
 <Note>
   Deployment-wide settings — feature flags, runtime, logging, compatibility and adaptive-routing policy, cluster nodes, security settings, alerting and the model pricing catalog — sit outside the org/team/project hierarchy. No org role reaches them; they require the deployment admin token or a superadmin account. The same is true of editing or deleting a user account, which spans every org that user belongs to.
 </Note>

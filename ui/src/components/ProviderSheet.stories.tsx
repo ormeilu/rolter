@@ -15,6 +15,7 @@ const PROVIDER: ProviderRow = {
   api_base: "https://api.openai.com",
   api_key_env: null,
   egress_proxy: null,
+  egress_proxies: [],
   created_at: "2026-08-01T10:00:00Z",
 };
 
