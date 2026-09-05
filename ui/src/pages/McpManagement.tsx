@@ -233,10 +233,13 @@ export function McpLibrary() {
   useErrorState(!!query.error, "mcp-library");
   const install = useMutation({ mutationFn: (item: McpLibraryItem) => createMcpServer(orgId as string, { ...item, enabled: true, source: "library" }), onSuccess: () => { void client.invalidateQueries({ queryKey: ["mcp-library", orgId] }); void client.invalidateQueries({ queryKey: ["mcp-servers", orgId] }); } });
   return <PageBody><PageLead eyebrow="curated endpoints">Install a reviewed server definition into this organization. OAuth consent remains per user; installation never stores a token.</PageLead>
-    {/* the curated definitions in mcp_oauth.rs carry no tool list — the tools
-        are discovered from the server once it is installed. saying "No tools
-        declared" about every entry stated something false about the catalog,
-        so the row is left out until there is something to put in it */}
+    {/* every curated definition in mcp_oauth.rs carries its tool manifest as
+        of #1252, so this row normally has something in it: it is what an
+        installed server arrives with, what the tool tally counts, and what a
+        tool group can pick from. the guard stays for a control plane older
+        than that change, which still answers with empty lists — saying "No
+        tools declared" about those stated something false about the catalog
+        rather than about the server (#1194) */}
     {query.isLoading ? <CardGridSkeleton cards={4} height={190} min={300} /> : query.error ? <LoadError error={query.error} resource={t("errors.resources.mcpLibrary")} onRetry={() => void query.refetch()} /> : <div className="grid gap-3 md:grid-cols-2">{query.data?.map((item) => <article key={item.slug} className="rounded-[10px] border border-[color:var(--border-default)] bg-card p-5"><div className="flex items-start gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-subtle)]"><Boxes className="h-5 w-5" aria-hidden /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="font-semibold">{item.name}</h2><Badge tone="info">{item.transport.replace("_", " ")}</Badge></div><p className="mt-1 text-sm text-muted-foreground">{item.description}</p></div></div>{item.tools.length > 0 && <div className="mt-4"><ToolBadges tools={item.tools} /></div>}<div className="mt-5 flex items-center border-t border-[color:var(--border-subtle)] pt-4"><span className="text-xs text-muted-foreground">{item.required_scopes.length ? `${item.required_scopes.length} OAuth scopes` : "No OAuth scopes"}</span><Button className="ml-auto" variant={item.installed ? "outline" : "default"} disabled={item.installed || install.isPending} onClick={() => install.mutate(item)}>{install.isPending && install.variables?.slug === item.slug && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{item.installed ? "Installed" : "Install"}</Button></div></article>)}</div>}
   </PageBody>;
 }
