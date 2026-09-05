@@ -1,8 +1,10 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { EditorSheet } from "@/components/EditorSheet";
+import { LoadError } from "@/components/LoadError";
 import { PageBody } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -14,6 +16,7 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 // teams from the design prototype: card per team with member count, the
 // team-scoped budget (when one exists), and the team admin
 export default function Teams() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const scope = useScope();
 
@@ -38,9 +41,9 @@ export default function Teams() {
     retry: false,
   });
   const budgetQueries = useQueries({
-    queries: (teams.data ?? []).map((t) => ({
-      queryKey: ["budgets", "team", t.id],
-      queryFn: () => fetchBudgets("team", t.id),
+    queries: (teams.data ?? []).map((team) => ({
+      queryKey: ["budgets", "team", team.id],
+      queryFn: () => fetchBudgets("team", team.id),
       retry: false,
     })),
   });
@@ -69,15 +72,22 @@ export default function Teams() {
       </div>
 
       {teams.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {teams.error && (
+        <LoadError
+          error={teams.error}
+          resource={t("errors.resources.teams")}
+          onRetry={() => void teams.refetch()}
+        />
+      )}
       <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
-        {(teams.data ?? []).map((t, i) => {
+        {(teams.data ?? []).map((team, i) => {
           const budget = budgetQueries[i]?.data?.[0];
           const members =
-            memberships.data?.filter((m) => m.team_id === t.id) ?? [];
+            memberships.data?.filter((m) => m.team_id === team.id) ?? [];
           const admin = members.find((m) => m.role === "admin");
           return (
             <div
-              key={t.id}
+              key={team.id}
               className="flex flex-col gap-3.5 rounded-[10px] border border-[color:var(--border-default)] bg-card p-4"
             >
               <div className="flex items-center gap-2.5">
@@ -85,9 +95,9 @@ export default function Teams() {
                   <Building className="h-4 w-4" />
                 </span>
                 <div className="min-w-0">
-                  <div className="font-mono text-sm font-semibold">{t.name}</div>
+                  <div className="font-mono text-sm font-semibold">{team.name}</div>
                   <div className="truncate text-xs text-muted-foreground">
-                    created {t.created_at?.slice(0, 10)}
+                    created {team.created_at?.slice(0, 10)}
                   </div>
                 </div>
               </div>

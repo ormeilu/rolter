@@ -98,9 +98,13 @@ export function ListTable({
   );
 }
 
+// the caller's `style` is merged over the grid template rather than replacing
+// it: spreading props after `style` let a row's `style={{ opacity }}` drop the
+// template, which stacked every cell of the Keys and Users lists into one column
 export function ListHeader({
   grid,
   className,
+  style,
   ...props
 }: React.HTMLAttributes<HTMLDivElement> & { grid: string }) {
   return (
@@ -109,7 +113,7 @@ export function ListHeader({
         "grid items-center gap-3 border-b border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] px-4 py-[9px] text-[0.6875rem] uppercase tracking-[0.07em] text-[color:var(--text-subtle)]",
         className,
       )}
-      style={{ gridTemplateColumns: grid }}
+      style={{ gridTemplateColumns: grid, ...style }}
       {...props}
     />
   );
@@ -118,6 +122,7 @@ export function ListHeader({
 export function ListRow({
   grid,
   className,
+  style,
   ...props
 }: React.HTMLAttributes<HTMLDivElement> & { grid: string }) {
   return (
@@ -126,7 +131,7 @@ export function ListRow({
         "grid items-center gap-3 border-b border-[color:var(--border-subtle)] px-4 py-[11px] last:border-b-0",
         className,
       )}
-      style={{ gridTemplateColumns: grid }}
+      style={{ gridTemplateColumns: grid, ...style }}
       {...props}
     />
   );

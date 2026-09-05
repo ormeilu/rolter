@@ -46,9 +46,13 @@ function loginFails(
   };
 }
 
+// the form starts empty (it once shipped a fake demo account pre-filled), so a
+// sign-in has to type an account first — `required` blocks an empty submit
 async function signIn(canvasElement: HTMLElement) {
   const canvas = within(canvasElement);
-  await userEvent.click(await canvas.findByRole("button", { name: /sign in/i }));
+  await userEvent.type(await canvas.findByLabelText(/email/i), "anya@acme.co");
+  await userEvent.type(canvas.getByLabelText(/^password/i), "correct-horse");
+  await userEvent.click(canvas.getByRole("button", { name: /sign in/i }));
 }
 
 export const WrongPassword: Story = {

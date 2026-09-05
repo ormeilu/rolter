@@ -1,8 +1,10 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { EditorSheet } from "@/components/EditorSheet";
+import { LoadError } from "@/components/LoadError";
 import { PageBody, StatusDot } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -28,6 +30,7 @@ const TARGET_BARS = ["var(--red-folk)", "var(--zinc-400)", "var(--status-info)",
 // routing rules from the design prototype: one card per route with its
 // strategy pill, per-target weight bars, and edit/delete actions
 export default function RoutingRules() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const scope = useScope();
 
@@ -90,6 +93,13 @@ export default function RoutingRules() {
       </div>
 
       {routes.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {routes.error && (
+        <LoadError
+          error={routes.error}
+          resource={t("errors.resources.routes")}
+          onRetry={() => void routes.refetch()}
+        />
+      )}
       <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(360px,1fr))]">
         {(routes.data ?? []).map((r) => {
           const targets = targetsByRoute.get(r.id) ?? [];

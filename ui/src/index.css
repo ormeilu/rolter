@@ -69,6 +69,15 @@
     --border-default: rgba(255, 255, 255, 0.15);
     --border-subtle: rgba(255, 255, 255, 0.08);
     --border-strong: rgba(255, 255, 255, 0.24);
+    /* aliases the ported DS screens reach for (prompt/skills repositories,
+       guardrail cards, mcp management). they were referenced without ever
+       being defined, so those surfaces and error banners rendered transparent */
+    --surface-raised: var(--zinc-850);
+    --surface-selected: var(--zinc-800);
+    --danger-text: var(--status-danger);
+    --danger-border: rgba(229, 57, 53, 0.4);
+    --danger-surface: rgba(229, 57, 53, 0.1);
+    --green-tint: rgba(22, 163, 74, 0.12);
     --text-primary: var(--zinc-50);
     --text-secondary: var(--zinc-300);
     --text-muted: var(--zinc-400);
