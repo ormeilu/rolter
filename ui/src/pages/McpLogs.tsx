@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { ListHeader, ListRow, ListTable, PageBody, Pill } from "@/components/screen";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ import {
   MCP_TRANSPORTS,
   type McpLogRow,
 } from "@/lib/api";
+import { useDrawerA11y } from "@/lib/use-drawer-a11y";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const STATUS_TONE: Record<string, [string, string]> = {
@@ -235,6 +237,8 @@ function McpStat({ label, value }: { label: string; value: string }) {
 }
 
 function DetailDrawer({ eventId, onClose }: { eventId: string; onClose: () => void }) {
+  const { t } = useTranslation();
+  const drawer = useDrawerA11y(true, onClose);
   const detail = useQuery({
     queryKey: ["mcp-log", eventId],
     queryFn: () => fetchMcpLogDetail(eventId),
@@ -252,7 +256,11 @@ function DetailDrawer({ eventId, onClose }: { eventId: string; onClose: () => vo
   };
 
   return (
-    <aside className="rl-fade-in flex w-[380px] flex-none flex-col gap-3.5 overflow-y-auto rounded-[10px] border border-[color:var(--border-default)] bg-card p-4">
+    <aside
+      {...drawer}
+      aria-label={t("analytics.mcpDetails")}
+      className="rl-fade-in flex w-[380px] flex-none flex-col gap-3.5 overflow-y-auto rounded-[10px] border border-[color:var(--border-default)] bg-card p-4 focus-visible:outline-none"
+    >
       <div className="flex items-center gap-2">
         <span className="min-w-0 truncate font-mono text-sm font-semibold">
           {d ? `${d.server} → ${d.tool}` : "…"}

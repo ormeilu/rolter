@@ -270,12 +270,15 @@ function Field({
   wide?: boolean;
   onChange: (v: string) => void;
 }) {
+  const id = React.useId();
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-medium text-[color:var(--text-secondary)]">{label}</label>
+      <label htmlFor={id} className="text-xs font-medium text-[color:var(--text-secondary)]">
+        {label}
+      </label>
       <Input
+        id={id}
         className={wide ? "min-w-[320px]" : "max-w-[160px]"}
-        aria-label={label}
         placeholder="provider default"
         value={value}
         disabled={disabled}

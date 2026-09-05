@@ -167,10 +167,11 @@ export default function ClientSettings() {
           </p>
         </div>
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-[color:var(--text-secondary)]">
+          <label htmlFor="client-public-base-url" className="text-xs font-medium text-[color:var(--text-secondary)]">
             Public base URL
           </label>
           <Input
+            id="client-public-base-url"
             className="min-w-[320px] font-mono text-xs"
             aria-label="Public base URL"
             placeholder={effectiveBase}
@@ -294,10 +295,11 @@ export default function ClientSettings() {
           </p>
         </div>
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-[color:var(--text-secondary)]">
+          <label htmlFor="client-request-id-header" className="text-xs font-medium text-[color:var(--text-secondary)]">
             Request ID header
           </label>
           <Input
+            id="client-request-id-header"
             className="max-w-[240px] font-mono text-xs"
             aria-label="Request ID header"
             value={form.requestIdHeader}
