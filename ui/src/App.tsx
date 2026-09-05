@@ -186,7 +186,6 @@ function MenuRow({
   return (
     <button
       type="button"
-      role="menuitem"
       onClick={onClick}
       className={cn(
         "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-[color:var(--surface-hover)] [&>svg]:h-4 [&>svg]:w-4 [&>svg]:flex-none",

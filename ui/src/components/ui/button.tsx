@@ -30,10 +30,14 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {}
 
+// `type` defaults to "button": a native button inside a <form> submits it,
+// which is never what a Cancel or a Delete placed in a form-backed sheet means.
+// submit buttons say so explicitly
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, ...props }, ref) => (
+  ({ className, variant, size, type = "button", ...props }, ref) => (
     <button
       ref={ref}
+      type={type}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
     />

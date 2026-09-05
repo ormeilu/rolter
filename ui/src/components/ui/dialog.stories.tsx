@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react";
 import * as React from "react";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { Button } from "./button";
 import {
@@ -64,5 +64,37 @@ export const OpensAndCloses: Story = {
 
     await userEvent.click(body.getByRole("button", { name: "Cancel" }));
     await expect(body.queryByRole("dialog")).toBeNull();
+  },
+};
+
+// what aria-modal promises (#1181): the panel is labelled by its title, focus
+// moves inside on open, Tab cycles within the panel, Escape closes it, and
+// focus returns to the control that opened it
+export const KeepsFocusAndReturnsIt: Story = {
+  render: () => <Demo />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const body = within(document.body);
+    const opener = canvas.getByRole("button", { name: "Delete project" });
+    await userEvent.click(opener);
+
+    const dialog = await body.findByRole("dialog", { name: "Delete project" });
+    await expect(dialog).toHaveAccessibleDescription(/permanently removes/i);
+    // no form control in a confirmation, so the first focusable — the close
+    // button — takes focus (after paint)
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+
+    // Tab from the last control wraps to the first
+    body.getByRole("button", { name: "Delete" }).focus();
+    await userEvent.tab();
+    await expect(dialog.contains(document.activeElement)).toBe(true);
+    await expect(document.activeElement).toBe(body.getByRole("button", { name: "Close" }));
+    // and Shift+Tab from the first wraps to the last
+    await userEvent.tab({ shift: true });
+    await expect(document.activeElement).toBe(body.getByRole("button", { name: "Delete" }));
+
+    await userEvent.keyboard("{Escape}");
+    await expect(body.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   },
 };

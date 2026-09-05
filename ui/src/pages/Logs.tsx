@@ -208,14 +208,16 @@ export default function Logs() {
             </colgroup>
             <thead>
               <tr>
-                <th className={TH}>Time</th>
-                <th className={TH}>Model</th>
-                <th className={TH}>Provider</th>
-                <th className={TH}>Status</th>
-                <th className={cn(TH, "text-right")}>Latency</th>
-                <th className={cn(TH, "text-right")}>Tokens</th>
-                <th className={cn(TH, "text-right")}>Cost</th>
-                <th className={TH} />
+                <th scope="col" className={TH}>Time</th>
+                <th scope="col" className={TH}>Model</th>
+                <th scope="col" className={TH}>Provider</th>
+                <th scope="col" className={TH}>Status</th>
+                <th scope="col" className={cn(TH, "text-right")}>Latency</th>
+                <th scope="col" className={cn(TH, "text-right")}>Tokens</th>
+                <th scope="col" className={cn(TH, "text-right")}>Cost</th>
+                <th scope="col" className={TH}>
+                  <span className="sr-only">{t("analytics.details")}</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -253,7 +255,20 @@ export default function Logs() {
                       ${num(r.cost_usd).toFixed(4)}
                     </td>
                     <td className={cn(TD, "pr-2.5 text-right")}>
-                      <ChevronRight className="ml-auto h-[15px] w-[15px] text-[color:var(--text-subtle)]" />
+                      {/* the row's click target is a mouse convenience; this
+                          button is the keyboard's and the screen reader's way
+                          into the same drawer */}
+                      <button
+                        type="button"
+                        aria-label={t("analytics.openDetails", { model: r.model })}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelected(r);
+                        }}
+                        className="ml-auto flex rounded-sm text-[color:var(--text-subtle)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      >
+                        <ChevronRight className="h-[15px] w-[15px]" />
+                      </button>
                     </td>
                   </tr>
                 );

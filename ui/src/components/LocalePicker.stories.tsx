@@ -44,15 +44,15 @@ export const MenuOpen: Story = {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByRole("button", { name: "Change language" }));
 
-    const list = await canvas.findByRole("listbox");
+    const list = await canvas.findByRole("menu");
     await expect(list).toBeVisible();
     // every language is listed in its own language, and the active one is marked
-    await expect(canvas.getByRole("option", { name: "English" })).toHaveAttribute(
-      "aria-selected",
+    await expect(canvas.getByRole("menuitemradio", { name: "English" })).toHaveAttribute(
+      "aria-checked",
       "true",
     );
-    await expect(canvas.getByRole("option", { name: "Русский" })).toHaveAttribute(
-      "aria-selected",
+    await expect(canvas.getByRole("menuitemradio", { name: "Русский" })).toHaveAttribute(
+      "aria-checked",
       "false",
     );
   },
@@ -67,12 +67,12 @@ export const SwitchesLanguage: Story = {
     await expect(canvas.getByRole("button", { name: "Change language" })).toHaveTextContent("EN");
 
     await userEvent.click(canvas.getByRole("button", { name: "Change language" }));
-    await userEvent.click(canvas.getByRole("option", { name: "Русский" }));
+    await userEvent.click(canvas.getByRole("menuitemradio", { name: "Русский" }));
 
     await waitFor(async () => {
       // the trigger's own label is translated too, so it changes name
       await expect(canvas.getByRole("button", { name: "Сменить язык" })).toHaveTextContent("RU");
     });
-    await expect(canvas.queryByRole("listbox")).toBeNull();
+    await expect(canvas.queryByRole("menu")).toBeNull();
   },
 };
