@@ -1,8 +1,21 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { MemoryRouter } from "react-router";
 import { expect, userEvent, within } from "storybook/test";
 
 import Config from "./Config";
-import { Harness, json, pending, scoped } from "./story-harness";
+import { Harness, json, pending, scoped, type FetchStub } from "./story-harness";
+
+// the screen links its related settings through react-router, so the story
+// supplies a router the same way main.tsx does
+function Stage({ fetchStub }: { fetchStub: FetchStub }) {
+  return (
+    <MemoryRouter>
+      <Harness fetchStub={fetchStub}>
+        <Config />
+      </Harness>
+    </MemoryRouter>
+  );
+}
 
 // a slice of what GET /api/v1/config returns: the three tabled sections plus
 // a handful of the ~40 generic ones the screen renders collapsed (#1204)
@@ -33,11 +46,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Loaded: Story = {
-  render: () => (
-    <Harness fetchStub={loaded}>
-      <Config />
-    </Harness>
-  ),
+  render: () => <Stage fetchStub={loaded} />,
   // every non-tabled section is listed once, collapsed, with its shape; the
   // gateway-only sections (digests, redacted sessions) are not
   play: async ({ canvasElement }) => {
@@ -54,19 +63,11 @@ export const Loaded: Story = {
 };
 
 export const Loading: Story = {
-  render: () => (
-    <Harness fetchStub={pending}>
-      <Config />
-    </Harness>
-  ),
+  render: () => <Stage fetchStub={pending} />,
 };
 
 export const Forbidden: Story = {
-  render: () => (
-    <Harness fetchStub={forbidden}>
-      <Config />
-    </Harness>
-  ),
+  render: () => <Stage fetchStub={forbidden} />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("alert")).toHaveTextContent(/do not have access/i);
