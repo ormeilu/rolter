@@ -683,11 +683,48 @@
       "emptyBody": "A profile bundles custom roles and a model policy, then hands the bundle to a user or a whole team.",
       "emptyAction": "Add profile"
     },
+    "mcpCatalog": {
+      "oauth": {
+        "title": "OAuth client",
+        "lead": "The client Rolter presents to this server's authorization server. Registering it is what makes Connect possible; nothing here mints a token.",
+        "authorizeUrl": "Authorization URL",
+        "tokenUrl": "Token URL",
+        "clientId": "Client ID",
+        "clientSecret": "Client secret",
+        "secretHint": "Write-only. Leave blank to keep the stored secret unchanged.",
+        "secretPlaceholder": "Sealed — type a new value to rotate",
+        "secretSet": "Secret stored",
+        "secretMissing": "No secret — public client",
+        "clearSecret": "Clear stored secret",
+        "clearingSecret": "The stored secret is cleared on save, leaving a public client.",
+        "scopes": "Default scopes",
+        "scopesHint": "Requested when a consent flow does not name its own. Comma or newline separated.",
+        "redirectUri": "Redirect URI",
+        "redirectHint": "Register this exact callback with the authorization server; it is derived from the deployment, never from the browser.",
+        "endpointError": "Must be an https URL (http is accepted only on loopback).",
+        "incomplete": "An OAuth client needs an authorization URL, a token URL and a client ID together."
+      },
+      "connect": {
+        "action": "Connect",
+        "ready": "Start the consent flow for {{name}}",
+        "unconfigured": "Register an OAuth client on this server before connecting.",
+        "started": "Consent started for {{name}}",
+        "startedDetail": "Finish the approval in the new tab. The session appears on Auth Sessions once it completes.",
+        "blocked": "The consent tab was blocked",
+        "blockedDetail": "Allow pop-ups for this dashboard, then start the flow again.",
+        "failed": "Could not start consent for {{name}}"
+      }
+    },
     "mcpOAuth": {
       "confirm": {
         "sessionTitle": "Revoke session on {{server}}?",
         "sessionBody": "The token behind this session stops working at once. The consent it was minted under stands, so a new session can be created without asking the user again.",
         "sessionConfirm": "Revoke session"
+      },
+      "refresh": {
+        "action": "Renew this session on {{server}}",
+        "done": "Session renewed",
+        "failed": "Could not renew the session"
       },
       "liveShort_one": "{{count}} live",
       "liveShort_other": "{{count}} live",
@@ -698,7 +735,7 @@
       "grantsEmptyTitle": "No consent granted yet",
       "grantsEmptyBody": "A grant appears the first time a user completes the OAuth flow for an MCP server. Nothing is created here — consent is only ever given by the user.",
       "sessionsEmptyTitle": "No sessions yet",
-      "sessionsEmptyBody": "A session is minted when a user's consent is exchanged for a token. Grant an MCP server access from a client to see one here."
+      "sessionsEmptyBody": "A session is minted when a user's consent is exchanged for a token. Start one with Connect on MCP Catalog — the session appears here as soon as the user approves."
     },
     "cluster": {
       "confirm": {

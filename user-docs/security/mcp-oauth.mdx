@@ -57,7 +57,44 @@ Both screens surface that `403` as a plain message rather than an empty table, s
 ## Granting consent
 
 Before a user can consent, an org admin registers the OAuth client Rolter
-presents to the server's authorization server:
+presents to the server's authorization server. The dashboard does this on
+**MCP Gateway → MCP Catalog**: open **Configure** on the server and fill in the
+**OAuth client** section.
+
+<Steps>
+  <Step title="Register the client">
+    Enter the authorization URL, the token URL and the client ID. All three
+    travel together — two of them is not a client — and both URLs must be
+    `https`, with `http` accepted only on loopback so a local stub still works.
+  </Step>
+  <Step title="Copy the redirect URI">
+    The **Redirect URI** field is filled in for you from the deployment's own
+    public URL. Register that exact callback with the authorization server;
+    Rolter never takes it from the request, so a spoofed `Host` header cannot
+    send an authorization code somewhere else.
+  </Step>
+  <Step title="Set the client secret">
+    The secret is write-only. A badge says whether one is stored, the field is
+    never pre-filled, and leaving it blank keeps the stored secret unchanged —
+    so saving the form for an unrelated reason cannot wipe a credential you
+    were not rotating. **Clear stored secret** removes it and downgrades the
+    client to a public one.
+  </Step>
+  <Step title="Connect">
+    **Connect** on the server card starts consent and opens the authorization
+    server in a new tab. Finish the approval there; the resulting session shows
+    up on **Auth Sessions**. The action stays disabled until a client is
+    registered, because until then there is nowhere to send the user.
+  </Step>
+</Steps>
+
+<Note>
+  Consent belongs to a person. Connect signs in as *you* — a superadmin token
+  with no user identity is refused, since the grant would belong to nobody and
+  no one could see or revoke it.
+</Note>
+
+The same registration over the API:
 
 ```bash
 curl -X PUT https://control.example.com/api/v1/mcp-servers/$SERVER_ID/oauth-client \
@@ -77,11 +114,12 @@ row names a third party the organization has chosen to trust. The secret is
 sealed with the deployment key on write and is never readable back; sending an
 empty secret downgrades the client to a public one.
 
-The user then starts consent from the dashboard, which calls
-`POST /api/v1/mcp-servers/{id}/oauth/authorize` and receives the authorization
-URL to open. After they approve, the browser returns to
-`/auth/mcp/callback`, and Rolter writes the grant and its first session
-together. A replayed callback finds nothing to consume and fails.
+Connect calls `POST /api/v1/mcp-servers/{id}/oauth/authorize`, which answers
+with the authorization URL rather than a redirect — the caller is a `fetch`
+from the dashboard, which cannot usefully follow a cross-origin `302`. After
+the user approves, the browser returns to `/auth/mcp/callback` and Rolter
+writes the grant and its first session together. A replayed callback finds
+nothing to consume and fails.
 
 ## Sessions renew themselves
 
@@ -90,9 +128,16 @@ consents once rather than every hour. Refresh-token rotation is handled: if
 the authorization server hands back a new refresh token, that is what gets
 stored.
 
+**Auth Sessions** also offers a renew action on each row for when you do not
+want to wait for the sweeper — after widening scopes upstream, say. Only a
+session that stored a refresh token can be renewed, so the action is disabled
+on the rest rather than failing.
+
 If the authorization server *refuses* the refresh with `invalid_grant` or
 `invalid_scope`, Rolter revokes the session instead of retrying — that answer
-means consent is gone, and the user simply consents again. Network blips and
+means consent is gone, and the user simply consents again. A renew that fails
+in the dashboard usually means exactly this: the session is already gone, and
+the fix is to Connect again rather than to retry. Network blips and
 `5xx` responses are left for the next sweep.
 
 A service that needs to call a downstream system on the user's behalf can

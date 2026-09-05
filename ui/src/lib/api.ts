@@ -3157,6 +3157,102 @@ export function revokeMcpSession(id: string): Promise<McpOAuthSessionRow> {
 }
 
 // ---------------------------------------------------------------------------
+// mcp oauth client registration and the consent flow it opens
+// (crates/rolter-control/src/mcp_oauth_flow.rs, #707)
+//
+// the block above is the shelf — grants and sessions that already exist. this
+// is the lifecycle that fills it, and three of its rules are visible from
+// here: the client secret is write-only (a read answers with
+// `has_client_secret` and nothing else), the redirect uri is deployment-derived
+// rather than sent by the caller, and nothing minted under a grant may ever
+// carry scopes that grant does not
+
+/** A server's registered OAuth client as it reads back — never the secret. */
+export interface McpOAuthClientRow {
+  server_id: string;
+  authorize_url: string | null;
+  token_url: string | null;
+  client_id: string | null;
+  default_scopes: string[];
+  has_client_secret: boolean;
+  /** the callback to register upstream; derived from the deployment, so it is
+   * returned rather than guessed from the browser's own origin */
+  redirect_uri: string;
+}
+
+export interface McpOAuthClientInput {
+  authorize_url: string;
+  token_url: string;
+  client_id: string;
+  /** omitted leaves the sealed secret alone; `""` clears it, which is how a
+   * confidential client is downgraded to a public one */
+  client_secret?: string;
+  default_scopes?: string[];
+}
+
+/** Where to send the browser for consent, and how long that url stays good. */
+export interface McpAuthorizeStarted {
+  authorization_url: string;
+  state: string;
+  expires_in: number;
+}
+
+export function fetchMcpOAuthClient(serverId: string): Promise<McpOAuthClientRow> {
+  return getJson<McpOAuthClientRow>(`/api/v1/mcp-servers/${serverId}/oauth-client`);
+}
+
+export function setMcpOAuthClient(
+  serverId: string,
+  input: McpOAuthClientInput,
+): Promise<McpOAuthClientRow> {
+  return sendJson<McpOAuthClientRow>(
+    "PUT",
+    `/api/v1/mcp-servers/${serverId}/oauth-client`,
+    input,
+  );
+}
+
+// the control plane does not redirect here: the caller is a `fetch` from the
+// dashboard, which cannot usefully follow a cross-origin 302, so the url comes
+// back for the browser to open itself
+export function startMcpOAuth(
+  serverId: string,
+  scopes?: string[],
+): Promise<McpAuthorizeStarted> {
+  return sendJson<McpAuthorizeStarted>(
+    "POST",
+    `/api/v1/mcp-servers/${serverId}/oauth/authorize`,
+    scopes ? { scopes } : {},
+  );
+}
+
+// renews one session from its stored refresh token. a refusal from the
+// authorization server revokes the session rather than being retried, so a
+// failure here can legitimately mean "consent is gone, ask for it again"
+export function refreshMcpSession(id: string): Promise<McpOAuthSessionRow> {
+  return sendJson<McpOAuthSessionRow>("POST", `/api/v1/mcp/sessions/${id}/refresh`);
+}
+
+export interface McpSessionExchangeInput {
+  scopes?: string[];
+  /** RFC 8693 `audience` — the downstream service the token is for */
+  audience?: string;
+}
+
+// on-behalf-of exchange (RFC 8693): a narrower session descending from the
+// same grant, revocable on its own and never broader than the consent
+export function exchangeMcpSession(
+  id: string,
+  input: McpSessionExchangeInput = {},
+): Promise<McpOAuthSessionRow> {
+  return sendJson<McpOAuthSessionRow>(
+    "POST",
+    `/api/v1/mcp/sessions/${id}/exchange`,
+    input,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // complexity routing policy (stored in route params, validated server-side)
 
 export interface ComplexityTier {

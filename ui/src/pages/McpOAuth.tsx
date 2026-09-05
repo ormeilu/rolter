@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, KeyRound, Loader2, Shield, ShieldOff } from "lucide-react";
+import { Building2, KeyRound, Loader2, RefreshCw, Shield, ShieldOff } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
@@ -29,6 +29,7 @@ import {
   fetchMcpServers,
   fetchMcpSessions,
   fetchUsers,
+  refreshMcpSession,
   revokeMcpGrant,
   revokeMcpSession,
   type McpOAuthGrantRow,
@@ -38,6 +39,7 @@ import {
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // both screens read crates/rolter-control/src/mcp_oauth.rs, whose three rules
@@ -46,7 +48,7 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 // listing only ever carries rows the caller is allowed to see (#561)
 
 const GRANT_GRID = "1.2fr 1.3fr 1.6fr 150px 130px 96px 44px";
-const SESSION_GRID = "1.1fr 1.2fr 1.4fr 140px 130px 150px 44px";
+const SESSION_GRID = "1.1fr 1.2fr 1.4fr 140px 130px 150px 44px 44px";
 
 // the org's grants, sessions and the lookup tables that give them names. The
 // users listing is best-effort: a member may not be allowed to read it, and
@@ -378,6 +380,25 @@ export function AuthSessions() {
       queryClient.invalidateQueries({ queryKey: ["mcp-sessions", scope.orgId] }),
   });
 
+  // renewing on demand, next to the background sweeper that renews about five
+  // minutes before expiry. a refusal from the authorization server revokes the
+  // session rather than being retried, so a failure here is worth reading:
+  // it usually means the consent behind it is gone (#707)
+  const toast = useToast();
+  const refresh = useMutation({
+    mutationFn: (id: string) => refreshMcpSession(id),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("pages.mcpOAuth.refresh.done") });
+      void queryClient.invalidateQueries({ queryKey: ["mcp-sessions", scope.orgId] });
+    },
+    onError: (error) =>
+      toast.push({
+        tone: "error",
+        title: t("pages.mcpOAuth.refresh.failed"),
+        detail: errorDetail(error),
+      }),
+  });
+
   // grants on this screen already confirm before revoking; a session revoke is
   // just as irreversible, so it asks the same way (#1179). the server label is
   // carried alongside the row because it is resolved from two other queries
@@ -438,7 +459,7 @@ export function AuthSessions() {
               description={t("pages.mcpOAuth.sessionsEmptyBody")}
             />
           ) : (
-            <ListTable minWidth={980}>
+            <ListTable minWidth={1024}>
               <ListHeader grid={SESSION_GRID}>
                 <span>Server</span>
                 <span>Owner</span>
@@ -446,6 +467,7 @@ export function AuthSessions() {
                 <span>Last used</span>
                 <span>Expires</span>
                 <span>State</span>
+                <span />
                 <span />
               </ListHeader>
               {rows.map((s) => {
@@ -489,6 +511,24 @@ export function AuthSessions() {
                           itself is never part of the payload */}
                       {s.has_refresh_token && <Badge tone="info">RENEWABLE</Badge>}
                     </div>
+                    {/* renewal is only possible where a refresh token was
+                        stored, and a revoked session has nothing to renew */}
+                    <RowIconButton
+                      title={t("pages.mcpOAuth.refresh.action", { server })}
+                      aria-label={t("pages.mcpOAuth.refresh.action", { server })}
+                      disabled={
+                        !s.has_refresh_token ||
+                        state === "revoked" ||
+                        (refresh.isPending && refresh.variables === s.id)
+                      }
+                      onClick={() => refresh.mutate(s.id)}
+                    >
+                      {refresh.isPending && refresh.variables === s.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      )}
+                    </RowIconButton>
                     <RowIconButton
                       danger
                       title={

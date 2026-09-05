@@ -5,7 +5,9 @@ import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { McpCatalog, McpLibrary, McpSettings, ToolGroups } from "./McpManagement";
 import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
+import { Toaster } from "@/components/ui/toaster";
 import type { McpGatewaySettingsRow, McpLibraryItem, McpServerRow, McpToolGroupRow } from "@/lib/api";
+import { ToastProvider } from "@/lib/toast";
 
 const ORG = { id: "org-1", name: "Acme", slug: "acme", created_at: "2026-01-01T00:00:00Z" };
 const TEAM = { id: "team-1", org_id: ORG.id, name: "Platform", created_at: ORG.created_at };
@@ -14,6 +16,11 @@ const SERVERS: McpServerRow[] = [
   { id: "server-github", org_id: ORG.id, name: "GitHub", slug: "github", url: "https://api.githubcopilot.com/mcp/", transport: "streamable_http", description: "Repository and pull request operations.", enabled: true, tools: ["search_code", "create_issue", "get_pull_request"], source: "library", required_scopes: ["repo"], created_at: ORG.created_at, authorize_url: null, token_url: null, client_id: null, default_scopes: [], has_client_secret: false },
   { id: "server-sentry", org_id: ORG.id, name: "Sentry", slug: "sentry", url: "https://mcp.sentry.dev/mcp", transport: "streamable_http", description: "Production issue investigation.", enabled: false, tools: ["list_issues", "get_issue"], source: "custom", required_scopes: ["org:read"], created_at: ORG.created_at, authorize_url: null, token_url: null, client_id: null, default_scopes: [], has_client_secret: false },
 ];
+// a server whose OAuth client is already registered: Connect is only offered
+// once all three of authorize url, token url and client id are on the row
+const CONNECTABLE: McpServerRow = { ...SERVERS[0], id: "server-linear", name: "Linear", slug: "linear", url: "https://mcp.linear.app/mcp", enabled: true, authorize_url: "https://linear.app/oauth/authorize", token_url: "https://api.linear.app/oauth/token", client_id: "rolter-linear", default_scopes: ["read", "write"], has_client_secret: true };
+const OAUTH_CLIENT = { server_id: "server-github", authorize_url: null, token_url: null, client_id: null, default_scopes: [], has_client_secret: false, redirect_uri: "https://control.example.com/auth/mcp/callback" };
+const AUTHORIZE_STARTED = { authorization_url: "https://linear.app/oauth/authorize?client_id=rolter-linear&state=abc", state: "abc", expires_in: 600 };
 const LIBRARY: McpLibraryItem[] = [
   { slug: "github", name: "GitHub", description: "Repository, issue, pull request, and code search tools.", url: "https://api.githubcopilot.com/mcp/", transport: "streamable_http", tools: ["search_code", "create_issue"], required_scopes: ["repo"], installed: true },
   { slug: "linear", name: "Linear", description: "Browse and manage teams, issues, and projects.", url: "https://mcp.linear.app/mcp", transport: "streamable_http", tools: ["list_issues", "create_issue"], required_scopes: ["read", "write"], installed: false },
@@ -25,12 +32,17 @@ type FetchStub = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const urlOf = (input: RequestInfo | URL) => typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 
-function routed(over: Partial<Record<"servers" | "library" | "groups" | "settings", FetchStub>> = {}): FetchStub {
+// both oauth routes sit *under* /mcp-servers/{id}, so they are matched before
+// the listing: a substring match would answer a client read with the server
+// array and leave the section rendering an undefined redirect uri
+function routed(over: Partial<Record<"servers" | "library" | "groups" | "settings" | "oauthClient" | "authorize", FetchStub>> = {}): FetchStub {
   return async (input, init) => {
     const url = urlOf(input);
     if (url.includes("/mcp/library")) return over.library?.(input, init) ?? json(LIBRARY);
     if (url.includes("/mcp/tool-groups")) return over.groups?.(input, init) ?? json(GROUPS);
     if (url.includes("/mcp/settings")) return over.settings?.(input, init) ?? json(SETTINGS);
+    if (url.includes("/oauth-client")) return over.oauthClient?.(input, init) ?? json(OAUTH_CLIENT);
+    if (url.includes("/oauth/authorize")) return over.authorize?.(input, init) ?? json(AUTHORIZE_STARTED);
     if (url.includes("/mcp-servers")) return over.servers?.(input, init) ?? json(SERVERS);
     if (url.includes("/projects")) return json([PROJECT]);
     if (url.includes("/teams")) return json([TEAM]);
@@ -67,7 +79,113 @@ export const CatalogValidatesEndpoint: Story = {
 };
 export const CatalogExplainsDeleteCascade: Story = { render: () => <Harness fetchStub={routed()}><McpCatalog /></Harness>, play: async ({ canvasElement }) => { const canvas = within(canvasElement); await userEvent.click(await canvas.findByRole("button", { name: "Delete GitHub" })); const body = within(document.body); await expect(body.getByText(/removes every OAuth grant and token session/)).toBeVisible(); await expect(body.getByRole("button", { name: "Delete server" })).toBeEnabled(); } };
 
+// the shared `recording` helper keeps method and url. the client save has to be
+// asserted on its *body* too: a PUT that silently dropped the scopes, or that
+// sent an empty `client_secret` and so cleared a secret nobody was rotating,
+// passes a url-only check (#1194)
+function bodyRecording(handler: FetchStub) {
+  const calls: { method: string; url: string; body: unknown }[] = [];
+  return {
+    calls,
+    stub: (async (input, init) => {
+      calls.push({ method: (init?.method ?? "GET").toUpperCase(), url: urlOf(input), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      return handler(input, init);
+    }) as FetchStub,
+    sent: async (method: string, fragment: string) => {
+      let found: { method: string; url: string; body: unknown } | undefined;
+      await waitFor(() => { found = calls.find((call) => call.method === method && call.url.includes(fragment)); expect(found).toBeDefined(); });
+      return found?.body;
+    },
+  };
+}
+
+const clientSaves = bodyRecording(routed({ servers: async (_input, init) => init?.method === "PATCH" ? json(SERVERS[0]) : json(SERVERS) }));
+export const CatalogRegistersOAuthClient: Story = {
+  render: () => <Harness fetchStub={clientSaves.stub}><McpCatalog /></Harness>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "Configure GitHub" }));
+    const dialog = within(await within(document.body).findByRole("dialog"));
+    // the redirect uri is deployment-derived, so it is read back rather than
+    // guessed from the browser's origin
+    await expect(dialog.getByLabelText("Redirect URI")).toHaveValue("https://control.example.com/auth/mcp/callback");
+    await userEvent.type(dialog.getByLabelText("Authorization URL"), "https://github.com/login/oauth/authorize");
+    await userEvent.type(dialog.getByLabelText("Token URL"), "https://github.com/login/oauth/access_token");
+    await userEvent.type(dialog.getByLabelText("Client ID"), "Iv1.abc123");
+    await userEvent.type(dialog.getByLabelText("Client secret"), "s3cr3t");
+    await userEvent.type(dialog.getByLabelText("Default scopes"), "repo, read:org");
+    await userEvent.click(dialog.getByRole("button", { name: "Save server" }));
+    await expect(await clientSaves.sent("PUT", "/mcp-servers/server-github/oauth-client")).toEqual({
+      authorize_url: "https://github.com/login/oauth/authorize",
+      token_url: "https://github.com/login/oauth/access_token",
+      client_id: "Iv1.abc123",
+      default_scopes: ["repo", "read:org"],
+      client_secret: "s3cr3t",
+    });
+  },
+};
+
+// three fields that travel together: two of them is not a client, and the
+// endpoints must be https before the control plane will take them
+export const CatalogRefusesAHalfClient: Story = {
+  render: () => <Harness fetchStub={routed()}><McpCatalog /></Harness>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "Configure Sentry" }));
+    const dialog = within(await within(document.body).findByRole("dialog"));
+    await userEvent.type(dialog.getByLabelText("Client ID"), "Iv1.abc123");
+    await expect(dialog.getByRole("button", { name: "Save server" })).toBeDisabled();
+    await userEvent.type(dialog.getByLabelText("Authorization URL"), "http://sentry.example.com/authorize");
+    await expect(dialog.getAllByText("Must be an https URL (http is accepted only on loopback).").length).toBeGreaterThan(0);
+  },
+};
+
+const connects = bodyRecording(routed({ servers: async () => json([CONNECTABLE]) }));
+export const CatalogConnectStartsConsent: Story = {
+  render: () => <Harness fetchStub={connects.stub}><ToastProvider><McpCatalog /><Toaster /></ToastProvider></Harness>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // stubbed because a real new tab would take the test runner with it, and
+    // the url the dashboard opens is the assertion that matters
+    const opened: string[] = [];
+    const original = window.open;
+    window.open = ((url?: string | URL) => { opened.push(String(url)); return {} as Window; }) as typeof window.open;
+    try {
+      await userEvent.click(await canvas.findByRole("button", { name: "Start the consent flow for Linear" }));
+      await connects.sent("POST", "/mcp-servers/server-linear/oauth/authorize");
+      await waitFor(() => expect(opened).toEqual([AUTHORIZE_STARTED.authorization_url]));
+      // the toast fades in, so it is momentarily transparent: waitFor rather
+      // than a bare assertion, which would read opacity 0 on the first frame
+      await waitFor(() => expect(canvas.getByText("Consent started for Linear")).toBeVisible());
+      await expect(canvas.getByText(/appears on Auth Sessions/)).toBeVisible();
+    } finally {
+      window.open = original;
+    }
+  },
+};
+
+// there is nowhere to send the user until a client is registered, so the
+// action is offered but refused rather than failing at the control plane
+export const CatalogConnectNeedsAClient: Story = {
+  render: () => <Harness fetchStub={routed()}><McpCatalog /></Harness>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByRole("button", { name: "Start the consent flow for GitHub" })).toBeDisabled();
+  },
+};
+
 export const LibraryLoaded: Story = { render: () => <Harness fetchStub={routed()}><McpLibrary /></Harness> };
+// the curated definitions in mcp_oauth.rs carry no tool list at all, so every
+// entry claimed "No tools declared" — a statement about the catalog that was
+// not true of the servers behind it (#1194)
+export const LibraryHidesAnEmptyToolList: Story = {
+  render: () => <Harness fetchStub={routed({ library: async () => json(LIBRARY.map((item) => ({ ...item, tools: [] }))) })}><McpLibrary /></Harness>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("Linear")).toBeVisible());
+    await expect(canvas.queryByText("No tools declared")).not.toBeInTheDocument();
+  },
+};
 export const LibraryInstallsServer: Story = { render: () => { let installed = false; const stub = routed({ library: async () => json(LIBRARY.map((item) => item.slug === "linear" ? { ...item, installed } : item)), servers: async (_input, init) => { if (init?.method === "POST") { installed = true; return json({ ...SERVERS[0], id: "server-linear", name: "Linear", slug: "linear" }); } return json(SERVERS); } }); return <Harness fetchStub={stub}><McpLibrary /></Harness>; }, play: async ({ canvasElement }) => { const canvas = within(canvasElement); await userEvent.click(await canvas.findByRole("button", { name: "Install" })); await waitFor(() => expect(canvas.getAllByRole("button", { name: "Installed" })).toHaveLength(2)); } };
 
 export const ToolGroupsLoaded: Story = { render: () => <Harness fetchStub={routed()}><ToolGroups /></Harness>, play: async ({ canvasElement }) => { const canvas = within(canvasElement); await waitFor(() => expect(canvas.getByText("Triage")).toBeVisible()); await expect(canvas.getByText("GitHub/search_code")).toBeVisible(); } };
