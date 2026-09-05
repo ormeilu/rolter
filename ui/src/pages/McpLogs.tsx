@@ -74,18 +74,20 @@ function McpLogsScreen() {
     retry: false,
   });
 
+  // a deployment with no analytics store, or a control plane too old to serve
+  // /api/v1/mcp/logs at all: both arrive as AnalyticsUnavailableError, and both
+  // are a load state LoadError already knows how to explain (#1236)
   const unavailable =
-    logs.error instanceof AnalyticsUnavailableError ||
-    summary.error instanceof AnalyticsUnavailableError;
+    logs.error instanceof AnalyticsUnavailableError
+      ? logs.error
+      : summary.error instanceof AnalyticsUnavailableError
+        ? summary.error
+        : null;
 
   if (unavailable) {
     return (
       <PageBody>
-        <div className="rounded-[10px] border border-[color:var(--border-subtle)] p-5 text-sm text-muted-foreground">
-          MCP tool-call logs aren't available on this deployment. They need{" "}
-          <code className="font-mono">clickhouse_url</code> set on the control plane, and a
-          control plane new enough to serve <code className="font-mono">/api/v1/mcp/logs</code>.
-        </div>
+        <LoadError error={unavailable} resource={t("errors.resources.mcpLogs")} />
       </PageBody>
     );
   }

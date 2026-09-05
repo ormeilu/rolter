@@ -334,8 +334,12 @@ export function ProviderSheet({
           </Select>
         </Field>
 
+        {/* three children — the input, the resolved url and the doubled-/v1
+            warning — so the id is written out rather than left to the field's
+            fallback (#1264) */}
         <Field
           label={t("providerSheet.fields.apiBase")}
+          htmlFor="provider-api-base"
           hint={t(
             baseIncludesV1
               ? "providerSheet.apiBase.includesV1"
@@ -344,6 +348,7 @@ export function ProviderSheet({
           )}
         >
           <Input
+            id="provider-api-base"
             value={draft.apiBase}
             onChange={(e) => set({ apiBase: e.target.value })}
             placeholder={

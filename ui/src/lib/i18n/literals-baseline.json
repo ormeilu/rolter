@@ -1,8 +1,6 @@
 {
   "src/components/GuardrailPanel.tsx": [
-    "Guardrail registry unavailable",
-    "Loading guardrails",
-    "Try again"
+    "Loading guardrails"
   ],
   "src/components/ModelSheet.tsx": [
     "Access & permissions",
@@ -441,8 +439,7 @@
     "Time",
     "Tool",
     "Trace",
-    "Transport",
-    "set on the control plane, and a control plane new enough to serve"
+    "Transport"
   ],
   "src/pages/McpManagement.tsx": [
     "Allow unlisted tools",

@@ -6,10 +6,10 @@ import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   GuardrailEmpty,
-  GuardrailError,
   GuardrailLoading,
   PolicyCard,
 } from "@/components/GuardrailPanel";
+import { LoadError } from "@/components/LoadError";
 import { superadminOnly } from "@/components/ForbiddenScreen";
 import { GatedButton } from "@/components/GatedButton";
 import { Badge } from "@/components/ui/badge";
@@ -137,9 +137,13 @@ function GuardrailRulesScreen() {
       {query.isLoading ? (
         <GuardrailLoading />
       ) : query.isError ? (
-        <GuardrailError
-          message={(query.error as Error).message}
-          retry={() => void query.refetch()}
+        // never hand-rolled: a 403 is what a non-superadmin gets on this
+        // deployment-scoped screen, and the bespoke panel offered it a retry
+        // that could not ever work (#1259)
+        <LoadError
+          error={query.error}
+          resource={t("errors.resources.guardrailRules")}
+          onRetry={() => void query.refetch()}
         />
       ) : rules.length === 0 ? (
         <GuardrailEmpty

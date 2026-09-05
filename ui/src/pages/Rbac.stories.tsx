@@ -214,11 +214,13 @@ export const Loaded: Story = {
     await expect(canvas.getByText("Project")).toBeVisible();
     await expect(canvas.getByText("7 resources")).toBeVisible();
 
-    // one column per built-in role, with the live membership count under it
+    // one column per built-in role, with the live membership count under it.
+    // the counts are a second request, so they are awaited rather than assumed
+    // to have landed with the matrix (#1266)
     await expect(canvas.getByText("admin")).toBeVisible();
-    await expect(canvas.getByText("2 members")).toBeVisible();
-    await expect(canvas.getByText("1 member")).toBeVisible();
-    await expect(canvas.getByText("0 members")).toBeVisible();
+    await expect(await canvas.findByText("2 members")).toBeVisible();
+    await expect(await canvas.findByText("1 member")).toBeVisible();
+    await expect(await canvas.findByText("0 members")).toBeVisible();
   },
 };
 
@@ -259,10 +261,13 @@ export const WithCustomRole: Story = {
     await expect(canvas.getByText("granted by access profile")).toBeVisible();
     await expect(canvas.getByText("4 roles")).toBeVisible();
 
-    // it is a viewer plus exactly one pair, shown as its own state
-    await expect(
-      canvas.getAllByTitle("Create — granted by this custom role"),
-    ).toHaveLength(1);
+    // it is a viewer plus exactly one pair, shown as its own state. the column
+    // arrives with the matrix, but the cells are re-derived once the roles land
+    await waitFor(() =>
+      expect(
+        canvas.getAllByTitle("Create — granted by this custom role"),
+      ).toHaveLength(1),
+    );
 
     // a grant naming a resource this build retired is surfaced, not hidden
     await expect(canvas.getByText(/does not define/)).toBeVisible();
@@ -285,8 +290,11 @@ export const CustomRolesList: Story = {
     await expect(canvas.getByText("extends viewer")).toBeVisible();
     // the known grant and the retired one both count: both are stored on the role
     await expect(canvas.getByText("2 grants")).toBeVisible();
-    // derived from the profiles that compose it, which is what a 409 would name
-    await expect(canvas.getByText("Composed into Support")).toBeVisible();
+    // derived from the profiles that compose it, which is what a 409 would name.
+    // those are their own two requests — the profile list, then a detail call
+    // per profile — so this is awaited rather than read off the roles' settle
+    // point, and the row says nothing about composition until they answer (#1266)
+    await expect(await canvas.findByText("Composed into Support")).toBeVisible();
   },
 };
 

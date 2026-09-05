@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { ApiError } from "@/lib/api";
+import { AnalyticsUnavailableError, ApiError } from "@/lib/api";
 import { classifyLoadError, isRetryable, needsSignIn } from "@/lib/load-error";
 
 describe("classifyLoadError", () => {
@@ -73,5 +73,29 @@ describe("noStore", () => {
 
   it("any other 404 stays unknown", () => {
     expect(classifyLoadError(new ApiError("not found", 404))).toBe("unknown");
+  });
+});
+
+// a control plane with no clickhouse_url mounts the analytics routes and
+// answers 503 from them; one too old to have them at all answers 404. Both are
+// the deployment's shape, and neither is the "never connected" case that an
+// error carrying no status otherwise means (#1236)
+describe("noAnalytics", () => {
+  it("classifies the analytics fetchers' own error as its own kind", () => {
+    const err = new AnalyticsUnavailableError("analytics is not configured");
+    expect(classifyLoadError(err)).toBe("noAnalytics");
+  });
+
+  it("does not read it as an unreachable control plane", () => {
+    // it is not an ApiError, so the status-less rule would have claimed the
+    // request never got an answer — it got one, and the answer was this
+    expect(classifyLoadError(new AnalyticsUnavailableError("503"))).not.toBe(
+      "unreachable",
+    );
+  });
+
+  it("offers neither a retry nor a sign-in, because neither can help", () => {
+    expect(isRetryable("noAnalytics")).toBe(false);
+    expect(needsSignIn("noAnalytics")).toBe(false);
   });
 });

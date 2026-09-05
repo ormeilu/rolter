@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, within } from "storybook/test";
 
 import Dashboard from "./Dashboard";
-import { Harness, pending, routes, type FetchStub } from "./story-harness";
+import { Harness, json, pending, routes, scoped, type FetchStub } from "./story-harness";
 import { formattersFor } from "@/lib/i18n/format";
 import { atMobile, atTablet, expectNoHorizontalOverflow } from "@/lib/story-viewport";
 
@@ -145,5 +145,29 @@ export const Tablet: Story = {
     const canvas = within(canvasElement);
     await canvas.findAllByText(fmt.number(132));
     await expectNoHorizontalOverflow();
+  },
+};
+
+/**
+ * Analytics off is a load state, not an empty one: the `EmptyState` this used
+ * to render said "nothing has happened yet" about a control plane that was
+ * never asked to record anything (#1236).
+ */
+export const NoAnalyticsStore: Story = {
+  render: () =>
+    render(
+      scoped(async (input) =>
+        String(input).includes("/api/v1/analytics")
+          ? json({ error: { message: "no clickhouse_url" } }, 503)
+          : json({ base: "USD", codes: ["USD"], rates: {} }),
+      ),
+    ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByText(/Analytics are not configured/i),
+    ).toBeVisible();
+    await expect(canvas.getByText(/CLICKHOUSE_URL/)).toBeVisible();
+    await expect(canvas.queryByRole("button", { name: /try again/i })).toBeNull();
   },
 };

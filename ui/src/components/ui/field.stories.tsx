@@ -125,3 +125,46 @@ export const AroundASelect: Story = {
     await expect(canvas.getByLabelText("Strategy")).toHaveValue("round_robin");
   },
 };
+
+/**
+ * Two children — a control and a note beside it — used to leave the label
+ * pointing at nothing: there was no single element to put the generated id on,
+ * so the control had no accessible name and `getByLabelText` could not find it
+ * either. Nothing about that is visible on screen, which is why it survived
+ * ~200 call sites (#1264).
+ */
+export const LabelsTheFirstOfTwoChildren: Story = {
+  args: { label: "Strategy" },
+  render: (args) => (
+    <Field {...args}>
+      <Select defaultValue="round_robin">
+        <option value="round_robin">Round robin</option>
+        <option value="least_latency">Least latency</option>
+      </Select>
+      <p className="text-xs text-muted-foreground">
+        Least latency needs health data before it can rank anything.
+      </p>
+    </Field>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByLabelText("Strategy")).toHaveValue("round_robin");
+  },
+};
+
+/** The hint below a two-child field still describes the control it belongs to. */
+export const TwoChildrenKeepTheirDescription: Story = {
+  args: { label: "Model name", error: "A model with this name already exists." },
+  render: (args) => (
+    <Field {...args}>
+      <Input defaultValue="gpt-4o" />
+      <p className="text-xs text-muted-foreground">Rewritten to the upstream name.</p>
+    </Field>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const control = canvas.getByLabelText("Model name");
+    await expect(control).toHaveAttribute("aria-invalid", "true");
+    await expect(control).toHaveAccessibleDescription(/already exists/);
+  },
+};

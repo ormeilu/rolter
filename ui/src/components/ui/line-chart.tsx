@@ -26,7 +26,8 @@ interface LineChartProps {
   label?: string;
 }
 
-const DEFAULT_COLORS = ["var(--red-folk)", "var(--zinc-300)", "var(--status-info)"];
+// the first three of the shared categorical sequence (#1245)
+const DEFAULT_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)"];
 
 /// small dependency-free SVG line chart — ported from the design system's
 /// components/charts/LineChart.jsx, driven by the same CSS custom properties

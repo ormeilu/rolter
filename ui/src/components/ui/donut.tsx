@@ -16,17 +16,19 @@ export interface DonutProps extends React.HTMLAttributes<HTMLDivElement> {
   maxSegments?: number;
 }
 
+// the shared categorical sequence, so a donut, a scatter and the dashboard's
+// provider bars colour their nth series the same way (#1245)
 const PALETTE = [
-  "var(--red-folk)",
-  "var(--zinc-400)",
-  "var(--status-info)",
-  "var(--status-success)",
-  "var(--status-warning)",
-  "var(--red-500)",
-  "var(--zinc-600)",
-  "var(--zinc-300)",
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
+  "var(--chart-6)",
+  "var(--chart-7)",
+  "var(--chart-8)",
 ];
-const OTHER = "var(--zinc-700)";
+const OTHER = "var(--chart-other)";
 
 export function Donut({
   segments = [],

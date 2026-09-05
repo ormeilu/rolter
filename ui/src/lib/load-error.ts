@@ -10,7 +10,12 @@
 // down" costs more time than no error at all, because it invites a wrong
 // hypothesis and the operator spends their attention there first.
 
-import { ApiError, isEndpointNotMounted, isOpenModeNoSession } from "@/lib/api";
+import {
+  AnalyticsUnavailableError,
+  ApiError,
+  isEndpointNotMounted,
+  isOpenModeNoSession,
+} from "@/lib/api";
 
 export type LoadErrorKind =
   /** no session, or it expired — signing in again fixes it */
@@ -30,6 +35,14 @@ export type LoadErrorKind =
    * configuring `ROLTER_DATABASE_URL` is the fix
    */
   | "noStore"
+  /**
+   * the analytics endpoint is mounted and answered, and the answer was "this
+   * deployment has no analytics store" — a 503 from a control plane with no
+   * `clickhouse_url`, or a 404 from one too old to serve the route at all
+   * (#1236). The sibling of `noStore`: same shape of answer, different setting
+   * to change, so retrying and signing in are both beside the point
+   */
+  | "noAnalytics"
   /** the request never got an answer — wrong URL, down, CORS, offline */
   | "unreachable"
   /** the control plane answered, and the answer was a failure */
@@ -47,6 +60,9 @@ export type LoadErrorKind =
 export function classifyLoadError(error: unknown): LoadErrorKind {
   if (isOpenModeNoSession(error)) return "openMode";
   if (isEndpointNotMounted(error)) return "noStore";
+  // thrown instead of an ApiError by the analytics fetchers, so it has to be
+  // read before the "no status means it never connected" rule below
+  if (error instanceof AnalyticsUnavailableError) return "noAnalytics";
   if (!(error instanceof ApiError)) return "unreachable";
   if (error.status === 401) return "unauthenticated";
   if (error.status === 403) return "forbidden";

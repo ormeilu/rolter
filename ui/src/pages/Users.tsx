@@ -148,9 +148,18 @@ export default function Users() {
   };
 
   const GRID = "1.7fr 1.4fr 110px 1fr 110px";
-  // avatar chips carry white initials, so every entry clears 4.5:1 against
-  // #ffffff — the gold used to be #b8860b at 3.25:1 (#1181)
-  const AVATARS = ["#c0392b", "#2e7d5b", "#3d6fb4", "#8e5aa8", "#8a6508", "#6b7280"];
+  // the categorical chip palette, one token per entry: a raw hex here is not
+  // retunable and is contrast-checked by nobody, which is how the gold entry
+  // reached white initials at 3.25:1 (#1181, #1245). the ratios are recorded
+  // beside the tokens in index.css
+  const AVATARS = [
+    "var(--avatar-1)",
+    "var(--avatar-2)",
+    "var(--avatar-3)",
+    "var(--avatar-4)",
+    "var(--avatar-5)",
+    "var(--avatar-6)",
+  ];
 
   return (
     <PageBody>

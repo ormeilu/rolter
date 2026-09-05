@@ -2,7 +2,6 @@ import type * as React from "react";
 import { ShieldCheck } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -34,20 +33,6 @@ export function GuardrailEmpty({
       description={description}
       actions={action}
     />
-  );
-}
-
-export function GuardrailError({ message, retry }: { message: string; retry: () => void }) {
-  return (
-    <div className="rounded-[10px] border border-[color:var(--status-danger)]/30 bg-[color:var(--status-danger)]/5 p-5">
-      <p className="text-sm font-medium text-[color:var(--status-danger-text)]">
-        Guardrail registry unavailable
-      </p>
-      <p className="mt-1 text-sm text-muted-foreground">{message}</p>
-      <Button className="mt-4" variant="outline" onClick={retry}>
-        Try again
-      </Button>
-    </div>
   );
 }
 

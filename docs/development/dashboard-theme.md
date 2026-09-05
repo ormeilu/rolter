@@ -85,6 +85,39 @@ darker half carries a shape, the lighter half carries a glyph.
 reads `text-[color:var(--status-danger-text)]`. `--danger-text` is an alias of
 the same token.
 
+## Categorical palettes are tokens too
+
+A series colour and an avatar chip are picked by *index*, not by meaning, so
+they were written out as arrays inside the components that needed them — five
+of them, one in raw hex. That array is the same failure as a hard-coded hex
+everywhere else: not retunable, checked against nothing, and free to drift. The
+next entry somebody adds has nothing stopping it from being another `#b8860b`,
+which is exactly how the gold avatar chip came to carry white initials at
+3.25:1 (#1181, #1245).
+
+Both palettes live in `ui/src/index.css`:
+
+| Tokens | Used by | Floor |
+|---|---|---|
+| `--chart-1` … `--chart-8`, `--chart-other` | `donut.tsx`, `scatter-plot.tsx`, `line-chart.tsx`, `Dashboard.tsx`'s provider bars | 3:1 — a fill carries a shape |
+| `--avatar-1` … `--avatar-6` | the `Users.tsx` chips | 4.5:1 against `#ffffff` — the chip carries initials |
+
+The ratio for each entry is recorded in the comment beside it, measured on
+`--surface-card` (`#111113`) for the chart hues, because that is what every
+chart in the dashboard sits on. Three inherited entries are under the graphical
+floor and are tracked separately (#1269); nothing new may join them.
+
+A component reads the sequence by index and never re-lists the hues:
+
+```tsx
+const PALETTE = ["var(--chart-1)", "var(--chart-2)", …];
+```
+
+Single-series defaults — a sparkline's stroke, a bar chart's fill — are a
+different thing and stay on the semantic token they already use. The
+categorical tokens are for "the nth of several", where the only thing the
+colour means is "not the previous one".
+
 ## Never dim a live region with `opacity`
 
 Container opacity fades the glyphs toward the page background while the

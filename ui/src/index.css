@@ -107,6 +107,40 @@
     --status-info-text: #6ba1ff;
     --status-danger-text: #ff6f66;
 
+    /* categorical palettes (#1245). a series colour and an avatar chip are
+       picked by index rather than by meaning, so they were written out as
+       arrays inside the components that needed them — one of them in raw hex,
+       which is how the gold chip reached 3.25:1 under white initials before
+       #1181 retuned it by hand. they live here now, so the next entry somebody
+       adds is retunable, is checked against the rolter surfaces, and stays in
+       family with the status hues above.
+
+       chart fills carry a shape, not a glyph: the floor is the 3:1 WCAG
+       non-text one, measured on --surface-card (#111113), which is what every
+       chart in the dashboard sits on. --chart-1, --chart-7 and --chart-other
+       are under it; they are inherited values rather than new ones, and are
+       tracked in #1269 */
+    --chart-1: var(--red-folk); /* #b41d21 · 2.82:1 */
+    --chart-2: var(--zinc-400); /* #a1a1aa · 7.36:1 */
+    --chart-3: var(--status-info); /* #3b82f6 · 5.13:1 */
+    --chart-4: var(--status-success); /* #16a34a · 5.72:1 */
+    --chart-5: var(--status-warning); /* #f59e0b · 8.78:1 */
+    --chart-6: var(--red-500); /* #ff4017 · 5.39:1 */
+    --chart-7: var(--zinc-600); /* #52525b · 2.44:1 */
+    --chart-8: var(--zinc-300); /* #d4d4d8 · 12.76:1 */
+    /* the tail a donut rolls everything past --chart-8 into, deliberately
+       quieter than the named slices it stands for */
+    --chart-other: var(--zinc-700); /* #3f3f46 · 1.81:1 */
+
+    /* avatar chips carry white initials, so each entry is measured against
+       #ffffff at the 4.5:1 body-text floor rather than the 3:1 one */
+    --avatar-1: #c0392b; /* 5.44:1 */
+    --avatar-2: #2e7d5b; /* 5.00:1 */
+    --avatar-3: #3d6fb4; /* 5.08:1 */
+    --avatar-4: #8e5aa8; /* 5.03:1 */
+    --avatar-5: #8a6508; /* 5.32:1 — was #b8860b at 3.25:1 (#1181) */
+    --avatar-6: #6b7280; /* 4.83:1 */
+
     /* surfaces + translucent borders (the borders do the work, not shadows) */
     --surface-app: var(--zinc-900);
     --surface-base: var(--zinc-925);
