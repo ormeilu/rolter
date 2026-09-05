@@ -89,7 +89,7 @@ export default function ComplexityRouter() {
           }
         />
       )}
-      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(380px,1fr))]">
+      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(380px,100%),1fr))]">
         {configured.map(({ route, tiers }) => (
           <div
             key={route.id}

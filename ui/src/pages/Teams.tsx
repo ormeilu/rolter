@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { EditorSheet } from "@/components/EditorSheet";
 import { LoadError } from "@/components/LoadError";
 import { CardGridSkeleton } from "@/components/LoadingState";
-import { PageBody } from "@/components/screen";
+import { PageBody, Toolbar } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
@@ -68,14 +68,14 @@ export default function Teams() {
 
   return (
     <PageBody>
-      <div className="flex items-center gap-3">
+      <Toolbar>
         <span className="text-sm text-muted-foreground">
           {teams.data?.length ?? 0} teams · group users, share budgets and access
         </span>
         <Button className="ml-auto" onClick={() => setAddOpen(true)} disabled={!scope.orgId}>
           + New team
         </Button>
-      </div>
+      </Toolbar>
 
       {teams.isLoading && <CardGridSkeleton cards={3} height={186} min={320} />}
       {teams.error && (
@@ -98,7 +98,7 @@ export default function Teams() {
           }
         />
       )}
-      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
+      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr))]">
         {(teams.data ?? []).map((team, i) => {
           const budget = budgetQueries[i]?.data?.[0];
           const members =

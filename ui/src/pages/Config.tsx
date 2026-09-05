@@ -33,7 +33,7 @@ export default function Config() {
   return (
     <div className="grid items-start gap-4 p-[22px] xl:grid-cols-[1.5fr_1fr]">
       <div className="flex min-w-0 flex-col gap-3">
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           <h2 className="text-base font-medium">Effective config</h2>
           <span className="font-mono text-xs text-[color:var(--text-subtle)]">{summary}</span>
           <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-[color:var(--status-success-text)]">

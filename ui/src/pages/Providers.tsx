@@ -16,6 +16,7 @@ import {
   ListTable,
   PageBody,
   SearchInput,
+  Toolbar,
 } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -109,7 +110,7 @@ export default function Providers() {
     <PageBody>
       <UnservedConfigNotice problems={problems.data ?? []} />
 
-      <div className="flex items-center gap-3">
+      <Toolbar>
         <SearchInput
           placeholder={t("pages.providers.search")}
           value={search}
@@ -122,7 +123,7 @@ export default function Providers() {
         >
           {t("pages.providers.add")}
         </Button>
-      </div>
+      </Toolbar>
 
       {providers.error && (
         <LoadError

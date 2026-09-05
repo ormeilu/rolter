@@ -123,7 +123,7 @@ export default function Health() {
           }
         />
       )}
-      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]">
+      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr))]">
         {uptime.data?.map((row) => {
           const key = `${row.provider}::${row.target_id}`;
           const breached = row.sla_breached === 1;

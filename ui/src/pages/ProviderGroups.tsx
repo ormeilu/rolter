@@ -18,6 +18,7 @@ import {
   SearchInput,
   SortLabel,
   useSort,
+  Toolbar,
 } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -102,7 +103,7 @@ export default function ProviderGroups() {
 
   return (
     <PageBody>
-      <div className="flex items-center gap-3">
+      <Toolbar>
         <SearchInput
           placeholder="Search provider groups"
           value={search}
@@ -115,7 +116,7 @@ export default function ProviderGroups() {
         >
           + Add group
         </Button>
-      </div>
+      </Toolbar>
 
       {groups.error && (
         <LoadError

@@ -19,6 +19,7 @@ import {
   withConfirm,
 } from "./story-harness";
 import type { AlertChannelRow, AlertNotificationRow, AlertRuleRow } from "@/lib/api";
+import { atMobile, expectNoHorizontalOverflow } from "@/lib/story-viewport";
 
 const CHANNELS: AlertChannelRow[] = [
   {
@@ -437,5 +438,34 @@ export const HistoryForbidden: Story = {
     await expect(
       await canvas.findByText(/You do not have access to alert history/i),
     ).toBeInTheDocument();
+  },
+};
+
+// the channel and rule toolbars wrap on a phone (#1242)
+export const ChannelsMobile: Story = {
+  ...atMobile,
+  render: () => (
+    <Harness fetchStub={loaded}>
+      <AlertChannels />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("ops-slack");
+    await expectNoHorizontalOverflow();
+  },
+};
+
+export const RulesMobile: Story = {
+  ...atMobile,
+  render: () => (
+    <Harness fetchStub={loaded}>
+      <AlertRules />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("high error rate");
+    await expectNoHorizontalOverflow();
   },
 };

@@ -19,7 +19,10 @@ export function Tabs({ tabs = [], value, onChange, className, ...props }: TabsPr
   return (
     <div
       className={cn(
-        "flex items-center gap-1 border-b border-[color:var(--border-subtle)]",
+        // a strip wider than a phone scrolls inside itself rather than pushing
+        // the page sideways (#1242); the scrollbar is hidden, the tabs stay
+        // reachable by swipe and by Tab
+        "flex items-center gap-1 overflow-x-auto border-b border-[color:var(--border-subtle)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         className,
       )}
       role="tablist"
@@ -34,7 +37,7 @@ export function Tabs({ tabs = [], value, onChange, className, ...props }: TabsPr
             aria-selected={active}
             onClick={() => onChange?.(t.value)}
             className={cn(
-              "relative cursor-pointer border-none bg-transparent px-2 py-2 text-sm font-medium transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+              "relative shrink-0 cursor-pointer border-none bg-transparent px-2 py-2 text-sm font-medium transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
               active
                 ? "text-foreground after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-foreground"
                 : "text-muted-foreground hover:text-foreground",

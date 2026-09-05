@@ -137,7 +137,7 @@ export function StatGridSkeleton({
 }) {
   return (
     <LoadingRegion
-      className={cn("grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]", className)}
+      className={cn("grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(220px,100%),1fr))]", className)}
     >
       {Array.from({ length: cards }, (_, i) => (
         <Skeleton key={i} height={96} radius={10} />

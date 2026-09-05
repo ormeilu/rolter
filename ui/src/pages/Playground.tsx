@@ -407,7 +407,7 @@ function ChatMode({ models }: { models: ModelOption[] }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2.5">
+      <div className="flex flex-wrap items-center gap-2.5">
         <label className="flex items-center gap-2 text-sm">
           <Switch
             checked={multimodal}
@@ -851,7 +851,7 @@ function RealtimeMode({ models }: { models: ModelOption[] }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2.5">
+      <div className="flex flex-wrap items-center gap-2.5">
         <ModelSelect models={models} value={model} onChange={setModel} />
         <span className="ml-auto">
           <Button

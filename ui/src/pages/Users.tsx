@@ -13,6 +13,7 @@ import {
   PageBody,
   RowIconButton,
   SearchInput,
+  Toolbar,
 } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import {
@@ -136,7 +137,7 @@ export default function Users() {
 
   return (
     <PageBody>
-      <div className="flex items-center gap-3">
+      <Toolbar>
         <SearchInput
           placeholder="Search users"
           value={search}
@@ -166,7 +167,7 @@ export default function Users() {
           <Plus className="h-4 w-4" />
           Invite user
         </Button>
-      </div>
+      </Toolbar>
 
       {!orgId && (
         <EmptyState

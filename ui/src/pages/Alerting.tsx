@@ -7,7 +7,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EditorSheet } from "@/components/EditorSheet";
 import { LoadError } from "@/components/LoadError";
 import { CardGridSkeleton, TableSkeleton } from "@/components/LoadingState";
-import { ListHeader, ListRow, ListTable, PageBody, Pill, StatusDot } from "@/components/screen";
+import { ListHeader, ListRow, ListTable, PageBody, Pill, StatusDot, Toolbar } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
@@ -74,14 +74,14 @@ export function AlertChannels() {
 
   return (
     <PageBody>
-      <div className="flex items-center gap-3">
+      <Toolbar>
         <span className="text-sm text-muted-foreground">
           {channels.data?.length ?? 0} channels · webhook destinations for alert delivery
         </span>
         <Button className="ml-auto" onClick={() => setAddOpen(true)}>
           + Add channel
         </Button>
-      </div>
+      </Toolbar>
 
       {channels.isLoading && <CardGridSkeleton cards={3} height={168} min={340} />}
       {channels.isError && (
@@ -100,7 +100,7 @@ export function AlertChannels() {
           actions={<Button onClick={() => setAddOpen(true)}>{t("pages.alerting.channels.add")}</Button>}
         />
       )}
-      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]">
+      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr))]">
         {(channels.data ?? []).map((c) => (
           <div
             key={c.id}
@@ -283,14 +283,14 @@ export function AlertRules() {
 
   return (
     <PageBody>
-      <div className="flex items-center gap-3">
+      <Toolbar>
         <span className="text-sm text-muted-foreground">
           {rules.data?.length ?? 0} rules · evaluated every 60s against gateway analytics
         </span>
         <Button className="ml-auto" onClick={() => setAddOpen(true)}>
           + Add rule
         </Button>
-      </div>
+      </Toolbar>
 
       {rules.isLoading && <CardGridSkeleton cards={3} height={196} min={380} />}
       {rules.isError && (
@@ -313,7 +313,7 @@ export function AlertRules() {
           actions={<Button onClick={() => setAddOpen(true)}>{t("pages.alerting.rules.add")}</Button>}
         />
       )}
-      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(380px,1fr))]">
+      <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(380px,100%),1fr))]">
         {(rules.data ?? []).map((r) => {
           const tone = stateTone(r.state);
           return (

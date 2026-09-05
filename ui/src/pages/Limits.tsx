@@ -268,7 +268,7 @@ export default function Limits() {
             }
           />
         )}
-        <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
+        <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr))]">
           {budgets.data?.map((budget) => (
             <BudgetCard
               key={budget.id}
@@ -319,7 +319,7 @@ export default function Limits() {
             }
           />
         )}
-        <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
+        <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr))]">
           {rateLimits.data?.map((limit) => (
             <RateLimitCard
               key={limit.id}
@@ -364,7 +364,7 @@ function BudgetCard({
   const currency = useCurrencyCode();
   return (
     <div className="flex flex-col gap-3 rounded-[10px] border border-[color:var(--border-default)] bg-card p-4">
-      <div className="flex items-center gap-2.5">
+      <div className="flex flex-wrap items-center gap-2.5">
         <span className="font-mono text-xl font-medium">
           {fmt.currency(Number(budget.limit_usd), currency)}
         </span>
