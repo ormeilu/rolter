@@ -1,14 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cable, FlaskConical, Trash2, Loader2 } from "lucide-react";
+import { Cable, FileCode2, FlaskConical, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { CopyButton } from "@/components/CopyButton";
 import { EditorSheet } from "@/components/EditorSheet";
 import { LoadError } from "@/components/LoadError";
-import { CardGridSkeleton } from "@/components/LoadingState";
+import { CardGridSkeleton, PanelSkeleton } from "@/components/LoadingState";
 import { PageBody, Pill, StatusDot } from "@/components/screen";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -16,6 +24,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   createConnector,
   deleteConnector,
+  fetchCollectorConfig,
   fetchConnectors,
   testConnector,
   updateConnector,
@@ -40,6 +49,104 @@ const asInput = (c: ConnectorRow) => ({
   sampling_rate: c.sampling_rate,
   auth_secret_ref: c.auth_secret_ref,
 });
+
+/**
+ * The document the connectors are actually delivered through (#1195).
+ *
+ * ADR-0026 put the per-destination fan-out in an OpenTelemetry Collector, not
+ * in N in-process exporters — so defining a connector here does nothing until
+ * a collector is running this config. The screen used to define connectors and
+ * never mention that, which left a freshly added connector with no visible way
+ * to receive anything.
+ *
+ * The document is fetched only while the dialog is open: it is rendered from
+ * the connector rows on every request and can carry a resolved bearer token,
+ * so there is no reason to hold it in the cache behind a closed dialog.
+ */
+function CollectorConfigDialog({
+  open,
+  onOpenChange,
+  connectorCount,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  connectorCount: number;
+}) {
+  const { t } = useTranslation();
+  const config = useQuery({
+    queryKey: ["collector-config"],
+    queryFn: fetchCollectorConfig,
+    enabled: open,
+    gcTime: 0,
+    retry: false,
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogHeader>
+        <DialogTitle>{t("pages.connectors.collectorConfig.title")}</DialogTitle>
+        <DialogDescription>
+          {t("pages.connectors.collectorConfig.where")}
+        </DialogDescription>
+      </DialogHeader>
+
+      {/* no connectors means no exporters and no pipelines: the document is
+          valid and delivers nothing, which is worth saying rather than
+          rendering as an almost-empty file */}
+      {connectorCount === 0 ? (
+        <EmptyState
+          uxTarget="collector-config"
+          icon={<FileCode2 />}
+          title={t("pages.connectors.collectorConfig.emptyTitle")}
+          description={t("pages.connectors.collectorConfig.emptyBody")}
+        />
+      ) : (
+        <>
+          {config.isLoading && <PanelSkeleton panels={1} height={240} />}
+          {config.isError && (
+            <LoadError
+              error={config.error}
+              resource={t("errors.resources.collectorConfig")}
+              onRetry={() => void config.refetch()}
+            />
+          )}
+          {config.data !== undefined && (
+            <>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs text-[color:var(--text-subtle)]">
+                  {t("pages.connectors.collectorConfig.endpoint")}
+                </span>
+                <CopyButton
+                  className="ml-auto"
+                  value={config.data}
+                  label={t("pages.connectors.collectorConfig.copy")}
+                />
+              </div>
+              {/* focusable, because it scrolls: a keyboard user has to be able
+                  to reach the scroll container without a pointer */}
+              <pre
+                tabIndex={0}
+                aria-label={t("pages.connectors.collectorConfig.title")}
+                className="max-h-[380px] overflow-auto rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] p-3 text-xs leading-relaxed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <code>{config.data}</code>
+              </pre>
+              <p className="text-sm text-muted-foreground">
+                {t("pages.connectors.collectorConfig.deploy")}
+              </p>
+            </>
+          )}
+        </>
+      )}
+
+      <DialogFooter>
+        <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          {t("common.close")}
+        </Button>
+      </DialogFooter>
+    </Dialog>
+  );
+}
 
 // OTLP log-shipping connectors: request logs mirrored to Datadog, Langfuse,
 // or any OTLP/HTTP collector, with per-connector sampling and health checks
@@ -67,6 +174,7 @@ export default function Connectors() {
   const remove = useMutation({ mutationFn: deleteConnector, onSuccess: invalidate });
 
   const [addOpen, setAddOpen] = React.useState(false);
+  const [configOpen, setConfigOpen] = React.useState(false);
   // log shipping stops the moment the connector goes, and the delivery history
   // goes with it — worth saying before the click (#1179)
   const [deleteTarget, setDeleteTarget] = React.useState<ConnectorRow | null>(null);
@@ -81,9 +189,18 @@ export default function Connectors() {
         <span className="text-sm text-muted-foreground">
           {connectors.data?.length ?? 0} connectors · OTLP/HTTP sinks for request logs
         </span>
-        <Button className="ml-auto" onClick={() => setAddOpen(true)}>
-          + Add connector
+        {/* the config sits beside "add", because it is the other half of the
+            job: a connector row does nothing until a collector runs this */}
+        <Button
+          className="ml-auto"
+          variant="outline"
+          disabled={connectors.isError}
+          onClick={() => setConfigOpen(true)}
+        >
+          <FileCode2 className="h-4 w-4" aria-hidden />
+          {t("pages.connectors.collectorConfig.open")}
         </Button>
+        <Button onClick={() => setAddOpen(true)}>+ Add connector</Button>
       </div>
 
       {connectors.isLoading && <CardGridSkeleton cards={3} height={186} min={380} />}
@@ -215,6 +332,12 @@ export default function Connectors() {
           deleteTarget &&
           remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
         }
+      />
+
+      <CollectorConfigDialog
+        open={configOpen}
+        onOpenChange={setConfigOpen}
+        connectorCount={connectors.data?.length ?? 0}
       />
 
       <AddConnectorDialog open={addOpen} onOpenChange={setAddOpen} onDone={invalidate} />

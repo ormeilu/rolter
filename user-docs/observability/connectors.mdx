@@ -52,6 +52,18 @@ The `ROLTER_TELEMETRY_ENABLED` kill switch wins over every connector: with it
 off, the rendered document has no exporters at all, regardless of what is
 enabled here.
 
+### Reading the config from the dashboard
+
+You do not have to `curl` for it. **Observability → Connectors** has a
+**Collector config** button beside **Add connector**: it fetches the rendered
+document, shows it in a scrollable pane, and copies it to the clipboard in one
+click. Save it as your collector's config file — `infra/otel/collector.compose.yaml`
+is the one the `docker/docker-compose.observability.yml` overlay mounts — or
+point the collector straight at the URL with `--config` and reload it on a
+schedule. With no connectors defined the panel says so instead of showing a
+document with no exporters in it, because a collector running that would
+deliver nothing.
+
 ## Fields
 
 | Field | Meaning |

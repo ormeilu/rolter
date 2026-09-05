@@ -7,6 +7,7 @@ import Connectors from "./Connectors";
 import {
   cancelConfirmation,
   confirmDestructive,
+  expectLoadError,
   expectSkeleton,
   recording,
 } from "./story-harness";
@@ -59,6 +60,38 @@ const json = (body: unknown, status = 200) =>
     status,
     headers: { "Content-Type": "application/json" },
   });
+
+// the collector config comes back as a yaml *document*, not json — the shape
+// `render_yaml` in crates/rolter-control/src/collector_config.rs produces
+const COLLECTOR_CONFIG = `# rendered by rolter (GET /api/v1/connectors/collector-config); do not edit by hand
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+exporters:
+  otlphttp/signoz:
+    endpoint: "https://collector.example.com/v1/logs"
+
+service:
+  pipelines:
+    logs/signoz:
+      receivers: [otlp]
+      exporters: [otlphttp/signoz]
+`;
+
+const yaml = (body: string, status = 200) =>
+  new Response(body, { status, headers: { "Content-Type": "application/yaml" } });
+
+/** Answer the config endpoint with `config`, everything else with the list. */
+function withConfig(
+  config: () => Response | Promise<Response>,
+  connectors: ConnectorRow[] = CONNECTORS,
+): FetchStub {
+  return async (input) =>
+    String(input).includes("collector-config") ? config() : json(connectors);
+}
 
 // the stub is installed during render, not in an effect: child effects run
 // before the parent's, so an effect would let the first real fetch through
@@ -190,5 +223,83 @@ export const DeletingAConnector: Story = {
         within(dialog).getByRole("button", { name: /delete connector/i }),
       ).toBeDisabled(),
     );
+  },
+};
+
+// defining a connector delivers nothing on its own — a collector has to be
+// running the config rendered from it (#1195, ADR-0026). the screen has to be
+// able to show that document, and say where it goes
+export const CollectorConfig: Story = {
+  render: () => <Harness fetchStub={withConfig(() => yaml(COLLECTOR_CONFIG))} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("signoz")).toBeVisible());
+    await userEvent.click(
+      canvas.getByRole("button", { name: /Collector config/ }),
+    );
+
+    const dialog = within(await within(document.body).findByRole("dialog"));
+    // the document itself, verbatim — one exporter and one pipeline per
+    // enabled connector
+    await waitFor(() =>
+      expect(dialog.getByText(/otlphttp\/signoz/)).toBeVisible(),
+    );
+    // and where it goes, which is the part a connector row never said
+    await expect(dialog.getByText(/collector\.compose\.yaml/)).toBeVisible();
+    // copyable, because pasting it into a collector is the whole point
+    await expect(
+      dialog.getByRole("button", { name: /^Copy collector config/ }),
+    ).toBeVisible();
+  },
+};
+
+// the document is rendered on request from the connector rows, so it can be
+// slow; the dialog stands in a skeleton rather than an empty frame
+export const CollectorConfigLoading: Story = {
+  render: () => (
+    <Harness fetchStub={withConfig(() => new Promise<Response>(() => {}))} />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("signoz")).toBeVisible());
+    await userEvent.click(
+      canvas.getByRole("button", { name: /Collector config/ }),
+    );
+    await expectSkeleton(document.body);
+  },
+};
+
+// with no connectors the config renders no exporters at all: a valid document
+// that delivers nothing, which is worth saying rather than showing
+export const CollectorConfigEmpty: Story = {
+  render: () => (
+    <Harness fetchStub={withConfig(() => yaml(COLLECTOR_CONFIG), [])} />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText(/No connectors yet/)).toBeVisible());
+    await userEvent.click(
+      canvas.getByRole("button", { name: /Collector config/ }),
+    );
+    const dialog = within(await within(document.body).findByRole("dialog"));
+    await expect(dialog.getByText(/Nothing to deliver yet/)).toBeVisible();
+  },
+};
+
+// the list can load while the render fails — a KEK the control plane cannot
+// open, say. the failure belongs in the dialog, not on the screen behind it
+export const CollectorConfigError: Story = {
+  render: () => (
+    <Harness
+      fetchStub={withConfig(() => json({ error: { message: "kek unavailable" } }, 500))}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("signoz")).toBeVisible());
+    await userEvent.click(
+      canvas.getByRole("button", { name: /Collector config/ }),
+    );
+    await expectLoadError(document.body, /collector config/i);
   },
 };
