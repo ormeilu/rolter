@@ -342,3 +342,27 @@ export const DetailDrawerNamesTheAttribution: Story = {
     await expect(drawer.getByText("Acme Corp")).toBeVisible();
   },
 };
+
+// a control plane with no clickhouse_url answers the analytics routes 503, and
+// one too old to have them answers 404. Both used to render an untranslated
+// grey paragraph of this screen's own (#1236)
+export const NoAnalyticsStore: Story = {
+  render: () => (
+    <Harness
+      fetchStub={scoped(async (input) =>
+        String(input).includes("/analytics/")
+          ? json({ error: { message: "analytics is not configured" } }, 503)
+          : json([]),
+      )}
+    >
+      <Logs />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expectLoadError(canvasElement, /Analytics are not configured/i);
+    // the setting to change is named, and the retry that cannot help is withheld
+    await expect(canvas.getByText(/CLICKHOUSE_URL/)).toBeVisible();
+    await expect(canvas.queryByRole("button", { name: /try again/i })).toBeNull();
+  },
+};

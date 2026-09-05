@@ -121,3 +121,21 @@ export const Forbidden: Story = {
     await expectLoadError(canvasElement, /You do not have access to MCP tool-call logs/);
   },
 };
+
+// the same deployment shape as Logs, plus a control plane too old to serve
+// /api/v1/mcp/logs at all — a 404 the fetcher reads the same way (#1236)
+export const NoAnalyticsStore: Story = {
+  render: () => (
+    <Harness
+      fetchStub={scoped(async () => json({ error: { message: "no clickhouse_url" } }, 503))}
+    >
+      <McpLogs />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expectLoadError(canvasElement, /Analytics are not configured/i);
+    await expect(canvas.getByText(/CLICKHOUSE_URL/)).toBeVisible();
+    await expect(canvas.queryByRole("button", { name: /try again/i })).toBeNull();
+  },
+};

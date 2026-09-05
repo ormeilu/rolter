@@ -62,6 +62,10 @@
         "title": "{{resource}} needs a database on the control plane",
         "body": "This control plane is running from a config file alone, so the endpoint behind this screen is not mounted at all. Retrying or signing in will not change that: start it with a database (ROLTER_DATABASE_URL) to manage {{resource}} here, or keep editing rolter.toml."
       },
+      "noAnalytics": {
+        "title": "Analytics are not configured on this control plane",
+        "body": "It answered, and the answer was that it keeps no analytics store, so it cannot serve {{resource}}: it runs without CLICKHOUSE_URL, or is older than the endpoint behind this screen. Retrying or signing in will not change that — configure ClickHouse and restart it."
+      },
       "unreachable": {
         "title": "Cannot reach the control plane",
         "body": "The request for {{resource}} got no answer at all. Check that the control plane is running and that this dashboard points at the right address."

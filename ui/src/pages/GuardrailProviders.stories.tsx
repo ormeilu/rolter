@@ -62,6 +62,39 @@ export const Loading: Story = { render: () => <Harness fetchStub={() => new Prom
 export const Empty: Story = { render: () => <Harness fetchStub={async () => json([])} /> };
 export const Error: Story = { render: () => <Harness fetchStub={async () => json({ error: { message: "registry offline" } }, 503)} /> };
 
+// the two failures the bespoke panel got wrong (#1259). a deployment-scoped
+// screen is refused to every non-superadmin, and a "try again" on a permission
+// suggests the refusal was transient
+export const Forbidden: Story = {
+  render: () => (
+    <Harness fetchStub={async () => json({ error: { message: "forbidden" } }, 403)} />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByText(/do not have access to guardrail providers/i),
+    ).toBeVisible();
+    await expect(canvas.queryByRole("button", { name: /try again/i })).toBeNull();
+  },
+};
+
+// fetch never connected, so there is no status to read: that one *is* worth
+// retrying, and the control plane's own message is still printed underneath
+export const Unreachable: Story = {
+  render: () => (
+    <Harness fetchStub={() => Promise.reject(new TypeError("Failed to fetch"))} />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByText(/cannot reach the control plane/i),
+    ).toBeVisible();
+    await expect(
+      await canvas.findByRole("button", { name: /try again/i }),
+    ).toBeVisible();
+  },
+};
+
 export const RegistersProvider: Story = {
   render: () => <Harness fetchStub={async (_input, init) => init?.method === "POST" ? json(PROVIDERS[0], 201) : json(PROVIDERS)} />,
   play: async ({ canvasElement }) => {

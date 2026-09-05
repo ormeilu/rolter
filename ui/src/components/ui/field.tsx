@@ -25,6 +25,16 @@ interface ControlProps {
   "aria-invalid"?: boolean | "true" | "false";
 }
 
+/**
+ * What a `<label for>` may point at.
+ *
+ * Read in document order, so the *first* control inside a multi-child field is
+ * the one the label names — a hint, a unit suffix or a "test" button beside it
+ * is not what the label is about. `button` is in the list because the composed
+ * controls render as one (a switch, a combobox trigger).
+ */
+const LABELABLE = 'input, select, textarea, button, [contenteditable="true"]';
+
 export function Field({
   label,
   htmlFor,
@@ -45,7 +55,16 @@ export function Field({
   const messageId = React.useId();
   const single = React.Children.count(children) === 1 ? children : null;
   const control = React.isValidElement<ControlProps>(single) ? single : null;
-  const controlId = htmlFor ?? control?.props.id ?? (control ? generated : undefined);
+  // hand the field two children — a control plus a hint, a row, a second
+  // control — and there is no single element to clone the id onto, so the label
+  // named nothing and `getByLabelText` could not find the control either. That
+  // failure is silent: the field looks right on screen (#1264). The children are
+  // wrapped and the first labelable control in them is bound after mount.
+  const [wrapped, setWrapped] = React.useState<string>();
+  const wrapper = React.useRef<HTMLDivElement>(null);
+  const byHand = !control && !htmlFor;
+  const controlId =
+    htmlFor ?? control?.props.id ?? (control ? generated : wrapped);
   // the error or hint below the control is tied to it as its description, and
   // an error also flips aria-invalid, so a screen reader hears both the state
   // and the reason rather than a control that silently refuses to submit
@@ -63,6 +82,46 @@ export function Field({
       ? React.cloneElement(control, described)
       : children;
 
+  // the cloning above cannot reach into a wrapper, so the multi-child case is
+  // resolved from the rendered DOM instead: whatever the children turned out to
+  // be, the first labelable node among them is the control this field is about.
+  // Layout effect rather than effect, so the association exists before paint
+  // and before a story's first query.
+  React.useLayoutEffect(() => {
+    if (!byHand) return;
+    const node = wrapper.current?.querySelector<HTMLElement>(LABELABLE) ?? null;
+    if (!node) {
+      // a field with a label and nothing to attach it to is the bug this
+      // component exists to prevent, and it is invisible on screen
+      if (import.meta.env.DEV && label) {
+        console.warn(
+          `Field: "${label}" wraps no labelable control, so its label names ` +
+            "nothing. Pass htmlFor and put the matching id on the control.",
+        );
+      }
+      return;
+    }
+    // only what this field added is removed again, so a control that carries
+    // its own id or description keeps it
+    const added: string[] = [];
+    if (!node.id) {
+      node.id = generated;
+      added.push("id");
+    }
+    setWrapped(node.id);
+    if (message && !node.hasAttribute("aria-describedby")) {
+      node.setAttribute("aria-describedby", messageId);
+      added.push("aria-describedby");
+    }
+    if (error && !node.hasAttribute("aria-invalid")) {
+      node.setAttribute("aria-invalid", "true");
+      added.push("aria-invalid");
+    }
+    return () => {
+      for (const attribute of added) node.removeAttribute(attribute);
+    };
+  }, [byHand, children, error, generated, label, message, messageId]);
+
   return (
     <div className={cn("space-y-1.5", className)} {...props}>
       {label && (
@@ -73,7 +132,15 @@ export function Field({
           {info && <InfoHint text={info} label={t("common.aboutField", { label })} />}
         </div>
       )}
-      {labelled}
+      {byHand ? (
+        // the wrapper carries the same spacing the children had as siblings of
+        // the label, so wrapping them changes nothing on screen
+        <div ref={wrapper} className="space-y-1.5">
+          {labelled}
+        </div>
+      ) : (
+        labelled
+      )}
       {error ? (
         <p id={messageId} role="alert" className="text-xs text-[color:var(--status-danger-text)]">
           {error}

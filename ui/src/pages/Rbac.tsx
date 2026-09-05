@@ -476,6 +476,12 @@ function CustomRolesTab({
   // role id -> the profiles composing it. a handful of entries over a handful
   // of profiles, so it is rebuilt per render rather than memoized against a
   // dependency that would have to be the whole `useQueries` result
+  // and whether that map is an answer yet. the profiles resolve independently
+  // of the roles, so a row rendered "not used by any access profile" — a claim,
+  // not a placeholder — for as long as the detail calls were still in flight,
+  // and then swapped it for the real composition (#1266)
+  const usageKnown =
+    !profiles.isLoading && details.every((detail) => !detail.isLoading);
   const usedBy = new Map<string, string[]>();
   for (const detail of details) {
     if (!detail.data) continue;
@@ -637,14 +643,18 @@ function CustomRolesTab({
                       ? t("pages.rbac.custom.noGrants")
                       : t("pages.rbac.custom.grantCount", { count: grants })}
                   </span>
-                  <span aria-hidden>·</span>
-                  <span>
-                    {profileNames.length === 0
-                      ? t("pages.rbac.custom.usedByNone")
-                      : t("pages.rbac.custom.usedBy", {
-                          profiles: profileNames.join(", "),
-                        })}
-                  </span>
+                  {usageKnown && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span>
+                        {profileNames.length === 0
+                          ? t("pages.rbac.custom.usedByNone")
+                          : t("pages.rbac.custom.usedBy", {
+                              profiles: profileNames.join(", "),
+                            })}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="flex flex-none items-center gap-1">

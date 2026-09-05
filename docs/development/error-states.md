@@ -34,7 +34,7 @@ honest.
 ## What it distinguishes
 
 `classifyLoadError` in `ui/src/lib/load-error.ts` maps a thrown value to one of
-seven kinds. `ApiError` already carries `status` and the control plane's `code`,
+eight kinds. `ApiError` already carries `status` and the control plane's `code`,
 so no screen has to parse a message to find out what happened.
 
 | kind | cause | recovery offered |
@@ -43,6 +43,7 @@ so no screen has to parse a message to find out what happened.
 | `forbidden` | 403 | none — ask an administrator |
 | `openMode` | 401 with code `open_mode_no_session` | none — set `ROLTER_ADMIN_TOKEN` |
 | `noStore` | 404 with code `no_such_endpoint` (or that message prefix from an older control plane) | none — set `ROLTER_DATABASE_URL` |
+| `noAnalytics` | an `AnalyticsUnavailableError`: 503 from a control plane with no `clickhouse_url`, or 404 from one too old to serve the route | none — set `CLICKHOUSE_URL` |
 | `unreachable` | the thrown value is not an `ApiError`, so `fetch` never connected | retry |
 | `server` | 5xx | retry |
 | `unknown` | any other non-ok status | retry |
@@ -52,6 +53,16 @@ settings route is mounted only when the control plane runs with a database, so
 a config-file-only deployment answers Users, Keys, Providers and every settings
 screen with the API's JSON 404. That is the deployment's shape, not a wrong URL
 and not a failure a retry can change (#1204).
+
+`noAnalytics` is its sibling and the fourth (#1236). The analytics routes *are*
+mounted; they just have no ClickHouse behind them, so they answer 503 —
+`getAnalytics` turns that, and the 404 an older control plane gives, into an
+`AnalyticsUnavailableError` rather than an `ApiError`. Without a kind of its
+own that error carried no status, so the status-less rule read it as
+`unreachable` and told the operator the control plane could not be reached
+while it was answering every request. Logs, McpLogs and Dashboard each used to
+hand-roll their own paragraph for it — two of them untranslated, one shaped as
+an empty state — which is three different answers to one deployment setting.
 
 Two of these are easy to collapse and must not be. A plain 401 is fixed by
 signing in; `open_mode_no_session` is a control plane running with no admin

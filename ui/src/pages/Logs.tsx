@@ -179,14 +179,13 @@ export default function Logs() {
     setCustomerSel([]);
   };
 
+  // a deployment with no analytics store is a load state like any other, not a
+  // grey paragraph of its own: LoadError names the cause, says which setting
+  // changes it, and withholds the retry that cannot work (#1236)
   if (isUnavailable(query.error)) {
     return (
       <div className="p-[22px]">
-        <p className="rounded-lg border border-[color:var(--border-subtle)] p-6 text-sm text-muted-foreground">
-          Analytics isn&apos;t configured for this deployment — set{" "}
-          <code className="font-mono text-xs">clickhouse_url</code> on the control plane to
-          enable per-invocation logs.
-        </p>
+        <LoadError error={query.error} resource={t("errors.resources.requestLogs")} />
       </div>
     );
   }

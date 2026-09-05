@@ -73,6 +73,11 @@ Two rules the wording depends on:
   the other offers to clear the filter. Screens with a search or a filter bar
   branch on whether one is actually active. Deriving the copy from the row count
   alone is what produced "No provider groups match." on a screen with no query.
+- **A deployment answer is not an empty state.** A control plane with no
+  ClickHouse has not "served nothing yet" — it was never asked to record
+  anything, and no amount of traffic will fill the screen. That is a
+  `noAnalytics` [load error](error-states.md), not an `EmptyState`; the
+  Dashboard rendered it as the latter until #1236.
 - **No CTA where no action exists.** `McpOAuth` grants are created by a user
   completing an OAuth flow in a client; `Cluster` nodes enrol themselves on
   their snapshot poll. Inventing a button for those would be worse than none.

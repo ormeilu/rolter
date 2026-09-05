@@ -34,12 +34,13 @@ export interface ScatterPlotProps extends React.HTMLAttributes<HTMLDivElement> {
   label?: string;
 }
 
+// the shared categorical sequence (#1245), the same one the donut groups by
 const PALETTE = [
-  "var(--zinc-300)",
-  "var(--red-folk)",
-  "var(--status-info)",
-  "var(--status-success)",
-  "var(--status-warning)",
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
 ];
 
 interface HoverState {

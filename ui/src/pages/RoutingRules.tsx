@@ -336,8 +336,13 @@ function AddRouteDialog({
             placeholder="gpt-4o"
           />
         </Field>
-        <Field label="Strategy">
-          <Select value={strategy} onChange={(e) => setStrategy(e.target.value)}>
+        {/* the select plus its caveat, so the label is bound by hand (#1264) */}
+        <Field label="Strategy" htmlFor="route-strategy">
+          <Select
+            id="route-strategy"
+            value={strategy}
+            onChange={(e) => setStrategy(e.target.value)}
+          >
             {strategyOptions(strategy).map((s) => (
               <option key={s} value={s}>
                 {s}

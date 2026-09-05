@@ -12,7 +12,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Donut } from "@/components/ui/donut";
-import { EmptyState } from "@/components/ui/empty-state";
 import { LineChart } from "@/components/ui/line-chart";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
@@ -36,11 +35,12 @@ const WINDOW = {
   bucket: "hour",
 };
 
+// the shared categorical sequence (#1245), not a fifth hand-written list
 const BAR_PALETTE = [
-  "var(--red-folk)",
-  "var(--zinc-400)",
-  "var(--status-info)",
-  "var(--status-success)",
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
 ];
 
 function isUnavailable(err: unknown): boolean {
@@ -82,21 +82,16 @@ export default function Dashboard() {
     retry: false,
   });
 
+  // a deployment with no analytics store answers every panel on this screen the
+  // same way. It used to render as an empty state, which says "nothing happened
+  // yet" about a control plane that was never asked to record anything (#1236)
   const unavailable =
-    isUnavailable(summary.error) ||
-    isUnavailable(series.error) ||
-    isUnavailable(byModel.error);
+    [summary.error, series.error, byModel.error].find(isUnavailable) ?? null;
 
   if (unavailable) {
     return (
       <PageBody>
-        <div className="rounded-lg border border-[color:var(--border-default)]">
-          <EmptyState
-            uxTarget="dashboard-analytics"
-            title={t("pages.dashboard.notConfiguredTitle")}
-            description={t("pages.dashboard.notConfiguredBody")}
-          />
-        </div>
+        <LoadError error={unavailable} resource={t("errors.resources.analytics")} />
       </PageBody>
     );
   }
@@ -149,7 +144,7 @@ export default function Dashboard() {
       label: m.model,
       value: num(m.requests),
       pct: (num(m.requests) / barMax) * 100,
-      color: BAR_PALETTE[i] ?? "var(--status-warning)",
+      color: BAR_PALETTE[i] ?? "var(--chart-5)",
     }));
 
   const recentRows = (recent.data ?? []).map((r: InvocationRow) => ({
