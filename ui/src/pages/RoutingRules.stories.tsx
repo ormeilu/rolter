@@ -23,6 +23,7 @@ const PROVIDERS: ProviderRow[] = [
     slug: "openai-prod",
     kind: "openai",
     api_base: "https://api.openai.com/v1",
+    egress_proxies: [],
     created_at: "2026-05-01T00:00:00Z",
   },
   {
@@ -32,6 +33,7 @@ const PROVIDERS: ProviderRow[] = [
     slug: "azure-west",
     kind: "azure_openai",
     api_base: "https://west.openai.azure.com",
+    egress_proxies: [],
     created_at: "2026-05-01T00:00:00Z",
   },
 ];
@@ -45,6 +47,7 @@ const ROUTES: RouteRow[] = [
     enabled: true,
     params: {},
     param_policy: {},
+    advanced: {},
     created_at: "2026-05-01T00:00:00Z",
   },
   // a disabled route still renders: a route nobody can see is a route nobody
@@ -57,6 +60,7 @@ const ROUTES: RouteRow[] = [
     enabled: false,
     params: {},
     param_policy: {},
+    advanced: {},
     created_at: "2026-05-02T00:00:00Z",
   },
 ];

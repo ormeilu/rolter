@@ -4,7 +4,7 @@ sidebarTitle: "Budgets & Rate Limits"
 description: "Configure USD spend caps and RPM/TPM throughput limits at org, team, project, or key scope to control LLM costs and prevent runaway usage."
 ---
 
-Rolter gives you two complementary levers for controlling how much your gateway spends and how fast it moves traffic: **spend budgets** block requests once a cumulative USD ceiling is reached, and **rate limits** reject requests that exceed per-minute throughput thresholds. Both systems operate across the same four-level scope hierarchy (org → team → project → key) and apply a most-restrictive-wins policy when multiple rules match a single request.
+Rolter gives you two complementary levers for controlling how much your gateway spends and how fast it moves traffic: **spend budgets** block requests once a cumulative USD ceiling is reached, and **rate limits** reject requests that exceed per-minute throughput thresholds. Both systems operate across the same scopes — the four-level tenancy hierarchy (org → team → project → key) plus the two cost-attribution dimensions a key rolls up to (business unit, customer) — and apply a most-restrictive-wins policy when multiple rules match a single request.
 
 <Warning>
   Budgets and rate limits both require Redis (`REDIS_URL`). Rolter uses Redis for distributed counters so limits remain accurate across multiple gateway instances. Without Redis, both budgets and rate limits **fail open** — they are not enforced and all requests pass through.
@@ -90,12 +90,16 @@ Every amount the dashboard renders — LLM Logs, budget cards, team cards, the s
 A spend budget blocks incoming requests with **HTTP 402** once the cumulative cost for a scope reaches `limit_usd` within the configured period. Add one `[[budgets]]` block per scope you want to cap.
 
 <ParamField path="scope" type="string" required>
-  The scope level this budget applies to. One of `org`, `team`, `project`, or `key`.
+  The scope level this budget applies to. One of `org`, `team`, `project`, `key`, `business_unit`, or `customer`.
 </ParamField>
 
 <ParamField path="id" type="string" required>
-  The UUID of the entity at the chosen scope (org ID, team ID, project ID, or virtual key ID).
+  The UUID of the entity at the chosen scope (org ID, team ID, project ID, virtual key ID, business unit ID, or customer ID).
 </ParamField>
+
+<Note>
+  `business_unit` and `customer` are not part of the org → team → project chain: they are the [cost-attribution dimensions](/observability/logs-and-cost) a virtual key rolls its spend up to, so a budget on one caps everything attributed to it regardless of which project the traffic came through. The control plane API and the dashboard's **Budgets & Limits** screen accept all six scopes; in the dashboard, picking one of these two lists your org's business units or customers rather than asking for a UUID.
+</Note>
 
 <ParamField path="limit_usd" type="float" required>
   The maximum cumulative spend in USD for the period before requests are blocked.
@@ -176,7 +180,7 @@ unpriced_policy = "block"   # ignore (default) | warn | block
 A rate limit rejects requests with **HTTP 429** (plus a `Retry-After` header) when the number of requests or tokens in the trailing one-minute window exceeds the cap. Add one `[[rate_limits]]` block per scope you want to throttle.
 
 <ParamField path="scope" type="string" required>
-  The scope level this limit applies to. One of `org`, `team`, `project`, or `key`.
+  The scope level this limit applies to. One of `org`, `team`, `project`, `key`, `business_unit`, or `customer`.
 </ParamField>
 
 <ParamField path="id" type="string" required>

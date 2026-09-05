@@ -23,6 +23,7 @@ const PROVIDERS: ProviderRow[] = [
     kind: "openai",
     api_base: "https://api.openai.com/v1",
     api_key_env: "OPENAI_API_KEY",
+    egress_proxies: [],
     created_at: "2026-01-02T00:00:00Z",
   },
   {
@@ -33,6 +34,7 @@ const PROVIDERS: ProviderRow[] = [
     kind: "anthropic",
     api_base: "https://api.anthropic.com",
     api_key_env: "ANTHROPIC_API_KEY",
+    egress_proxies: [],
     created_at: "2026-01-09T00:00:00Z",
   },
 ];

@@ -122,7 +122,8 @@
       "performanceSettings": "настройки производительности",
       "roleMembers": "число участников по ролям",
       "securitySettings": "настройки безопасности",
-      "toolGroups": "группы инструментов"
+      "toolGroups": "группы инструментов",
+      "rbacMatrix": "матрица прав"
     }
   },
   "locale": {
@@ -644,7 +645,8 @@
       "checkedAt": "проверено в {{time}}",
       "emptyTitle": "Коннекторов пока нет",
       "emptyBody": "Добавьте OTLP/HTTP-коллектор, и журнал запросов будет дублироваться в него — Datadog, Langfuse или ваш собственный стек.",
-      "emptyAction": "Добавить коннектор"
+      "emptyAction": "Добавить коннектор",
+      "testFailed": "Доставка не удалась: {{message}}"
     },
     "accessProfiles": {
       "confirm": {
@@ -734,7 +736,51 @@
       "memberCount_few": "{{count}} участника",
       "memberCount_many": "{{count}} участников",
       "memberCount_other": "{{count}} участника",
-      "membersUnknown": "участники неизвестны"
+      "membersUnknown": "участники недоступны",
+      "intro": "Каждый защищённый маршрут называет одну пару resource:action, и control plane отдаёт эту таблицу из того же списка, по которому проверяет доступ, — поэтому ячейка здесь и есть правило, а не его описание.",
+      "resourceColumn": "Ресурс",
+      "roleCount_one": "{{count}} роль",
+      "roleCount_few": "{{count}} роли",
+      "roleCount_many": "{{count}} ролей",
+      "roleCount_other": "{{count}} роли",
+      "resourceCount_one": "{{count}} ресурс",
+      "resourceCount_few": "{{count}} ресурса",
+      "resourceCount_many": "{{count}} ресурсов",
+      "resourceCount_other": "{{count}} ресурса",
+      "viaAccessProfiles": "выдаётся профилем доступа",
+      "unknownGrants_one": "{{count}} право пользовательской роли ссылается на ресурс, которого нет в этой сборке. Оно ничего не разрешает.",
+      "unknownGrants_few": "{{count}} права пользовательских ролей ссылаются на ресурсы, которых нет в этой сборке. Они ничего не разрешают.",
+      "unknownGrants_many": "{{count}} прав пользовательских ролей ссылаются на ресурсы, которых нет в этой сборке. Они ничего не разрешают.",
+      "unknownGrants_other": "{{count}} права пользовательских ролей ссылаются на ресурсы, которых нет в этой сборке. Они ничего не разрешают.",
+      "scopes": {
+        "deployment": "Вся установка",
+        "org": "Организация",
+        "team": "Команда",
+        "project": "Проект"
+      },
+      "actions": {
+        "read": "Чтение",
+        "create": "Создание",
+        "update": "Изменение",
+        "delete": "Удаление"
+      },
+      "letters": {
+        "read": "Ч",
+        "create": "С",
+        "update": "И",
+        "delete": "У"
+      },
+      "states": {
+        "allowed": "разрешено",
+        "granted": "выдано этой пользовательской ролью",
+        "superadmin": "только суперадмин",
+        "denied": "запрещено",
+        "na": "неприменимо"
+      },
+      "cellTitle": "{{action}} — {{state}}",
+      "legendSuperadmin": "Только суперадмин",
+      "legendGranted": "Выдано пользовательской ролью",
+      "legendNa": "Такого действия нет"
     },
     "sso": {
       "policy": {
@@ -849,7 +895,19 @@
       "budgetsEmptyAction": "Добавить бюджет",
       "rateLimitsEmptyTitle": "Для этой области лимитов частоты нет",
       "rateLimitsEmptyBody": "Лимит частоты ограничивает число запросов и токенов в минуту для выбранной области, чтобы один клиент не вытеснил остальных.",
-      "rateLimitsEmptyAction": "Добавить лимит частоты"
+      "rateLimitsEmptyAction": "Добавить лимит частоты",
+      "scopeTypes": {
+        "org": "Организация",
+        "team": "Команда",
+        "project": "Проект",
+        "virtual_key": "Виртуальный ключ",
+        "business_unit": "Бизнес-юнит",
+        "customer": "Клиент"
+      },
+      "selectBusinessUnit": "Выберите бизнес-юнит",
+      "selectCustomer": "Выберите клиента",
+      "budgetsHint": "Ограничения расходов для организации, команды, проекта, виртуального ключа, бизнес-юнита или клиента",
+      "rateLimitsHint": "Ограничения запросов и токенов в минуту для выбранной области"
     },
     "logs": {
       "emptyTitle": "Записей пока нет",

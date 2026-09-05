@@ -20,6 +20,7 @@ const route = (over: Partial<RouteRow> = {}): RouteRow => ({
   model: "gpt-4o",
   strategy: "weighted",
   enabled: true,
+  advanced: {},
   params: {},
   param_policy: {},
   created_at: "2026-02-01T00:00:00Z",

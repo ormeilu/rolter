@@ -35,6 +35,11 @@ const SERVERS: McpServerRow[] = [
     source: "custom",
     required_scopes: ["repo"],
     created_at: "2026-02-01T09:00:00Z",
+    authorize_url: "https://mcp.example.com/github/authorize",
+    token_url: "https://mcp.example.com/github/token",
+    client_id: "rolter-github",
+    default_scopes: ["repo"],
+    has_client_secret: true,
   },
   {
     id: "srv-jira",
@@ -49,6 +54,11 @@ const SERVERS: McpServerRow[] = [
     source: "custom",
     required_scopes: ["read"],
     created_at: "2026-02-03T09:00:00Z",
+    authorize_url: "https://mcp.example.com/jira/authorize",
+    token_url: "https://mcp.example.com/jira/token",
+    client_id: "rolter-jira",
+    default_scopes: [],
+    has_client_secret: false,
   },
 ];
 

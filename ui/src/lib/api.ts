@@ -330,6 +330,10 @@ export interface InvocationRow {
   team_id: string;
   project_id: string;
   virtual_key_id: string;
+  /// governance dimensions the key is attributed to. both are clickhouse
+  /// `String default ''`, so an unattributed request reads "" and never null
+  business_unit_id: string;
+  customer_id: string;
   model: string;
   provider: string;
   target: string;
@@ -500,6 +504,15 @@ export function apiBaseDoublesV1(apiBase: string, baseIncludesV1: boolean): bool
   return !!base && !baseIncludesV1 && base.endsWith("/v1");
 }
 
+/**
+ * Every provider kind the control plane accepts, in the order of the
+ * `PROVIDER_KINDS` allowlist in `crates/rolter-control/src/crud.rs`.
+ *
+ * A fallback and a type, not the menu: `ProviderSheet` builds its picker from
+ * `fetchProviderKinds()` so a kind the deployment gained is selectable without
+ * a dashboard release. This list is what it offers when the control plane
+ * cannot answer.
+ */
 export const PROVIDER_KINDS = [
   "openai",
   "anthropic",
@@ -514,6 +527,7 @@ export const PROVIDER_KINDS = [
   "vertex",
   "gemini",
   "gemini_native",
+  "gemini_interactions",
   "mistral",
   "groq",
   "xai",
@@ -858,6 +872,8 @@ export interface ProviderRow {
   api_base: string;
   api_key_env?: string | null;
   egress_proxy?: string | null;
+  /** extra egress proxies the upstream client rotates through; never null */
+  egress_proxies: string[];
   created_at: string;
 }
 
@@ -873,11 +889,19 @@ export interface CreateProviderInput {
 }
 
 export interface UpdateProviderInput {
+  /**
+   * new slug. the server rejects it unless `allow_slug_change` is also true,
+   * because `provider-slug/model` addresses depend on the old one
+   */
+  slug?: string;
+  allow_slug_change?: boolean;
   kind?: string;
   api_base?: string;
   api_key?: string;
   api_key_env?: string;
   egress_proxy?: string;
+  /** omit to leave unchanged; an empty array clears the list */
+  egress_proxies?: string[];
 }
 
 export function fetchProviders(orgId: string): Promise<ProviderRow[]> {
@@ -1022,6 +1046,13 @@ export interface RouteRow {
   enabled: boolean;
   params: Record<string, unknown>;
   param_policy: Record<string, unknown>;
+  /**
+   * catalog metadata and per-model execution policy, written by
+   * `setRouteAdvanced`. an `AdvancedModelConfig` object; every field of it is
+   * `#[serde(default)]` on the backend, so a route nobody has edited carries
+   * `{}` rather than null
+   */
+  advanced: Record<string, unknown>;
   created_at: string;
 }
 
@@ -1119,10 +1150,20 @@ export interface VirtualKeyRow {
   key_prefix: string;
   name?: string | null;
   models: string[];
+  /// empty means the key may reach every provider on an allowed route
+  providers: string[];
   disabled: boolean;
   expires_at?: string | null;
   /// per-key response-cache override; null inherits the route decision
   cache_enabled?: boolean | null;
+  /// local account that minted the key from the self-service panel; null for
+  /// admin-created and bootstrap-config keys
+  created_by: string | null;
+  /// business unit this key's spend rolls up to; null leaves the key
+  /// attributed to its tenancy chain only
+  business_unit_id: string | null;
+  /// customer this key's spend rolls up to; null when unattributed
+  customer_id: string | null;
   created_at: string;
 }
 
@@ -1433,7 +1474,20 @@ export function rollbackSkillVersion(
 
 // --- budgets, rate limits, model pricing (crates/rolter-control/src/crud.rs) ---
 
-export const SCOPE_TYPES = ["org", "team", "project", "virtual_key"] as const;
+// every scope a budget or rate limit may hang off, in the order of the
+// `SCOPE_TYPES` allowlist in `crates/rolter-control/src/crud.rs`. business unit
+// and customer are the governance dimensions a key's spend rolls up to (#539);
+// leaving them out made those budgets uncreatable from the dashboard
+export const SCOPE_TYPES = [
+  "org",
+  "team",
+  "project",
+  "virtual_key",
+  "business_unit",
+  "customer",
+] as const;
+
+export type ScopeType = (typeof SCOPE_TYPES)[number];
 
 export interface BudgetRow {
   id: string;
@@ -1582,7 +1636,14 @@ export interface LoginResponse {
   /** opaque bearer token; store it and send as Authorization: Bearer */
   token: string;
   expires_at: string;
-  user: { id: string; email: string; is_superadmin: boolean };
+  user: {
+    id: string;
+    email: string;
+    is_superadmin: boolean;
+    /// set when an admin deactivated the account; a non-null value blocks login
+    deactivated_at: string | null;
+    created_at: string;
+  };
 }
 
 // authenticate a local account; returns a session token. rejects (throws) on
@@ -1812,6 +1873,79 @@ export function createMembership(
 
 export function deleteMembership(id: string): Promise<void> {
   return sendJson<void>("DELETE", `/api/v1/memberships/${id}`);
+}
+
+// --- the rbac capability matrix (crates/rolter-control/src/rbac_matrix.rs) ---
+//
+// `CAPABILITIES` is the one table that backs the guard *and* this endpoint, so
+// what the dashboard renders is by construction what the control plane
+// enforces. The screen used to draw a hardcoded 3x7 matrix that had drifted
+// away from the real 50-odd resources (#1178).
+
+export type RbacAction = "read" | "create" | "update" | "delete";
+
+/**
+ * What one action on one resource takes.
+ *
+ * An action the resource does not have at all is *absent* from `actions`
+ * rather than present with a null authority — the backend `filter_map`s it
+ * away — so a UI must render a missing entry as "not applicable" and never as
+ * "denied".
+ */
+export interface RbacActionView {
+  action: RbacAction;
+  /** minimum scoped role; null when the action is superadmin- or auth-only */
+  minimum_role: Role | null;
+  superadmin_only: boolean;
+  /** no membership required: any authenticated caller may perform it */
+  authenticated_only: boolean;
+}
+
+export interface RbacResourceView {
+  resource: string;
+  /** `deployment` | `org` | `team` | `project` — where the resource lives */
+  scope: string;
+  actions: RbacActionView[];
+}
+
+export interface RbacRoleView {
+  role: Role;
+  /** total order over roles: viewer 0 < member 1 < admin 2 */
+  rank: number;
+}
+
+/** one `resource:action` pair an org-defined role grants explicitly */
+export interface RbacCustomGrant {
+  resource: string;
+  action: string;
+}
+
+export interface RbacCustomRoleView {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  /** the built-in role this custom role is at least equivalent to */
+  base_role: Role;
+  base_rank: number;
+  /** the pairs it grants on top of `base_role` */
+  grants: RbacCustomGrant[];
+  /** pairs this build's capability table does not define; they grant nothing */
+  unknown_grants: RbacCustomGrant[];
+}
+
+export interface RbacMatrix {
+  roles: RbacRoleView[];
+  resources: RbacResourceView[];
+  /** org-defined roles; empty when no org was asked for, or none are defined */
+  custom_roles: RbacCustomRoleView[];
+}
+
+// any authenticated principal may read it: it describes the rules, not anyone's
+// access. `orgId` adds that org's custom roles and needs a membership there
+export function fetchRbacMatrix(orgId?: string): Promise<RbacMatrix> {
+  const query = orgId ? `?org_id=${encodeURIComponent(orgId)}` : "";
+  return getJson<RbacMatrix>(`/api/v1/rbac/matrix${query}`);
 }
 
 // --- scim provisioning tokens (crates/rolter-control/src/scim.rs, #540) ---
@@ -2538,16 +2672,21 @@ export function deleteConnector(id: string): Promise<void> {
   return sendJson<void>("DELETE", `/api/v1/connectors/${id}`);
 }
 
-export function testConnector(id: string): Promise<{
+// the probe's own verdict. `health_error` is `skip_serializing_if = "none"` on
+// the control plane, so it is absent on a delivered probe and carries the
+// sink's refusal — the reason delivery failed — on a rejected one
+export interface ConnectorTestResult {
   delivered: boolean;
   health_status: string;
   health_checked_at: string;
-}> {
-  return sendJson<{
-    delivered: boolean;
-    health_status: string;
-    health_checked_at: string;
-  }>("POST", `/api/v1/connectors/${id}/test`);
+  health_error?: string | null;
+}
+
+export function testConnector(id: string): Promise<ConnectorTestResult> {
+  return sendJson<ConnectorTestResult>(
+    "POST",
+    `/api/v1/connectors/${id}/test`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2660,6 +2799,18 @@ export interface McpServerRow {
   source: "custom" | "library";
   required_scopes: string[];
   created_at: string;
+  /// authorization endpoint a user's browser is sent to for consent (#707)
+  authorize_url: string | null;
+  /// token endpoint the code, refresh and exchange grants are posted to
+  token_url: string | null;
+  /// the OAuth client rolter presents. the matching secret is sealed and
+  /// deliberately never crosses this boundary
+  client_id: string | null;
+  /// scopes requested when a consent flow does not name its own
+  default_scopes: string[];
+  /// whether a sealed client secret is stored, so the UI can show the client is
+  /// confidential without the control plane handing the secret out
+  has_client_secret: boolean;
 }
 
 export interface McpServerInput {

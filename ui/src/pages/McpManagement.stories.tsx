@@ -11,8 +11,8 @@ const ORG = { id: "org-1", name: "Acme", slug: "acme", created_at: "2026-01-01T0
 const TEAM = { id: "team-1", org_id: ORG.id, name: "Platform", created_at: ORG.created_at };
 const PROJECT = { id: "project-1", team_id: TEAM.id, name: "Gateway", created_at: ORG.created_at };
 const SERVERS: McpServerRow[] = [
-  { id: "server-github", org_id: ORG.id, name: "GitHub", slug: "github", url: "https://api.githubcopilot.com/mcp/", transport: "streamable_http", description: "Repository and pull request operations.", enabled: true, tools: ["search_code", "create_issue", "get_pull_request"], source: "library", required_scopes: ["repo"], created_at: ORG.created_at },
-  { id: "server-sentry", org_id: ORG.id, name: "Sentry", slug: "sentry", url: "https://mcp.sentry.dev/mcp", transport: "streamable_http", description: "Production issue investigation.", enabled: false, tools: ["list_issues", "get_issue"], source: "custom", required_scopes: ["org:read"], created_at: ORG.created_at },
+  { id: "server-github", org_id: ORG.id, name: "GitHub", slug: "github", url: "https://api.githubcopilot.com/mcp/", transport: "streamable_http", description: "Repository and pull request operations.", enabled: true, tools: ["search_code", "create_issue", "get_pull_request"], source: "library", required_scopes: ["repo"], created_at: ORG.created_at, authorize_url: null, token_url: null, client_id: null, default_scopes: [], has_client_secret: false },
+  { id: "server-sentry", org_id: ORG.id, name: "Sentry", slug: "sentry", url: "https://mcp.sentry.dev/mcp", transport: "streamable_http", description: "Production issue investigation.", enabled: false, tools: ["list_issues", "get_issue"], source: "custom", required_scopes: ["org:read"], created_at: ORG.created_at, authorize_url: null, token_url: null, client_id: null, default_scopes: [], has_client_secret: false },
 ];
 const LIBRARY: McpLibraryItem[] = [
   { slug: "github", name: "GitHub", description: "Repository, issue, pull request, and code search tools.", url: "https://api.githubcopilot.com/mcp/", transport: "streamable_http", tools: ["search_code", "create_issue"], required_scopes: ["repo"], installed: true },

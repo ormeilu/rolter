@@ -152,6 +152,17 @@ export default function Connectors() {
               {c.health_error && (
                 <p className="text-xs text-destructive">{c.health_error}</p>
               )}
+              {/* the probe's own verdict, which the row only picks up after the
+                  invalidated list comes back. saying why delivery failed at the
+                  moment the operator pressed the button is the whole point of
+                  the test (#1178) */}
+              {test.data && test.variables === c.id && !test.data.delivered && (
+                <p className="text-xs text-destructive">
+                  {t("pages.connectors.testFailed", {
+                    message: test.data.health_error ?? test.data.health_status,
+                  })}
+                </p>
+              )}
               <div className="flex items-center gap-2 border-t border-[color:var(--border-subtle)] pt-3">
                 <Button
                   size="sm"
