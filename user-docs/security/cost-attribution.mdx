@@ -124,9 +124,20 @@ The rollup needs ClickHouse. A deployment with no `clickhouse_url` gets the same
 
 Every row in `request_logs` carries `business_unit_id` and `customer_id`, so **LLM Logs** can be read per unit or per customer. The filter rail offers both dimensions, and the detail drawer names the unit and the customer a request was charged to.
 
-<Warning>
-The attribution filter narrows the page in front of you. `GET /api/v1/analytics/invocations` searches by model, virtual key and status only, so the two attribution filters are applied client-side and the rail says so. For a whole-window answer, use `by-attribution` rather than paging the log.
-</Warning>
+`GET /api/v1/analytics/invocations` filters on both dimensions itself:
+
+```bash
+curl -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  "https://control.example.com/api/v1/analytics/invocations?business_unit=<uuid>&since=2026-01-01T00:00:00Z"
+```
+
+Both accept a comma-separated set — `customer=<uuid>,<uuid>` — matching the filter rail, where several can be ticked at once. An id that nothing was attributed to matches nothing: a filter narrows, it never widens.
+
+Because the filtering happens in the database, `limit` and `offset` mean what they say under a filter. Paging through a unit's requests pages through *that unit's* requests.
+
+<Note>
+For a whole-window total rather than individual requests, `by-attribution` is still the cheaper question — it aggregates in ClickHouse instead of returning rows.
+</Note>
 
 ---
 

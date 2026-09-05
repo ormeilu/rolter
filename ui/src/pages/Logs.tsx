@@ -132,11 +132,22 @@ export default function Logs() {
   );
 
   const query = useQuery({
-    queryKey: ["invocations", window.since, status, modelSel[0] ?? "", page],
+    queryKey: [
+      "invocations",
+      window.since,
+      status,
+      modelSel[0] ?? "",
+      unitSel.join(","),
+      customerSel.join(","),
+      page,
+    ],
     queryFn: () =>
       fetchInvocations({
         since: window.since,
         model: modelSel[0] || undefined,
+        // the rail allows several of each, so the whole selection travels
+        business_unit: unitSel.length ? unitSel : undefined,
+        customer: customerSel.length ? customerSel : undefined,
         status,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
@@ -146,17 +157,12 @@ export default function Logs() {
     refetchInterval: streaming ? 5000 : false,
   });
 
-  // attribution narrows the page the server already returned:
-  // `/analytics/invocations` filters on model, key and status only, so asking
-  // it for a business unit would silently return everything (#1193). The rail
-  // says so rather than implying the whole window was searched.
-  const pageRows = query.data ?? [];
-  const rows = pageRows.filter(
-    (r) =>
-      (unitSel.length === 0 || unitSel.includes(r.business_unit_id)) &&
-      (customerSel.length === 0 || customerSel.includes(r.customer_id)),
-  );
-  const hasMore = pageRows.length === PAGE_SIZE;
+  // every filter is applied by the server now (#1247). filtering the page
+  // here instead made `limit` mean something else: a unit that served 3 of
+  // the last 50 requests showed 3 rows under a full-looking pager, and paging
+  // was the only way to find the rest
+  const rows = query.data ?? [];
+  const hasMore = rows.length === PAGE_SIZE;
   const unitName = (id: string) => units.data?.find((u) => u.id === id)?.name;
   const customerName = (id: string) =>
     customers.data?.find((c) => c.id === id)?.name;
@@ -302,9 +308,6 @@ export default function Logs() {
                   onChange={setUnitSel}
                   placeholder={t("pages.logs.filterBusinessUnits")}
                 />
-                <p className="px-0.5 pt-1 text-[0.6875rem] text-[color:var(--text-subtle)]">
-                  {t("pages.logs.attributionFilterHint")}
-                </p>
               </FilterSection>
             )}
             {(customers.data ?? []).length > 0 && (
@@ -321,9 +324,6 @@ export default function Logs() {
                   onChange={setCustomerSel}
                   placeholder={t("pages.logs.filterCustomers")}
                 />
-                <p className="px-0.5 pt-1 text-[0.6875rem] text-[color:var(--text-subtle)]">
-                  {t("pages.logs.attributionFilterHint")}
-                </p>
               </FilterSection>
             )}
           </FilterPanel>

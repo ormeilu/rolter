@@ -418,6 +418,10 @@ export interface InvocationRow {
 export interface InvocationsQuery extends AnalyticsWindow {
   model?: string;
   key?: string;
+  /** business unit ids to narrow to; omitted means every unit (#1247) */
+  business_unit?: string[];
+  /** customer ids to narrow to; omitted means every customer */
+  customer?: string[];
   status?: "all" | "error" | "success";
   limit?: number;
   offset?: number;
@@ -431,6 +435,10 @@ export function fetchInvocations(
   if (query.until) params.set("until", query.until);
   if (query.model) params.set("model", query.model);
   if (query.key) params.set("key", query.key);
+  // the control plane splits these on commas, so a set travels as one param
+  if (query.business_unit?.length)
+    params.set("business_unit", query.business_unit.join(","));
+  if (query.customer?.length) params.set("customer", query.customer.join(","));
   if (query.status) params.set("status", query.status);
   if (query.limit != null) params.set("limit", String(query.limit));
   if (query.offset != null) params.set("offset", String(query.offset));
