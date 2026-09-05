@@ -198,10 +198,12 @@ export function NavSidebar({
   React.useEffect(() => {
     if (!userOpen) return;
     // the scope switcher's create/delete dialogs are portaled to the body, so
-    // a click inside one lands "outside" the menu; treat any open dialog as
-    // part of the menu, or the first keystroke in the name field closes both
+    // a click inside one lands "outside" the menu; treat any open *modal* as
+    // part of the menu, or the first keystroke in the name field closes both.
+    // the popover itself is a (non-modal) dialog, and Escape inside it must
+    // still close it, hence the aria-modal test rather than the role
     const inDialog = (target: EventTarget | null) =>
-      target instanceof Element && target.closest('[role="dialog"]') != null;
+      target instanceof Element && target.closest('[aria-modal="true"]') != null;
     const onDoc = (e: MouseEvent) => {
       if (inDialog(e.target)) return;
       if (userRef.current && !userRef.current.contains(e.target as Node)) setUserOpen(false);
