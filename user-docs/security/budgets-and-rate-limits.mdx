@@ -83,6 +83,8 @@ That set is read from `GET /api/v1/currency`, which answers from the bootstrap c
 
 A price already stored in a code that is no longer in the table still displays, flagged as unconvertible on both the Pricing screen and the model sheet. Its spend is missing from base-currency totals and budgets until you add the rate back.
 
+Every amount the dashboard renders — LLM Logs, budget cards, team cards, the spend tiles — is formatted in the base currency from that same endpoint, so a deployment budgeting in EUR reads `€` rather than a hardcoded `$`. Model prices are the exception: they are shown in the currency the price row was written in, which is what you typed. Amounts, dates and counts all follow the dashboard's language rather than the browser's, so the separators in a number never disagree with the copy beside it.
+
 ## Step 2 — Configure spend budgets
 
 A spend budget blocks incoming requests with **HTTP 402** once the cumulative cost for a scope reaches `limit_usd` within the configured period. Add one `[[budgets]]` block per scope you want to cap.

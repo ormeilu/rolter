@@ -9,20 +9,18 @@ import {
   fetchUptime,
   type TimelineRow,
 } from "@/lib/api";
+import { useFormat, type Formatters } from "@/lib/i18n/format";
 import { cn } from "@/lib/utils";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const SLA = 0.99;
 
-function pct(v: number): string {
-  return `${(v * 100).toFixed(2)}%`;
+function pct(fmt: Formatters, v: number): string {
+  return fmt.percent(v, 2);
 }
 
-function mttrLabel(seconds: number | undefined): string {
-  if (seconds === undefined) return "—";
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-  return `${(seconds / 3600).toFixed(1)}h`;
+function mttrLabel(fmt: Formatters, seconds: number | undefined): string {
+  return seconds === undefined ? "—" : fmt.duration(seconds);
 }
 
 // one thin bar per time bucket: red if any failure landed in it, else green
@@ -53,6 +51,7 @@ function Timeline({ buckets }: { buckets: TimelineRow[] }) {
 
 export default function Health() {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const uptime = useQuery({
     queryKey: ["health-uptime", SLA],
     queryFn: () => fetchUptime(SLA),
@@ -87,7 +86,7 @@ export default function Health() {
       <div className="flex items-center gap-3">
         <span className="text-sm text-muted-foreground">
           Per-target circuit breakers, uptime, and error-budget burn — last 7 days, SLA target{" "}
-          {pct(SLA)}
+          {pct(fmt, SLA)}
         </span>
       </div>
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
@@ -147,7 +146,7 @@ export default function Health() {
                       breached && "text-destructive",
                     )}
                   >
-                    {pct(row.uptime)}
+                    {pct(fmt, row.uptime)}
                   </span>
                   <span className="text-[0.6875rem] uppercase tracking-[0.06em] text-[color:var(--text-subtle)]">
                     uptime · {row.events} events
@@ -171,7 +170,7 @@ export default function Health() {
                     MTTR
                   </div>
                   <div className="font-mono text-sm text-[color:var(--text-secondary)]">
-                    {mttrLabel(m?.mttr_seconds)}
+                    {mttrLabel(fmt, m?.mttr_seconds)}
                   </div>
                 </div>
                 <div>
@@ -194,7 +193,7 @@ export default function Health() {
                         : "var(--text-secondary)",
                   }}
                 >
-                  {(row.error_budget_burn * 100).toFixed(0)}%
+                  {fmt.percent(row.error_budget_burn, 0)}
                 </span>
               </div>
             </div>

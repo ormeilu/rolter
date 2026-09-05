@@ -42,6 +42,8 @@ export default function ProviderGroups() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const scope = useScope();
+  // the scope hook names a catalog key rather than carrying english copy
+  const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
 
   const groups = useQuery({
     queryKey: ["provider-groups", scope.orgId],
@@ -79,7 +81,7 @@ export default function ProviderGroups() {
   } | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<ProviderGroupRow | null>(null);
 
-  const scopeBlocked = !scope.isLoading && !!scope.error;
+  const scopeBlocked = !scope.isLoading && !!scope.errorKey;
 
   const q = search.trim().toLowerCase();
   const filtered = (groups.data ?? []).filter(
@@ -123,10 +125,10 @@ export default function ProviderGroups() {
       )}
       {scopeBlocked && (
         <p className="text-sm text-muted-foreground">
-          Add/edit/delete is unavailable: {scope.error}. Read-only view still works.
+          Add/edit/delete is unavailable: {scopeMessage}. Read-only view still works.
         </p>
       )}
-      {!scope.isLoading && !scope.error && !scope.orgId && (
+      {!scope.isLoading && !scope.errorKey && !scope.orgId && (
         <p className="text-sm text-muted-foreground">
           No org configured yet — pick or create one to manage provider groups.
         </p>

@@ -31,6 +31,8 @@ type Level = "org" | "team" | "project";
 export function ScopeSwitcher() {
   const { t } = useTranslation();
   const scope = useScope();
+  // the scope hook names a catalog key rather than carrying english copy
+  const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
   const queryClient = useQueryClient();
 
   const [createLevel, setCreateLevel] = React.useState<Level | null>(null);
@@ -106,8 +108,8 @@ export function ScopeSwitcher() {
         }
         disabled={!scope.teamId}
       />
-      {scope.error && (
-        <p className="px-1 text-xs text-muted-foreground">{scope.error}</p>
+      {scopeMessage && (
+        <p className="px-1 text-xs text-muted-foreground">{scopeMessage}</p>
       )}
 
       <CreateScopeDialog

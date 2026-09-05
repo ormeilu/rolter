@@ -25,7 +25,10 @@ export function Sparkline({
   const xAt = (i: number) => (n <= 1 ? width / 2 : (i / (n - 1)) * width);
   const yAt = (v: number) =>
     padY + (height - padY * 2) - ((v - min) / range) * (height - padY * 2);
-  const line = values.map((v, i) => `${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`).join(" ");
+  // SVG path coordinates, not copy: they must stay machine-readable, so they
+  // are rounded arithmetically and never handed to a locale-aware formatter
+  const round = (v: number) => Math.round(v * 10) / 10;
+  const line = values.map((v, i) => `${round(xAt(i))},${round(yAt(v))}`).join(" ");
   const fill = `M0,${height} L ${line.split(" ").join(" L ")} L ${width},${height} Z`;
   return (
     <svg

@@ -110,6 +110,8 @@ export default function PromptRepository() {
   const scope = useScope();
   const queryClient = useQueryClient();
   const { t } = useTranslation();
+  // the scope hook names a catalog key rather than carrying english copy
+  const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
   const [selectedId, setSelectedId] = React.useState<string>();
   const [selectedVersion, setSelectedVersion] = React.useState<number>();
   const [draft, setDraft] = React.useState<Draft>(() => copyDraft());
@@ -300,12 +302,12 @@ export default function PromptRepository() {
   });
 
   if (scope.isLoading || templates.isLoading) return <LoadingState />;
-  if (scope.error || templates.isError) {
+  if (scope.errorKey || templates.isError) {
     return (
       <EmptyState uxTarget="prompt-list"
         icon={<GitBranch />}
         title={t("pages.promptRepo.unavailableTitle")}
-        description={scope.error ?? (templates.error as Error).message}
+        description={scopeMessage ?? (templates.error as Error).message}
         actions={<Button variant="outline" onClick={() => templates.refetch()}>{t("pages.promptRepo.tryAgain")}</Button>}
       />
     );

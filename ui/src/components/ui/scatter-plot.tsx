@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { useFormat } from "@/lib/i18n/format";
+
 // points in an X/Y plane (latency vs cost, p50 vs p95) with an interactive
 // hover tooltip. ported from the Rolter Design System
 // components/charts/ScatterPlot.jsx
@@ -32,11 +34,6 @@ const PALETTE = [
   "var(--status-success)",
   "var(--status-warning)",
 ];
-
-function fmt(v: number): string | number {
-  if (v >= 1000) return (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + "k";
-  return Math.round(v * 100) / 100;
-}
 
 interface HoverState {
   i: number;
@@ -74,6 +71,10 @@ export function ScatterPlot({
   className,
   ...props
 }: ScatterPlotProps) {
+  // tick and tooltip numbers follow the dashboard locale, not a hand-rolled
+  // `1.2k` that always printed a dot as the decimal mark
+  const format = useFormat();
+  const fmt = format.compact;
   const [hover, setHover] = React.useState<HoverState | null>(null);
   const W = 640;
   const padL = 48;

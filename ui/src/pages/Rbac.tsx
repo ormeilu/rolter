@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 
 import { PageBody } from "@/components/screen";
 import { fetchMemberships } from "@/lib/api";
@@ -17,6 +18,7 @@ const OPS: { letter: string; op: string; title: string }[] = [
 // the static contract the control API enforces (roles are fixed); member
 // counts come from the live users list.
 export default function Rbac() {
+  const { t } = useTranslation();
   const scope = useScope();
   const memberships = useQuery({
     queryKey: ["memberships", scope.orgId],
@@ -55,7 +57,9 @@ export default function Rbac() {
             <div key={r.key} className="flex flex-col gap-0.5">
               <span className="text-sm font-semibold capitalize">{r.label}</span>
               <span className="text-[10px] text-[color:var(--text-subtle)]">
-                {memberships.isError ? "—" : memberCount(r.key)} members
+                {memberships.isError
+                  ? "—"
+                  : t("pages.rbac.memberCount", { count: memberCount(r.key) })}
               </span>
             </div>
           ))}

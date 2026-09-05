@@ -114,6 +114,8 @@ function draftProblem(draft: Draft): ProblemKey | undefined {
 export default function SkillsRepository() {
   const { t } = useTranslation();
   const scope = useScope();
+  // the scope hook names a catalog key rather than carrying english copy
+  const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = React.useState<string>();
   const [selectedVersion, setSelectedVersion] = React.useState<number>();
@@ -246,12 +248,12 @@ export default function SkillsRepository() {
   });
 
   if (scope.isLoading || skills.isLoading) return <LoadingState />;
-  if (scope.error || skills.isError) {
+  if (scope.errorKey || skills.isError) {
     return (
       <EmptyState uxTarget="skill-list"
         icon={<BookOpen />}
         title={t("pages.skillsRepo.unavailableTitle")}
-        description={scope.error ?? (skills.error as Error).message}
+        description={scopeMessage ?? (skills.error as Error).message}
         actions={<Button variant="outline" onClick={() => skills.refetch()}>{t("pages.skillsRepo.tryAgain")}</Button>}
       />
     );

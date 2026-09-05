@@ -72,6 +72,8 @@ export default function Plugins() {
   const { t } = useTranslation();
   const stages = useStages();
   const scope = useScope();
+  // the scope hook names a catalog key rather than carrying english copy
+  const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
   const client = useQueryClient();
   const query = useQuery({
     queryKey: ["plugins", scope.orgId],
@@ -110,10 +112,10 @@ export default function Plugins() {
   if (scope.isLoading) {
     return <PluginLoading />;
   }
-  if (scope.error || !scope.orgId) {
+  if (scope.errorKey || !scope.orgId) {
     return (
       <p className="p-[22px] text-sm text-muted-foreground">
-        {scope.error ?? t("pages.plugins.noOrg")}
+        {scopeMessage ?? t("pages.plugins.noOrg")}
       </p>
     );
   }

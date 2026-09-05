@@ -40,6 +40,7 @@ function ProfileCard({
   onDelete: (profile: AccessProfileRow) => void;
   deleting: boolean;
 }) {
+  const { t } = useTranslation();
   const assignments = useQuery({
     queryKey: ["access-profile-assignments", profile.id],
     queryFn: () => fetchAccessProfileAssignments(profile.id),
@@ -74,7 +75,7 @@ function ProfileCard({
               <span>
                 {users === 0 && teams === 0
                   ? "Not assigned to anyone yet"
-                  : `${users} user${users === 1 ? "" : "s"} · ${teams} team${teams === 1 ? "" : "s"}`}
+                  : `${t("pages.accessProfiles.userCount", { count: users })} · ${t("pages.accessProfiles.teamCount", { count: teams })}`}
               </span>
             )}
           </div>

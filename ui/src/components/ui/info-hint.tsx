@@ -1,5 +1,6 @@
 import { Info } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
 
@@ -14,14 +15,15 @@ export interface InfoHintProps {
   className?: string;
 }
 
-export function InfoHint({ text, label = "More info", className }: InfoHintProps) {
+export function InfoHint({ text, label, className }: InfoHintProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = React.useState(false);
   const id = React.useId();
   return (
     <span className="relative inline-flex">
       <button
         type="button"
-        aria-label={label}
+        aria-label={label ?? t("common.moreInfo")}
         aria-expanded={open}
         aria-describedby={open ? id : undefined}
         onMouseEnter={() => setOpen(true)}

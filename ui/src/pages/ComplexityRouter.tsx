@@ -14,6 +14,7 @@ import {
   type ComplexityTier,
   type RouteRow,
 } from "@/lib/api";
+import { useFormat, type Formatters } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -21,6 +22,7 @@ import { useErrorState, useScreenReady } from "@/lib/ux-react";
 // re-routed to the tier's model; the catch-all tier (no ceiling) closes the
 // policy. validated server-side against configured route names.
 export default function ComplexityRouter() {
+  const fmt = useFormat();
   const scope = useScope();
   const routes = useQuery({
     queryKey: ["routes", scope.projectId],
@@ -88,7 +90,7 @@ export default function ComplexityRouter() {
                   <span className="text-[color:var(--text-subtle)]">
                     {t.max_input_bytes === null || t.max_input_bytes === undefined
                       ? "catch-all"
-                      : `≤ ${formatBytes(t.max_input_bytes)}`}
+                      : `≤ ${formatBytes(fmt, t.max_input_bytes)}`}
                   </span>
                   <span className="ml-auto truncate text-muted-foreground">→ {t.route}</span>
                 </div>
@@ -135,10 +137,13 @@ export default function ComplexityRouter() {
   );
 }
 
-function formatBytes(bytes: number) {
-  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MiB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`;
-  return `${bytes} B`;
+// IEC symbols stay as they are — the number in front of them is what has to
+// follow the dashboard locale
+function formatBytes(fmt: Formatters, bytes: number) {
+  if (bytes >= 1_048_576)
+    return `${fmt.number(bytes / 1_048_576, { maximumFractionDigits: 1 })} MiB`;
+  if (bytes >= 1024) return `${fmt.number(Math.round(bytes / 1024))} KiB`;
+  return `${fmt.number(bytes)} B`;
 }
 
 function PolicyDialog({

@@ -15,6 +15,7 @@ import {
   type FetchStub,
 } from "./story-harness";
 import type { VirtualKeyRow } from "@/lib/api";
+import { formattersFor } from "@/lib/i18n/format";
 
 const KEYS: VirtualKeyRow[] = [
   {
@@ -191,5 +192,32 @@ export const AdminCreateAlsoRequiresANameAndAnExpiry: Story = {
     // the finite default is the same one the self-service sheet offers
     await expect(within(form).getByLabelText("Expires")).toHaveValue("30");
     await expect(within(form).getByText(/^Until /)).toBeInTheDocument();
+  },
+};
+
+/**
+ * #1182: the row said `expires 05.10.2026` while the sheet previewed `Until
+ * 10/5/2026` — two formats for one date, on one screen. Both go through
+ * `useFormat().date` now, so they cannot disagree.
+ */
+export const RowExpiryUsesTheSameDateFormatAsTheMintPreview: Story = {
+  render: () => (
+    <Harness fetchStub={withKeys(KEYS)}>
+      <Keys />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const fmt = formattersFor("en");
+    await expect(
+      await canvas.findByText(`expires ${fmt.date("2026-12-31T00:00:00Z")}`),
+    ).toBeInTheDocument();
+
+    await clickWhenEnabled(canvasElement, /add virtual key/i);
+    const form = sheet();
+    // the default is 30 days out; the preview formats it exactly as the row does
+    const until = within(form).getByText(/^Until /);
+    const previewed = (until.textContent ?? "").replace(/^Until /, "");
+    await expect(previewed).toBe(fmt.date(new Date(Date.now() + 30 * 86_400_000)));
   },
 };

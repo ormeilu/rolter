@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, type TableColumn } from "@/components/ui/table";
 import { fetchAuditLogPage, type AuditLogEntry } from "@/lib/api";
+import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -79,6 +80,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // filters map to query params, pagination walks the keyset cursor
 export default function AuditLog() {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const scope = useScope();
   const [expanded, setExpanded] = React.useState<string | null>(null);
 
@@ -139,7 +141,7 @@ export default function AuditLog() {
       key: "at",
       header: "Time",
       mono: true,
-      render: (v) => new Date(v as string).toLocaleString(),
+      render: (v) => fmt.dateTime(v as string),
     },
     {
       key: "actor_user_id",
@@ -204,7 +206,7 @@ export default function AuditLog() {
           onRetry={() => page.refetch()}
         />
       )}
-      {!scope.isLoading && !scope.error && !scope.orgId && (
+      {!scope.isLoading && !scope.errorKey && !scope.orgId && (
         <p className="text-sm text-muted-foreground">
           No org configured yet — pick or create one to view its audit log.
         </p>

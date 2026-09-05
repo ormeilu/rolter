@@ -1,3 +1,5 @@
+import { useFormat } from "@/lib/i18n/format";
+
 // vertical bars (doubles as a histogram) with an optional horizontal ranked
 // mode for 10+ categories. ported from the Rolter Design System
 // components/charts/BarChart.jsx
@@ -15,11 +17,6 @@ export interface BarChartProps extends React.HTMLAttributes<HTMLDivElement> {
   gap?: number;
 }
 
-function formatNum(v: number): string | number {
-  if (v >= 1000) return (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + "k";
-  return Math.round(v * 100) / 100;
-}
-
 export function BarChart({
   data = [],
   labels = [],
@@ -35,6 +32,9 @@ export function BarChart({
   className,
   ...props
 }: BarChartProps) {
+  // axis labels are read by a person, so they follow the dashboard locale: the
+  // hand-rolled `1.2k` printed a dot as the decimal mark in every language
+  const fmt = useFormat();
   if (horizontal) {
     return (
       <RankedBars
@@ -89,7 +89,7 @@ export function BarChart({
                 fontFamily="var(--font-mono)"
                 fill="var(--text-subtle)"
               >
-                {formatNum(v)}
+                {fmt.compact(v)}
                 {unit}
               </text>
             </g>
@@ -142,6 +142,7 @@ function RankedBars({
   className,
   ...props
 }: RankedBarsProps) {
+  const fmt = useFormat();
   let rows = data.map((v, i) => ({ v, label: labels[i] != null ? labels[i] : String(i) }));
   rows.sort((a, b) => b.v - a.v);
   if (topN) rows = rows.slice(0, topN);
@@ -196,7 +197,7 @@ function RankedBars({
               color: "var(--text-secondary)",
             }}
           >
-            {formatNum(r.v)}
+            {fmt.compact(r.v)}
             {unit}
           </span>
         </div>

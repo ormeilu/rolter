@@ -45,6 +45,8 @@ export default function Providers() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const scope = useScope();
+  // the scope hook names a catalog key rather than carrying english copy
+  const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
 
   const providers = useQuery({
     queryKey: [...PROVIDERS_QUERY_KEY, scope.orgId],
@@ -86,7 +88,7 @@ export default function Providers() {
   useErrorState(!!providers.error, "provider-list");
   const deleteUx = useFormTelemetry("provider-delete", !!deleteTarget);
 
-  const scopeBlocked = !scope.isLoading && !!scope.error;
+  const scopeBlocked = !scope.isLoading && !!scope.errorKey;
 
   const q = search.trim().toLowerCase();
   const rows = (providers.data ?? []).filter(
@@ -132,10 +134,10 @@ export default function Providers() {
       )}
       {scopeBlocked && (
         <p className="text-sm text-muted-foreground">
-          {t("pages.providers.scopeBlocked", { error: scope.error })}
+          {t("pages.providers.scopeBlocked", { error: scopeMessage })}
         </p>
       )}
-      {!scope.isLoading && !scope.error && !scope.orgId && (
+      {!scope.isLoading && !scope.errorKey && !scope.orgId && (
         <p className="text-sm text-muted-foreground">
           {t("pages.providers.noOrg")}
         </p>

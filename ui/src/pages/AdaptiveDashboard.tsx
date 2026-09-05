@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Activity, Network } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
@@ -14,40 +15,46 @@ import {
   type AdaptiveRouteTelemetryDto,
   type AdaptiveTargetTelemetryDto,
 } from "@/lib/api";
+import { useFormat, type Formatters } from "@/lib/i18n/format";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
-const count = new Intl.NumberFormat();
-const decimal = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
+// scores and weights are read against each other, so they keep three decimals
+const DECIMAL: Intl.NumberFormatOptions = { maximumFractionDigits: 3 };
 
 function totalDecisions(decisions: AdaptiveDecisionCountsDto): number {
   return decisions.blend + decisions.exploration + decisions.fallback;
 }
 
-function percent(value: number, total: number): string {
-  return total > 0 ? `${Math.round((value / total) * 100)}%` : "0%";
+// a CSS length for the decision bar — never a localized percentage
+function barWidth(value: number, total: number): string {
+  return `${total > 0 ? Math.round((value / total) * 100) : 0}%`;
 }
 
-function formatLatency(value?: number): string {
+function share(fmt: Formatters, value: number, total: number): string {
+  return fmt.percent(total > 0 ? value / total : 0, 0);
+}
+
+function formatLatency(fmt: Formatters, value?: number): string {
   if (!value || value <= 0) return "No samples";
-  return `${decimal.format(value)} ms`;
+  return `${fmt.number(value, DECIMAL)} ms`;
 }
 
-function formatCost(value?: number): string {
+function formatCost(fmt: Formatters, value?: number): string {
   if (!value || value <= 0) return "Unknown";
-  return decimal.format(value);
+  return fmt.number(value, DECIMAL);
 }
 
-function policySummary(node: AdaptiveNodeTelemetryDto): string {
+function policySummary(fmt: Formatters, node: AdaptiveNodeTelemetryDto): string {
   const policy = node.policy;
   const weights = [
-    policy.latency_weight != null ? `${decimal.format(policy.latency_weight)} latency` : null,
-    policy.cost_weight != null ? `${decimal.format(policy.cost_weight)} cost` : null,
-    policy.load_weight != null ? `${decimal.format(policy.load_weight)} load` : null,
+    policy.latency_weight != null ? `${fmt.number(policy.latency_weight, DECIMAL)} latency` : null,
+    policy.cost_weight != null ? `${fmt.number(policy.cost_weight, DECIMAL)} cost` : null,
+    policy.load_weight != null ? `${fmt.number(policy.load_weight, DECIMAL)} load` : null,
   ].filter(Boolean);
   const details = weights.length > 0 ? weights.join(" / ") : "policy unavailable";
   const summary = policy.min_samples == null
     ? details
-    : `${details} · ${count.format(policy.min_samples)} warm-up samples`;
+    : `${details} · ${fmt.number(policy.min_samples)} warm-up samples`;
   return policy.enabled === false ? `disabled · ${summary}` : summary;
 }
 
@@ -67,6 +74,8 @@ function targetName(target: AdaptiveTargetTelemetryDto): string {
 }
 
 export default function AdaptiveDashboard() {
+  const { t } = useTranslation();
+  const fmt = useFormat();
   const telemetry = useQuery({
     queryKey: ["adaptive-routing-telemetry"],
     queryFn: fetchAdaptiveRoutingTelemetry,
@@ -139,10 +148,10 @@ export default function AdaptiveDashboard() {
         </p>
         {view && (
           <p className="text-xs tabular-nums text-muted-foreground">
-            <time dateTime={view.generated_at} title={new Date(view.generated_at).toLocaleString()}>
-              Updated {new Date(view.generated_at).toLocaleTimeString()}
+            <time dateTime={view.generated_at} title={fmt.dateTime(view.generated_at)}>
+              Updated {fmt.time(view.generated_at)}
             </time>
-            {` · reports expire after ${count.format(view.fresh_window_secs)} s`}
+            {` · reports expire after ${fmt.number(view.fresh_window_secs)} s`}
           </p>
         )}
       </div>
@@ -164,10 +173,10 @@ export default function AdaptiveDashboard() {
       ) : (
         <>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard label="Adaptive routes" value={count.format(routes.length)} />
-            <StatCard label="Blend active" value={count.format(engaged)} />
-            <StatCard label="Reporting gateways" value={count.format(nodes.size)} />
-            <StatCard label="Observed picks" value={count.format(observed)} />
+            <StatCard label="Adaptive routes" value={fmt.number(routes.length)} />
+            <StatCard label="Blend active" value={fmt.number(engaged)} />
+            <StatCard label="Reporting gateways" value={fmt.number(nodes.size)} />
+            <StatCard label="Observed picks" value={fmt.number(observed)} />
           </div>
 
           <div className="flex flex-col gap-4">
@@ -183,7 +192,7 @@ export default function AdaptiveDashboard() {
                       {route.model}
                     </h2>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {route.nodes.length} reporting {route.nodes.length === 1 ? "gateway" : "gateways"}
+                      {t("pages.adaptiveDashboard.reportingGateways", { count: route.nodes.length })}
                     </p>
                   </div>
                   <Badge
@@ -219,7 +228,7 @@ export default function AdaptiveDashboard() {
                               {nodeState(node)}
                             </Badge>
                             <span className="text-xs tabular-nums text-muted-foreground">
-                              {count.format(decisionTotal)} decisions
+                              {fmt.number(decisionTotal)} decisions
                             </span>
                           </span>
                         </summary>
@@ -227,14 +236,14 @@ export default function AdaptiveDashboard() {
                         <div className="flex flex-col gap-4 border-t border-[color:var(--border-subtle)] p-4">
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <p className="max-w-[65ch] text-xs leading-relaxed text-muted-foreground">
-                              {policySummary(node)}
+                              {policySummary(fmt, node)}
                             </p>
                             <time
                               dateTime={node.reported_at}
-                              title={new Date(node.reported_at).toLocaleString()}
+                              title={fmt.dateTime(node.reported_at)}
                               className="text-xs tabular-nums text-muted-foreground"
                             >
-                              Reported {new Date(node.reported_at).toLocaleTimeString()}
+                              Reported {fmt.time(node.reported_at)}
                             </time>
                           </div>
 
@@ -245,15 +254,15 @@ export default function AdaptiveDashboard() {
                             >
                               <span
                                 className="bg-[color:var(--status-success)]"
-                                style={{ width: percent(node.decisions.blend, decisionTotal) }}
+                                style={{ width: barWidth(node.decisions.blend, decisionTotal) }}
                               />
                               <span
                                 className="bg-[color:var(--status-info)]"
-                                style={{ width: percent(node.decisions.exploration, decisionTotal) }}
+                                style={{ width: barWidth(node.decisions.exploration, decisionTotal) }}
                               />
                               <span
                                 className="bg-[color:var(--text-subtle)]"
-                                style={{ width: percent(node.decisions.fallback, decisionTotal) }}
+                                style={{ width: barWidth(node.decisions.fallback, decisionTotal) }}
                               />
                             </div>
                             <dl className="mt-2 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
@@ -265,7 +274,7 @@ export default function AdaptiveDashboard() {
                                 <div key={label} className="flex items-baseline justify-between gap-2">
                                   <dt className="text-muted-foreground">{label}</dt>
                                   <dd className="font-mono tabular-nums text-foreground">
-                                    {count.format(value)} · {percent(value, decisionTotal)}
+                                    {fmt.number(value)} · {share(fmt, value, decisionTotal)}
                                   </dd>
                                 </div>
                               ))}
@@ -302,19 +311,19 @@ export default function AdaptiveDashboard() {
                                         {targetName(target)}
                                       </th>
                                       <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">
-                                        {target.score == null ? "—" : decimal.format(target.score)}
+                                        {target.score == null ? "—" : fmt.number(target.score, DECIMAL)}
                                       </td>
                                       <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">
-                                        {formatLatency(target.latency_ms)}
+                                        {formatLatency(fmt, target.latency_ms)}
                                       </td>
                                       <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">
-                                        {formatCost(target.cost_per_mtok)}
+                                        {formatCost(fmt, target.cost_per_mtok)}
                                       </td>
                                       <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">
-                                        {count.format(target.in_flight ?? 0)}
+                                        {fmt.number(target.in_flight ?? 0)}
                                       </td>
                                       <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">
-                                        {count.format(target.samples ?? 0)}
+                                        {fmt.number(target.samples ?? 0)}
                                       </td>
                                     </tr>
                                   ))}

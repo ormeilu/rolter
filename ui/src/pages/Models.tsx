@@ -36,6 +36,7 @@ import {
   type RouteRow,
   type RouteTargetRow,
 } from "@/lib/api";
+import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
@@ -71,8 +72,11 @@ interface CatalogRow {
 // the unified add/edit/view model sheet
 export default function Models() {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const queryClient = useQueryClient();
   const scope = useScope();
+  // the scope hook names a catalog key rather than carrying english copy
+  const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
 
   const models = useQuery({ queryKey: ["models"], queryFn: fetchModels });
 
@@ -153,8 +157,10 @@ export default function Models() {
       origin: entry.source === "config" ? "config" : "db",
       locked: policy?.mode === "deny" || deny.length > 0,
       enabled: route?.enabled ?? true,
-      inPrice: price ? `$${price.input_per_mtok}` : "—",
-      outPrice: price ? `$${price.output_per_mtok}` : "—",
+      // a price row carries the currency it was written in, so the cell says
+      // what the operator actually configured rather than assuming dollars
+      inPrice: price ? fmt.currency(Number(price.input_per_mtok), price.currency) : "—",
+      outPrice: price ? fmt.currency(Number(price.output_per_mtok), price.currency) : "—",
       priced: pricesKnown ? !!price : null,
       weight: target ? String(target.weight) : "—",
     };
@@ -193,7 +199,7 @@ export default function Models() {
     onSuccess: invalidate,
   });
 
-  const scopeBlocked = !scope.isLoading && !!scope.error;
+  const scopeBlocked = !scope.isLoading && !!scope.errorKey;
 
   return (
     <PageBody>
@@ -281,7 +287,7 @@ export default function Models() {
       )}
       {scopeBlocked && (
         <p className="text-sm text-muted-foreground">
-          Add/edit/delete is unavailable: {scope.error}. Read-only view still works.
+          Add/edit/delete is unavailable: {scopeMessage}. Read-only view still works.
         </p>
       )}
 

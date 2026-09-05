@@ -18,6 +18,7 @@ import {
   updateConnector,
   type ConnectorRow,
 } from "@/lib/api";
+import { useFormat } from "@/lib/i18n/format";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const HEALTH_TONE: Record<string, [string, string]> = {
@@ -41,6 +42,7 @@ const asInput = (c: ConnectorRow) => ({
 // or any OTLP/HTTP collector, with per-connector sampling and health checks
 export default function Connectors() {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const queryClient = useQueryClient();
   const connectors = useQuery({
     queryKey: ["connectors"],
@@ -150,7 +152,7 @@ export default function Connectors() {
                 </Button>
                 {c.health_checked_at && (
                   <span className="text-[0.6875rem] text-[color:var(--text-subtle)]">
-                    checked {c.health_checked_at.slice(11, 19)}
+                    {t("pages.connectors.checkedAt", { time: fmt.time(c.health_checked_at) })}
                   </span>
                 )}
                 <button
