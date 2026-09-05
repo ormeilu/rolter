@@ -184,7 +184,7 @@ succeed:
 | Code | Status | What the sign-in screen shows |
 | --- | --- | --- |
 | `invalid_credentials` | 401 | that email and password do not match an account |
-| `password_login_disabled` | 403 | the organization requires single sign-on |
+| `password_login_disabled` | 403 | the organization requires [single sign-on](/security/single-sign-on) |
 | `too_many_attempts` | 429 | how long the lock lasts, read from `Retry-After` |
 
 The email-only gate — where the dashboard opens with no session at all — is
