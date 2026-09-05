@@ -1548,6 +1548,8 @@
     "closeNav": "Закрыть навигацию",
     "githubRepo": "Репозиторий на GitHub",
     "reportBug": "Сообщить об ошибке",
+    "updateAvailable": "Доступна v{{latest}}",
+    "updateAvailableHint": "Доступна rolter v{{latest}} — открыть заметки о выпуске",
     "role": "Администратор",
     "roleWithOrg": "{{role}} · {{org}}",
     "roles": {

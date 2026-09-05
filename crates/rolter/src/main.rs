@@ -22,6 +22,7 @@ mod init;
 #[cfg(feature = "postgres")]
 mod kek;
 mod preflight;
+mod update_notice;
 
 use clap::{Parser, Subcommand};
 
@@ -59,7 +60,12 @@ enum Command {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _telemetry = rolter_core::telemetry::init();
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    // beside the command, never ahead of it: a one-line stderr notice when a
+    // newer release exists, cached for a day, silenced by
+    // ROLTER_UPDATE_CHECK=false (#901). the command's exit status is its own
+    update_notice::spawn();
+    match cli.command {
         Command::Gateway(args) => rolter_gateway::run(args).await,
         Command::Control(args) => rolter_control::run(args).await,
         Command::EasyUp(args) => easy_up::run(args).await,

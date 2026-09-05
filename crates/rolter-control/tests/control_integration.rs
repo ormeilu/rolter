@@ -1295,6 +1295,59 @@ async fn admin_token_guards_crud_and_snapshot() {
     assert!(allowed.status().is_success(), "{}", allowed.status());
 }
 
+/// `GET /api/v1/version` is the dashboard's one source for the update hint
+/// (#902): any signed-in caller reads it, an anonymous one does not, and with
+/// the check disabled it reports the running version and nothing else — no
+/// latest, no url, no check time — so a footer can stay quiet on it.
+#[tokio::test]
+async fn version_endpoint_reports_the_running_build_and_the_disabled_check() {
+    skip_without_db!();
+    let pool = fresh_pool().await;
+    let app = rolter_control::test_app_with_admin_token(pool.clone(), Some("sekrit".to_string()))
+        .await
+        .unwrap();
+    let addr = serve(app).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+
+    let denied = client
+        .get(format!("{base}/api/v1/version"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    // a viewer with no membership anywhere is still an authenticated caller
+    let viewer = seed_user(&pool, "version-viewer@example.com", false).await;
+    let token = seed_session(&pool, viewer, "versionviewer").await;
+    let resp = client
+        .get(format!("{base}/api/v1/version"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["current"],
+        rolter_control::update_check::CURRENT_VERSION
+    );
+    assert_eq!(body["enabled"], false);
+    assert_eq!(body["update_available"], false);
+    assert!(body["latest"].is_null());
+    assert!(body["release_url"].is_null());
+    assert!(body["checked_at"].is_null());
+
+    // and the admin token reads it too
+    let as_admin = client
+        .get(format!("{base}/api/v1/version"))
+        .bearer_auth("sekrit")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(as_admin.status(), 200);
+}
+
 /// The `/me/*` 401 distinguishes "you are not signed in" from "this deployment
 /// has no accounts to sign in to" (#942).
 ///
@@ -4231,15 +4284,18 @@ async fn rbac_matrix_and_effective_permissions_are_api_backed() {
         .await
         .unwrap();
     assert!(elsewhere["role"].is_null());
-    // nothing org-scoped is reachable there; what remains is exactly the two
-    // global read-only catalogs, which take authentication and no membership
+    // nothing org-scoped is reachable there; what remains is exactly the
+    // global read-only facts, which take authentication and no membership
     let elsewhere_allowed: Vec<&str> = elsewhere["allowed"]
         .as_array()
         .unwrap()
         .iter()
         .map(|a| a.as_str().unwrap())
         .collect();
-    assert_eq!(elsewhere_allowed, vec!["model_price:read", "model:read"]);
+    assert_eq!(
+        elsewhere_allowed,
+        vec!["model_price:read", "model:read", "version:read"]
+    );
 
     // a project-scoped admin inherits nothing upward: the same user is only an
     // admin inside the project chain they were granted

@@ -79,6 +79,7 @@ mod telemetry;
 mod ui_config;
 #[cfg(feature = "postgres")]
 mod ui_events;
+pub mod update_check;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -350,6 +351,11 @@ struct ControlState {
     /// against; see [`login_throttle::ClientAddr`]
     #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
     trust_forwarded_for: bool,
+    /// the last successful check for a newer release (#902), served from
+    /// `GET /api/v1/version`. Disabled, and never on the network, when
+    /// `ROLTER_UPDATE_CHECK` is falsy
+    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
+    update_check: update_check::UpdateChecker,
 }
 
 /// Run the control plane to completion. The caller owns argument parsing and
@@ -508,6 +514,11 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
 
     let gateway_url = Arc::new(args.gateway_url.trim_end_matches('/').to_string());
     tracing::info!(gateway_url = %gateway_url, "proxying /gw/* to the gateway");
+    // one bounded request to github at boot and every few hours, so the
+    // dashboard's version hint never has a browser call github itself (#902).
+    // opt-out for air-gapped deployments; offline is a debug line, not an error
+    let update_check = update_check::UpdateChecker::from_env();
+    update_check.spawn(http.clone());
     #[cfg(feature = "postgres")]
     let state = ControlState {
         store,
@@ -524,6 +535,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         metrics: metrics.clone(),
         login_throttle: login_throttle.clone(),
         trust_forwarded_for: args.login_trust_forwarded_for,
+        update_check: update_check.clone(),
         pool: pool.clone(),
     };
     #[cfg(not(feature = "postgres"))]
@@ -542,6 +554,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         metrics: metrics.clone(),
         login_throttle: login_throttle.clone(),
         trust_forwarded_for: args.login_trust_forwarded_for,
+        update_check: update_check.clone(),
     };
 
     // converge the clickhouse ttl with the stored retention policy. spawned
@@ -888,7 +901,8 @@ fn build_app_with(state: ControlState, mount_internal: bool) -> Router {
             .merge(cluster::router())
             .merge(connectors::router())
             .merge(collector_config::router())
-            .merge(security::router());
+            .merge(security::router())
+            .merge(update_check::router());
     }
 
     if mount_internal {
@@ -1017,6 +1031,9 @@ fn test_state(pool: sqlx::PgPool, admin_token: Option<String>) -> ControlState {
         // tests cover, and no test signs in wrongly five times by accident
         login_throttle: login_throttle::LoginThrottle::new(Default::default(), String::new(), None),
         trust_forwarded_for: false,
+        // never on the network from a test; the endpoint's disabled shape is
+        // what the integration test asserts
+        update_check: update_check::UpdateChecker::disabled(),
         pool: Some(pool),
     }
 }
@@ -2242,6 +2259,7 @@ mod tests {
             metrics: Default::default(),
             login_throttle: Default::default(),
             trust_forwarded_for: false,
+            update_check: update_check::UpdateChecker::disabled(),
             #[cfg(feature = "postgres")]
             pool: None,
         }

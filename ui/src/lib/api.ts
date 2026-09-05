@@ -1872,6 +1872,26 @@ export function fetchCurrencySettings(): Promise<CurrencySettings> {
 }
 
 /**
+ * `GET /api/v1/version`: the running build and the latest stable release the
+ * control plane has heard of (#902). The control plane asks GitHub once at
+ * boot and every few hours; the browser never does. `latest`, `release_url`
+ * and `checked_at` are null until a check has succeeded, and `enabled` is
+ * false when `ROLTER_UPDATE_CHECK=false` opted the deployment out.
+ */
+export interface VersionStatus {
+  current: string;
+  latest: string | null;
+  release_url: string | null;
+  update_available: boolean;
+  checked_at: string | null;
+  enabled: boolean;
+}
+
+export function fetchVersion(): Promise<VersionStatus> {
+  return getJson<VersionStatus>("/api/v1/version");
+}
+
+/**
  * Whether `code` can be converted into the settlement currency.
  *
  * A price already stored in a code the rate table no longer carries must still

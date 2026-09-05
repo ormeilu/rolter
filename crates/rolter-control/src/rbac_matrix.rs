@@ -245,6 +245,17 @@ const CAPABILITIES: &[Capability] = &[
         update: NA,
         delete: SUPER,
     },
+    // the running version and the latest stable release (#902): a fact about
+    // the deployment, carrying no tenant's data, so any authenticated caller
+    // may read it and nobody may write it
+    Capability {
+        resource: "version",
+        scope: "deployment",
+        read: ANYONE,
+        create: NA,
+        update: NA,
+        delete: NA,
+    },
     Capability {
         resource: "business_unit",
         scope: "org",
@@ -1054,7 +1065,10 @@ mod tests {
     #[test]
     fn no_membership_means_only_the_global_catalogs() {
         let allowed = allowed_for(false, None, &[], ScopeChain::default());
-        assert_eq!(allowed, vec!["model_price:read", "model:read"]);
+        assert_eq!(
+            allowed,
+            vec!["model_price:read", "model:read", "version:read"]
+        );
     }
 
     #[test]
@@ -1149,6 +1163,7 @@ mod tests {
         ("telemetry.rs", include_str!("telemetry.rs")),
         ("ui_config.rs", include_str!("ui_config.rs")),
         ("ui_events.rs", include_str!("ui_events.rs")),
+        ("update_check.rs", include_str!("update_check.rs")),
     ];
 
     /// A module the checks below skip, and why.
