@@ -1007,6 +1007,25 @@
       "noMatchBody": "Под ваш поиск и выбранную вкладку статуса ничего не подошло.",
       "noOrgTitle": "Выберите организацию",
       "noOrgBody": "Пользователи управляются в рамках организации. Выберите или создайте её, чтобы увидеть участников."
+    },
+    "config": {
+      "allSections": {
+        "title": "Все разделы",
+        "count_one": "{{count}} раздел",
+        "count_few": "{{count}} раздела",
+        "count_many": "{{count}} разделов",
+        "count_other": "{{count}} раздела",
+        "body": "Весь документ, который обслуживает шлюз, в том виде, в каком его отдаёт control plane: учётные данные, дайджесты ключей и OAuth-сессии удаляются ещё на сервере.",
+        "copy": "Скопировать как JSON",
+        "entries_one": "{{count}} запись",
+        "entries_few": "{{count}} записи",
+        "entries_many": "{{count}} записей",
+        "entries_other": "{{count}} записи",
+        "fields_one": "{{count}} поле",
+        "fields_few": "{{count}} поля",
+        "fields_many": "{{count}} полей",
+        "fields_other": "{{count}} поля"
+      }
     }
   },
   "playground": {
