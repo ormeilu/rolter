@@ -195,7 +195,8 @@
     "security": "Security",
     "api-keys": "My Virtual Keys",
     "performance": "Performance Tuning",
-    "feature-flags": "Feature Flags"
+    "feature-flags": "Feature Flags",
+    "caching": "Caching"
   },
   "pages": {
     "dashboard": {
@@ -969,6 +970,19 @@
       "noMatchBody": "Nothing matched your search and the status tab you are on.",
       "noOrgTitle": "Choose an organization",
       "noOrgBody": "Users are managed per organization. Pick or create one to see its members."
+    },
+    "config": {
+      "allSections": {
+        "title": "Every section",
+        "count_one": "{{count}} section",
+        "count_other": "{{count}} sections",
+        "body": "The whole document the gateway serves, as the control plane returns it — credentials, key digests and OAuth sessions are removed before it leaves the server.",
+        "copy": "Copy as JSON",
+        "entries_one": "{{count}} entry",
+        "entries_other": "{{count}} entries",
+        "fields_one": "{{count}} field",
+        "fields_other": "{{count}} fields"
+      }
     }
   },
   "playground": {
@@ -1270,6 +1284,10 @@
     "feature-flags": {
       "title": "Feature Flags",
       "subtitle": "Toggle experimental gateway features."
+    },
+    "caching": {
+      "title": "Caching",
+      "subtitle": "Direct and semantic response caching."
     }
   },
   "shell": {

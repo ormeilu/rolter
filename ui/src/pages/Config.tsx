@@ -3,9 +3,10 @@ import { useTranslation } from "react-i18next";
 import { ArrowRight, Check, ShieldCheck } from "lucide-react";
 import { Link } from "react-router";
 
+import { CopyButton } from "@/components/CopyButton";
 import { LoadError } from "@/components/LoadError";
 import { Skeleton } from "@/components/ui/skeleton";
-import { fetchConfig } from "@/lib/api";
+import { fetchConfig, type GatewayConfigDto } from "@/lib/api";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const SECTION_TH =
@@ -102,6 +103,8 @@ export default function Config() {
           Config hot-swaps with no restart — the gateway polls the control plane's snapshot
           endpoint.
         </p>
+
+        {cfg && <AllSections config={cfg} />}
       </div>
 
       <div className="flex flex-col gap-3">
@@ -144,4 +147,56 @@ function RelatedLink({ to, title, desc }: { to: string; title: string; desc: str
       <ArrowRight className="h-4 w-4 flex-none text-[color:var(--text-subtle)] transition-colors group-hover:text-[color:var(--red-folk)]" />
     </Link>
   );
+}
+
+
+// the three tables above are the parts an operator reads daily; the document
+// the gateway actually serves has some forty sections, and until now the
+// screen called itself "effective config" while showing three of them (#1204).
+// every remaining section renders here, collapsed, as the JSON the control
+// plane returns — credentials are redacted before it leaves the server
+const TABLED = new Set(["providers", "routes", "virtual_keys"]);
+// carried for the gateway, meaningless to a reader: digests and an
+// always-empty (redacted) session list
+const HIDDEN = new Set(["db_virtual_keys", "mcp_oauth_sessions"]);
+
+function AllSections({ config }: { config: GatewayConfigDto }) {
+  const { t } = useTranslation();
+  const sections = Object.entries(config).filter(
+    ([key]) => !TABLED.has(key) && !HIDDEN.has(key),
+  );
+  const json = JSON.stringify(config, null, 2);
+  return (
+    <section className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-medium">{t("pages.config.allSections.title")}</h3>
+        <span className="font-mono text-xs text-[color:var(--text-subtle)]">
+          {t("pages.config.allSections.count", { count: sections.length })}
+        </span>
+        <CopyButton className="ml-auto" value={json} label={t("pages.config.allSections.copy")} />
+      </div>
+      <p className="text-xs text-muted-foreground">{t("pages.config.allSections.body")}</p>
+      <div className="overflow-hidden rounded-[10px] border border-[color:var(--border-subtle)]">
+        {sections.map(([key, value]) => (
+          <details key={key} className="group border-b border-[color:var(--border-subtle)] last:border-b-0">
+            <summary className="flex cursor-pointer items-center gap-3 px-3.5 py-2 font-mono text-xs hover:bg-[color:var(--surface-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              <span className="text-foreground">{key}</span>
+              <span className="text-[color:var(--text-subtle)]">{summarize(value, t)}</span>
+            </summary>
+            <pre className="max-h-[360px] overflow-auto border-t border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] px-3.5 py-2.5 font-mono text-[11px] leading-relaxed text-[color:var(--text-secondary)]">
+              {JSON.stringify(value, null, 2)}
+            </pre>
+          </details>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function summarize(value: unknown, t: (key: string, opts?: Record<string, unknown>) => string): string {
+  if (Array.isArray(value)) return t("pages.config.allSections.entries", { count: value.length });
+  if (value && typeof value === "object") {
+    return t("pages.config.allSections.fields", { count: Object.keys(value).length });
+  }
+  return String(value);
 }

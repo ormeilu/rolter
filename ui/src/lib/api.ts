@@ -28,6 +28,12 @@ export interface GatewayConfigDto {
   providers: ProviderDto[];
   routes: RouteDto[];
   virtual_keys: VirtualKeyDto[];
+  /**
+   * every other section of `GatewayConfig` (`crates/rolter-core/src/config.rs`)
+   * — server, tls, cache, guardrails, feature_flags, … — which the Effective
+   * config screen renders generically rather than typing one by one (#1204)
+   */
+  [section: string]: unknown;
 }
 
 // bearer token from a real login (see lib/auth.tsx); attached to every request
