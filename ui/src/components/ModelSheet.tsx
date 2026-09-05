@@ -31,6 +31,7 @@ import {
   fetchVirtualKeys,
   isConvertible,
   ROLES,
+  setRouteAdvanced,
   setRouteEnabled,
   STRATEGIES,
   updateRouteParams,
@@ -117,6 +118,17 @@ interface ModelDraft {
     users: string[];
   };
 }
+
+/**
+ * Where the prices in this sheet come from.
+ *
+ * They come from whoever types them: rolter ships no pricing catalog, so the
+ * link points at our own docs for how a request's cost is computed. It used to
+ * point at a competing gateway's datasheet, presented as the source of numbers
+ * that were never theirs (#977).
+ */
+const PRICING_DOCS_URL =
+  "https://github.com/rolter-ai/rolter/blob/master/user-docs/observability/logs-and-cost.mdx#cost-tracking";
 
 const MODALITIES: Modality[] = ["chat", "embedding", "image", "audio"];
 const PARAM_TYPES: ParamType[] = ["string", "int", "float", "boolean", "enum"];
@@ -281,6 +293,99 @@ function seedAdvanced(draft: ModelDraft, advanced: Record<string, unknown>) {
       : "public";
 }
 
+/**
+ * Serialize the draft back into an `AdvancedModelConfig` — the inverse of
+ * `seedAdvanced()` (#1189).
+ *
+ * `stored` is the blob the route already carries and is the base of the
+ * result, so a field this form does not model — the per-route guardrail
+ * selection, anything a newer control plane added — survives a save instead of
+ * being reset to its serde default.
+ */
+function advancedToApi(
+  draft: ModelDraft,
+  stored: Record<string, unknown>,
+): Record<string, unknown> {
+  const obj = (v: unknown): Record<string, unknown> =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? { ...(v as Record<string, unknown>) }
+      : {};
+  // a limit of 0 is refused by `validate_advanced`; blank and 0 both read as
+  // "inherit the gateway/provider setting", so neither is sent
+  const limit = (v: string) => {
+    const n = Math.trunc(Number(v));
+    return v.trim() !== "" && Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+  const price = (v: string) => {
+    const n = Number(v);
+    return v.trim() !== "" && Number.isFinite(n) ? n : undefined;
+  };
+  // an absent field is absent, not null: every one is `Option`/`default` on the
+  // backend and a null would fail to deserialize
+  const put = (target: Record<string, unknown>, key: string, value: unknown) => {
+    if (value === undefined) delete target[key];
+    else target[key] = value;
+  };
+
+  const out = { ...stored };
+  out.model_type = draft.modality;
+  out.capabilities = Object.entries(draft.caps)
+    .filter(([, on]) => on)
+    .map(([key]) => key);
+  put(out, "base_url", draft.baseUrl.trim() || undefined);
+  put(out, "description", draft.description.trim() || undefined);
+
+  // the audio rates have no field on this sheet, so they are carried through
+  // rather than dropped by a save that never showed them
+  const pricing = obj(stored.pricing);
+  put(pricing, "cache_write_per_mtok", price(draft.price.cacheWrite));
+  put(pricing, "image_per_unit", price(draft.price.perRequest));
+  put(out, "pricing", Object.keys(pricing).length > 0 ? pricing : undefined);
+
+  const limits: Record<string, unknown> = {};
+  put(limits, "rpm", limit(draft.net.rpm));
+  put(limits, "tpm", limit(draft.net.tpm));
+  put(limits, "concurrency", limit(draft.net.concurrency));
+  put(limits, "retries", limit(draft.net.retries));
+  put(limits, "context_window", limit(draft.net.context));
+  put(limits, "output_tokens", limit(draft.net.maxOutput));
+  // the field is milliseconds and the backend stores whole seconds; a
+  // sub-second timeout rounds up to 1 rather than to the 0 it would refuse
+  const timeoutMs = Number(draft.net.timeoutMs);
+  if (draft.net.timeoutMs.trim() !== "" && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    limits.timeout_secs = Math.max(1, Math.round(timeoutMs / 1000));
+  }
+  out.limits = limits;
+
+  out.insecure_tls = draft.net.insecureTls;
+  // the switch has no field of its own on the wire — `seedAdvanced` reads it
+  // off whether the stored map has anything in it — so the map is carried
+  // through untouched rather than invented here (#1271)
+  out.additional_fields = draft.net.allowAdditional ? obj(stored.additional_fields) : {};
+
+  const headers: Record<string, string> = {};
+  const lockedHeaders: string[] = [];
+  for (const h of draft.headers) {
+    const key = h.key.trim();
+    if (!key) continue;
+    headers[key] = h.value;
+    if (effLock(draft.headerMode, h.locked)) lockedHeaders.push(key);
+  }
+  out.headers = headers;
+  out.locked_headers = lockedHeaders;
+
+  // the allow-lists are ids, and the control plane parses each one as a uuid;
+  // a public model carries none of them
+  const restricted = draft.rbac.visibility === "restricted";
+  out.visibility = {
+    minimum_role: draft.rbac.minRole,
+    allowed_team_ids: restricted ? draft.rbac.teams : [],
+    allowed_key_ids: restricted ? draft.rbac.vkeys : [],
+    allowed_user_ids: restricted ? draft.rbac.users : [],
+  };
+  return out;
+}
+
 // seed draft params/lock-mode from a stored route's params + override policy
 // (the same shapes ParamsEditor reads/writes: allow/deny base + deny list)
 function seedParams(
@@ -355,67 +460,44 @@ function paramsToApi(draft: ModelDraft): {
   return { params, paramPolicy };
 }
 
-// live JSON of the resulting model entry — only non-empty fields
-function buildPreview(draft: ModelDraft, providerName: string) {
-  const num = (v: string) => {
-    const n = parseFloat(v);
-    return Number.isNaN(n) ? undefined : n;
-  };
-  const paramSet = draft.params
-    .filter((p) => p.key.trim() && p.value.trim() !== "")
-    .map((p) => ({
-      key: p.key.trim(),
-      value: coerce(p.value, p.type),
-      locked: effLock(draft.paramMode, p.locked),
-    }));
-  const pricing: Record<string, unknown> = {};
-  (["input", "output", "cacheWrite", "cacheRead", "perRequest"] as const).forEach((k) => {
-    const n = num(draft.price[k]);
-    if (n) pricing[k] = n;
-  });
-  const network: Record<string, unknown> = {};
-  if (draft.net.insecureTls) network.allow_insecure_tls = true;
-  (["rpm", "tpm", "concurrency", "timeoutMs", "retries", "weight", "context", "maxOutput"] as const).forEach(
-    (k) => {
-      const n = num(draft.net[k]);
-      if (n != null) network[k] = n;
-    },
-  );
-  const headers = draft.headers
-    .filter((h) => h.key.trim())
-    .map((h) => ({
-      key: h.key.trim(),
-      value: h.value,
-      locked: effLock(draft.headerMode, h.locked),
-    }));
-  if (headers.length) network.custom_headers = { mode: draft.headerMode, values: headers };
+/**
+ * Live JSON of what saving this draft sends, request by request.
+ *
+ * It used to serialize a shape of its own — `network.custom_headers`,
+ * `access.min_role` — that no endpoint took, so the pane read as a
+ * confirmation of fields the sheet then dropped (#1189). Every key below is a
+ * body the save actually puts on the wire.
+ */
+function buildPreview(
+  draft: ModelDraft,
+  providerName: string,
+  advanced: Record<string, unknown>,
+) {
+  const { params, paramPolicy } = paramsToApi(draft);
+  const upstream = draft.upstreamName.trim();
+  const publicName = draft.alias.trim() || upstream;
+  const hasPricing = draft.price.input.trim() !== "" || draft.price.output.trim() !== "";
   const obj = {
-    provider: providerName || undefined,
-    model: draft.upstreamName.trim() || undefined,
-    alias: draft.alias.trim() || undefined,
-    type: draft.modality,
-    enabled: draft.enabled,
-    base_url: draft.baseUrl.trim() || undefined,
-    description: draft.description.trim() || undefined,
-    params: paramSet.length ? { mode: draft.paramMode, values: paramSet } : undefined,
-    allow_additional_fields: draft.net.allowAdditional || undefined,
-    capabilities: Object.entries(draft.caps)
-      .filter(([, v]) => v)
-      .map(([k]) => k),
-    pricing: Object.keys(pricing).length
-      ? { ...pricing, currency: draft.price.currency }
+    route: { model: publicName || undefined, enabled: draft.enabled },
+    target: draft.providerId
+      ? {
+          provider: providerName || undefined,
+          upstream_model: upstream !== publicName ? upstream : undefined,
+          weight: Number(draft.net.weight) || 1,
+        }
       : undefined,
-    network: Object.keys(network).length ? network : undefined,
-    access:
-      draft.rbac.visibility === "restricted"
-        ? {
-            min_role: draft.rbac.minRole,
-            visibility: "restricted",
-            teams: draft.rbac.teams,
-            virtual_keys: draft.rbac.vkeys,
-            users: draft.rbac.users,
-          }
-        : { min_role: draft.rbac.minRole, visibility: "public" },
+    params,
+    param_policy: paramPolicy,
+    model_price: hasPricing
+      ? {
+          model: publicName || undefined,
+          input_per_mtok: draft.price.input.trim() || "0",
+          output_per_mtok: draft.price.output.trim() || "0",
+          cached_input_per_mtok: draft.price.cacheRead.trim() || undefined,
+          currency: draft.price.currency,
+        }
+      : undefined,
+    advanced,
   };
   return JSON.stringify(obj, null, 2);
 }
@@ -600,7 +682,12 @@ function ChipGroup({
   disabled,
 }: {
   label: string;
-  options: string[];
+  /**
+   * the rows to pick from. `id` is what the draft stores and what
+   * `visibility.allowed_*_ids` carries — the control plane parses each one as
+   * a uuid — while `name` is what the operator reads (#1189)
+   */
+  options: { id: string; name: string }[];
   selected: string[];
   onToggle: (v: string) => void;
   disabled?: boolean;
@@ -615,14 +702,14 @@ function ChipGroup({
         {options.length === 0 && (
           <p className="text-xs text-muted-foreground">none available</p>
         )}
-        {options.map((v) => {
-          const on = selected.includes(v);
+        {options.map((o) => {
+          const on = selected.includes(o.id);
           return (
             <button
-              key={v}
+              key={o.id}
               type="button"
               disabled={disabled}
-              onClick={() => onToggle(v)}
+              onClick={() => onToggle(o.id)}
               aria-pressed={on}
               className={cn(
                 "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -632,7 +719,7 @@ function ChipGroup({
                   : "border-[color:var(--border-subtle)] bg-transparent text-muted-foreground",
               )}
             >
-              {v}
+              {o.name}
             </button>
           );
         })}
@@ -733,6 +820,9 @@ export function ModelSheet({
   const [dupFrom, setDupFrom] = React.useState("");
   const [testState, setTestState] = React.useState<"idle" | "testing" | "ok">("idle");
   const initialRef = React.useRef("");
+  // the advanced payload as it was seeded, so a save can skip the extra PUT
+  // when the operator changed nothing on that half of the form
+  const initialAdvancedRef = React.useRef("");
 
   // data for edit-mode prefill
   const targets = useQuery({
@@ -821,6 +911,9 @@ export function ModelSheet({
       preview: false,
     });
     initialRef.current = JSON.stringify(d);
+    initialAdvancedRef.current = JSON.stringify(
+      advancedToApi(d, mode === "edit" ? (route?.advanced ?? {}) : {}),
+    );
   }, [open, mode, route, configModel, providers, targets.data, prices.data, editLoading]);
 
   const dirty = !readonly && initialRef.current !== "" && JSON.stringify(draft) !== initialRef.current;
@@ -904,17 +997,36 @@ export function ModelSheet({
     Boolean,
   );
   const canSave = !readonly && !editLoading && errors.length === 0;
+  // the one the footer repeats beside the disabled button; the summary above it
+  // still lists the rest
+  const blockingError = readonly ? "" : (errors[0] ?? "");
+  const blockingErrorId = React.useId();
 
   // -- persistence ----------------------------------------------------------
-  // wires the fields the control api models today: route + first target,
-  // default params with the lock policy, enabled flag, and pricing. the
-  // capability / network / header / rbac sections are forward-looking — they
-  // render and preview but have no backing DTOs yet.
+  // route + first target, default params with the lock policy, the enabled
+  // flag and pricing go through their own endpoints; the catalog metadata,
+  // limits, headers and visibility travel together as the route's `advanced`
+  // blob (#1189).
   // form lifecycle for the UX stream (#805); names the form, never its contents
   const ux = useFormTelemetry(mode === "add" ? "model-create" : "model-edit", open);
+  // the advanced blob is the last write of the save, so a rejection there means
+  // the rest already landed — the footer has to say which half failed rather
+  // than print `validate_advanced`'s message with nothing around it
+  const [advancedRejected, setAdvancedRejected] = React.useState(false);
+  const advancedPayload = advancedToApi(draft, mode === "edit" ? (route?.advanced ?? {}) : {});
+  const writeAdvanced = async (routeId: string) => {
+    if (JSON.stringify(advancedPayload) === initialAdvancedRef.current) return;
+    try {
+      await setRouteAdvanced(routeId, advancedPayload);
+    } catch (err) {
+      setAdvancedRejected(true);
+      throw err;
+    }
+  };
 
   const save = useMutation({
     mutationFn: async () => {
+      setAdvancedRejected(false);
       const { params, paramPolicy } = paramsToApi(draft);
       const upstream = draft.upstreamName.trim();
       const hasPricing = draft.price.input.trim() !== "" || draft.price.output.trim() !== "";
@@ -943,6 +1055,7 @@ export function ModelSheet({
             currency: draft.price.currency,
           });
         }
+        await writeAdvanced(created.id);
         return;
       }
       // edit
@@ -975,11 +1088,16 @@ export function ModelSheet({
           currency: draft.price.currency,
         });
       }
+      await writeAdvanced(r.id);
     },
     onSuccess: () => {
       ux.saved();
       queryClient.invalidateQueries({ queryKey: ["route-targets", route?.id] });
       queryClient.invalidateQueries({ queryKey: ["model-prices"] });
+      // the route list owns `route.advanced`, and the sheet seeds the editor
+      // from it on the next open — a stale list would reopen on the values
+      // this save just replaced
+      queryClient.invalidateQueries({ queryKey: ["routes"] });
       // the sheet closes on success, so the outcome is announced somewhere
       // that outlives it (#1197)
       toast.push(
@@ -1511,12 +1629,12 @@ export function ModelSheet({
               </Select>
             </div>
             <a
-              href="https://getbifrost.ai/datasheet"
+              href={PRICING_DOCS_URL}
               target="_blank"
               rel="noreferrer"
               className="pb-2 text-xs text-muted-foreground hover:text-foreground"
             >
-              View pricing source ↗
+              {t("modelSheet.pricingDocs")}
             </a>
           </div>
           {currencyUnconvertible && (
@@ -1709,7 +1827,7 @@ export function ModelSheet({
             <div className="space-y-3.5">
               <ChipGroup
                 label="Allowed teams / business units"
-                options={(teams.data ?? []).map((t) => t.name)}
+                options={(teams.data ?? []).map((row) => ({ id: row.id, name: row.name }))}
                 selected={draft.rbac.teams}
                 disabled={readonly}
                 onToggle={(v) =>
@@ -1722,9 +1840,10 @@ export function ModelSheet({
               />
               <ChipGroup
                 label="Allowed virtual keys"
-                options={(vkeys.data ?? [])
-                  .map((k) => k.name)
-                  .filter((n): n is string => !!n)}
+                options={(vkeys.data ?? []).map((row) => ({
+                  id: row.id,
+                  name: row.name || row.key_prefix,
+                }))}
                 selected={draft.rbac.vkeys}
                 disabled={readonly}
                 onToggle={(v) =>
@@ -1737,7 +1856,7 @@ export function ModelSheet({
               />
               <ChipGroup
                 label="Restrict to specific users"
-                options={(users.data ?? []).map((u) => u.email)}
+                options={(users.data ?? []).map((row) => ({ id: row.id, name: row.email }))}
                 selected={draft.rbac.users}
                 disabled={readonly}
                 onToggle={(v) =>
@@ -1759,7 +1878,7 @@ export function ModelSheet({
           onToggle={() => toggleSec("preview")}
         >
           <pre className="max-h-[280px] overflow-auto rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-subtle)] p-3 font-mono text-[11px] leading-relaxed text-[color:var(--text-secondary)]">
-            {buildPreview(draft, providerName)}
+            {buildPreview(draft, providerName, advancedPayload)}
           </pre>
         </Section>
       </SheetBody>
@@ -1775,8 +1894,10 @@ export function ModelSheet({
           </div>
         )}
         {save.isError && (
-          <p className="px-[22px] pt-2.5 text-xs text-[color:var(--status-danger-text)]">
-            {(save.error as Error).message}
+          <p role="alert" className="px-[22px] pt-2.5 text-xs text-[color:var(--status-danger-text)]">
+            {advancedRejected
+              ? t("modelSheet.advancedRejected", { message: (save.error as Error).message })
+              : (save.error as Error).message}
           </p>
         )}
         <div className="flex items-center gap-2.5 px-[22px] py-3.5">
@@ -1803,7 +1924,20 @@ export function ModelSheet({
                 ? "Connection OK"
                 : "Test connection"}
           </button>
-          <span className="ml-auto inline-flex gap-2.5">
+          {/* the primary action stays where it is and greys out instead of
+              vanishing (#1265): a footer that reflows tells an operator who
+              never scrolled to the field errors only that saving is gone, so
+              the first error travels with the button and names the reason */}
+          {blockingError && (
+            <p
+              id={blockingErrorId}
+              role="alert"
+              className="ml-auto max-w-[52%] text-right text-xs leading-snug text-[color:var(--status-danger-text)]"
+            >
+              {blockingError}
+            </p>
+          )}
+          <span className={cn("inline-flex gap-2.5", !blockingError && "ml-auto")}>
             <Button variant="ghost" onClick={() => guard() && onOpenChange(false)}>
               Cancel
             </Button>
@@ -1812,9 +1946,10 @@ export function ModelSheet({
                 Close
               </Button>
             )}
-            {canSave && (
+            {!readonly && (
               <Button
-                disabled={save.isPending}
+                disabled={!canSave || save.isPending}
+                aria-describedby={blockingError ? blockingErrorId : undefined}
                 onClick={() => {
                   ux.submitted();
                   save.mutate();

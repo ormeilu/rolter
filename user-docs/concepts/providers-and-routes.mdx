@@ -131,6 +131,36 @@ model = "gpt-4o"
 
 ---
 
+## Per-model advanced settings
+
+Beyond params, a route carries an **advanced** block: catalog metadata
+(description, capabilities), a per-model `base_url` override, request limits,
+extra upstream headers, and catalog visibility. In the dashboard these are the
+"Limits & network", "Custom request headers" and "Access & permissions"
+sections of a model's sheet, and saving the sheet writes them back to the route.
+
+| Field | Notes |
+| --- | --- |
+| `base_url` | Absolute `http(s)` URL; overrides the provider endpoint for this model only |
+| `limits.rpm` / `limits.tpm` / `limits.concurrency` | Per-model ceilings; each is `1`–`10000000`. Leave blank to inherit the gateway and provider settings |
+| `limits.timeout_secs` / `limits.retries` | Whole seconds and whole attempts. The dashboard's timeout field is in milliseconds and rounds to the nearest second, never below one |
+| `limits.context_window` / `limits.output_tokens` | Advertised model geometry, same `1`–`10000000` range |
+| `headers` / `locked_headers` | Extra request headers, and which of them a caller may not replace. Credentials belong in the provider, not here |
+| `visibility.minimum_role` | Lowest role allowed to call the model |
+| `visibility.allowed_team_ids` / `allowed_key_ids` / `allowed_user_ids` | Restrict the model to specific teams, virtual keys or users. Each entry is an **id**, not a name |
+
+The control plane validates the whole block before storing it and refuses the
+save with the offending field named, so an out-of-range limit or a malformed
+header name never reaches the gateway. The dashboard reports that refusal on
+the sheet, with the rest of the model already saved.
+
+<Note>
+  The advanced block is stored per route and travels in the config snapshot, so
+  a change takes effect without restarting the gateway.
+</Note>
+
+---
+
 ## Variants
 
 Variants let you run **A/B tests**, **canary deployments**, and **per-key traffic splits** under a single route. Instead of defining a flat `targets` pool, you define named variant buckets, each with its own weight, targets, and optional param overrides.

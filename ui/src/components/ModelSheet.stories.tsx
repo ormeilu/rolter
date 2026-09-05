@@ -52,6 +52,32 @@ const ROUTE: RouteRow = {
   created_at: "2026-02-01T00:00:00Z",
 };
 
+/**
+ * The same route with a populated `advanced` blob. `guardrails` is a field the
+ * sheet has no editor for: it rides along to prove a save carries it rather
+ * than resetting it to the backend's serde default.
+ */
+const ADVANCED_ROUTE: RouteRow = {
+  ...ROUTE,
+  advanced: {
+    model_type: "chat",
+    capabilities: ["streaming", "tools", "json"],
+    description: "prod chat traffic",
+    base_url: "https://api.openai.com/v1",
+    limits: { rpm: 600, timeout_secs: 30 },
+    insecure_tls: false,
+    headers: { "X-Tenant": "acme" },
+    locked_headers: ["X-Tenant"],
+    visibility: {
+      minimum_role: "member",
+      allowed_team_ids: [],
+      allowed_key_ids: [],
+      allowed_user_ids: [],
+    },
+    guardrails: { rules: ["pii-out"] },
+  },
+};
+
 const MODELS: EffectiveModelDto[] = [
   { model: "gpt-4o", strategy: "round_robin", targets: 1, source: "db" },
   { model: "fake-llm", strategy: "round_robin", targets: 1, source: "config" },
@@ -155,10 +181,11 @@ export const Add: Story = {
   render: () => <Stage mode="add" />,
   play: async () => {
     const dialog = within(sheet());
-    await expect(dialog.getByText("Add model")).toBeVisible();
-    // the primary action is withheld rather than disabled while the draft is
-    // incomplete; the two required fields carry the reason instead
-    await expect(dialog.queryByRole("button", { name: "Add model" })).not.toBeInTheDocument();
+    await expect(dialog.getByRole("heading", { name: "Add model" })).toBeVisible();
+    // the primary action keeps its place and greys out while the draft is
+    // incomplete (#1265), with the first blocking reason beside it
+    await expect(dialog.getByRole("button", { name: "Add model" })).toBeDisabled();
+    await expect(dialog.getByRole("alert")).toHaveTextContent(/Pick the upstream provider/);
     // `getAll`: the sheet states each error under its field *and* repeats the
     // set in a summary above the footer
     await expect(dialog.getAllByText(/Pick the upstream provider/).length).toBeGreaterThan(0);
@@ -219,7 +246,7 @@ export const NameConflict: Story = {
     await seeded(dialog);
     await userEvent.type(dialog.getByLabelText("Upstream model name"), "gpt-4o");
     await expect(dialog.getAllByText(/already exists/).length).toBeGreaterThan(0);
-    await expect(dialog.queryByRole("button", { name: "Add model" })).not.toBeInTheDocument();
+    await expect(dialog.getByRole("button", { name: "Add model" })).toBeDisabled();
   },
 };
 
@@ -231,6 +258,7 @@ export const InvalidBaseUrl: Story = {
     await seeded(dialog);
     await userEvent.type(dialog.getByLabelText("Base URL override"), "vllm.internal:8000");
     await expect(dialog.getAllByText(/must start with http/).length).toBeGreaterThan(0);
+    await expect(dialog.getByRole("button", { name: "Add model" })).toBeDisabled();
   },
 };
 
@@ -254,6 +282,118 @@ export const AddsAModel: Story = {
       provider_id: string;
     };
     await expect(target.provider_id).toBe("prov-2");
+  },
+};
+
+/**
+ * The advanced half of the form is written back.
+ *
+ * Every field under "Limits & network", "Custom request headers" and "Access &
+ * permissions" was local draft state that the sheet threw away on close
+ * (#1189). Saving now sends the route's `advanced` blob, and the story asserts
+ * the body: the edited limit and header, and the `guardrails` the sheet cannot
+ * edit but must not reset.
+ */
+export const SavesTheAdvancedEditor: Story = {
+  render: () => <Stage mode="edit" route={ADVANCED_ROUTE} />,
+  play: async () => {
+    const dialog = within(sheet());
+    await seeded(dialog);
+    await userEvent.click(dialog.getByRole("button", { name: "Limits & network" }));
+    const rpm = dialog.getByLabelText("Requests / min");
+    await expect(rpm).toHaveValue(600);
+    await userEvent.clear(rpm);
+    await userEvent.type(rpm, "900");
+
+    await userEvent.click(dialog.getByRole("button", { name: "Custom request headers" }));
+    const headerValue = dialog.getByLabelText("Header value");
+    await expect(headerValue).toHaveValue("acme");
+    await userEvent.clear(headerValue);
+    await userEvent.type(headerValue, "beta");
+
+    await userEvent.click(dialog.getByRole("button", { name: "Save model" }));
+    const body = (await calls.expectSentBody("PUT", "/routes/route-1/advanced")) as {
+      advanced: {
+        base_url: string;
+        limits: { rpm: number; timeout_secs: number };
+        headers: Record<string, string>;
+        locked_headers: string[];
+        guardrails: unknown;
+      };
+    };
+    await expect(body.advanced.limits.rpm).toBe(900);
+    // milliseconds on screen, whole seconds on the wire
+    await expect(body.advanced.limits.timeout_secs).toBe(30);
+    await expect(body.advanced.headers).toEqual({ "X-Tenant": "beta" });
+    await expect(body.advanced.locked_headers).toEqual(["X-Tenant"]);
+    await expect(body.advanced.base_url).toBe("https://api.openai.com/v1");
+    await expect(body.advanced.guardrails).toEqual({ rules: ["pii-out"] });
+  },
+};
+
+/**
+ * A save that touched nothing in the advanced editor does not rewrite the blob
+ * — the params PUT still goes, the advanced PUT does not.
+ */
+export const LeavesTheAdvancedBlobAloneWhenUntouched: Story = {
+  render: () => <Stage mode="edit" route={ADVANCED_ROUTE} />,
+  play: async () => {
+    const dialog = within(sheet());
+    await seeded(dialog);
+    await userEvent.click(dialog.getByRole("button", { name: "Save model" }));
+    await calls.expectSent("PUT", "/routes/route-1/params");
+    calls.expectNotSent("PUT", "/routes/route-1/advanced");
+  },
+};
+
+/**
+ * The control plane refuses a limit of its own accord — `validate_advanced`
+ * caps every one at ten million. The sheet says which half of the save failed
+ * instead of printing the message on its own.
+ */
+export const AdvancedRejected: Story = {
+  render: () => (
+    <Stage
+      mode="edit"
+      route={ADVANCED_ROUTE}
+      stub={async (input, init) => {
+        const url = String(input);
+        if (url.includes("/advanced")) {
+          return json({ error: { message: "rpm must be between 1 and 10000000" } }, 400);
+        }
+        return backing(input, init);
+      }}
+    />
+  ),
+  play: async () => {
+    const dialog = within(sheet());
+    await seeded(dialog);
+    await userEvent.click(dialog.getByRole("button", { name: "Limits & network" }));
+    const rpm = dialog.getByLabelText("Requests / min");
+    await userEvent.clear(rpm);
+    await userEvent.type(rpm, "99999999");
+    await userEvent.click(dialog.getByRole("button", { name: "Save model" }));
+    await waitFor(() =>
+      expect(dialog.getByRole("alert")).toHaveTextContent(/advanced configuration/),
+    );
+    await expect(dialog.getByRole("alert")).toHaveTextContent(/rpm must be between/);
+  },
+};
+
+/**
+ * Prices are operator-supplied — rolter ships no pricing catalog — so the
+ * pricing section points at our own cost docs rather than at a competitor's
+ * datasheet presented as their source (#977).
+ */
+export const PricingLinksToRolterDocs: Story = {
+  render: () => <Stage mode="add" />,
+  play: async () => {
+    const dialog = within(sheet());
+    await userEvent.click(dialog.getByRole("button", { name: "Pricing override" }));
+    const link = dialog.getByRole("link", { name: /Rolter docs/ });
+    await expect(link.getAttribute("href")).toContain("github.com/rolter-ai/rolter");
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", "noreferrer");
   },
 };
 

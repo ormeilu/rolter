@@ -144,7 +144,9 @@
   "modelSheet": {
     "currencyUnconvertible": "{{code}} has no conversion rate configured, so this price cannot be converted to {{base}} and will not reach spend or budgets. Add it to [currency.rates] in the bootstrap config, or price in {{base}}.",
     "paramLockMode": "Parameter lock mode",
-    "headerLockMode": "Header lock mode"
+    "headerLockMode": "Header lock mode",
+    "pricingDocs": "Rolter docs: how request cost is calculated ↗",
+    "advancedRejected": "The control plane refused this model's advanced configuration: {{message}}. Everything else was saved."
   },
   "nav": {
     "playground": "Playground",
