@@ -115,6 +115,19 @@ cached_input_per_mtok = 1.25   # optional; defaults to input_per_mtok when absen
   </Step>
 </Steps>
 
+### Prices are yours, not ours
+
+Rolter ships no pricing catalog and never fetches one. Every rate comes from
+your `[[model_prices]]` entries, or from the **Pricing override** section of a
+model's sheet in the dashboard, which writes the same rows. That is deliberate:
+published list prices go stale, and most deployments have a negotiated rate, a
+committed-use discount or a self-hosted model whose real cost is a GPU bill.
+Rolter multiplies the tokens it counted by the number you gave it.
+
+The dashboard's pricing section links here for that reason — it is the answer
+to "where does this number come from", and the answer is "from whoever typed
+it".
+
 ### Unpriced traffic
 
 A zero `cost_usd` is ambiguous on its own: it means either "this request cost nothing" or "we have no price for this model". The `unpriced` column tells them apart, so a spend total can say when it is incomplete rather than presenting a partial figure as final.
