@@ -1126,8 +1126,7 @@
       "businessUnit": "Бизнес-подразделение",
       "customer": "Клиент",
       "filterBusinessUnits": "Фильтр по подразделениям",
-      "filterCustomers": "Фильтр по клиентам",
-      "attributionFilterHint": "Сужает показанную ниже страницу. Логи шлюза ищутся только по модели, ключу и статусу."
+      "filterCustomers": "Фильтр по клиентам"
     },
     "mcpLogs": {
       "emptyTitle": "Вызовов MCP-инструментов пока нет",

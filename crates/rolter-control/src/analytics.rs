@@ -423,6 +423,14 @@ pub struct InvocationsQuery {
     pub(crate) model: Option<String>,
     /// exact virtual key id to filter to; empty/omitted means all keys
     pub(crate) key: Option<String>,
+    /// comma-separated business unit ids to filter to; empty/omitted means
+    /// every unit. a set rather than one id because the dashboard's filter
+    /// rail has always allowed several, and an id nothing was attributed to
+    /// matches nothing — a filter narrows, it never widens (#1247)
+    pub(crate) business_unit: Option<String>,
+    /// comma-separated customer ids to filter to; empty/omitted means every
+    /// customer
+    pub(crate) customer: Option<String>,
     /// status class: all|error|success (defaults to all)
     pub(crate) status: Option<String>,
     /// page size, 1..=200 (defaults to 50)
@@ -435,6 +443,17 @@ pub struct InvocationsQuery {
 ///
 /// All user-supplied values are passed as ClickHouse params; the only spliced
 /// text is the status predicate, which `status_predicate` whitelists.
+///
+/// The two attribution dimensions filter here, in the database, rather than in
+/// the dashboard over whatever the page happened to return. Filtering a page
+/// makes `limit` mean something different from what the caller asked for: ask
+/// for 50 rows from a unit that served 3 of the last 50 and you get 3 rows and
+/// a "next page" button, with no way to tell a narrow window from a narrow
+/// filter (#1247).
+///
+/// Both accept a comma-separated set, because the dashboard's filter rail has
+/// always let an operator tick several units at once. `splitByChar` runs on
+/// the bound parameter, so the ids are still values and never spliced text.
 ///
 /// The two payload columns carry explicit aliases because ClickHouse names an
 /// unaliased qualified column `payload.request_payload` in its JSON output,
@@ -456,6 +475,10 @@ fn invocations_sql(status_expr: &str) -> String {
          where {WHERE_WINDOW} \
            and ({{model:String}} = '' or model = {{model:String}}) \
            and ({{key:String}} = '' or virtual_key_id = {{key:String}}) \
+           and ({{business_unit:String}} = '' \
+                or has(splitByChar(',', {{business_unit:String}}), business_unit_id)) \
+           and ({{customer:String}} = '' \
+                or has(splitByChar(',', {{customer:String}}), customer_id)) \
            and {status_expr} \
          order by ts desc \
          limit {{limit:UInt32}} offset {{offset:UInt32}} format JSON"
@@ -494,6 +517,14 @@ async fn invocations(
         q.model.clone().unwrap_or_default(),
     ));
     params.push(("param_key".to_string(), q.key.clone().unwrap_or_default()));
+    params.push((
+        "param_business_unit".to_string(),
+        q.business_unit.clone().unwrap_or_default(),
+    ));
+    params.push((
+        "param_customer".to_string(),
+        q.customer.clone().unwrap_or_default(),
+    ));
     params.push(("param_limit".to_string(), limit.to_string()));
     params.push(("param_offset".to_string(), offset.to_string()));
     run(ch.query(&sql, &params).await)
@@ -557,6 +588,23 @@ mod tests {
         assert!(!sql.contains("payload.request_payload, payload.response_payload"));
         assert!(sql.contains("payload.request_payload as request_payload"));
         assert!(sql.contains("payload.response_payload as response_payload"));
+    }
+
+    #[test]
+    fn invocations_sql_filters_both_attribution_dimensions_as_params() {
+        let sql = invocations_sql(status_predicate("all").expect("all is whitelisted"));
+        // both are bound, never spliced: they arrive as caller-supplied uuids
+        assert!(sql.contains("has(splitByChar(',', {business_unit:String}), business_unit_id)"));
+        assert!(sql.contains("has(splitByChar(',', {customer:String}), customer_id)"));
+        // the empty-string guard is what makes an omitted filter mean "every
+        // unit" rather than "the unit whose id is the empty string" — without
+        // it an unattributed row (both columns default to '') would be the
+        // only thing an empty filter matched
+        assert!(sql.contains("{business_unit:String} = ''"));
+        assert!(sql.contains("{customer:String} = ''"));
+        // and no attribution value is ever formatted into the text
+        assert!(!sql.contains("business_unit_id = '"));
+        assert!(!sql.contains("customer_id = '"));
     }
 
     #[test]

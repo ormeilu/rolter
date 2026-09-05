@@ -9,6 +9,7 @@ import {
   expectSkeleton,
   json,
   pending,
+  recording,
   routes,
   scoped,
   type FetchStub,
@@ -93,6 +94,37 @@ const CUSTOMER: CustomerRow = {
   retired_at: null,
   created_at: "2026-02-05T10:00:00Z",
 };
+
+/**
+ * A stub that filters the way the control plane does (#1247): the attribution
+ * dimensions arrive as comma-separated sets on the query string and narrow the
+ * rows *before* the page is cut. A stub that ignored them would let a story
+ * pass while the screen quietly filtered the page itself again.
+ */
+const serverFiltered = (rows: InvocationRow[], base = "USD"): FetchStub =>
+  scoped(async (input) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/v1/analytics/invocations") {
+      const set = (name: string) => {
+        const raw = url.searchParams.get(name);
+        return raw ? raw.split(",") : null;
+      };
+      const units = set("business_unit");
+      const customers = set("customer");
+      const data = rows.filter(
+        (r) =>
+          (!units || units.includes(r.business_unit_id)) &&
+          (!customers || customers.includes(r.customer_id)),
+      );
+      return json({ data });
+    }
+    if (url.pathname === "/api/v1/currency")
+      return json({ base, codes: [base], rates: {} });
+    if (url.pathname === "/api/v1/models") return json([]);
+    if (url.pathname.includes("/business-units")) return json([UNIT]);
+    if (url.pathname.includes("/customers")) return json([CUSTOMER]);
+    return json([]);
+  });
 
 const withLogs = (rows: InvocationRow[], base = "USD"): FetchStub =>
   routes([
@@ -259,7 +291,7 @@ export const Tablet: Story = {
  */
 export const FiltersByBusinessUnit: Story = {
   render: () => (
-    <Harness fetchStub={withLogs(ATTRIBUTED)}>
+    <Harness fetchStub={serverFiltered(ATTRIBUTED)}>
       <Logs />
     </Harness>
   ),
@@ -286,7 +318,7 @@ export const FiltersByBusinessUnit: Story = {
 /** the same rail, on the customer dimension */
 export const FiltersByCustomer: Story = {
   render: () => (
-    <Harness fetchStub={withLogs(ATTRIBUTED)}>
+    <Harness fetchStub={serverFiltered(ATTRIBUTED)}>
       <Logs />
     </Harness>
   ),
@@ -301,14 +333,16 @@ export const FiltersByCustomer: Story = {
 };
 
 /**
- * A filter that narrows only the page in front of you must say so. The
- * invocations endpoint searches by model, key and status; attribution is
- * applied client-side, and implying otherwise would make an operator read a
- * partial answer as a complete one.
+ * #1247: the attribution filter is a query the server answers, not a pass over
+ * the page it already returned. The request has to carry it — a screen that
+ * filtered locally would look identical on a single page and be wrong on every
+ * page after it.
  */
-export const TheAttributionFilterSaysWhatItSearches: Story = {
+const filtered = recording(serverFiltered(ATTRIBUTED));
+
+export const TheAttributionFilterIsSentToTheServer: Story = {
   render: () => (
-    <Harness fetchStub={withLogs(ATTRIBUTED)}>
+    <Harness fetchStub={filtered.stub}>
       <Logs />
     </Harness>
   ),
@@ -319,9 +353,20 @@ export const TheAttributionFilterSaysWhatItSearches: Story = {
     await userEvent.click(
       await canvas.findByRole("button", { name: "Business unit" }),
     );
-    await expect(
-      await canvas.findByText(/searched by model, key and status only/),
-    ).toBeVisible();
+    await userEvent.click(
+      await canvas.findByRole("checkbox", { name: "Platform Engineering" }),
+    );
+
+    await waitFor(() => {
+      const asked = filtered.calls.find((c) =>
+        c.url.includes("business_unit=unit-1"),
+      );
+      expect(asked).toBeDefined();
+    });
+
+    // and the warning that the old client-side filter needed is gone, because
+    // the answer is no longer partial
+    await expect(canvas.queryByText(/searched by model, key and status only/)).toBeNull();
   },
 };
 

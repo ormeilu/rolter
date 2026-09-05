@@ -1076,8 +1076,7 @@
       "businessUnit": "Business unit",
       "customer": "Customer",
       "filterBusinessUnits": "Filter business units",
-      "filterCustomers": "Filter customers",
-      "attributionFilterHint": "Narrows the page below. The gateway logs are searched by model, key and status only."
+      "filterCustomers": "Filter customers"
     },
     "mcpLogs": {
       "emptyTitle": "No MCP tool calls yet",
