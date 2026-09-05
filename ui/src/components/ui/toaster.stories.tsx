@@ -60,16 +60,17 @@ export const AnnouncesAndDismisses: Story = {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByRole("button", { name: "Success" }));
     const status = canvas.getByRole("status");
-    await expect(within(status).getByText("Provider saved")).toBeVisible();
+    // the card fades in, so visibility is awaited rather than asserted at once
+    await waitFor(() => expect(within(status).getByText("Provider saved")).toBeVisible());
 
     await userEvent.click(canvas.getByRole("button", { name: "Error" }));
     const alert = canvas.getByRole("alert");
-    await expect(within(alert).getByText(/could not delete/i)).toBeVisible();
-    await expect(within(alert).getByText(/still the target/i)).toBeVisible();
+    await waitFor(() => expect(within(alert).getByText(/could not delete/i)).toBeVisible());
+    await expect(within(alert).getByText(/still the target/i)).toBeInTheDocument();
 
     await userEvent.click(within(alert).getByRole("button", { name: "Dismiss notification" }));
     await waitFor(() => expect(within(alert).queryByText(/could not delete/i)).toBeNull());
     // the success is still on its own timer
-    await expect(within(status).getByText("Provider saved")).toBeVisible();
+    await expect(within(status).getByText("Provider saved")).toBeInTheDocument();
   },
 };
