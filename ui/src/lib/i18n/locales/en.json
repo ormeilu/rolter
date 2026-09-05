@@ -157,7 +157,7 @@
     "settings": "Settings",
     "client-settings": "Client Settings",
     "compatibility": "Compatibility",
-    "caching": "Caching",
+    "effective-config": "Effective config",
     "security": "Security",
     "api-keys": "My Virtual Keys",
     "performance": "Performance Tuning",
@@ -913,9 +913,9 @@
       "title": "Compatibility",
       "subtitle": "OpenAI/Anthropic-compatible conversion settings."
     },
-    "caching": {
-      "title": "Caching",
-      "subtitle": "Direct and semantic response caching."
+    "effective-config": {
+      "title": "Effective config",
+      "subtitle": "The config every gateway is serving right now — providers, routes and keys from rolter.toml and the store, read-only."
     },
     "security": {
       "title": "Security",

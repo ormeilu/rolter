@@ -2,6 +2,7 @@ import { ArrowRight, Eye, EyeOff, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { LocalePicker } from "@/components/LocalePicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ApiError, getAuthMethods, login, type AuthMethods } from "@/lib/api";
@@ -203,8 +204,12 @@ export default function Login() {
                 {t("auth.noMethod")}
               </span>
             )}
-            <span className="text-center text-xs text-[color:var(--text-subtle)]">
+            <span className="flex items-center justify-center gap-2 text-center text-xs text-[color:var(--text-subtle)]">
               {t("auth.selfHosted")}
+              {/* the only language switch lives in the shell's nav, which a
+                  signed-out visitor never sees; the menu opens upward, so it
+                  sits on the card's last line rather than above the form */}
+              <LocalePicker />
             </span>
           </div>
         </div>

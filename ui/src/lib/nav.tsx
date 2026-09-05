@@ -143,7 +143,7 @@ export const NAV: NavDef[] = [
     children: [
       { key: "client-settings", icon: <SlidersHorizontal /> },
       { key: "compatibility", icon: <Plug /> },
-      { key: "caching", icon: <Database /> },
+      { key: "effective-config", icon: <Database /> },
       { key: "security", icon: <Shield /> },
       { key: "api-keys", icon: <KeyRound /> },
       { key: "performance", icon: <TrendingUp /> },
@@ -170,7 +170,7 @@ export const BUILT = new Set([
   "audit-logs",
   "gov-users",
   "circuit-breaker",
-  "caching",
+  "effective-config",
   "routing-rules",
   "gov-teams",
   "mcp-catalog",

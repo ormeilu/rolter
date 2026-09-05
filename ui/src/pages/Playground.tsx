@@ -385,9 +385,20 @@ function ChatColumn({
 function ChatMode({ models }: { models: ModelOption[] }) {
   const [cols, setCols] = React.useState<{ model: string }[]>([{ model: FAKE }]);
   const [multimodal, setMultimodal] = React.useState(false);
+  // the list arrives after the first render. until the operator picks
+  // something, the first real route beats the built-in placeholder: a
+  // deployment with models configured should not open on lorem ipsum
+  const touched = React.useRef(false);
+  React.useEffect(() => {
+    if (touched.current) return;
+    const real = models.find((m) => m.id !== FAKE && !m.id.includes("/"));
+    if (real) setCols((c) => (c.length === 1 && c[0].model === FAKE ? [{ model: real.id }] : c));
+  }, [models]);
   const compare = cols.length > 1;
-  const setModel = (i: number, v: string) =>
+  const setModel = (i: number, v: string) => {
+    touched.current = true;
     setCols((c) => c.map((col, j) => (j === i ? { model: v } : col)));
+  };
   const add = () =>
     setCols((c) => [...c, { model: models[c.length % models.length]?.id ?? FAKE }]);
   const remove = (i: number) => setCols((c) => c.filter((_, j) => j !== i));

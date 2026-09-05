@@ -208,6 +208,7 @@ function ScopeRow({
         <button
           type="button"
           aria-label={t(keys.add)}
+          title={t(keys.add)}
           onClick={onAdd}
           className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
@@ -218,6 +219,7 @@ function ScopeRow({
         <button
           type="button"
           aria-label={t(keys.remove)}
+          title={t(keys.remove)}
           onClick={onDelete}
           className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
