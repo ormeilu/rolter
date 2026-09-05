@@ -1045,10 +1045,24 @@
       "tierRouteAria": "Route for this tier"
     },
     "health": {
-      "emptyTitle": "No health events recorded yet",
-      "emptyBody": "Uptime, MTTR and error-budget burn are computed from real traffic. Send a request through the gateway and the first rollup lands here.",
+      "closed": "closed",
       "emptyAction": "Open the playground",
-      "noEvents": "No events in window."
+      "emptyBody": "Uptime, MTTR and error-budget burn are computed from real traffic. Send a request through the gateway and the first rollup lands here.",
+      "emptyTitle": "No health events recorded yet",
+      "errorBudget": "error budget burn",
+      "failures": "Failures",
+      "failuresShort_one": "{{count}} failure",
+      "failuresShort_other": "{{count}} failures",
+      "grainDerived": "rolled up from targets",
+      "grainProvider": "probed · {{sources}}",
+      "incidents": "Incidents",
+      "mttr": "MTTR",
+      "noEvents": "No events in window.",
+      "subtitle": "Circuit breakers, uptime and error-budget burn per provider — last 7 days, SLA target {{sla}}",
+      "targets_one": "{{count}} target",
+      "targets_other": "{{count}} targets",
+      "tripped": "tripped",
+      "uptimeMeta": "uptime · {{events}} events"
     },
     "limits": {
       "budgetsEmptyTitle": "No budgets for this scope",

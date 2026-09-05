@@ -2,6 +2,24 @@
 //! (ROL-198): uptime %, MTTR and a bucketed failure timeline, per provider and
 //! target. All endpoints are read-only and window-bounded so scans stay cheap.
 //!
+//! # Two grains, named
+//!
+//! The gateway watches a provider at two different grains and writes both to
+//! this one table. Probe and status-page events describe the *provider* and
+//! carry its own name as the `target_id`; passive events describe one route
+//! through it and carry the real target. Grouping by `(provider, target_id)`
+//! alone therefore made a provider surface twice — once as itself, once per
+//! target it serves — as two unrelated rows with wildly different counts
+//! (#1257).
+//!
+//! Every row now reports `grain`: `provider` when the row is about the provider
+//! as a whole, `target` when it is about one route through it. The counts are
+//! deliberately *not* merged, because they measure different things — a probe
+//! every `probe_interval_secs` against a request-driven passive observation —
+//! so the dashboard nests the target rows under their provider instead of
+//! adding them up. `uptime` also returns `sources`, the distinct event sources
+//! behind the row, so a card can say what actually fed it.
+//!
 //! Injection safety is the same as the analytics module: time bounds are passed
 //! as ClickHouse query **parameters**, and the only value spliced into SQL text
 //! (the timeline bucket) is validated against a fixed whitelist first. The SLA
@@ -16,6 +34,11 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::analytics::{bucket_fn, client_or_503, run, window_params, WindowQuery, WHERE_WINDOW};
+
+/// How wide a rollup row is. Probe and status-page events name the provider
+/// itself as their `target_id`, passive events name the route's real target, so
+/// this expression recovers which of the two a grouped row describes.
+const GRAIN: &str = "if(target_id = provider, 'provider', 'target') as grain";
 
 pub fn router() -> Router<crate::ControlState> {
     Router::new()
@@ -46,8 +69,18 @@ async fn uptime(
     // clamp the sla target into a sane open interval; it is a validated literal,
     // never a raw query string spliced into sql
     let sla = q.sla.unwrap_or(0.99).clamp(0.0001, 1.0);
-    let sql = format!(
+    run(ch.query(&uptime_sql(sla), &window_params(&q.window)).await)
+}
+
+/// The uptime rollup. `sla` must already be clamped by the caller — it is
+/// spliced into the SQL text as a float literal, so it is never a raw query
+/// string. Rows carry their [`grain`](self) and the distinct sources behind
+/// them.
+fn uptime_sql(sla: f64) -> String {
+    format!(
         "select provider, target_id, \
+                {GRAIN}, \
+                arraySort(groupUniqArray(source)) as sources, \
                 count() as events, \
                 countIf(outcome = 'ok') as ok, \
                 countIf(outcome = 'error') as errors, \
@@ -58,9 +91,8 @@ async fn uptime(
                 (1 - countIf(outcome = 'ok') / count()) > (1 - {sla}) as sla_breached, \
                 max(ts) as last_event \
          from provider_health_events where {WHERE_WINDOW} \
-         group by provider, target_id order by uptime asc format JSON"
-    );
-    run(ch.query(&sql, &window_params(&q.window)).await)
+         group by provider, target_id, grain order by uptime asc format JSON"
+    )
 }
 
 /// Mean time to recovery per provider/target over the window.
@@ -76,8 +108,16 @@ async fn mttr(State(state): State<crate::ControlState>, Query(q): Query<WindowQu
         Ok(ch) => ch,
         Err(resp) => return resp,
     };
-    let sql = format!(
+    run(ch.query(&mttr_sql(), &window_params(&q)).await)
+}
+
+/// The MTTR rollup. Episodes are detected per `(provider, target_id)`, so a
+/// probe outage and a passive outage on the same provider stay separate
+/// incidents; each row names its [`grain`](self).
+fn mttr_sql() -> String {
+    format!(
         "select provider, target_id, \
+                {GRAIN}, \
                 round(avg(mttr_seconds), 1) as mttr_seconds, \
                 count() as incidents \
          from ( \
@@ -96,9 +136,8 @@ async fn mttr(State(state): State<crate::ControlState>, Query(q): Query<WindowQu
              group by provider, target_id, good_before \
              having bad_n > 0 and good_n > 0 and mttr_seconds > 0 \
          ) \
-         group by provider, target_id order by mttr_seconds desc format JSON"
-    );
-    run(ch.query(&sql, &window_params(&q)).await)
+         group by provider, target_id, grain order by mttr_seconds desc format JSON"
+    )
 }
 
 /// Bucketed failure timeline per provider/target: ok/error/timeout counts per
@@ -119,16 +158,25 @@ async fn timeline(
         )
             .into_response();
     };
-    let sql = format!(
+    run(ch
+        .query(&timeline_sql(bucket_expr), &window_params(&q))
+        .await)
+}
+
+/// The bucketed failure timeline. `bucket_expr` has already been checked
+/// against [`bucket_fn`]'s fixed whitelist by the caller, so no untrusted value
+/// reaches the SQL text.
+fn timeline_sql(bucket_expr: &str) -> String {
+    format!(
         "select {bucket_expr}(ts) as bucket, provider, target_id, \
+                {GRAIN}, \
                 count() as events, \
                 countIf(outcome = 'ok') as ok, \
                 countIf(outcome = 'error') as errors, \
                 countIf(outcome = 'timeout') as timeouts \
          from provider_health_events where {WHERE_WINDOW} \
-         group by bucket, provider, target_id order by bucket format JSON"
-    );
-    run(ch.query(&sql, &window_params(&q)).await)
+         group by bucket, provider, target_id, grain order by bucket format JSON"
+    )
 }
 
 #[cfg(test)]
@@ -150,5 +198,33 @@ mod tests {
         assert!(bucket_fn("hour").is_some());
         assert!(bucket_fn("year").is_none());
         assert!(bucket_fn("hour; drop table provider_health_events").is_none());
+    }
+
+    #[test]
+    fn every_rollup_names_its_grain() {
+        // without this the probe row (target_id = provider) and the passive
+        // rows for the same provider come back as unrelated peers, which is
+        // what made one provider render as several duplicate cards
+        for sql in [uptime_sql(0.99), mttr_sql(), timeline_sql("toStartOfHour")] {
+            assert!(
+                sql.contains("if(target_id = provider, 'provider', 'target') as grain"),
+                "missing grain in: {sql}"
+            );
+            assert!(sql.contains(", grain order by"), "grain not grouped: {sql}");
+        }
+    }
+
+    #[test]
+    fn uptime_reports_the_sources_behind_a_row() {
+        let sql = uptime_sql(0.99);
+        assert!(sql.contains("arraySort(groupUniqArray(source)) as sources"));
+    }
+
+    #[test]
+    fn uptime_splices_only_the_clamped_sla_literal() {
+        let sql = uptime_sql(0.995);
+        assert!(sql.contains("(1 - 0.995)"));
+        // the window bounds stay parameters, never text
+        assert!(sql.contains("{since:String}"));
     }
 }

@@ -340,10 +340,6 @@
     "Traffic inspection rules",
     "Use a built-in detector or one bounded regular expression. The gateway validates it before publishing."
   ],
-  "src/pages/Health.tsx": [
-    "Failures",
-    "Incidents"
-  ],
   "src/pages/Keys.tsx": [
     "Add Virtual Key",
     "Cancel",
