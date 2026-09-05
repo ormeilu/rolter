@@ -599,19 +599,50 @@ jobs:
       - name: cargo check (macos)
         run: cargo check --workspace --all-features
 
-  # ── semver: no accidental breaking API change in published crates ───────────
-  # meaningful once crates are published (ROL-117); informational until a
-  # baseline version exists on crates.io to diff against.
+  # ── semver: no accidental breaking API change on the guarded crates ─────────
+  # scoped deliberately. the baseline is the previous release *tag*, not the
+  # published crate, and only the crates listed in GUARDED are checked — the
+  # rest are pre-1.0 implementation detail that breaks on purpose. what each
+  # surface promises, and how a crate joins or leaves the list, is written down
+  # in docs/development/api-stability.md (#1217). still informational; it is
+  # promoted to blocking when 1.0 fixes the surfaces for real (#922).
   semver-checks:
     name: semver-checks (informational)
     runs-on: ubuntu-latest
     continue-on-error: true
+    env:
+      # crates whose rust API is checked for patch-level compatibility against
+      # the last release tag. keep in sync with docs/development/api-stability.md
+      GUARDED: -p rolter-auth -p rolter-balancer -p rolter-gateway -p rolter-proxy
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # --baseline-rev needs the tag history, which a shallow clone omits
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
+      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+        with:
+          tool: cargo-semver-checks
+      - name: resolve baseline tag
+        id: baseline
+        run: |
+          tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+          if [ -z "$tag" ]; then
+            echo "no release tag found; nothing to diff against" >> "$GITHUB_STEP_SUMMARY"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          else
+            echo "baseline: \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          fi
+      # --release-type patch is the strict reading: on the guarded crates a
+      # breaking change must be a deliberate act, not a side effect
+      - name: cargo semver-checks (guarded crates)
+        if: steps.baseline.outputs.tag != ''
+        env:
+          BASELINE: ${{ steps.baseline.outputs.tag }}
+        # shellcheck disable=SC2086 # GUARDED is a deliberate word-split list
+        run: cargo semver-checks $GUARDED --baseline-rev "$BASELINE" --release-type patch
