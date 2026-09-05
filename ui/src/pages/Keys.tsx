@@ -44,12 +44,14 @@ import {
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useFormTelemetry, useScreenReady } from "@/lib/ux-react";
 
 const KEYS_QUERY_KEY = ["virtual-keys"];
 
 export default function Keys() {
   const { t } = useTranslation();
+  const toast = useToast();
   // the same short date the mint sheet previews, so a row and its preview
   // cannot disagree about when the key stops working (#1182)
   const fmt = useFormat();
@@ -67,16 +69,27 @@ export default function Keys() {
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: [...KEYS_QUERY_KEY, scope.projectId] });
 
+  // the row toggles have no inline error line, so a refused change is the
+  // toast's to report; a change that went through needs no announcement
+  const reportFailure = (error: unknown) =>
+    toast.push({
+      tone: "error",
+      title: t("toast.saveFailed", { what: t("errors.resources.virtualKeys") }),
+      detail: errorDetail(error),
+    });
+
   const toggleDisabled = useMutation({
     mutationFn: ({ id, disabled }: { id: string; disabled: boolean }) =>
       setVirtualKeyDisabled(id, disabled),
     onSuccess: invalidate,
+    onError: reportFailure,
   });
 
   const setCache = useMutation({
     mutationFn: ({ id, cache }: { id: string; cache: boolean | null }) =>
       setVirtualKeyCache(id, cache),
     onSuccess: invalidate,
+    onError: reportFailure,
   });
 
   const removeKey = useMutation({
@@ -291,12 +304,21 @@ export default function Keys() {
 
               if (!deleteTarget) return;
               deleteUx.submitted();
+              const name = deleteTarget.name;
               removeKey.mutate(deleteTarget.id, {
                 onSuccess: () => {
                   deleteUx.saved();
                   setDeleteTarget(null);
+                  toast.push({ tone: "success", title: t("toast.deleted", { what: name }) });
                 },
-                onError: () => deleteUx.failed(),
+                onError: (error) => {
+                  deleteUx.failed();
+                  toast.push({
+                    tone: "error",
+                    title: t("toast.deleteFailed", { what: name }),
+                    detail: errorDetail(error),
+                  });
+                },
               });
             }}
           >

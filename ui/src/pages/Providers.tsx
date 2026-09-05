@@ -35,6 +35,7 @@ import {
   type ProviderRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import {
   useErrorState,
   useFormTelemetry,
@@ -45,6 +46,7 @@ const PROVIDERS_QUERY_KEY = ["providers"];
 
 export default function Providers() {
   const { t } = useTranslation();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const scope = useScope();
   // the scope hook names a catalog key rather than carrying english copy
@@ -260,12 +262,21 @@ export default function Providers() {
             onClick={() => {
               if (!deleteTarget) return;
               deleteUx.submitted();
+              const name = deleteTarget.name;
               removeProvider.mutate(deleteTarget.id, {
                 onSuccess: () => {
                   deleteUx.saved();
                   setDeleteTarget(null);
+                  toast.push({ tone: "success", title: t("toast.deleted", { what: name }) });
                 },
-                onError: () => deleteUx.failed(),
+                onError: (error) => {
+                  deleteUx.failed();
+                  toast.push({
+                    tone: "error",
+                    title: t("toast.deleteFailed", { what: name }),
+                    detail: errorDetail(error),
+                  });
+                },
               });
             }}
           >
