@@ -10,12 +10,14 @@ import {
   expectSkeleton,
   recording,
 } from "./story-harness";
+import { Toaster } from "@/components/ui/toaster";
 import type {
   McpOAuthGrantRow,
   McpOAuthSessionRow,
   McpServerRow,
   UserRow,
 } from "@/lib/api";
+import { ToastProvider } from "@/lib/toast";
 
 const ORG = { id: "org-1", name: "acme", slug: "acme", created_at: "2026-01-01T00:00:00Z" };
 const TEAM = { id: "team-1", org_id: ORG.id, name: "platform", created_at: "2026-01-01T00:00:00Z" };
@@ -365,6 +367,86 @@ export const SessionRevokeConfirmsFirst: Story = {
     // cascade, and says so
     await confirmDestructive(/github/, /revoke session/i);
     await sessionRevokes.expectSent("DELETE", "/mcp/sessions/sess-1");
+  },
+};
+
+// renewing on demand, beside the sweeper that renews shortly before expiry.
+// only a session that stored a refresh token has anything to renew (#1194)
+const sessionRefreshes = recording(async (input, init) =>
+  String(input).includes("/refresh")
+    ? json(session({ expires_at: new Date(Date.now() + 7_200_000).toISOString() }))
+    : routed()(input, init),
+);
+
+export const SessionRefreshesFromTheRow: Story = {
+  render: () => (
+    <Harness fetchStub={sessionRefreshes.stub}>
+      <ToastProvider>
+        <AuthSessions />
+        <Toaster />
+      </ToastProvider>
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const renew = (await canvas.findAllByRole("button", {
+      name: "Renew this session on github",
+    }))[0];
+    await userEvent.click(renew);
+    await sessionRefreshes.expectSent("POST", "/mcp/sessions/sess-1/refresh");
+    // the toast fades in, so it is momentarily transparent: waitFor rather
+    // than a bare assertion, which would read opacity 0 on the first frame
+    await waitFor(() => expect(canvas.getByText("Session renewed")).toBeVisible());
+  },
+};
+
+// a refusal upstream revokes the session server-side rather than being
+// retried, so the failure has to be said out loud rather than swallowed
+export const SessionRefreshFails: Story = {
+  render: () => (
+    <Harness
+      fetchStub={async (input, init) =>
+        String(input).includes("/refresh")
+          ? json({ error: { message: "session has no usable refresh token" } }, 400)
+          : routed()(input, init)
+      }
+    >
+      <ToastProvider>
+        <AuthSessions />
+        <Toaster />
+      </ToastProvider>
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      (await canvas.findAllByRole("button", { name: "Renew this session on github" }))[0],
+    );
+    await waitFor(() =>
+      expect(canvas.getByText("Could not renew the session")).toBeVisible(),
+    );
+    await expect(canvas.getByText(/no usable refresh token/)).toBeVisible();
+  },
+};
+
+// nothing to renew without a stored refresh token, and the row says so by
+// refusing rather than by failing at the control plane
+export const SessionWithoutRefreshTokenCannotRenew: Story = {
+  render: () => (
+    <Harness
+      fetchStub={routed({
+        grants: () => json([grant()]),
+        sessions: () => json([session({ has_refresh_token: false })]),
+      })}
+    >
+      <AuthSessions />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByRole("button", { name: "Renew this session on github" }),
+    ).toBeDisabled();
   },
 };
 
