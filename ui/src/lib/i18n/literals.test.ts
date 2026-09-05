@@ -120,3 +120,71 @@ describe("baseline", () => {
     expect(recorded["a.tsx"]).toEqual(["Alpha", "Beta"]);
   });
 });
+
+// the blind spots the first scanner had (#1200): one finding per line, prose
+// that wraps, strings inside expressions, a confirm split across lines
+describe("findLiterals sees what the line-at-a-time scan missed", () => {
+  test("reports every literal on a dense line, not just the first", () => {
+    const source = '<Button>Cancel</Button><Button>Delete</Button>';
+    expect(texts(source)).toEqual(["Cancel", "Delete"]);
+  });
+
+  test("reads a paragraph that wraps across lines", () => {
+    const source = `
+      <p className="text-sm">
+        This invitation link is not valid. It may have been used,
+        revoked, or expired.
+      </p>`;
+    expect(texts(source)).toEqual([
+      "This invitation link is not valid. It may have been used, revoked, or expired.",
+    ]);
+  });
+
+  test("reads the strings inside an expression in text position", () => {
+    const source = '<Button>{pending ? "Saving…" : "Save group"}</Button>';
+    expect(texts(source)).toEqual(["Saving…", "Save group"]);
+  });
+
+  test("reads the strings inside an expression-valued user-facing prop", () => {
+    const source = '<Sheet title={initial ? "Configure tool group" : "Create tool group"} />';
+    expect(texts(source)).toEqual(["Configure tool group", "Create tool group"]);
+  });
+
+  test("reads a window.confirm whose literal sits on the next line", () => {
+    const source = `
+      if (
+        window.confirm(
+          "Delete this rule? Traffic that matched it will pass through unchecked.",
+        )
+      ) remove.mutate(id);`;
+    expect(texts(source)).toEqual([
+      "Delete this rule? Traffic that matched it will pass through unchecked.",
+    ]);
+  });
+
+  test("still ignores keyboard keys, header names and class lists in expressions", () => {
+    const source = `
+      <div onKeyDown={(e) => e.key === "Escape" && close()} className={cn("flex items-center", open && "bg-muted")}>
+        {label}
+      </div>`;
+    expect(texts(source)).toEqual([]);
+  });
+
+  test("blanks a t() call that spans lines", () => {
+    const source = `
+      <p>
+        {t("pages.acceptInvite.intro", {
+          email,
+        })}
+      </p>`;
+    expect(texts(source)).toEqual([]);
+  });
+});
+
+// an error's message is what LoadError prints under its heading (#1200)
+test("reads the message of a thrown error", () => {
+  expect(texts('throw new ApiError("gateway request failed: ${res.status}", 502);')).toEqual([
+    "gateway request failed: ${res.status}",
+  ]);
+  expect(texts('throw new Error("scope-1");')).toEqual([]);
+});
