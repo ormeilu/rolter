@@ -124,6 +124,24 @@ function noteUnauthorized(url: string, authed: boolean, err: ApiError) {
   sessionExpiredHandler?.();
 }
 
+/**
+ * The control plane answered, and the answer was "this endpoint is not
+ * mounted here": every CRUD and settings route only exists when it runs with a
+ * database (`--database-url`). A config-file-only deployment therefore 404s
+ * Users, Keys, Providers and every settings screen, which is a deployment
+ * shape, not a bug in the request (#1204).
+ *
+ * Newer control planes send `code: no_such_endpoint`; older ones only the
+ * message, which is matched on its prefix so the screen still explains itself.
+ */
+export function isEndpointNotMounted(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 404 &&
+    (error.code === "no_such_endpoint" || error.message.startsWith("no such endpoint"))
+  );
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const headers = authHeaders();
   const res = await fetch(url, { headers });

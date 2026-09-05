@@ -10,7 +10,7 @@
 // down" costs more time than no error at all, because it invites a wrong
 // hypothesis and the operator spends their attention there first.
 
-import { ApiError, isOpenModeNoSession } from "@/lib/api";
+import { ApiError, isEndpointNotMounted, isOpenModeNoSession } from "@/lib/api";
 
 export type LoadErrorKind =
   /** no session, or it expired — signing in again fixes it */
@@ -24,6 +24,12 @@ export type LoadErrorKind =
    * `ROLTER_ADMIN_TOKEN` is
    */
   | "openMode"
+  /**
+   * the control plane runs without a database, so this endpoint is not
+   * mounted at all (#1204). Neither signing in nor retrying can help;
+   * configuring `ROLTER_DATABASE_URL` is the fix
+   */
+  | "noStore"
   /** the request never got an answer — wrong URL, down, CORS, offline */
   | "unreachable"
   /** the control plane answered, and the answer was a failure */
@@ -40,6 +46,7 @@ export type LoadErrorKind =
  */
 export function classifyLoadError(error: unknown): LoadErrorKind {
   if (isOpenModeNoSession(error)) return "openMode";
+  if (isEndpointNotMounted(error)) return "noStore";
   if (!(error instanceof ApiError)) return "unreachable";
   if (error.status === 401) return "unauthenticated";
   if (error.status === 403) return "forbidden";

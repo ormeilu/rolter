@@ -34,7 +34,7 @@ honest.
 ## What it distinguishes
 
 `classifyLoadError` in `ui/src/lib/load-error.ts` maps a thrown value to one of
-six kinds. `ApiError` already carries `status` and the control plane's `code`,
+seven kinds. `ApiError` already carries `status` and the control plane's `code`,
 so no screen has to parse a message to find out what happened.
 
 | kind | cause | recovery offered |
@@ -42,9 +42,16 @@ so no screen has to parse a message to find out what happened.
 | `unauthenticated` | 401 | sign in again |
 | `forbidden` | 403 | none — ask an administrator |
 | `openMode` | 401 with code `open_mode_no_session` | none — set `ROLTER_ADMIN_TOKEN` |
+| `noStore` | 404 with code `no_such_endpoint` (or that message prefix from an older control plane) | none — set `ROLTER_DATABASE_URL` |
 | `unreachable` | the thrown value is not an `ApiError`, so `fetch` never connected | retry |
 | `server` | 5xx | retry |
 | `unknown` | any other non-ok status | retry |
+
+`noStore` is the third one that looks like something else. Every CRUD and
+settings route is mounted only when the control plane runs with a database, so
+a config-file-only deployment answers Users, Keys, Providers and every settings
+screen with the API's JSON 404. That is the deployment's shape, not a wrong URL
+and not a failure a retry can change (#1204).
 
 Two of these are easy to collapse and must not be. A plain 401 is fixed by
 signing in; `open_mode_no_session` is a control plane running with no admin

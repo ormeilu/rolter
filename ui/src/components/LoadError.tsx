@@ -1,4 +1,12 @@
-import { KeyRound, PlugZap, RefreshCw, ServerCrash, ShieldAlert, ShieldX } from "lucide-react";
+import {
+  DatabaseZap,
+  KeyRound,
+  PlugZap,
+  RefreshCw,
+  ServerCrash,
+  ShieldAlert,
+  ShieldX,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -9,6 +17,7 @@ const ICONS: Record<LoadErrorKind, typeof KeyRound> = {
   unauthenticated: KeyRound,
   forbidden: ShieldX,
   openMode: ShieldAlert,
+  noStore: DatabaseZap,
   unreachable: PlugZap,
   server: ServerCrash,
   unknown: ServerCrash,
