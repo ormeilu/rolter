@@ -226,7 +226,9 @@ export default function Models() {
           [
             ["all", "All"],
             ["db", "DB-managed"],
-            ["config", "Config"],
+            // a deployment with nothing in rolter.toml has no config tier to
+            // filter by; the chip and its legend appear once one exists
+            ...(counts.config > 0 ? [["config", "Config"]] : []),
           ] as [Origin, string][]
         ).map(([key, label]) => (
           <button
@@ -264,17 +266,19 @@ export default function Models() {
             </span>
           </button>
         )}
-        <span className="ml-auto inline-flex items-center gap-[7px] text-xs text-muted-foreground">
-          <Pill
-            color="var(--text-secondary)"
-            tint="var(--surface-subtle)"
-            border="var(--border-default)"
-          >
-            <Lock className="h-3 w-3" />
-            config
-          </Pill>
-          shipped in config · immutable
-        </span>
+        {counts.config > 0 && (
+          <span className="ml-auto inline-flex items-center gap-[7px] text-xs text-muted-foreground">
+            <Pill
+              color="var(--text-secondary)"
+              tint="var(--surface-subtle)"
+              border="var(--border-default)"
+            >
+              <Lock className="h-3 w-3" />
+              config
+            </Pill>
+            shipped in config · immutable
+          </span>
+        )}
       </div>
 
       {models.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}

@@ -112,7 +112,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   "mcp-settings": <McpSettings />,
   "api-keys": <Account />,
   security: <Security />,
-  caching: <Config />,
+  "effective-config": <Config />,
   "client-settings": <ClientSettings />,
   "feature-flags": <FeatureFlags />,
   "guardrail-rules": <GuardrailRules />,
@@ -135,7 +135,10 @@ const LEGACY: Record<string, string> = {
   "": "dashboard",
   keys: "virtual-keys",
   analytics: "dashboard",
-  config: "caching",
+  config: "effective-config",
+  // the entry was labelled "Caching" for a while although it always opened the
+  // effective-config viewer; keep the old path alive
+  caching: "effective-config",
   users: "gov-users",
   limits: "budgets",
   pricing: "pricing-overrides",
