@@ -189,7 +189,7 @@ stages = ["pre-push"]
 [[repos.hooks]]
 id = "cargo-deny"
 name = "cargo deny"
-entry = "cargo deny --all-features check --config .config/deny.toml"
+entry = "cargo deny --all-features --config .config/deny.toml check"
 language = "system"
 always_run = true
 pass_filenames = false
