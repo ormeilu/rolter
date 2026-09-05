@@ -71,6 +71,7 @@ import Providers from "@/pages/Providers";
 import Rbac from "@/pages/Rbac";
 import RoutingRules from "@/pages/RoutingRules";
 import Security from "@/pages/Security";
+import SingleSignOn from "@/pages/SingleSignOn";
 import SkillsRepository from "@/pages/SkillsRepository";
 import Stub from "@/pages/Stub";
 import Teams from "@/pages/Teams";
@@ -126,6 +127,7 @@ const SCREENS: Record<string, React.ReactNode> = {
   "business-units": <BusinessUnits />,
   customers: <Customers />,
   "user-provisioning": <UserProvisioning />,
+  sso: <SingleSignOn />,
   "prompt-repo": <PromptRepository />,
   "skills-repo": <SkillsRepository />,
 };

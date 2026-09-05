@@ -82,7 +82,7 @@ curl -X POST https://your-rolter-host/api/v1/orgs/$ORG_ID/scim-group-mappings \
 - Name a `team_id` or a `project_id` to grant at that scope; omit both to grant at the org.
 - The scope must belong to the same org. A mapping cannot reach another tenant's team, whatever the IdP sends.
 
-This is the same model [single sign-on](/security/authentication) uses for its group mappings, so you only learn it once.
+This is the same model [single sign-on](/security/single-sign-on) uses for its group mappings, so you only learn it once.
 
 <Info>
 Mappings key on the group's display name. If you rename a group in the identity provider, rewrite the mapping too — otherwise the old name simply stops matching and the roles it granted are withdrawn on the next sync.

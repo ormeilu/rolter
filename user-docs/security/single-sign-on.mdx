@@ -1,0 +1,117 @@
+---
+title: "Sign In to Rolter with Okta, Entra ID, or Any OIDC Identity Provider"
+sidebarTitle: "Single Sign-On"
+description: "Register an OIDC provider from the dashboard, map its groups to Rolter roles, and decide whether your organization still accepts passwords."
+---
+
+Rolter can hand the dashboard's front door to your identity provider. A user picks **Continue with Acme Okta** on the sign-in screen, is bounced through the provider's authorization-code flow, and comes back with an ordinary Rolter session — the same session type a password login issues, so nothing downstream of authentication changes.
+
+Everything below lives on one screen: **Governance → Single Sign-On**.
+
+## What the screen manages
+
+<CardGroup cols={3}>
+  <Card title="Org sign-in policy" icon="lock">
+    Whether this org accepts passwords, single sign-on, or both.
+  </Card>
+
+  <Card title="Identity providers" icon="fingerprint">
+    The OIDC providers registered for this org, and the login URL each one answers on.
+  </Card>
+
+  <Card title="Group mappings" icon="users">
+    Which group in the identity provider is worth which role in Rolter.
+  </Card>
+</CardGroup>
+
+Every part of it requires the **admin** role on the org (see [RBAC](/security/rbac)). A member or a viewer is told they do not have access rather than shown an empty screen.
+
+## Register an identity provider
+
+<Steps>
+  <Step title="Create the application in your identity provider">
+    Create an OIDC web application. The redirect URI is `https://your-rolter-host/auth/sso/<slug>/callback`, where `<slug>` is the short name you are about to give the provider in Rolter. Rolter derives that URI from its own configured base URL and never from the incoming request, so a crafted link cannot send an authorization code somewhere else.
+  </Step>
+
+  <Step title="Add the provider in Rolter">
+    Open **Governance → Single Sign-On** and choose **Add provider**. Four fields are required:
+
+    <ParamField path="Name" type="string" required>
+      What the button on the sign-in screen says — `Acme Okta`, `Entra ID`.
+    </ParamField>
+
+    <ParamField path="Slug" type="string" required>
+      The short name in the login URL. It cannot be changed later; registering the provider again is the only way to change it.
+    </ParamField>
+
+    <ParamField path="Issuer URL" type="string" required>
+      The provider's OIDC issuer, such as `https://acme.okta.com`. Rolter reads the discovery document and the signing keys from here, and rejects an issuer that is not an `http(s)` URL.
+    </ParamField>
+
+    <ParamField path="Client ID" type="string" required>
+      The application the provider registered for Rolter.
+    </ParamField>
+
+    Three more are optional: **Scopes** (`openid email profile` by default), **Group claim** (`groups` by default), and **Default role**.
+  </Step>
+
+  <Step title="Paste the client secret">
+    The client secret is sealed with the deployment's key-encryption key the moment it is saved, and it is **never returned** — not on this screen, not through the API. To change it, delete the provider and register it again. Leave the field empty for a public client that relies on PKCE alone.
+
+    <Warning>
+    Storing a client secret needs `ROLTER_KEK` configured on the control plane. Without it, saving a provider *with* a secret is refused — Rolter will not fall back to storing one in the clear.
+    </Warning>
+  </Step>
+
+  <Step title="Copy the login URL">
+    The provider's card shows the URL its sign-in button points at, `https://your-rolter-host/auth/sso/<slug>/start`. Copy it straight from the card to test the flow or to link it from an internal portal.
+  </Step>
+</Steps>
+
+## Map groups to roles
+
+A group arriving from your identity provider grants nothing on its own. **You** decide what it is worth, in the **Group mappings** panel on the provider's card: type the group name exactly as the IdP publishes it, pick `admin`, `member` or `viewer`, and choose **Map group**.
+
+- Mappings are matched against the claim named in **Group claim** — `groups` unless you changed it.
+- Every mapping the dashboard creates grants at the provider's own org. A mapping can never reach another tenant, whatever the identity provider sends.
+- Removing a mapping stops that group being granted the role on the next sign-in. Roles someone already holds are not withdrawn.
+
+<Warning>
+A user who matches no mapping falls back to the provider's **Default role**. Leave that unset and they are **refused** instead of quietly admitted with no memberships — which is the safe default, and the reason a provider with neither a mapping nor a default role cannot log anybody in.
+</Warning>
+
+This is the same mapping model [SCIM provisioning](/security/user-provisioning) uses, so you only learn it once.
+
+## Choose how the org signs in
+
+The **Org sign-in policy** card at the top of the screen carries two switches, and they are saved together.
+
+| Password sign-in | Single sign-on | What the sign-in screen shows |
+| --- | --- | --- |
+| on | on | the email and password form, plus one button per enabled provider |
+| off | on | only the provider buttons |
+| on | off | only the email and password form |
+
+Two combinations are refused, with the reason shown inline:
+
+- **Both off** is an outage rather than a policy, so the dashboard will not send it.
+- **Password sign-in off with no enabled provider** would lock every non-superadmin out. Register the provider first, then turn passwords off.
+
+<Info>
+The superadmin is exempt from `Password sign-in: off` on purpose. A mistyped issuer or an outage at the identity provider would otherwise leave nobody able to sign in and fix it. That exemption is what makes the switch safe to use.
+</Info>
+
+## What the login flow refuses to do
+
+- **No unsigned trust.** The id token is verified against the JWKS fetched from the issuer's discovery document, with the issuer, audience and nonce all checked. An `alg: none` or HMAC-signed token is rejected — only the asymmetric algorithms the provider publishes are accepted.
+- **No open redirect.** The redirect URI comes from the deployment's own base URL, never from the request.
+- **One-shot state.** The login state row is consumed by the callback and expires, so a replayed `code`+`state` pair finds nothing to redeem.
+- **No implicit access.** A user in no mapped group gets the provider's default role, or is refused when there is none.
+
+## Removing a provider
+
+Deleting a provider is confirmed by name first, because it takes a whole route in away at once: anyone signing in through it loses it immediately, and its group mappings go with it. Accounts it already created stay, with the roles they already hold — deletion is not a way to lock people out. Deactivate those accounts from **Governance → Users** if that is what you meant.
+
+<Warning>
+If the org's policy has password sign-in turned off, deleting its only enabled provider leaves nobody but the superadmin able to sign in. Turn password sign-in back on first.
+</Warning>

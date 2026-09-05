@@ -76,6 +76,8 @@
     "resources": {
       "users": "users",
       "provisioningTokens": "provisioning tokens",
+      "ssoProviders": "identity providers",
+      "signInPolicy": "the sign-in policy",
       "budgets": "budgets",
       "rateLimits": "rate limits",
       "providerGroups": "provider groups",
@@ -142,6 +144,7 @@
     "business-units": "Business Units",
     "customers": "Customers",
     "user-provisioning": "User Provisioning",
+    "sso": "Single Sign-On",
     "rbac": "Roles & Permissions",
     "access-profiles": "Access Profiles",
     "audit-logs": "Audit Logs",
@@ -635,6 +638,91 @@
     "rbac": {
       "memberCount_one": "{{count}} member",
       "memberCount_other": "{{count}} members"
+    },
+    "sso": {
+      "policy": {
+        "title": "Org sign-in policy",
+        "subtitle": "Which ways into the dashboard this organization allows. The superadmin can always sign in with a password, so an identity-provider outage cannot lock the deployment out.",
+        "passwordLabel": "Password sign-in",
+        "passwordHint": "Members sign in with an email and a password. Turning this off needs an enabled identity provider first — the control plane refuses it otherwise.",
+        "ssoLabel": "Single sign-on",
+        "ssoHint": "Members sign in through a registered identity provider. The sign-in screen shows one button per enabled provider.",
+        "save": "Save policy",
+        "saved": "Policy saved.",
+        "bothOff": "At least one sign-in method has to stay on — both off is an outage, not a policy."
+      },
+      "providers": {
+        "title": "Identity providers",
+        "count_one": "{{count}} registered",
+        "count_other": "{{count}} registered",
+        "add": "Add provider",
+        "issuer": "Issuer",
+        "clientId": "Client ID",
+        "startUrl": "Login URL",
+        "copyStartUrl": "Copy login URL",
+        "groupClaim": "Group claim",
+        "scopes": "Scopes",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "defaultRole": "Signs in as {{role}} when no group mapping matches.",
+        "noDefaultRole": "No default role: a user in no mapped group is refused, rather than admitted with nothing.",
+        "delete": "Delete provider",
+        "deleteNamed": "Delete provider {{name}}"
+      },
+      "empty": {
+        "title": "No identity provider yet",
+        "body": "Register your OIDC provider and members sign in with the company account they already have — rolter turns the groups in their id token into roles here, so joiners and leavers are handled in the directory instead of one invitation at a time."
+      },
+      "confirm": {
+        "title": "Delete provider {{name}}?",
+        "body": "Anyone signing in through it loses that route immediately, and its group mappings go with it. Accounts it already created stay, with the roles they already hold.",
+        "confirm": "Delete provider"
+      },
+      "create": {
+        "title": "Add identity provider",
+        "subtitle": "OIDC · authorization code with PKCE",
+        "save": "Add provider",
+        "name": "Name",
+        "nameHint": "What the button on the sign-in screen says.",
+        "namePlaceholder": "Acme Okta",
+        "slug": "Slug",
+        "slugHint": "Appears in the login URL, so keep it short — it cannot be changed later.",
+        "slugPlaceholder": "okta",
+        "issuer": "Issuer URL",
+        "issuerHint": "The provider's OIDC issuer. Its discovery document and signing keys are read from here.",
+        "issuerPlaceholder": "https://acme.okta.com",
+        "clientId": "Client ID",
+        "clientIdHint": "The application your provider registered for rolter.",
+        "clientIdPlaceholder": "0oa1b2c3d4",
+        "clientSecret": "Client secret",
+        "clientSecretHint": "Leave empty for a public client that relies on PKCE alone.",
+        "secretWriteOnly": "The secret is sealed the moment it is saved and is never shown again — not on this screen, not through the API. To change it, delete the provider and register it again.",
+        "scopes": "Scopes",
+        "scopesHint": "Space-separated. Leave empty for openid email profile.",
+        "scopesPlaceholder": "openid email profile groups",
+        "groupClaim": "Group claim",
+        "groupClaimHint": "The claim in the id token carrying the user's groups. Leave empty for groups.",
+        "groupClaimPlaceholder": "groups",
+        "defaultRole": "Default role",
+        "defaultRoleHint": "Granted when no group mapping matches. Leave unset to refuse those users instead.",
+        "defaultRoleNone": "Refuse the sign-in"
+      },
+      "mappings": {
+        "title": "Group mappings",
+        "empty": "No group is mapped and there is no default role, so every sign-in through this provider is refused until you map one.",
+        "emptyWithDefault": "No group is mapped yet, so everyone signing in through this provider gets {{role}}.",
+        "groupLabel": "IdP group",
+        "groupPlaceholder": "platform-engineering",
+        "roleLabel": "Role in this org",
+        "add": "Map group",
+        "remove": "Remove mapping",
+        "removeNamed": "Remove the mapping for {{group}}",
+        "confirm": {
+          "title": "Remove the mapping for {{group}}?",
+          "body": "Members of that group stop being granted {{role}} on their next sign-in. Roles they already hold are not withdrawn.",
+          "confirm": "Remove mapping"
+        }
+      }
     }
   },
   "playground": {
@@ -852,6 +940,10 @@
     "user-provisioning": {
       "title": "User Provisioning",
       "subtitle": "SCIM-based user sync and provisioning."
+    },
+    "sso": {
+      "title": "Single Sign-On",
+      "subtitle": "Register an identity provider, map its groups to roles, and choose how this organization signs in."
     },
     "rbac": {
       "title": "Roles & Permissions",

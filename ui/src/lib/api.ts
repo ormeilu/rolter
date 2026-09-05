@@ -3040,3 +3040,154 @@ export const UI_EVENTS_MAX_BATCH = 100;
  */
 export const sendUiEvents = (events: UiEvent[]) =>
   sendJson<void>("POST", "/api/v1/ui-events", { events });
+
+// --- single sign-on (crates/rolter-control/src/sso.rs, #240) ---
+//
+// an org registers an OIDC provider, and a user hits `/auth/sso/{slug}/start`
+// to be bounced through the authorization-code flow. everything here is
+// org-scoped and admin-gated (`sso_provider`, `sso_group_mapping` in
+// rbac_matrix.rs), so a lesser principal is refused with 403 rather than
+// handed an empty list.
+
+/**
+ * A registered identity provider, as `SsoProvider` serialises it.
+ *
+ * `secret_ciphertext` and `secret_nonce` are `#[serde(skip_serializing)]` on
+ * the server, so the sealed client secret is not merely redacted — it is
+ * absent, and nothing in the payload says whether one was ever stored.
+ */
+export interface SsoProviderRow {
+  id: string;
+  org_id: string;
+  name: string;
+  slug: string;
+  issuer: string;
+  client_id: string;
+  scopes: string[];
+  /** claim in the id token carrying the user's groups; `groups` by default */
+  group_claim: string;
+  /** role granted when no mapping matches; null refuses that user entirely */
+  default_role: string | null;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface CreateSsoProviderInput {
+  name: string;
+  slug: string;
+  issuer: string;
+  client_id: string;
+  /** write-only: sealed with the KEK before storage and never returned */
+  client_secret?: string;
+  /** defaults to openid/email/profile when omitted */
+  scopes?: string[];
+  group_claim?: string;
+  default_role?: string;
+}
+
+export function fetchSsoProviders(orgId: string): Promise<SsoProviderRow[]> {
+  return getJson<SsoProviderRow[]>(`/api/v1/orgs/${orgId}/sso-providers`);
+}
+
+export function createSsoProvider(
+  orgId: string,
+  input: CreateSsoProviderInput,
+): Promise<SsoProviderRow> {
+  return sendJson<SsoProviderRow>(
+    "POST",
+    `/api/v1/orgs/${orgId}/sso-providers`,
+    input,
+  );
+}
+
+export function deleteSsoProvider(id: string): Promise<void> {
+  return sendJson<void>("DELETE", `/api/v1/sso-providers/${id}`);
+}
+
+/** an IdP group name granting a role at a scope inside the provider's own org */
+export interface SsoGroupMappingRow {
+  id: string;
+  provider_id: string;
+  group_name: string;
+  org_id: string | null;
+  team_id: string | null;
+  project_id: string | null;
+  role: string;
+  created_at: string;
+}
+
+export interface CreateSsoGroupMappingInput {
+  group_name: string;
+  role: string;
+  /** all three omitted grants at the provider's own org, which is what the
+   * dashboard sends; a mapping may never reach outside that org */
+  org_id?: string;
+  team_id?: string;
+  project_id?: string;
+}
+
+export function fetchSsoGroupMappings(
+  providerId: string,
+): Promise<SsoGroupMappingRow[]> {
+  return getJson<SsoGroupMappingRow[]>(
+    `/api/v1/sso-providers/${providerId}/group-mappings`,
+  );
+}
+
+export function createSsoGroupMapping(
+  providerId: string,
+  input: CreateSsoGroupMappingInput,
+): Promise<SsoGroupMappingRow> {
+  return sendJson<SsoGroupMappingRow>(
+    "POST",
+    `/api/v1/sso-providers/${providerId}/group-mappings`,
+    input,
+  );
+}
+
+export function deleteSsoGroupMapping(id: string): Promise<void> {
+  return sendJson<void>("DELETE", `/api/v1/sso-group-mappings/${id}`);
+}
+
+/**
+ * Where a provider's "Continue with …" button points.
+ *
+ * The same string `auth_policy.rs` builds for `GET /api/v1/auth/methods`, from
+ * the slug alone — the admin screen has to show the URL for a provider it just
+ * created, which that unauthenticated endpoint only lists once the login screen
+ * next reloads.
+ */
+export function ssoStartPath(slug: string): string {
+  return `/auth/sso/${slug}/start`;
+}
+
+// --- org sign-in policy (crates/rolter-control/src/auth_policy.rs, #240) ---
+
+/** `OrgAuthPolicy`; the pair decides what the login screen offers this org */
+export interface OrgAuthPolicy {
+  org_id: string;
+  allow_password_login: boolean;
+  allow_sso: boolean;
+  updated_at: string;
+}
+
+export function fetchAuthPolicy(orgId: string): Promise<OrgAuthPolicy> {
+  return getJson<OrgAuthPolicy>(`/api/v1/orgs/${orgId}/auth-policy`);
+}
+
+/**
+ * Both flags travel together, because the server refuses the *combination*
+ * rather than either field: turning both off is an outage, and turning
+ * passwords off before an enabled provider exists locks every non-superadmin
+ * out. Each comes back 409 carrying its own message.
+ */
+export function updateAuthPolicy(
+  orgId: string,
+  input: { allow_password_login: boolean; allow_sso: boolean },
+): Promise<OrgAuthPolicy> {
+  return sendJson<OrgAuthPolicy>(
+    "PUT",
+    `/api/v1/orgs/${orgId}/auth-policy`,
+    input,
+  );
+}
