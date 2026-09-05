@@ -9,6 +9,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -60,6 +61,11 @@ struct IngestEvent {
     arguments: Option<Value>,
     result: Option<Value>,
     error: Option<String>,
+    /// when the tool call itself happened, RFC 3339. only the submitter knows
+    /// this — a proxy that buffers or retries can be minutes late, and leaving
+    /// the column to its `now64(3)` default stamps the ingest time instead
+    /// (#1210)
+    ts: Option<String>,
 }
 
 fn validate_atom(value: &str, name: &str) -> Result<(), String> {
@@ -87,6 +93,20 @@ fn validate_event(event: &IngestEvent) -> Result<(), String> {
         return Err("latency_ms exceeds UInt32 range".to_string());
     }
     Ok(())
+}
+
+/// The instant the tool call happened, in the RFC 3339 form ClickHouse's
+/// `best_effort` parser reads into `DateTime64(3)`. Falls back to the ingest
+/// time when the submitter names none, which is the closest honest answer
+/// available here.
+fn event_ts(supplied: Option<&str>) -> Result<String, String> {
+    let ts = match supplied.filter(|value| !value.is_empty()) {
+        Some(value) => DateTime::parse_from_rfc3339(value)
+            .map_err(|_| "ts must be an RFC 3339 timestamp".to_string())?
+            .with_timezone(&Utc),
+        None => Utc::now(),
+    };
+    Ok(ts.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
 fn redact(value: &mut Value, fields: &[String]) {
@@ -151,7 +171,10 @@ async fn ingest_event(
         .map_err(|message| ApiError::Core(rolter_core::Error::Config(message)))?;
     let logging = state.store.load().await?.logging;
     let capture_policy = logging.payload_capture;
+    let ts = event_ts(event.ts.as_deref())
+        .map_err(|message| ApiError::Core(rolter_core::Error::Config(message)))?;
     let row = json!({
+        "ts": ts,
         "event_id": event.event_id,
         "server": event.server,
         "tool": event.tool,
@@ -408,9 +431,29 @@ mod tests {
                 arguments: None,
                 result: None,
                 error: None,
+                ts: None,
             };
             assert!(validate_event(&event).is_ok());
         }
+    }
+
+    #[test]
+    fn a_supplied_event_time_is_normalized_and_a_bad_one_is_rejected() {
+        // the submitter's own instant survives, at the column's precision
+        assert_eq!(
+            event_ts(Some("2025-09-05T00:02:22.061+00:00")).unwrap(),
+            "2025-09-05T00:02:22.061Z"
+        );
+        // an offset is carried into utc rather than dropped
+        assert_eq!(
+            event_ts(Some("2025-09-05T02:02:22.061+02:00")).unwrap(),
+            "2025-09-05T00:02:22.061Z"
+        );
+        assert!(event_ts(Some("not a timestamp")).is_err());
+        // no ts means ingest time, still in the form clickhouse parses
+        let now = event_ts(None).unwrap();
+        assert!(now.ends_with('Z'), "{now}");
+        assert!(DateTime::parse_from_rfc3339(&now).is_ok(), "{now}");
     }
 
     #[test]

@@ -492,6 +492,9 @@ fn probe_health_event(
         }
     };
     HealthEvent {
+        // stamped where the sweep observed the target rather than where the
+        // batch is flushed, so probes keep their own cadence in the rollups
+        ts: chrono::Utc::now(),
         target_id: provider.to_string(),
         provider: provider.to_string(),
         source,

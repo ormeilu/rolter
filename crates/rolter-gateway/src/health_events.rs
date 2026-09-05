@@ -12,9 +12,11 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::sync::mpsc;
 
+use crate::logging::{clickhouse_ts, BEST_EFFORT_DATES};
 use crate::metrics::Metrics;
 
 /// Which signal produced a health observation. Serializes to the string names of
@@ -43,10 +45,15 @@ pub enum HealthOutcome {
 }
 
 /// One row of the `provider_health_events` table. Field names match the column
-/// names so the struct serializes directly as a `JSONEachRow` line. `ts` is
-/// omitted deliberately — ClickHouse fills it with `now64(3)` on insert.
+/// names so the struct serializes directly as a `JSONEachRow` line.
 #[derive(Debug, Clone, Serialize)]
 pub struct HealthEvent {
+    /// when the observation was made, not when its batch was flushed. the batch
+    /// writer here has the same flush cadence as the request-log writer, so
+    /// leaving this to the column default collapsed a whole sweep onto one
+    /// millisecond and skewed every uptime/MTTR bucket (#1210)
+    #[serde(serialize_with = "clickhouse_ts::serialize")]
+    pub ts: DateTime<Utc>,
     pub target_id: String,
     pub provider: String,
     pub source: HealthSource,
@@ -84,7 +91,7 @@ impl HealthEventSink {
         let (tx, rx) = mpsc::channel(queue_capacity.max(1));
         let writer = BatchWriter {
             url: format!(
-                "{}/?query=INSERT%20INTO%20provider_health_events%20FORMAT%20JSONEachRow",
+                "{}/?query=INSERT%20INTO%20provider_health_events%20FORMAT%20JSONEachRow{BEST_EFFORT_DATES}",
                 clickhouse_url.trim_end_matches('/')
             ),
             client: reqwest::Client::new(),
@@ -203,6 +210,7 @@ mod tests {
 
     fn event() -> HealthEvent {
         HealthEvent {
+            ts: DateTime::from_timestamp_millis(1_757_030_542_061).expect("timestamp is in range"),
             target_id: "openai/gpt-4o".to_string(),
             provider: "openai".to_string(),
             source: HealthSource::Probe,
@@ -214,11 +222,11 @@ mod tests {
     }
 
     #[test]
-    fn serializes_without_ts_with_enum_names() {
+    fn serializes_the_observation_time_with_enum_names() {
         let value: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&event()).unwrap()).unwrap();
-        // ts is filled by clickhouse, never serialized by us
-        assert!(value.get("ts").is_none());
+        // the observation's own time, in the rfc 3339 form best_effort reads
+        assert_eq!(value["ts"], "2025-09-05T00:02:22.061Z");
         assert_eq!(value["target_id"], "openai/gpt-4o");
         assert_eq!(value["source"], "probe");
         assert_eq!(value["outcome"], "ok");
@@ -286,6 +294,7 @@ mod tests {
             .expect("server timed out")
             .unwrap();
         assert!(req.contains("INSERT%20INTO%20provider_health_events%20FORMAT%20JSONEachRow"));
+        assert!(req.contains("date_time_input_format=best_effort"));
         assert!(req.contains("\"provider\":\"openai\""));
         assert!(req.contains("\"outcome\":\"error\""));
         assert!(req.contains("\"error_kind\":\"rate_limited\""));
