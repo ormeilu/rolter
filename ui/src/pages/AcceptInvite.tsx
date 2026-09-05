@@ -1,5 +1,7 @@
 import { ArrowRight, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
+import { useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +15,8 @@ import { useAuth } from "@/lib/auth";
 // the invitee has no account yet, so this screen renders outside the signed-in
 // shell. the token in the url is the only credential it has.
 export default function AcceptInvite({ token }: { token: string }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
   const { signIn } = useAuth();
   const [invite, setInvite] = useState<InvitationPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -27,13 +31,13 @@ export default function AcceptInvite({ token }: { token: string }) {
       .catch(
         () =>
           live &&
-          setError(
-            "This invitation link is not valid. It may have been used, revoked, or expired — ask whoever invited you for a new one.",
-          ),
+          setError(t("pages.acceptInvite.invalidLink")),
       );
     return () => {
       live = false;
     };
+    // `t` is stable for the lifetime of the loaded catalog
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   const submit = async () => {
@@ -42,8 +46,11 @@ export default function AcceptInvite({ token }: { token: string }) {
     try {
       const res = await acceptInvitation(token, pw);
       signIn(res.user.email, res.token);
-      // land on the dashboard rather than back on a spent link
-      window.history.replaceState(null, "", "/dashboard");
+      // land on the dashboard rather than back on a spent link. this has to
+      // go through the router: a bare history.replaceState changed the url bar
+      // but not the router's location, so the shell re-rendered this screen
+      // against a token that had just been consumed
+      navigate("/dashboard", { replace: true });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -68,18 +75,20 @@ export default function AcceptInvite({ token }: { token: string }) {
 
           {invite == null ? (
             <p className="text-sm text-muted-foreground">
-              {error ?? "Checking your invitation..."}
+              {error ?? t("pages.acceptInvite.checking")}
             </p>
           ) : (
             <>
               <div className="flex flex-col gap-1">
                 <h1 className="text-xl font-semibold">
-                  Join {invite.org_name}
+                  {t("pages.acceptInvite.title", { org: invite.org_name })}
                 </h1>
                 <p className="text-sm text-muted-foreground">
-                  You were invited as <strong>{invite.email}</strong> with the{" "}
-                  <strong>{invite.role}</strong> role. Choose a password — only
-                  you will know it.
+                  <Trans
+                    i18nKey="pages.acceptInvite.intro"
+                    values={{ email: invite.email, role: invite.role }}
+                    components={{ strong: <strong /> }}
+                  />
                 </p>
               </div>
               <form
@@ -91,10 +100,13 @@ export default function AcceptInvite({ token }: { token: string }) {
               >
                 <label className="flex flex-col gap-1.5 text-sm">
                   <span className="text-muted-foreground">
-                    Password (at least 8 characters)
+                    {t("pages.acceptInvite.password")}
                   </span>
                   <Input
                     type="password"
+                    name="new-password"
+                    required
+                    minLength={8}
                     value={pw}
                     onChange={(e) => setPw(e.target.value)}
                     autoComplete="new-password"
@@ -102,22 +114,27 @@ export default function AcceptInvite({ token }: { token: string }) {
                 </label>
                 <label className="flex flex-col gap-1.5 text-sm">
                   <span className="text-muted-foreground">
-                    Confirm password
+                    {t("pages.acceptInvite.confirm")}
                   </span>
                   <Input
                     type="password"
+                    name="confirm-password"
+                    required
+                    aria-invalid={mismatch || undefined}
                     value={confirm}
                     onChange={(e) => setConfirm(e.target.value)}
                     autoComplete="new-password"
                   />
                 </label>
                 {mismatch && (
-                  <p className="text-xs text-destructive">
-                    The two passwords do not match.
+                  <p role="alert" className="text-xs text-destructive">
+                    {t("pages.acceptInvite.mismatch")}
                   </p>
                 )}
                 {error != null && (
-                  <p className="text-xs text-destructive">{error}</p>
+                  <p role="alert" className="text-xs text-destructive">
+                    {error}
+                  </p>
                 )}
                 <Button
                   type="submit"
@@ -126,12 +143,13 @@ export default function AcceptInvite({ token }: { token: string }) {
                 >
                   {pending ? (
                     <>
-                      Creating account...{" "}
+                      {t("pages.acceptInvite.creating")}{" "}
                       <Loader2 className="h-4 w-4 animate-spin" />
                     </>
                   ) : (
                     <>
-                      Accept invitation <ArrowRight className="h-4 w-4" />
+                      {t("pages.acceptInvite.accept")}{" "}
+                      <ArrowRight className="h-4 w-4" />
                     </>
                   )}
                 </Button>

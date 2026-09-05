@@ -143,6 +143,12 @@ export const ChannelsEmpty: Story = {
       <AlertChannels />
     </Harness>
   ),
+  // a fresh deployment used to render nothing under the header here
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("No channels yet")).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Add channel" })).toBeVisible();
+  },
 };
 
 export const ChannelsForbidden: Story = {
@@ -222,6 +228,11 @@ export const RulesEmpty: Story = {
       <AlertRules />
     </Harness>
   ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("No alert rules")).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Add rule" })).toBeVisible();
+  },
 };
 
 export const RulesForbidden: Story = {

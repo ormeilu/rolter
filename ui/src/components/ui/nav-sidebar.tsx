@@ -197,10 +197,18 @@ export function NavSidebar({
 
   React.useEffect(() => {
     if (!userOpen) return;
+    // the scope switcher's create/delete dialogs are portaled to the body, so
+    // a click inside one lands "outside" the menu; treat any open dialog as
+    // part of the menu, or the first keystroke in the name field closes both
+    const inDialog = (target: EventTarget | null) =>
+      target instanceof Element && target.closest('[role="dialog"]') != null;
     const onDoc = (e: MouseEvent) => {
+      if (inDialog(e.target)) return;
       if (userRef.current && !userRef.current.contains(e.target as Node)) setUserOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setUserOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !inDialog(e.target)) setUserOpen(false);
+    };
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
     return () => {

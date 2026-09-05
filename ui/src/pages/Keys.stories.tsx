@@ -60,6 +60,15 @@ export const Loaded: Story = {
       <Keys />
     </Harness>
   ),
+  // the row's own `style` (opacity for a disabled key) must not replace the
+  // grid template: it once did, and every cell stacked into one column
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const name = await canvas.findByText("backend service");
+    const row = name.closest('[style*="grid-template-columns"]');
+    await expect(row).not.toBeNull();
+    await expect(getComputedStyle(row as HTMLElement).gridTemplateColumns).not.toBe("none");
+  },
 };
 
 export const Loading: Story = {

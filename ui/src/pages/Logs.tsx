@@ -9,6 +9,7 @@ import {
   FilterSearchList,
   FilterSection,
 } from "@/components/ui/filter-panel";
+import { LoadError } from "@/components/LoadError";
 import { Button } from "@/components/ui/button";
 import {
   AnalyticsUnavailableError,
@@ -257,7 +258,16 @@ export default function Logs() {
               })}
             </tbody>
           </table>
-          {!query.isLoading && rows.length === 0 && (
+          {query.error && (
+            <div className="p-4">
+              <LoadError
+                error={query.error}
+                resource={t("errors.resources.requestLogs")}
+                onRetry={() => void query.refetch()}
+              />
+            </div>
+          )}
+          {!query.isLoading && !query.error && rows.length === 0 && (
             <p className="px-4 py-10 text-center text-sm text-muted-foreground">
               {t("analytics.noRowsYet")}
             </p>

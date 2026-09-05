@@ -91,14 +91,8 @@ export default function McpLogs() {
           label="Failures"
           value={summary.data ? String(summary.data.failures) : "—"}
         />
-        <McpStat
-          label="Avg latency"
-          value={summary.data ? `${summary.data.avg_latency_ms} ms` : "—"}
-        />
-        <McpStat
-          label="p95 latency"
-          value={summary.data ? `${Math.round(summary.data.p95_latency_ms)} ms` : "—"}
-        />
+        <McpStat label="Avg latency" value={latencyStat(summary.data?.avg_latency_ms)} />
+        <McpStat label="p95 latency" value={latencyStat(summary.data?.p95_latency_ms)} />
       </div>
 
       <div className="flex items-center gap-2.5">
@@ -220,6 +214,13 @@ function McpRow({ row, onSelect }: { row: McpLogRow; onSelect: () => void }) {
       </span>
     </ListRow>
   );
+}
+
+// an empty window averages to null (or nan) upstream; that is "no calls", not
+// a latency of "null ms"
+function latencyStat(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
+  return `${Math.round(Number(value))} ms`;
 }
 
 function McpStat({ label, value }: { label: string; value: string }) {

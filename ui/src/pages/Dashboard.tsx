@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { PageBody } from "@/components/screen";
 import { IncompleteSpendNotice } from "@/components/IncompleteSpendNotice";
+import { LoadError } from "@/components/LoadError";
 import {
   Card,
   CardContent,
@@ -94,6 +95,25 @@ export default function Dashboard() {
             description={t("pages.dashboard.notConfiguredBody")}
           />
         </div>
+      </PageBody>
+    );
+  }
+
+  // a failed summary is a failure, not a quiet day: without this branch a 5xx
+  // or an expired session rendered "0 requests · $0.00" and nothing else
+  const failed = summary.error ?? series.error ?? byModel.error;
+  if (failed) {
+    return (
+      <PageBody>
+        <LoadError
+          error={failed}
+          resource={t("errors.resources.analytics")}
+          onRetry={() => {
+            void summary.refetch();
+            void series.refetch();
+            void byModel.refetch();
+          }}
+        />
       </PageBody>
     );
   }

@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Megaphone, Play, Trash2 } from "lucide-react";
+import { Gavel, History, Loader2, Megaphone, Play, Trash2 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { EditorSheet } from "@/components/EditorSheet";
 import { ListHeader, ListRow, ListTable, PageBody, Pill, StatusDot } from "@/components/screen";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -39,6 +41,7 @@ const stateTone = (state: string) => STATE_TONE[state] ?? STATE_TONE.unknown;
 // channels: webhook destinations alerts are delivered to
 
 export function AlertChannels() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const channels = useQuery({ queryKey: ["alert-channels"], queryFn: fetchAlertChannels, retry: false });
 
@@ -72,6 +75,15 @@ export function AlertChannels() {
         <p className="text-sm text-muted-foreground">
           Alert channels need superadmin access: {(channels.error as Error).message}
         </p>
+      )}
+      {channels.data && channels.data.length === 0 && (
+        <EmptyState
+          uxTarget="alert-channels"
+          icon={<Megaphone />}
+          title={t("pages.alerting.channels.emptyTitle")}
+          description={t("pages.alerting.channels.emptyBody")}
+          actions={<Button onClick={() => setAddOpen(true)}>{t("pages.alerting.channels.add")}</Button>}
+        />
       )}
       <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]">
         {(channels.data ?? []).map((c) => (
@@ -203,6 +215,7 @@ function AddChannelDialog({
 // rules: threshold rules over gateway signals
 
 export function AlertRules() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const rules = useQuery({ queryKey: ["alert-rules"], queryFn: fetchAlertRules, retry: false });
 
@@ -248,6 +261,19 @@ export function AlertRules() {
         <p className="text-sm text-muted-foreground">
           Alert rules need superadmin access: {(rules.error as Error).message}
         </p>
+      )}
+      {rules.data && rules.data.length === 0 && (
+        <EmptyState
+          uxTarget="alert-rules"
+          icon={<Gavel />}
+          title={t("pages.alerting.rules.emptyTitle")}
+          description={
+            channels.data && channels.data.length === 0
+              ? t("pages.alerting.rules.emptyBodyNoChannel")
+              : t("pages.alerting.rules.emptyBody")
+          }
+          actions={<Button onClick={() => setAddOpen(true)}>{t("pages.alerting.rules.add")}</Button>}
+        />
       )}
       <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(380px,1fr))]">
         {(rules.data ?? []).map((r) => {
@@ -456,6 +482,7 @@ function AddRuleDialog({
 const HISTORY_GRID = "150px 1.4fr 110px 130px 2fr";
 
 export function AlertHistory() {
+  const { t } = useTranslation();
   const history = useQuery({
     queryKey: ["alert-history"],
     queryFn: () => fetchAlertHistory(200),
@@ -480,7 +507,12 @@ export function AlertHistory() {
         </p>
       )}
       {history.data && history.data.length === 0 && (
-        <p className="text-sm text-muted-foreground">No alerts delivered yet.</p>
+        <EmptyState
+          uxTarget="alert-history"
+          icon={<History />}
+          title={t("pages.alerting.history.emptyTitle")}
+          description={t("pages.alerting.history.emptyBody")}
+        />
       )}
       {history.data && history.data.length > 0 && (
         <ListTable>

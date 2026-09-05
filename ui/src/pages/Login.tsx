@@ -11,8 +11,10 @@ import { useAuth } from "@/lib/auth";
 export default function Login() {
   const { t } = useTranslation();
   const { signIn } = useAuth();
-  const [email, setEmail] = useState("anya@acme.co");
-  const [pw, setPw] = useState("correct-horse");
+  // empty by design: the prototype shipped a fake demo account here, which a
+  // real deployment then showed to every operator as if it were a login
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
   const [show, setShow] = useState(false);
   const [pending, setPending] = useState(false);
   // what this deployment offers. null while unknown; the permissive shape is
@@ -107,6 +109,10 @@ export default function Login() {
               <span className="text-muted-foreground">{t("auth.email")}</span>
               <Input
                 type="email"
+                name="email"
+                autoComplete="email"
+                autoFocus
+                required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
@@ -116,6 +122,9 @@ export default function Login() {
               <span className="relative block">
                 <Input
                   type={show ? "text" : "password"}
+                  name="password"
+                  autoComplete="current-password"
+                  required
                   value={pw}
                   onChange={(e) => setPw(e.target.value)}
                   className="pr-10"

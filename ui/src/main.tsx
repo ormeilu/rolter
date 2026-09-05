@@ -7,6 +7,7 @@ import "@fontsource-variable/geist-mono";
 
 import App from "@/App";
 import { AuthProvider } from "@/lib/auth";
+import { classifyLoadError, isRetryable } from "@/lib/load-error";
 // initialises i18next as a side effect: the detected locale is applied before
 // the first render, so nothing flashes english on the way to another language
 import "@/lib/i18n";
@@ -18,7 +19,23 @@ import "@/index.css";
 // the first interactions are captured
 void initTelemetry();
 
-const queryClient = new QueryClient();
+// one retry policy for every screen: a 401, a 403 or an open-mode deployment
+// cannot be retried into success, so retrying them three times with backoff
+// (the library default) only delayed the LoadError by several seconds of blank
+// screen. transient failures — an unreachable control plane, a 5xx — still get
+// the default three attempts
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (failureCount, error) =>
+        isRetryable(classifyLoadError(error)) && failureCount < 3,
+      // the org/team/project scope is read by every screen; without a stale
+      // window it was refetched on every navigation before the screen's own
+      // data could even start loading. mutations invalidate explicitly
+      staleTime: 15_000,
+    },
+  },
+});
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

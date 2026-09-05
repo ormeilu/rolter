@@ -21,12 +21,14 @@ export default defineConfig({
   server: {
     port: Number(process.env.PORT) || 3000,
     proxy: {
-      // proxy management api calls to rolter-control during dev
-      "/api": "http://localhost:4001",
+      // proxy management api calls to rolter-control during dev. anchored on
+      // the path segment: a bare "/api" prefix also swallowed the dashboard's
+      // own /api-keys screen, which then rendered blank in dev
+      "^/api/": "http://localhost:4001",
       // proxy playground /v1 calls to the rolter-gateway (data plane) during
       // dev so the browser stays same-origin (no CORS). in production the
       // control plane needs to reverse-proxy /gw/* to the gateway (follow-up).
-      "/gw": {
+      "^/gw/": {
         target: "http://localhost:4000",
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/gw/, ""),

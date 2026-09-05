@@ -2505,8 +2505,10 @@ export interface McpLogsQuery extends AnalyticsWindow {
 export interface McpSummaryRow {
   calls: string | number;
   failures: string | number;
-  avg_latency_ms: number;
-  p95_latency_ms: number;
+  // clickhouse averages an empty window to null (and quantile to nan); the
+  // control plane forwards the JSON as-is
+  avg_latency_ms: number | null;
+  p95_latency_ms: number | null;
 }
 
 export function fetchMcpLogs(
