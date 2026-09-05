@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import GuardrailRules from "./GuardrailRules";
+import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
 import type { GuardrailRuleRow } from "@/lib/api";
 
 const RULES: GuardrailRuleRow[] = [
@@ -72,6 +73,28 @@ export const CreatesCustomRule: Story = {
     await userEvent.selectOptions(within(dialog).getByLabelText("Source"), "pattern");
     await userEvent.type(within(dialog).getByLabelText("Regular expression"), "ignore previous instructions");
     await expect(within(dialog).getByRole("button", { name: "Publish rule" })).toBeEnabled();
+  },
+};
+
+// the delete used to be a bare window.confirm — unstyled, untranslated, and a
+// modal the story runner cannot answer. It is a real dialog now (#1179)
+const deletes = recording(async (_input, init) =>
+  init?.method === "DELETE" ? json({}, 204) : json(RULES),
+);
+
+export const ConfirmsBeforeDeletingARule: Story = {
+  render: () => <Harness fetchStub={deletes.stub} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const del = async () => (await canvas.findAllByRole("button", { name: "Delete" }))[0];
+
+    await userEvent.click(await del());
+    await cancelConfirmation();
+    deletes.expectNotSent("DELETE", "/guardrails/rules/rule-email");
+
+    await userEvent.click(await del());
+    await confirmDestructive(/Redact customer email/, "Delete");
+    await deletes.expectSent("DELETE", "/guardrails/rules/rule-email");
   },
 };
 

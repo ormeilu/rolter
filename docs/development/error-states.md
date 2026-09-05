@@ -68,3 +68,8 @@ it was wrong.
 Add the resource noun to `errors.resources.*` in **every** catalog under
 `ui/src/lib/i18n/locales/` (see [i18n](i18n.md)) and use it as above. The six
 `errors.load.*` kinds already exist; a new screen needs no new error copy.
+
+A *mutation* that fails is a different surface: it is reported where the action
+was taken, not where the data would have been. For a destructive action that
+means inside the confirmation, which stays open so the message has somewhere to
+live — see [destructive actions](destructive-actions.md).

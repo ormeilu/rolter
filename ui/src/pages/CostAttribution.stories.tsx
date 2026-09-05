@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { BusinessUnits, Customers } from "./CostAttribution";
+import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
 import type { BusinessUnitRow, CustomerRow } from "@/lib/api";
 
 const ORG = "11111111-1111-1111-1111-111111111111";
@@ -234,5 +235,54 @@ export const CustomersEmpty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() => expect(canvas.getByText("No customers yet")).toBeVisible());
+  },
+};
+
+// Retire and Delete sit one click apart on the same row, and only one of them
+// is reversible. The confirmation is what separates them (#1179).
+const unitDeletes = recording(async (input, init) => {
+  if (init?.method === "DELETE") return json({}, 204);
+  return router({})(input, init);
+});
+
+export const ConfirmsBeforeDeletingABusinessUnit: Story = {
+  render: () => (
+    <Harness fetchStub={unitDeletes.stub}>
+      <BusinessUnits />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("Platform Engineering")).toBeVisible());
+    const del = () => canvas.getAllByRole("button", { name: "Delete" })[0];
+
+    await userEvent.click(del());
+    await cancelConfirmation();
+    unitDeletes.expectNotSent("DELETE", `/business-units/${UNITS[0].id}`);
+
+    await userEvent.click(del());
+    // the copy points at the reversible alternative rather than only warning
+    await confirmDestructive(/Platform Engineering/, "Delete");
+    await unitDeletes.expectSent("DELETE", `/business-units/${UNITS[0].id}`);
+  },
+};
+
+const customerDeletes = recording(async (input, init) => {
+  if (init?.method === "DELETE") return json({}, 204);
+  return router({})(input, init);
+});
+
+export const ConfirmsBeforeDeletingACustomer: Story = {
+  render: () => (
+    <Harness fetchStub={customerDeletes.stub}>
+      <Customers />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("Acme Corp")).toBeVisible());
+    await userEvent.click(canvas.getAllByRole("button", { name: "Delete" })[0]);
+    await confirmDestructive(/Acme Corp/, "Delete");
+    await customerDeletes.expectSent("DELETE", `/customers/${CUSTOMERS[0].id}`);
   },
 };

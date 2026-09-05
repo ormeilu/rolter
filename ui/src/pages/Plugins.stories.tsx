@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import Plugins from "./Plugins";
+import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
 import type { PluginInstanceRow } from "@/lib/api";
 
 const PLUGINS: PluginInstanceRow[] = [
@@ -108,6 +109,30 @@ export const RejectsInvalidConfiguration: Story = {
     await userEvent.paste("[]");
     await userEvent.click(within(dialog).getByRole("button", { name: "Install plugin" }));
     await expect(within(dialog).getByRole("alert")).toHaveTextContent("Configuration must be a JSON object.");
+  },
+};
+
+// the delete was a bare window.confirm, so the confirm path had never been
+// exercised by a story at all (#1179)
+const deletes = recording(async (input, init) => {
+  const scoped = scopeResponse(String(input));
+  if (scoped) return scoped;
+  return init?.method === "DELETE" ? json({}, 204) : json(PLUGINS);
+});
+
+export const ConfirmsBeforeDeletingAPlugin: Story = {
+  render: () => <Harness fetchStub={deletes.stub} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const del = async () => (await canvas.findAllByRole("button", { name: "Delete" }))[0];
+
+    await userEvent.click(await del());
+    await cancelConfirmation();
+    deletes.expectNotSent("DELETE", "/plugins/plugin-redact");
+
+    await userEvent.click(await del());
+    await confirmDestructive(/PII redaction/, "Delete");
+    await deletes.expectSent("DELETE", "/plugins/plugin-redact");
   },
 };
 

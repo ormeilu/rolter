@@ -1,8 +1,9 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
+import { Loader2, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EditorSheet } from "@/components/EditorSheet";
 import { LoadError } from "@/components/LoadError";
 import { PageBody, StatusDot } from "@/components/screen";
@@ -18,6 +19,7 @@ import {
   fetchRoutes,
   fetchRouteTargets,
   STRATEGIES,
+  type RouteRow,
   type RouteTargetRow,
 } from "@/lib/api";
 import { StrategyHint } from "@/components/StrategyHint";
@@ -79,6 +81,15 @@ export default function RoutingRules() {
   });
 
   const [addOpen, setAddOpen] = React.useState(false);
+  // a route is the public name clients call; deleting one breaks them silently,
+  // so it is confirmed by name before anything leaves (#1179)
+  const [deleteTarget, setDeleteTarget] = React.useState<RouteRow | null>(null);
+  // reset first: an error left over from a previous failed delete would
+  // otherwise greet the next route the operator picks
+  const startDelete = (route: RouteRow) => {
+    remove.reset();
+    setDeleteTarget(route);
+  };
 
   return (
     <PageBody>
@@ -164,19 +175,38 @@ export default function RoutingRules() {
                   type="button"
                   title="Delete route"
                   aria-label="Delete route"
-                  onClick={() => remove.mutate(r.id)}
+                  disabled={remove.isPending && remove.variables === r.id}
+                  onClick={() => startDelete(r)}
                   className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  {remove.isPending && remove.variables === r.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
                 </button>
               </div>
             </div>
           );
         })}
       </div>
-      {remove.isError && (
+      {remove.isError && !deleteTarget && (
         <p className="text-xs text-destructive">{(remove.error as Error).message}</p>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={t("pages.routing.confirm.title", { model: deleteTarget?.model })}
+        description={t("pages.routing.confirm.body")}
+        confirmLabel={t("pages.routing.confirm.confirm")}
+        pending={remove.isPending}
+        error={remove.error}
+        onConfirm={() =>
+          deleteTarget &&
+          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
+        }
+      />
 
       {scope.projectId && (
         <AddRouteDialog

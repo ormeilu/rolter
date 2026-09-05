@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react";
 import * as React from "react";
-import { expect, waitFor, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import Connectors from "./Connectors";
+import { cancelConfirmation, confirmDestructive, recording } from "./story-harness";
 import type { ConnectorRow } from "@/lib/api";
 
 const connector = (over: Partial<ConnectorRow> = {}): ConnectorRow => ({
@@ -135,6 +136,55 @@ export const Error_: Story = {
     const canvas = within(canvasElement);
     await waitFor(() =>
       expect(canvas.getByText(/need superadmin access/)).toBeVisible(),
+    );
+  },
+};
+
+// shipping request logs somewhere is an egress decision; unmaking it takes the
+// delivery history with it, so the connector is named before anything goes
+// (#1179)
+const deletes = recording(async (_input, init) => {
+  if (init?.method === "DELETE") return json({}, 204);
+  return json(CONNECTORS);
+});
+
+export const ConfirmsBeforeDeletingAConnector: Story = {
+  render: () => <Harness fetchStub={deletes.stub} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("signoz")).toBeVisible());
+
+    await userEvent.click(canvas.getByLabelText("Delete connector signoz"));
+    await cancelConfirmation();
+    deletes.expectNotSent("DELETE", "/connectors/c-1");
+
+    await userEvent.click(canvas.getByLabelText("Delete connector signoz"));
+    await confirmDestructive(/signoz/, /delete connector/i);
+    await deletes.expectSent("DELETE", "/connectors/c-1");
+  },
+};
+
+// the delete is on the wire: the confirm button spins and neither button is
+// clickable again
+export const DeletingAConnector: Story = {
+  render: () => (
+    <Harness
+      fetchStub={async (_input, init) =>
+        init?.method === "DELETE" ? new Promise<Response>(() => {}) : json(CONNECTORS)
+      }
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("signoz")).toBeVisible());
+    await userEvent.click(canvas.getByLabelText("Delete connector signoz"));
+    await confirmDestructive(/signoz/, /delete connector/i);
+
+    const dialog = within(document.body).getByRole("dialog");
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: /delete connector/i }),
+      ).toBeDisabled(),
     );
   },
 };

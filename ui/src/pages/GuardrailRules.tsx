@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Plus } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   GuardrailEmpty,
   GuardrailError,
@@ -46,6 +48,7 @@ const EMPTY: GuardrailRuleInput = {
 };
 
 export default function GuardrailRules() {
+  const { t } = useTranslation();
   const client = useQueryClient();
   const query = useQuery({
     queryKey: ["guardrail-rules"],
@@ -76,6 +79,16 @@ export default function GuardrailRules() {
     onSuccess: () =>
       void client.invalidateQueries({ queryKey: ["guardrail-rules"] }),
   });
+
+  // was a bare window.confirm: unstyled, untranslatable, and invisible to the
+  // story runner, which is the one place this path is ever exercised (#1179)
+  const [deleteTarget, setDeleteTarget] = React.useState<GuardrailRuleRow | null>(
+    null,
+  );
+  const startDelete = (rule: GuardrailRuleRow) => {
+    remove.reset();
+    setDeleteTarget(rule);
+  };
 
   const open = editing !== undefined;
   const rules = query.data ?? [];
@@ -154,11 +167,7 @@ export default function GuardrailRules() {
                 <>
                   <Button
                     variant="ghost"
-                    onClick={() =>
-                      window.confirm(
-                        `Delete ${rule.name}? This immediately changes gateway policy.`,
-                      ) && remove.mutate(rule.id)
-                    }
+                    onClick={() => startDelete(rule)}
                     disabled={remove.isPending && remove.variables === rule.id}
                   >
                     {remove.isPending && remove.variables === rule.id && (
@@ -175,6 +184,20 @@ export default function GuardrailRules() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => !o && setDeleteTarget(null)}
+        title={t("pages.guardrailRules.confirm.title", { name: deleteTarget?.name })}
+        description={t("pages.guardrailRules.confirm.body")}
+        confirmLabel={t("common.delete")}
+        pending={remove.isPending}
+        error={remove.error}
+        onConfirm={() =>
+          deleteTarget &&
+          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
+        }
+      />
 
       <RuleDialog
         key={editing?.id ?? (editing === null ? "new" : "closed")}

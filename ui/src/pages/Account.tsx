@@ -3,6 +3,7 @@ import { Check, Copy, Plus, RotateCw, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   DEFAULT_KEY_TTL_DAYS,
   KeyExpiryField,
@@ -240,14 +241,16 @@ function KeyCard({
     mutationFn: () => rotateMyKey(keyRow.id),
     onSuccess: onRotated,
   });
+  // rotation is not undoable and the old secret dies the instant the new one is
+  // issued, so it asks first like every other destructive action (#1179)
+  const [rotateOpen, setRotateOpen] = React.useState(false);
+  const keyLabel = keyRow.name ?? t("account.keys.card.unnamed");
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center justify-between gap-2">
-          <span className="truncate">
-            {keyRow.name ?? t("account.keys.card.unnamed")}
-          </span>
+          <span className="truncate">{keyLabel}</span>
           <Badge tone={keyRow.disabled ? "danger" : "success"}>
             {keyRow.disabled
               ? t("account.keys.card.disabled")
@@ -288,7 +291,10 @@ function KeyCard({
             size="sm"
             variant="outline"
             disabled={rotate.isPending}
-            onClick={() => rotate.mutate()}
+            onClick={() => {
+              rotate.reset();
+              setRotateOpen(true);
+            }}
             title={t("account.keys.card.rotateHint")}
           >
             <RotateCw className="h-3.5 w-3.5" />
@@ -303,6 +309,16 @@ function KeyCard({
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
+        <ConfirmDialog
+          open={rotateOpen}
+          onOpenChange={setRotateOpen}
+          title={t("account.keys.rotateConfirm.title", { name: keyLabel })}
+          description={t("account.keys.rotateConfirm.body")}
+          confirmLabel={t("account.keys.rotateConfirm.confirm")}
+          pending={rotate.isPending}
+          error={rotate.error}
+          onConfirm={() => rotate.mutate(undefined, { onSuccess: () => setRotateOpen(false) })}
+        />
       </CardContent>
     </Card>
   );

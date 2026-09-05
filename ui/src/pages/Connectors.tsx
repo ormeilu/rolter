@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cable, FlaskConical, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody, Pill, StatusDot } from "@/components/screen";
 import { Button } from "@/components/ui/button";
@@ -38,6 +40,7 @@ const asInput = (c: ConnectorRow) => ({
 // OTLP log-shipping connectors: request logs mirrored to Datadog, Langfuse,
 // or any OTLP/HTTP collector, with per-connector sampling and health checks
 export default function Connectors() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const connectors = useQuery({
     queryKey: ["connectors"],
@@ -59,6 +62,13 @@ export default function Connectors() {
   const remove = useMutation({ mutationFn: deleteConnector, onSuccess: invalidate });
 
   const [addOpen, setAddOpen] = React.useState(false);
+  // log shipping stops the moment the connector goes, and the delivery history
+  // goes with it — worth saying before the click (#1179)
+  const [deleteTarget, setDeleteTarget] = React.useState<ConnectorRow | null>(null);
+  const startDelete = (connector: ConnectorRow) => {
+    remove.reset();
+    setDeleteTarget(connector);
+  };
 
   return (
     <PageBody>
@@ -148,7 +158,7 @@ export default function Connectors() {
                   title="Delete connector"
                   aria-label={`Delete connector ${c.name}`}
                   disabled={remove.isPending && remove.variables === c.id}
-                  onClick={() => remove.mutate(c.id)}
+                  onClick={() => startDelete(c)}
                   className="ml-auto flex h-[30px] items-center rounded-[6px] border border-[color:var(--border-subtle)] px-2 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
                 >
                   {remove.isPending && remove.variables === c.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
@@ -158,11 +168,25 @@ export default function Connectors() {
           );
         })}
       </div>
-      {(test.isError || remove.isError) && (
+      {(test.isError || (remove.isError && !deleteTarget)) && (
         <p className="text-xs text-destructive">
           {((test.error ?? remove.error) as Error).message}
         </p>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={t("pages.connectors.confirm.title", { name: deleteTarget?.name })}
+        description={t("pages.connectors.confirm.body")}
+        confirmLabel={t("pages.connectors.confirm.confirm")}
+        pending={remove.isPending}
+        error={remove.error}
+        onConfirm={() =>
+          deleteTarget &&
+          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
+        }
+      />
 
       <AddConnectorDialog open={addOpen} onOpenChange={setAddOpen} onDone={invalidate} />
     </PageBody>

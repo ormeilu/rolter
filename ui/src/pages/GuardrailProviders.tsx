@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, PlugZap, Plus } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   GuardrailEmpty,
   GuardrailError,
@@ -45,6 +47,7 @@ const EMPTY: GuardrailProviderInput = {
 };
 
 export default function GuardrailProviders() {
+  const { t } = useTranslation();
   const client = useQueryClient();
   const query = useQuery({
     queryKey: ["guardrail-providers"],
@@ -74,6 +77,15 @@ export default function GuardrailProviders() {
     onSuccess: () =>
       void client.invalidateQueries({ queryKey: ["guardrail-providers"] }),
   });
+  // was a bare window.confirm; an external enforcement point going away is
+  // exactly the kind of change that deserves a styled, translated dialog (#1179)
+  const [deleteTarget, setDeleteTarget] =
+    React.useState<GuardrailProviderRow | null>(null);
+  const startDelete = (provider: GuardrailProviderRow) => {
+    remove.reset();
+    setDeleteTarget(provider);
+  };
+
   const providers = query.data ?? [];
   const active = providers.find((provider) => provider.enabled);
 
@@ -165,11 +177,7 @@ export default function GuardrailProviders() {
                 <>
                   <Button
                     variant="ghost"
-                    onClick={() =>
-                      window.confirm(
-                        `Delete ${provider.name}? An active provider stops external enforcement.`,
-                      ) && remove.mutate(provider.id)
-                    }
+                    onClick={() => startDelete(provider)}
                     disabled={
                       remove.isPending && remove.variables === provider.id
                     }
@@ -191,6 +199,22 @@ export default function GuardrailProviders() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => !o && setDeleteTarget(null)}
+        title={t("pages.guardrailProviders.confirm.title", {
+          name: deleteTarget?.name,
+        })}
+        description={t("pages.guardrailProviders.confirm.body")}
+        confirmLabel={t("common.delete")}
+        pending={remove.isPending}
+        error={remove.error}
+        onConfirm={() =>
+          deleteTarget &&
+          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
+        }
+      />
 
       <ProviderDialog
         key={editing?.id ?? (editing === null ? "new" : "closed")}

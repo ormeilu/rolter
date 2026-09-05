@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building2, WalletCards } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -198,6 +200,9 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
   onUpdate,
   onRetire,
   onDelete,
+  deleting,
+  deleteError,
+  resetDelete,
   mutating,
   mutationError,
   disabled,
@@ -211,14 +216,27 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
   onCreate: (form: EditorState) => void;
   onUpdate: (form: EditorState, original: T) => void;
   onRetire: (row: T, retired: boolean) => void;
-  onDelete: (row: T) => void;
+  // the caller owns the mutation, so it is the caller that knows the delete
+  // succeeded — it closes the confirmation through `onSuccess` (#1179)
+  onDelete: (row: T, onSuccess: () => void) => void;
+  deleting: boolean;
+  deleteError?: unknown;
+  resetDelete: () => void;
   mutating: boolean;
   mutationError?: Error;
   disabled: boolean;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = React.useState(false);
   const [form, setForm] = React.useState<EditorState>(blank);
   const [editing, setEditing] = React.useState<T | null>(null);
+  // retiring is the reversible option and deleting is not, so the two must not
+  // sit one indistinguishable click apart
+  const [deleteTarget, setDeleteTarget] = React.useState<T | null>(null);
+  const startDelete = (row: T) => {
+    resetDelete();
+    setDeleteTarget(row);
+  };
 
   const startCreate = () => {
     setEditing(null);
@@ -269,7 +287,9 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
         <span className="text-sm text-muted-foreground">
           {rows.length} {plural} · {active} active
         </span>
-        {mutationError && (
+        {/* the confirmation carries the delete's own failure, so the banner
+            stands down while it is open rather than saying it twice */}
+        {mutationError && !deleteTarget && (
           <span className="text-xs text-destructive">{mutationError.message}</span>
         )}
         <Button className="ml-auto" disabled={disabled} onClick={startCreate}>
@@ -347,7 +367,7 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
                     size="sm"
                     className="ml-auto text-destructive"
                     disabled={disabled || mutating}
-                    onClick={() => onDelete(row)}
+                    onClick={() => startDelete(row)}
                   >
                     Delete
                   </Button>
@@ -357,6 +377,23 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
           })}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => !o && setDeleteTarget(null)}
+        title={t("pages.costAttribution.confirm.title", { name: deleteTarget?.name })}
+        description={t(
+          kind === "unit"
+            ? "pages.costAttribution.confirm.unitBody"
+            : "pages.costAttribution.confirm.customerBody",
+        )}
+        confirmLabel={t("common.delete")}
+        pending={deleting}
+        error={deleteError}
+        onConfirm={() =>
+          deleteTarget && onDelete(deleteTarget, () => setDeleteTarget(null))
+        }
+      />
 
       <Sheet open={open} onOpenChange={setOpen}>
         <Editor
@@ -448,7 +485,10 @@ export function BusinessUnits() {
       onCreate={(form) => create.mutate(form)}
       onUpdate={(form, row) => update.mutate({ form, row })}
       onRetire={(row, retired) => retire.mutate({ row, retired })}
-      onDelete={(row) => remove.mutate(row)}
+      onDelete={(row, onSuccess) => remove.mutate(row, { onSuccess })}
+      deleting={remove.isPending}
+      deleteError={remove.error}
+      resetDelete={() => remove.reset()}
     />
   );
 }
@@ -535,7 +575,10 @@ export function Customers() {
       onCreate={(form) => create.mutate(form)}
       onUpdate={(form, row) => update.mutate({ form, row })}
       onRetire={(row, retired) => retire.mutate({ row, retired })}
-      onDelete={(row) => remove.mutate(row)}
+      onDelete={(row, onSuccess) => remove.mutate(row, { onSuccess })}
+      deleting={remove.isPending}
+      deleteError={remove.error}
+      resetDelete={() => remove.reset()}
     />
   );
 }

@@ -4,10 +4,13 @@ import { expect, userEvent, waitFor, within } from "storybook/test";
 import Account from "./Account";
 import {
   Harness,
+  cancelConfirmation,
   clickWhenEnabled,
+  confirmDestructive,
   expectClosesWithoutPrompting,
   json,
   pending,
+  recording,
   scoped,
   sheet,
   withConfirm,
@@ -69,6 +72,15 @@ const account = (
   scoped(async (input) => (String(input).includes("/me/usage") ? usage() : keys()));
 
 const loaded = account(() => json(KEYS));
+
+// rotation is destructive — the old secret dies the moment the new one exists —
+// so the confirmation is what stands between a stray click and a broken client
+const rotations = recording(
+  scoped(async (input, init) => {
+    if (init?.method === "POST") return json(MINTED);
+    return String(input).includes("/me/usage") ? json({ data: USAGE }) : json(KEYS);
+  }),
+);
 
 const meta = {
   title: "Screens/Account",
@@ -202,9 +214,32 @@ export const RotatingAKeyRevealsTheNewSecret: Story = {
     const canvas = within(canvasElement);
     const [rotate] = await canvas.findAllByRole("button", { name: /rotate/i });
     await userEvent.click(rotate);
+    // rotation kills the old secret the instant the new one is issued, so it
+    // now asks first, naming the key it is about to invalidate (#1179)
+    await confirmDestructive(/my laptop/, /rotate key/i);
     await waitFor(() =>
       expect(within(document.body).getByText(MINTED.key)).toBeInTheDocument(),
     );
+  },
+};
+
+// backing out of the rotation must leave the key working: no POST is issued
+export const CancellingARotationLeavesTheKeyAlone: Story = {
+  render: () => (
+    <Harness fetchStub={rotations.stub}>
+      <Account />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const [rotate] = await canvas.findAllByRole("button", { name: /rotate/i });
+    await userEvent.click(rotate);
+    await cancelConfirmation();
+    rotations.expectNotSent("POST", "/me/virtual-keys/vk-1/rotate");
+
+    await userEvent.click(rotate);
+    await confirmDestructive(/my laptop/, /rotate key/i);
+    await rotations.expectSent("POST", "/me/virtual-keys/vk-1/rotate");
   },
 };
 

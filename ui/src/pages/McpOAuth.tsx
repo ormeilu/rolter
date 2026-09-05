@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Loader2, Shield, ShieldOff } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   ListHeader,
   ListRow,
@@ -350,6 +352,7 @@ function sessionState(s: McpOAuthSessionRow, now: number): SessionState {
 }
 
 export function AuthSessions() {
+  const { t } = useTranslation();
   const scope = useScope();
   const queryClient = useQueryClient();
   const { servers, grants, sessions, users } = useOrgOAuth(scope.orgId);
@@ -371,6 +374,17 @@ export function AuthSessions() {
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["mcp-sessions", scope.orgId] }),
   });
+
+  // grants on this screen already confirm before revoking; a session revoke is
+  // just as irreversible, so it asks the same way (#1179). the server label is
+  // carried alongside the row because it is resolved from two other queries
+  const [confirming, setConfirming] = React.useState<
+    { session: McpOAuthSessionRow; server: string } | null
+  >(null);
+  const startRevoke = (session: McpOAuthSessionRow, server: string) => {
+    revoke.reset();
+    setConfirming({ session, server });
+  };
 
   const grantById = React.useMemo(() => {
     const map = new Map<string, McpOAuthGrantRow>();
@@ -400,7 +414,7 @@ export function AuthSessions() {
             <span className="text-sm text-muted-foreground">
               {rows.length} sessions · {live} live
             </span>
-            {revoke.isError && (
+            {revoke.isError && !confirming && (
               <span className="text-xs text-destructive">
                 {(revoke.error as Error).message}
               </span>
@@ -475,7 +489,7 @@ export function AuthSessions() {
                       }
                       aria-label={`Revoke session on ${server}`}
                       disabled={state === "revoked" || (revoke.isPending && revoke.variables === s.id)}
-                      onClick={() => revoke.mutate(s.id)}
+                      onClick={() => startRevoke(s, server)}
                     >
                       {revoke.isPending && revoke.variables === s.id ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -488,6 +502,24 @@ export function AuthSessions() {
               })}
             </ListTable>
           )}
+          <ConfirmDialog
+            open={confirming !== null}
+            onOpenChange={(open) => !open && setConfirming(null)}
+            title={t("pages.mcpOAuth.confirm.sessionTitle", {
+              server: confirming?.server,
+            })}
+            description={t("pages.mcpOAuth.confirm.sessionBody")}
+            confirmLabel={t("pages.mcpOAuth.confirm.sessionConfirm")}
+            pending={revoke.isPending}
+            error={revoke.error}
+            onConfirm={() =>
+              confirming &&
+              revoke.mutate(confirming.session.id, {
+                onSuccess: () => setConfirming(null),
+              })
+            }
+          />
+
           <p className="text-xs text-[color:var(--text-subtle)]">
             Revoking a session leaves the consent in place — a new session can be
             minted without asking the user again. To withdraw consent itself,

@@ -129,6 +129,71 @@ export function sheet(): HTMLElement {
   return within(document.body).getByRole("dialog");
 }
 
+/**
+ * Every request the stub was given, so a story can assert the DELETE actually
+ * left rather than that a row vanished from a fixture it controls (#1179).
+ */
+export interface Recorder {
+  stub: FetchStub;
+  calls: { method: string; url: string }[];
+  /** wait for a request with `method` whose URL contains `fragment` */
+  expectSent: (method: string, fragment: string) => Promise<void>;
+  /** assert none was sent — the half a "cancel" test exists to check */
+  expectNotSent: (method: string, fragment: string) => void;
+}
+
+export function recording(handler: FetchStub): Recorder {
+  const calls: { method: string; url: string }[] = [];
+  const sent = (method: string, fragment: string) =>
+    calls.some((c) => c.method === method && c.url.includes(fragment));
+  return {
+    stub: async (input, init) => {
+      calls.push({ method: (init?.method ?? "GET").toUpperCase(), url: String(input) });
+      return handler(input, init);
+    },
+    calls,
+    expectSent: async (method, fragment) => {
+      await waitFor(() => expect(sent(method, fragment)).toBe(true));
+    },
+    expectNotSent: (method, fragment) => {
+      expect(sent(method, fragment)).toBe(false);
+    },
+  };
+}
+
+/**
+ * The open confirmation. Like every dialog it portals onto the body, so it is
+ * never in `canvasElement`.
+ */
+export async function confirmation(): Promise<HTMLElement> {
+  return within(document.body).findByRole("dialog");
+}
+
+/**
+ * Confirm a destructive action, checking the dialog names the thing first.
+ *
+ * Naming is the whole point of #1179: a confirmation that says "Are you sure?"
+ * is a click-through, not a decision, so the story asserts the item's own name
+ * is on screen before it presses the button.
+ */
+export async function confirmDestructive(
+  names: RegExp | string,
+  confirmLabel: RegExp | string,
+): Promise<void> {
+  const dialog = await confirmation();
+  await expect(within(dialog).getByText(names)).toBeInTheDocument();
+  const button = within(dialog).getByRole("button", { name: confirmLabel });
+  await waitFor(() => expect(button).toBeEnabled());
+  await userEvent.click(button);
+}
+
+/** Dismiss the open confirmation without running the action. */
+export async function cancelConfirmation(): Promise<void> {
+  const dialog = await confirmation();
+  await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await expectSheetClosed();
+}
+
 /** Assert the sheet closed. */
 export async function expectSheetClosed(): Promise<void> {
   await waitFor(() => expect(within(document.body).queryByRole("dialog")).not.toBeInTheDocument());
