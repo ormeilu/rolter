@@ -252,7 +252,7 @@ function RuleDialog({
             onChange={(event) => set({ name: event.target.value })}
           />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Source" htmlFor="rule-source">
             <Select
               id="rule-source"
@@ -317,7 +317,7 @@ function RuleDialog({
             />
           </Field>
         )}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Stage" htmlFor="rule-stage">
             <Select
               id="rule-stage"

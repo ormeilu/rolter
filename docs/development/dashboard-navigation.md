@@ -1,7 +1,34 @@
 # Dashboard navigation rail
 
 The left rail (`ui/src/components/ui/nav-sidebar.tsx`) is the dashboard's
-primary navigation. It has two independent size controls.
+primary navigation. It has three shapes, one per breakpoint, and two
+independent size controls within them.
+
+## Breakpoints
+
+The shape is chosen in javascript, not only in CSS: below `md` the rail is a
+modal drawer, and a modal owes a focus trap, an Escape handler and a scroll
+lock that no class can supply. `ui/src/lib/use-media-query.ts` exports the two
+queries (`BELOW_MD`, `BELOW_LG`), which are tailwind's `md` and `lg` so the
+javascript and the classes cannot disagree.
+
+| Viewport | Shape | Behaviour |
+|---|---|---|
+| `< 768px` (below `md`) | off-canvas drawer | Hidden by default and out of the flow entirely — a closed drawer takes no width. Opened by the hamburger in `ScreenHeader`, which renders only at this width; drawn over a scrim, with labels; dismissed by Escape, a scrim click, or navigating. Focus, the Tab trap and the scroll lock come from `useModalA11y`, the same contract `Sheet` signs. |
+| `768px`–`1023px` (`md` to `lg`) | icon rail | On screen, folded to the 52px icon strip. The collapse toggle still works — this only picks the starting state. No splitter. |
+| `≥ 1024px` (`lg` and up) | full rail | The resizable, collapsible rail described below. The remembered width applies here and nowhere else. |
+
+Below `md` the rail's persisted width is not read and not written: the drawer
+is sized by the viewport, and a width dragged on a desktop must not decide how
+much of a phone screen the navigation eats.
+
+Stories: `MobileDrawer` and `TabletIconRail` in `nav-sidebar.stories.tsx` pin
+the first two rows, including that nothing overflows the viewport at either
+width. They set their size through `src/lib/story-viewport.ts`, which
+`.storybook/test-runner.ts` turns into a real `page.setViewportSize` — the
+viewport addon only sizes the preview iframe inside the Storybook UI, so
+without that hook a "fits at 375px" story would be measured at 1280 and assert
+nothing.
 
 ## Collapse
 
@@ -35,7 +62,8 @@ way to read the whole label (#950).
   everywhere.
 - **Collapse wins.** While collapsed there is no splitter at all — a 52px icon
   rail has no edge worth dragging, and leaving it behind would let a keyboard
-  user stretch a rail whose labels are hidden.
+  user stretch a rail whose labels are hidden. The same applies below `lg`,
+  where the rail is folded or a drawer.
 
 The width transition is disabled for the duration of a drag; animating it
 would fight the pointer.

@@ -138,7 +138,7 @@ export default function Keys() {
       <p className="text-sm text-muted-foreground">
         {t("pages.virtualKeys.explainer")}
       </p>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <SearchInput
           placeholder="Search by name…"
           value={search}

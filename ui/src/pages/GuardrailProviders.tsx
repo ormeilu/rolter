@@ -286,7 +286,7 @@ function ProviderDialog({
             onChange={(event) => set({ url: event.target.value })}
           />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Stage" htmlFor="provider-stage">
             <Select
               id="provider-stage"
@@ -317,7 +317,7 @@ function ProviderDialog({
             </Select>
           </Field>
         </div>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Field label="Timeout (ms)" htmlFor="provider-timeout">
             <Input
               id="provider-timeout"

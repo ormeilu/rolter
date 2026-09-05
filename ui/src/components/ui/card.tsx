@@ -6,8 +6,11 @@ export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElemen
   return (
     <div
       className={cn(
-        // DS card is border-only (translucent border, no shadow) on the zinc ground
-        "rounded-lg border border-[color:var(--border-default)] bg-card text-card-foreground",
+        // DS card is border-only (translucent border, no shadow) on the zinc ground.
+        // `min-w-0` because a card is almost always a grid or flex item: without
+        // it the widest thing inside — a table, a donut legend — sets the track
+        // width and drags the page sideways instead of scrolling in place (#1203)
+        "min-w-0 rounded-lg border border-[color:var(--border-default)] bg-card text-card-foreground",
         className,
       )}
       {...props}

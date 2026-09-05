@@ -17,6 +17,7 @@ import {
 } from "./story-harness";
 import type { VirtualKeyRow } from "@/lib/api";
 import { formattersFor } from "@/lib/i18n/format";
+import { atMobile, atTablet, expectNoHorizontalOverflow } from "@/lib/story-viewport";
 
 const KEYS: VirtualKeyRow[] = [
   {
@@ -231,5 +232,34 @@ export const RowExpiryUsesTheSameDateFormatAsTheMintPreview: Story = {
     const until = within(form).getByText(/^Until /);
     const previewed = (until.textContent ?? "").replace(/^Until /, "");
     await expect(previewed).toBe(fmt.date(new Date(Date.now() + 30 * 86_400_000)));
+  },
+};
+
+/** The six-column key list scrolls inside its border rather than the page. */
+export const Mobile: Story = {
+  ...atMobile,
+  render: () => (
+    <Harness fetchStub={withKeys(KEYS)}>
+      <Keys />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("backend service");
+    await expectNoHorizontalOverflow();
+  },
+};
+
+export const Tablet: Story = {
+  ...atTablet,
+  render: () => (
+    <Harness fetchStub={withKeys(KEYS)}>
+      <Keys />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("backend service");
+    await expectNoHorizontalOverflow();
   },
 };

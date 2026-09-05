@@ -232,14 +232,14 @@ function roleLabel(
   return t("shell.role");
 }
 
-function Screen({ screen }: { screen: string }) {
+function Screen({ screen, onOpenNav }: { screen: string; onOpenNav: () => void }) {
   const [title, subtitle] = useScreenMeta(screen);
   return (
     // names the screen for every UX event emitted below it (#805), so shared
     // components like EmptyState are instrumented without a prop per screen
     <UxScreenProvider screen={screen}>
       <div className="flex h-full min-h-0 flex-col">
-        <ScreenHeader title={title} subtitle={subtitle} />
+        <ScreenHeader title={title} subtitle={subtitle} onOpenNav={onOpenNav} />
         <div className="min-h-0 flex-1 overflow-y-auto">
           {BUILT.has(screen) ? SCREENS[screen] : <Stub screen={screen} />}
         </div>
@@ -259,6 +259,13 @@ export default function App() {
   // that follow are called unconditionally
   const key = location.pathname.replace(/^\/+|\/+$/g, "");
   const activeKey = LEAVES.has(key) ? key : "dashboard";
+
+  // below `md` the rail is a drawer opened from the screen header, so its
+  // state is owned here, between the two (#959). any route change closes it,
+  // which covers the paths the rail does not know it took — the account link
+  // in the user menu, a redirect, the browser's back button
+  const [navOpen, setNavOpen] = React.useState(false);
+  React.useEffect(() => setNavOpen(false), [location.pathname]);
 
   // the navigation half of the UX stream (#805): screen_view, navigate and
   // back_out for the whole dashboard, emitted once from the shell rather than
@@ -318,6 +325,8 @@ export default function App() {
           brand="rolter"
           activeKey={activeKey}
           onNavigate={(k) => navigate(`/${k}`)}
+          open={navOpen}
+          onOpenChange={setNavOpen}
           searchable
           collapsible
           resizable
@@ -394,7 +403,11 @@ export default function App() {
           ) : (
             <Routes>
               {[...LEAVES].map((k) => (
-                <Route key={k} path={`/${k}`} element={<Screen screen={k} />} />
+                <Route
+                  key={k}
+                  path={`/${k}`}
+                  element={<Screen screen={k} onOpenNav={() => setNavOpen(true)} />}
+                />
               ))}
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>

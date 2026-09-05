@@ -2,6 +2,8 @@ import { ChevronDown, ChevronsUpDown, PanelLeftClose, PanelLeftOpen, Search, X }
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { useModalA11y } from "@/lib/modal-a11y";
+import { BELOW_LG, BELOW_MD, useMediaQuery } from "@/lib/use-media-query";
 import { cn } from "@/lib/utils";
 
 // left rail: brand + collapse toggle, nav search, nav groups (flat items or
@@ -9,6 +11,10 @@ import { cn } from "@/lib/utils";
 // pinned to the bottom. collapses to an icon-only rail. the active item carries
 // the folk-red вышивка thread on its left edge. mirrors the Rolter Design
 // System navigation/NavSidebar.
+//
+// three shapes by viewport (#959) — below `md` an off-canvas drawer over a
+// scrim, between `md` and `lg` an icon rail, at `lg` and up the full resizable
+// rail. see docs/development/dashboard-navigation.md.
 export interface NavItem {
   key: string;
   label: string;
@@ -66,6 +72,12 @@ export interface NavSidebarProps extends React.HTMLAttributes<HTMLElement> {
      entry cannot restore an unusable rail. */
   resizable?: boolean;
   storageKey?: string;
+  /* below `md` the rail is an off-canvas drawer and this is whether it is
+     showing. the trigger lives in the screen header, so the state has to be
+     owned above both of them. ignored at `md` and up, where the rail is always
+     on screen. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 /** narrowest the rail may be dragged: still wide enough for icon + label */
@@ -120,10 +132,16 @@ export function NavSidebar({
   version,
   resizable,
   storageKey = NAV_WIDTH_STORAGE_KEY,
+  // `open` is taken by the expanded-parents map below, so the drawer's flag is
+  // renamed rather than the state that predates it
+  open: drawerRequested = false,
+  onOpenChange,
   className,
   ...props
 }: NavSidebarProps) {
   const { t } = useTranslation();
+  const isDrawer = useMediaQuery(BELOW_MD);
+  const isIconRail = useMediaQuery(BELOW_LG) && !isDrawer;
   const [collapsed, setCollapsed] = React.useState(defaultCollapsed ?? false);
   const [query, setQuery] = React.useState("");
   // parents stay open once toggled; the one holding the active child opens itself
@@ -131,8 +149,31 @@ export function NavSidebar({
   const [userOpen, setUserOpen] = React.useState(false);
   const userRef = React.useRef<HTMLDivElement>(null);
   const navRef = React.useRef<HTMLElement>(null);
+  const panelRef = React.useRef<HTMLDivElement>(null);
   const [width, setWidth] = React.useState(NAV_DEFAULT_WIDTH);
   const [dragging, setDragging] = React.useState(false);
+
+  const closeDrawer = React.useCallback(() => onOpenChange?.(false), [onOpenChange]);
+
+  // the drawer is a modal: it covers the screen it navigates, so it owes the
+  // same focus trap, Escape and scroll lock a Sheet does (#1181). the user
+  // menu opens *inside* it and owns Escape while it is up
+  const drawerOpen = isDrawer && drawerRequested;
+  const a11y = useModalA11y(panelRef, {
+    open: drawerOpen,
+    onEscape: () => {
+      if (userOpen) return;
+      closeDrawer();
+    },
+  });
+
+  // between `md` and `lg` the rail starts as icons: a 232px rail is a quarter
+  // of a 900px screen. the toggle still works, this only picks the starting
+  // state each time the viewport crosses a breakpoint
+  React.useEffect(() => {
+    if (isDrawer) return;
+    setCollapsed(isIconRail ? true : (defaultCollapsed ?? false));
+  }, [isDrawer, isIconRail, defaultCollapsed]);
 
   // read the remembered width after mount rather than in the initializer: the
   // first paint then matches what a server-rendered or storage-less browser
@@ -193,8 +234,6 @@ export function NavSidebar({
     e.preventDefault();
   };
 
-  const showHandle = Boolean(resizable) && !collapsed;
-
   React.useEffect(() => {
     if (!userOpen) return;
     // the scope switcher's create/delete dialogs are portaled to the body, so
@@ -219,8 +258,16 @@ export function NavSidebar({
     };
   }, [userOpen]);
 
-  // the search box is hidden while collapsed, so the filter must not apply
-  const q = collapsed ? "" : query.trim().toLowerCase();
+  // the drawer has room for labels whatever the rail was folded to before the
+  // viewport shrank, so it always shows them
+  const folded = collapsed && !isDrawer;
+
+  // the splitter belongs to the `lg`-and-up rail: the icon rail has no edge
+  // worth dragging and the drawer is sized by the viewport, not by the pointer
+  const showHandle = Boolean(resizable) && !folded && !isDrawer && !isIconRail;
+
+  // the search box is hidden while folded, so the filter must not apply
+  const q = folded ? "" : query.trim().toLowerCase();
 
   const isOpen = (it: NavItem) =>
     q !== "" ||
@@ -236,26 +283,32 @@ export function NavSidebar({
         <button
           aria-current={active ? "page" : undefined}
           aria-expanded={hasKids ? expanded : undefined}
-          title={collapsed ? it.label : undefined}
-          onClick={() =>
-            hasKids
-              ? setOpen((o) => ({ ...o, [it.key]: !isOpen(it) }))
-              : onNavigate?.(it.key)
-          }
+          title={folded ? it.label : undefined}
+          onClick={() => {
+            if (hasKids) {
+              setOpen((o) => ({ ...o, [it.key]: !isOpen(it) }));
+              return;
+            }
+            onNavigate?.(it.key);
+            // the drawer covers the screen it just navigated to
+            if (isDrawer) closeDrawer();
+          }}
           className={cn(
             itemBase,
             active ? itemActive : itemIdle,
-            collapsed && "justify-center px-0",
+            folded && "justify-center px-0",
+            // a touch target, not a pointer one, once the rail is a drawer
+            isDrawer && "py-2.5",
           )}
         >
           {it.icon}
-          {!collapsed && <span className="min-w-0 truncate">{it.label}</span>}
-          {!collapsed && it.count != null && (
+          {!folded && <span className="min-w-0 truncate">{it.label}</span>}
+          {!folded && it.count != null && (
             <span className="ml-auto font-mono text-[0.6875rem] text-[color:var(--text-subtle)]">
               {it.count}
             </span>
           )}
-          {!collapsed && hasKids && (
+          {!folded && hasKids && (
             <ChevronDown
               className={cn(
                 "!ml-auto !h-3.5 !w-3.5 text-[color:var(--text-subtle)] transition-transform",
@@ -264,7 +317,7 @@ export function NavSidebar({
             />
           )}
         </button>
-        {expanded && !collapsed && (
+        {expanded && !folded && (
           <div className="ml-[15px] flex flex-col gap-0.5 border-l border-[color:var(--border-subtle)] pl-1.5">
             {it.children!.map((c) => renderItem(c, depth + 1))}
           </div>
@@ -273,7 +326,12 @@ export function NavSidebar({
     );
   };
 
-  return (
+  // below `md` the rail is out of the flow entirely: a closed drawer takes no
+  // width, which is the whole of #959 — the old rail kept its 232px and left a
+  // 375px screen 143px to work in
+  if (isDrawer && !drawerRequested) return null;
+
+  const rail = (
     <nav
       ref={navRef}
       aria-label={t("shell.navLabel")}
@@ -282,7 +340,8 @@ export function NavSidebar({
         "relative flex h-full flex-col gap-3 border-r border-[color:var(--border-subtle)] bg-[color:var(--surface-app)] px-2 py-3",
         // the width transition would fight the pointer during a drag
         !dragging && "transition-[width]",
-        collapsed ? "w-[52px] items-stretch" : "w-[var(--sidebar-width)]",
+        folded ? "w-[52px] items-stretch" : "w-[var(--sidebar-width)]",
+        isDrawer && "w-full",
         className,
       )}
       {...props}
@@ -315,17 +374,17 @@ export function NavSidebar({
       <div
         className={cn(
           "group relative flex items-center gap-2 px-2 py-1.5",
-          collapsed && "justify-center px-0",
+          folded && "justify-center px-0",
         )}
       >
         {logoSrc ? <img className="block h-6 w-6 flex-none" src={logoSrc} alt="" /> : null}
-        {!collapsed && (
+        {!folded && (
           <span className="font-mono text-lg font-semibold leading-none tracking-[-0.03em] text-foreground">
             {brand}
             <span className="text-[color:var(--red-folk)]">.</span>
           </span>
         )}
-        {collapsible && !collapsed && (
+        {collapsible && !folded && !isDrawer && (
           <button
             title={t("shell.collapseSidebar")}
             aria-label={t("shell.collapseSidebar")}
@@ -335,11 +394,11 @@ export function NavSidebar({
             <PanelLeftClose className="h-4 w-4" />
           </button>
         )}
-        {/* collapsed: the expand toggle lives inside the logo/header area,
+        {/* folded: the expand toggle lives inside the logo/header area,
             hidden by default and revealed only on hover or keyboard focus of
             the header container. it overlays the centered logo so the rail
             stays icon-narrow. */}
-        {collapsible && collapsed && (
+        {collapsible && folded && !isDrawer && (
           <button
             title={t("shell.expandSidebar")}
             aria-label={t("shell.expandSidebar")}
@@ -354,7 +413,7 @@ export function NavSidebar({
       {/* the focus ring lives on the wrapper, not the input: the input is
           borderless inside a bordered box, so a ring on it would draw inside
           that box rather than around the control a keyboard user sees (#963) */}
-      {searchable && !collapsed && (
+      {searchable && !folded && (
         <label className="flex items-center gap-2 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--surface-base)] px-2 py-1.5 transition-colors focus-within:border-[color:var(--border-default)] focus-within:ring-1 focus-within:ring-ring">
           <Search className="h-3.5 w-3.5 flex-none text-[color:var(--text-subtle)]" />
           <input
@@ -383,7 +442,7 @@ export function NavSidebar({
           if (q && items.length === 0) return null;
           return (
             <div className="flex flex-col gap-0.5" key={g.label || gi}>
-              {g.label && !collapsed && (
+              {g.label && !folded && (
                 <div className="px-2 py-1.5 text-[0.6875rem] uppercase tracking-[0.08em] text-[color:var(--text-subtle)]">
                   {g.label}
                 </div>
@@ -395,8 +454,8 @@ export function NavSidebar({
       </div>
 
       {(footerLinks?.length || footerExtra || version) && (
-        <div className={cn("flex flex-col gap-1.5", collapsed && "items-center")}>
-          <div className={cn("flex items-center gap-1 px-1", collapsed && "flex-col px-0")}>
+        <div className={cn("flex flex-col gap-1.5", folded && "items-center")}>
+          <div className={cn("flex items-center gap-1 px-1", folded && "flex-col px-0")}>
             {footerLinks?.map((l) =>
               l.href ? (
                 <a
@@ -422,8 +481,8 @@ export function NavSidebar({
                 </button>
               ),
             )}
-            {footerExtra?.(collapsed)}
-            {version && !collapsed && (
+            {footerExtra?.(folded)}
+            {version && !folded && (
               <span className="ml-auto pr-1 font-mono text-[0.6875rem] text-[color:var(--text-subtle)]">
                 {version}
               </span>
@@ -435,7 +494,7 @@ export function NavSidebar({
       {user && (
         <div
           ref={userRef}
-          className={cn("relative mt-auto flex flex-col gap-1.5", collapsed && "items-center")}
+          className={cn("relative mt-auto flex flex-col gap-1.5", folded && "items-center")}
         >
           {userMenu && userOpen && (
             <div
@@ -443,7 +502,7 @@ export function NavSidebar({
               aria-label={t("shell.userMenuLabel")}
               className={cn(
                 "absolute bottom-[calc(100%+6px)] z-40 rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-elevated)] py-1.5 shadow-lg",
-                collapsed ? "left-0 w-[260px]" : "inset-x-0",
+                folded ? "left-0 w-[min(260px,calc(100vw_-_1.5rem))]" : "inset-x-0",
               )}
             >
               {userMenu(() => setUserOpen(false))}
@@ -453,19 +512,19 @@ export function NavSidebar({
             onClick={() => (userMenu ? setUserOpen((v) => !v) : user.onClick?.())}
             aria-haspopup={userMenu ? "dialog" : undefined}
             aria-expanded={userMenu ? userOpen : undefined}
-            title={collapsed && typeof user.name === "string" ? user.name : undefined}
+            title={folded && typeof user.name === "string" ? user.name : undefined}
             className={cn(
               "flex items-center gap-2 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-              collapsed
+              folded
                 ? "justify-center p-0.5 hover:bg-muted"
                 : "border border-[color:var(--border-subtle)] bg-[color:var(--surface-base)] px-2 py-1.5 hover:border-[color:var(--border-default)]",
-              userOpen && !collapsed && "border-[color:var(--border-default)]",
+              userOpen && !folded && "border-[color:var(--border-default)]",
             )}
           >
             <span className="flex h-[26px] w-[26px] flex-none items-center justify-center rounded-full bg-[color:var(--red-folk)] text-xs font-semibold text-white">
               {user.initials}
             </span>
-            {!collapsed && (
+            {!folded && (
               <>
                 <span className="flex min-w-0 flex-col">
                   <span className="overflow-hidden text-ellipsis whitespace-nowrap text-xs font-medium text-foreground">
@@ -484,5 +543,36 @@ export function NavSidebar({
         </div>
       )}
     </nav>
+  );
+
+  if (!isDrawer) return rail;
+
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      <div
+        className="absolute inset-0 bg-black/50 rl-fade-in"
+        onClick={closeDrawer}
+        aria-hidden
+      />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("shell.navLabel")}
+        className="rl-drawer-in relative flex h-full w-[min(280px,85vw)] max-w-full shadow-[14px_0_44px_rgba(0,0,0,0.42)] focus-visible:outline-none"
+        {...a11y}
+      >
+        {rail}
+        <button
+          type="button"
+          title={t("shell.closeNav")}
+          aria-label={t("shell.closeNav")}
+          onClick={closeDrawer}
+          className="absolute right-2 top-2.5 flex h-9 w-9 items-center justify-center rounded-md text-[color:var(--text-subtle)] transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
   );
 }

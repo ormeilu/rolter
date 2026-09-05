@@ -245,7 +245,7 @@ export function OAuthGrants() {
               description={t("pages.mcpOAuth.grantsEmptyBody")}
             />
           ) : (
-            <ListTable>
+            <ListTable minWidth={980}>
               <ListHeader grid={GRANT_GRID}>
                 <span>Server</span>
                 <span>Owner</span>
@@ -438,7 +438,7 @@ export function AuthSessions() {
               description={t("pages.mcpOAuth.sessionsEmptyBody")}
             />
           ) : (
-            <ListTable>
+            <ListTable minWidth={980}>
               <ListHeader grid={SESSION_GRID}>
                 <span>Server</span>
                 <span>Owner</span>

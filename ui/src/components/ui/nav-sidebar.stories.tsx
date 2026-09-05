@@ -1,8 +1,10 @@
 import { Boxes, KeyRound, Play, ScrollText } from "lucide-react";
 import type { Meta, StoryObj } from "@storybook/react";
+import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
-import { NAV_MAX_WIDTH, NAV_MIN_WIDTH, NavSidebar } from "./nav-sidebar";
+import { NAV_MAX_WIDTH, NAV_MIN_WIDTH, NavSidebar, type NavSidebarProps } from "./nav-sidebar";
+import { atMobile, atTablet, expectNoHorizontalOverflow } from "@/lib/story-viewport";
 
 const meta = {
   title: "Navigation/NavSidebar",
@@ -138,5 +140,66 @@ export const CollapsedHasNoSplitter: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.queryByRole("separator")).toBeNull();
+  },
+};
+
+// the shell the two viewport stories below need: the drawer's open state is
+// owned above the rail, exactly as `App` owns it, and the trigger stands in for
+// the hamburger `ScreenHeader` grows below `md`
+function Shell(props: NavSidebarProps) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div className="flex h-[560px] w-full">
+      <NavSidebar {...props} open={open} onOpenChange={setOpen} />
+      <div className="min-w-0 flex-1 p-3">
+        <button type="button" onClick={() => setOpen(true)}>
+          Open navigation
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * #959: at 375px the rail kept its 232px and left the screen 143px. Below `md`
+ * it is out of the flow entirely until the header asks for it, and it comes
+ * back as a modal drawer over a scrim.
+ */
+export const MobileDrawer: Story = {
+  ...atMobile,
+  render: (args) => <Shell {...args} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // nothing of the rail is on screen, and nothing overflows without it
+    await expect(canvas.queryByRole("navigation")).toBeNull();
+    await expectNoHorizontalOverflow();
+
+    await userEvent.click(canvas.getByRole("button", { name: "Open navigation" }));
+    const drawer = await canvas.findByRole("dialog", { name: /navigation/i });
+    // labels are readable in the drawer whatever the rail was folded to
+    await expect(within(drawer).getByRole("button", { name: "Playground" })).toBeVisible();
+    await expectNoHorizontalOverflow();
+
+    // Escape puts it away again, like every other modal in the dashboard
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(canvas.queryByRole("dialog")).toBeNull());
+  },
+};
+
+/**
+ * Between `md` and `lg` the rail is on screen but folded to icons, and the
+ * splitter is gone: dragging a 52px strip wider is not the affordance that
+ * width needs.
+ */
+export const TabletIconRail: Story = {
+  ...atTablet,
+  args: resizable("tablet"),
+  render: (args) => <Shell {...args} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const nav = canvasElement.querySelector("nav") as HTMLElement;
+    await waitFor(() => expect(nav.getBoundingClientRect().width).toBe(52));
+    await expect(canvas.queryByRole("separator")).toBeNull();
+    await expectNoHorizontalOverflow();
   },
 };

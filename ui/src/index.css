@@ -197,6 +197,10 @@
   .rl-sheet-in {
     animation: rl-sheet-in 0.24s cubic-bezier(0.4, 0, 0.2, 1);
   }
+  /* the same slide from the other edge, for the nav drawer below `md` */
+  .rl-drawer-in {
+    animation: rl-drawer-in 0.24s cubic-bezier(0.4, 0, 0.2, 1);
+  }
   @keyframes rl-fade-in {
     from {
       opacity: 0;
@@ -213,9 +217,18 @@
       transform: none;
     }
   }
+  @keyframes rl-drawer-in {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: none;
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
     .rl-fade-in,
-    .rl-sheet-in {
+    .rl-sheet-in,
+    .rl-drawer-in {
       animation: none;
     }
   }

@@ -1220,6 +1220,8 @@
     "collapseSidebar": "Collapse sidebar",
     "expandSidebar": "Expand sidebar",
     "resizeSidebar": "Resize sidebar",
+    "openNav": "Open navigation",
+    "closeNav": "Close navigation",
     "githubRepo": "GitHub repository",
     "reportBug": "Report a bug",
     "role": "Admin",

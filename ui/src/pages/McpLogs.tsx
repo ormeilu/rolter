@@ -9,6 +9,7 @@ import { ListHeader, ListRow, ListTable, PageBody, Pill } from "@/components/scr
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Select } from "@/components/ui/select";
+import { Sheet, SheetBody, SheetHeader } from "@/components/ui/sheet";
 import {
   AnalyticsUnavailableError,
   fetchMcpLogDetail,
@@ -20,6 +21,7 @@ import {
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
 import { useDrawerA11y } from "@/lib/use-drawer-a11y";
+import { BELOW_LG, useMediaQuery } from "@/lib/use-media-query";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const STATUS_TONE: Record<string, [string, string]> = {
@@ -101,7 +103,7 @@ export default function McpLogs() {
 
   return (
     <PageBody className="h-full min-h-0">
-      <div className="grid grid-cols-4 gap-3.5">
+      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
         <McpStat label="Calls (24h)" value={summary.data ? String(summary.data.calls) : "—"} />
         <McpStat
           label="Failures"
@@ -265,7 +267,10 @@ function McpStat({ label, value }: { label: string; value: string }) {
 function DetailDrawer({ eventId, onClose }: { eventId: string; onClose: () => void }) {
   const { t } = useTranslation();
   const fmt = useFormat();
-  const drawer = useDrawerA11y(true, onClose);
+  // below `lg` a 380px panel beside the table leaves neither of them usable, so
+  // the detail comes over the top as a sheet instead (#1203)
+  const asSheet = useMediaQuery(BELOW_LG);
+  const drawer = useDrawerA11y(!asSheet, onClose);
   const detail = useQuery({
     queryKey: ["mcp-log", eventId],
     queryFn: () => fetchMcpLogDetail(eventId),
@@ -281,6 +286,47 @@ function DetailDrawer({ eventId, onClose }: { eventId: string; onClose: () => vo
       return value;
     }
   };
+
+  const body = (
+    <>
+      {detail.isLoading && <FormSkeleton fields={3} />}
+      {detail.isError && (
+        <LoadError
+          error={detail.error}
+          resource={t("errors.resources.mcpLogDetail")}
+          onRetry={() => void detail.refetch()}
+        />
+      )}
+      {d && (
+        <>
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+            <DrawerStat label="Status" value={d.status} />
+            <DrawerStat label="Latency" value={`${d.latency_ms} ms`} />
+            <DrawerStat label="Transport" value={d.transport} />
+            <DrawerStat label="Time" value={fmt.dateTime(d.ts)} />
+            <DrawerStat label="Request" value={d.request_id || "—"} />
+            <DrawerStat label="Trace" value={d.trace_id || "—"} />
+          </div>
+          {d.error && <p className="text-xs text-destructive">{d.error}</p>}
+          {pretty(d.arguments) && <DrawerBlock label="Arguments" body={pretty(d.arguments)!} />}
+          {pretty(d.result) && <DrawerBlock label="Result" body={pretty(d.result)!} />}
+        </>
+      )}
+    </>
+  );
+
+  if (asSheet) {
+    return (
+      <Sheet open onOpenChange={(next) => !next && onClose()}>
+        <SheetHeader
+          title={t("analytics.mcpDetails")}
+          subtitle={d ? `${d.server} → ${d.tool}` : "…"}
+          onClose={onClose}
+        />
+        <SheetBody>{body}</SheetBody>
+      </Sheet>
+    );
+  }
 
   return (
     <aside
@@ -301,29 +347,7 @@ function DetailDrawer({ eventId, onClose }: { eventId: string; onClose: () => vo
           <X className="h-4 w-4" />
         </button>
       </div>
-      {detail.isLoading && <FormSkeleton fields={3} />}
-      {detail.isError && (
-        <LoadError
-          error={detail.error}
-          resource={t("errors.resources.mcpLogDetail")}
-          onRetry={() => void detail.refetch()}
-        />
-      )}
-      {d && (
-        <>
-          <div className="grid grid-cols-2 gap-2.5">
-            <DrawerStat label="Status" value={d.status} />
-            <DrawerStat label="Latency" value={`${d.latency_ms} ms`} />
-            <DrawerStat label="Transport" value={d.transport} />
-            <DrawerStat label="Time" value={fmt.dateTime(d.ts)} />
-            <DrawerStat label="Request" value={d.request_id || "—"} />
-            <DrawerStat label="Trace" value={d.trace_id || "—"} />
-          </div>
-          {d.error && <p className="text-xs text-destructive">{d.error}</p>}
-          {pretty(d.arguments) && <DrawerBlock label="Arguments" body={pretty(d.arguments)!} />}
-          {pretty(d.result) && <DrawerBlock label="Result" body={pretty(d.result)!} />}
-        </>
-      )}
+      {body}
     </aside>
   );
 }

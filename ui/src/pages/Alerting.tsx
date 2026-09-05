@@ -331,7 +331,7 @@ export function AlertRules() {
                   onCheckedChange={() => toggle.mutate(r)}
                 />
               </div>
-              <div className="grid grid-cols-3 gap-2.5">
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
                 <RuleStat label="Signal" value={r.signal} />
                 <RuleStat label="Threshold" value={String(r.threshold)} />
                 <RuleStat label="Window" value={`${r.window_secs}s`} />
@@ -492,7 +492,7 @@ function AddRuleDialog({
             ))}
           </Select>
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Threshold">
             <Input
               type="number"

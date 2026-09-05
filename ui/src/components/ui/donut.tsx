@@ -58,7 +58,15 @@ export function Donut({
   return (
     <div
       className={className}
-      style={{ display: "flex", alignItems: "center", gap: "var(--space-6, 1.25rem)" }}
+      // the legend drops below the ring rather than pushing the card past the
+      // viewport: donut + legend has a min-content width of ~320px, which is
+      // more than a 375px screen has left after the page padding (#1203)
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: "var(--space-6, 1.25rem)",
+      }}
       {...props}
     >
       <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} style={{ flex: "none" }}>

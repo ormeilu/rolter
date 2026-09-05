@@ -13,6 +13,7 @@ import {
   scoped,
 } from "./story-harness";
 import type { ProviderRow } from "@/lib/api";
+import { atMobile, atTablet, expectNoHorizontalOverflow } from "@/lib/story-viewport";
 
 const PROVIDERS: ProviderRow[] = [
   {
@@ -128,5 +129,38 @@ export const Forbidden: Story = {
   ),
   play: async ({ canvasElement }) => {
     await expectLoadError(canvasElement, /You do not have access to providers/);
+  },
+};
+
+/**
+ * The provider list is six columns wide and stays six columns wide: below `md`
+ * it scrolls inside its own border instead of dragging the page sideways under
+ * the shell (#1203).
+ */
+export const Mobile: Story = {
+  ...atMobile,
+  render: () => (
+    <Harness fetchStub={loaded}>
+      <Providers />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getAllByText("openai-prod").length).toBeGreaterThan(0));
+    await expectNoHorizontalOverflow();
+  },
+};
+
+export const Tablet: Story = {
+  ...atTablet,
+  render: () => (
+    <Harness fetchStub={loaded}>
+      <Providers />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getAllByText("openai-prod").length).toBeGreaterThan(0));
+    await expectNoHorizontalOverflow();
   },
 };

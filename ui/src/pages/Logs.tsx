@@ -13,6 +13,7 @@ import { LoadError } from "@/components/LoadError";
 import { ListSkeleton } from "@/components/LoadingState";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Sheet, SheetBody, SheetHeader } from "@/components/ui/sheet";
 import {
   AnalyticsUnavailableError,
   fetchInvocations,
@@ -22,7 +23,9 @@ import {
 } from "@/lib/api";
 import { useCurrencyCode } from "@/lib/currency";
 import { useFormat } from "@/lib/i18n/format";
+import { useModalA11y } from "@/lib/modal-a11y";
 import { useDrawerA11y } from "@/lib/use-drawer-a11y";
+import { BELOW_LG, BELOW_MD, useMediaQuery } from "@/lib/use-media-query";
 import { cn } from "@/lib/utils";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -62,7 +65,19 @@ export default function Logs() {
   const [modelSel, setModelSel] = React.useState<string[]>([]);
   const [page, setPage] = React.useState(0);
   const [selected, setSelected] = React.useState<InvocationRow | null>(null);
-  const drawer = useDrawerA11y(selected != null, () => setSelected(null));
+  // below `md` the 248px filter rail would leave the table 127px; below `lg`
+  // the 380px detail drawer pushes it off screen entirely (#1203). both become
+  // overlays at those widths — the same panels, out of the flow
+  const railOverlays = useMediaQuery(BELOW_MD);
+  const detailAsSheet = useMediaQuery(BELOW_LG);
+  const drawer = useDrawerA11y(selected != null && !detailAsSheet, () =>
+    setSelected(null),
+  );
+  const filterPanel = React.useRef<HTMLDivElement>(null);
+  const filterA11y = useModalA11y(filterPanel, {
+    open: railOverlays && filtersOpen,
+    onEscape: () => setFiltersOpen(false),
+  });
   const [streaming, setStreaming] = React.useState(true);
 
   const window = React.useMemo(
@@ -136,10 +151,60 @@ export default function Logs() {
 
   const statusSelected = status === "all" ? [] : [status];
 
+  // the same panel content in both shapes: an inline drawer beside the
+  // table at `lg`, a sheet over it below that
+  const detail = selected && (
+    <>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <DrawerStat label="Model" value={selected.model} />
+        <DrawerStat label="Provider" value={selected.provider || "—"} />
+        <DrawerStat
+          label="Latency"
+          value={t("analytics.ms", {
+            value: fmt.number(Math.round(num(selected.latency_ms))),
+          })}
+        />
+        <DrawerStat
+          label="Cost"
+          value={cost(selected) ?? t("analytics.unpriced")}
+          title={isUnpriced(selected) ? t("analytics.unpricedHint") : undefined}
+        />
+        <DrawerStat
+          label="Tokens"
+          value={`${num(selected.prompt_tokens)} in · ${num(selected.completion_tokens)} out`}
+        />
+        <DrawerStat label="Virtual key" value={selected.virtual_key_id || "—"} />
+      </div>
+      {selected.error && (
+        <DrawerBlock label="Error" content={selected.error} />
+      )}
+      <DrawerBlock
+        label="Request"
+        content={pretty(selected.request_payload) ?? "payload logging is off"}
+      />
+      <DrawerBlock
+        label="Response"
+        content={pretty(selected.response_payload) ?? "payload logging is off"}
+      />
+    </>
+  );
+
   return (
     <div className="flex h-full min-h-0">
       {filtersOpen && (
-        <div className="w-[248px] flex-none overflow-y-auto border-r border-[color:var(--border-subtle)]">
+        <div
+          ref={railOverlays ? filterPanel : undefined}
+          role={railOverlays ? "dialog" : undefined}
+          aria-modal={railOverlays ? true : undefined}
+          aria-label={railOverlays ? t("common.filters") : undefined}
+          className={cn(
+            "overflow-y-auto border-r border-[color:var(--border-subtle)]",
+            railOverlays
+              ? "rl-drawer-in fixed inset-y-0 left-0 z-50 w-[min(300px,85vw)] bg-[color:var(--surface-app)] shadow-[14px_0_44px_rgba(0,0,0,0.42)] focus-visible:outline-none"
+              : "w-[248px] flex-none",
+          )}
+          {...(railOverlays ? filterA11y : {})}
+        >
           <FilterPanel title="Filters" onHide={() => setFiltersOpen(false)}>
             <FilterSection title="Status" defaultOpen count={statusSelected.length}>
               <FilterCheckList
@@ -166,6 +231,13 @@ export default function Logs() {
             </FilterSection>
           </FilterPanel>
         </div>
+      )}
+      {filtersOpen && railOverlays && (
+        <div
+          className="rl-fade-in fixed inset-0 z-40 bg-black/50"
+          onClick={() => setFiltersOpen(false)}
+          aria-hidden
+        />
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -221,8 +293,8 @@ export default function Logs() {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <table className="w-full table-fixed border-collapse text-sm">
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full min-w-[880px] table-fixed border-collapse text-sm">
             <colgroup>
               <col style={{ width: "16%" }} />
               <col style={{ width: "20%" }} />
@@ -343,58 +415,38 @@ export default function Logs() {
         </div>
       </div>
 
-      {selected && (
-        <aside
-          {...drawer}
-          aria-label={t("analytics.details")}
-          className="w-[380px] flex-none overflow-y-auto border-l border-[color:var(--border-subtle)] bg-background focus-visible:outline-none"
-        >
-          <div className="flex items-center gap-2.5 border-b border-[color:var(--border-subtle)] px-[18px] py-3.5">
-            <span className="truncate font-mono text-sm">{selected.request_id || "request"}</span>
-            <button
-              type="button"
-              aria-label="Close details"
-              onClick={() => setSelected(null)}
-              className="ml-auto flex text-[color:var(--text-subtle)] transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="flex flex-col gap-3.5 p-[18px]">
-            <div className="grid grid-cols-2 gap-3">
-              <DrawerStat label="Model" value={selected.model} />
-              <DrawerStat label="Provider" value={selected.provider || "—"} />
-              <DrawerStat
-                label="Latency"
-                value={t("analytics.ms", {
-                  value: fmt.number(Math.round(num(selected.latency_ms))),
-                })}
-              />
-              <DrawerStat
-                label="Cost"
-                value={cost(selected) ?? t("analytics.unpriced")}
-                title={isUnpriced(selected) ? t("analytics.unpricedHint") : undefined}
-              />
-              <DrawerStat
-                label="Tokens"
-                value={`${num(selected.prompt_tokens)} in · ${num(selected.completion_tokens)} out`}
-              />
-              <DrawerStat label="Virtual key" value={selected.virtual_key_id || "—"} />
+      {selected &&
+        (detailAsSheet ? (
+          <Sheet open onOpenChange={(next) => !next && setSelected(null)}>
+            <SheetHeader
+              title={t("analytics.details")}
+              subtitle={selected.request_id || "request"}
+              onClose={() => setSelected(null)}
+            />
+            <SheetBody>{detail}</SheetBody>
+          </Sheet>
+        ) : (
+          <aside
+            {...drawer}
+            aria-label={t("analytics.details")}
+            className="w-[380px] flex-none overflow-y-auto border-l border-[color:var(--border-subtle)] bg-background focus-visible:outline-none"
+          >
+            <div className="flex items-center gap-2.5 border-b border-[color:var(--border-subtle)] px-[18px] py-3.5">
+              <span className="truncate font-mono text-sm">
+                {selected.request_id || "request"}
+              </span>
+              <button
+                type="button"
+                aria-label="Close details"
+                onClick={() => setSelected(null)}
+                className="ml-auto flex text-[color:var(--text-subtle)] transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
-            {selected.error && (
-              <DrawerBlock label="Error" content={selected.error} />
-            )}
-            <DrawerBlock
-              label="Request"
-              content={pretty(selected.request_payload) ?? "payload logging is off"}
-            />
-            <DrawerBlock
-              label="Response"
-              content={pretty(selected.response_payload) ?? "payload logging is off"}
-            />
-          </div>
-        </aside>
-      )}
+            <div className="flex flex-col gap-3.5 p-[18px]">{detail}</div>
+          </aside>
+        ))}
     </div>
   );
 }
