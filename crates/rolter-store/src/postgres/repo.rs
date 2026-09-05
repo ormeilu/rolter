@@ -5281,13 +5281,15 @@ mod tests {
             budgets.get(strict.id).await.unwrap().unpriced_policy,
             Some("block".to_string())
         );
+        // both budgets belong to the project scope, the inherited one and the
+        // strict one, so the scope lists two
         assert_eq!(
             budgets
                 .list_for_scope("project", project.id)
                 .await
                 .unwrap()
                 .len(),
-            1
+            2
         );
 
         let limits = RateLimitRepo(&pool);
