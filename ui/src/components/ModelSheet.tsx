@@ -349,14 +349,24 @@ function FieldLabel({
   label,
   required,
   info,
+  htmlFor,
+  id,
 }: {
   label: string;
   required?: boolean;
   info?: string;
+  /** the control this names, so no label dangles */
+  htmlFor?: string;
+  /** for a group (a segmented control) that is `aria-labelledby` this id */
+  id?: string;
 }) {
   return (
     <div className="flex items-center gap-1.5">
-      <label className="text-xs font-medium text-[color:var(--text-secondary)]">
+      <label
+        id={id}
+        htmlFor={htmlFor}
+        className="text-xs font-medium text-[color:var(--text-secondary)]"
+      >
         {label}
       </label>
       {required && <span className="text-xs text-destructive">*</span>}
@@ -434,21 +444,35 @@ function Segmented<T extends string>({
   options,
   onChange,
   disabled,
+  labelledBy,
+  ariaLabel,
 }: {
   value: T;
   options: { value: T; label: string }[];
   onChange: (v: T) => void;
   disabled?: boolean;
+  /** id of the FieldLabel naming this group */
+  labelledBy?: string;
+  /** a name for a group with no visible label */
+  ariaLabel?: string;
 }) {
   return (
-    <div className="inline-flex w-fit rounded-md bg-[color:var(--surface-subtle)] p-0.5">
+    <div
+      role="radiogroup"
+      aria-labelledby={labelledBy}
+      aria-label={ariaLabel}
+      className="inline-flex w-fit rounded-md bg-[color:var(--surface-subtle)] p-0.5"
+    >
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
+          role="radio"
+          aria-checked={value === o.value}
           disabled={disabled}
           onClick={() => onChange(o.value)}
           className={cn(
+            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             "rounded px-2.5 py-1 text-xs font-medium transition-colors duration-[120ms] disabled:cursor-not-allowed disabled:opacity-50",
             value === o.value
               ? "bg-[color:var(--surface-base)] text-foreground shadow-sm"
@@ -508,11 +532,12 @@ function ChipGroup({
   onToggle: (v: string) => void;
   disabled?: boolean;
 }) {
+  const id = React.useId();
   return (
-    <div className="space-y-1.5">
-      <label className="text-xs font-medium text-[color:var(--text-secondary)]">
+    <div className="space-y-1.5" role="group" aria-labelledby={id}>
+      <span id={id} className="text-xs font-medium text-[color:var(--text-secondary)]">
         {label}
-      </label>
+      </span>
       <div className="flex flex-wrap gap-1.5">
         {options.length === 0 && (
           <p className="text-xs text-muted-foreground">none available</p>
@@ -527,6 +552,7 @@ function ChipGroup({
               onClick={() => onToggle(v)}
               aria-pressed={on}
               className={cn(
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 "inline-flex h-7 items-center rounded-full border px-2.5 font-mono text-xs transition-colors duration-[120ms] disabled:cursor-not-allowed disabled:opacity-50",
                 on
                   ? "border-[color:var(--red-500)] bg-[color:var(--red-tint)] text-foreground"
@@ -947,8 +973,9 @@ export function ModelSheet({
     info?: string,
   ) => (
     <div className="space-y-1">
-      <FieldLabel label={label} info={info} />
+      <FieldLabel label={label} info={info} htmlFor={`ms-net-${key}`} />
       <Input
+        id={`ms-net-${key}`}
         type="number"
         className="font-mono"
         value={draft.net[key] as string}
@@ -961,8 +988,9 @@ export function ModelSheet({
 
   const priceInput = (key: "input" | "output" | "cacheWrite" | "cacheRead", label: string) => (
     <div className="space-y-1">
-      <FieldLabel label={label} />
+      <FieldLabel label={label} htmlFor={`ms-price-${key}`} />
       <Input
+        id={`ms-price-${key}`}
         type="number"
         step="any"
         className="font-mono"
@@ -999,8 +1027,10 @@ export function ModelSheet({
             <FieldLabel
               label="Duplicate from"
               info="Prefill every field from an existing model, then tweak. Handy for adding a second deployment of the same model on another provider."
+              htmlFor="ms-field-1"
             />
             <Select
+              id="ms-field-1"
               className="font-mono"
               value={dupFrom}
               onChange={(e) => applyDupFrom(e.target.value)}
@@ -1028,8 +1058,10 @@ export function ModelSheet({
                 label="Provider"
                 required
                 info="The upstream provider that serves this model. Sets auth, endpoint shape, and which parameters are valid."
+                htmlFor="ms-field-2"
               />
               <Select
+                id="ms-field-2"
                 className="font-mono"
                 value={draft.providerId}
                 disabled={readonly}
@@ -1048,8 +1080,10 @@ export function ModelSheet({
               <FieldLabel
                 label="Model type"
                 info="The modality this endpoint handles. Determines which request schema and playground surface apply."
+                htmlFor="ms-field-3"
               />
               <Select
+                id="ms-field-3"
                 className="font-mono"
                 value={draft.modality}
                 disabled={readonly}
@@ -1068,8 +1102,10 @@ export function ModelSheet({
               label="Upstream model name"
               required
               info="The exact model id the provider expects — this string is sent to the base URL. e.g. gpt-4o, claude-sonnet-4-20250514, Llama-3.1-8B-Instruct."
+              htmlFor="ms-field-4"
             />
             <Input
+              id="ms-field-4"
               className="font-mono"
               value={draft.upstreamName}
               placeholder="gpt-4o"
@@ -1087,8 +1123,10 @@ export function ModelSheet({
             <FieldLabel
               label="Rolter alias"
               info="Optional. The public name clients call this model by. Leave blank to reuse the upstream name. Use it to expose a stable, provider-agnostic name."
+              htmlFor="ms-field-5"
             />
             <Input
+              id="ms-field-5"
               className="font-mono"
               value={draft.alias}
               placeholder={draft.upstreamName.trim() || "same as upstream name"}
@@ -1104,8 +1142,10 @@ export function ModelSheet({
             <FieldLabel
               label="Base URL override"
               info="Point this model at a custom endpoint (self-hosted, proxy, or region). Leave blank to use the provider's default base URL."
+              htmlFor="ms-field-6"
             />
             <Input
+              id="ms-field-6"
               className="font-mono"
               value={draft.baseUrl}
               placeholder="https://api.provider.com/v1"
@@ -1121,8 +1161,10 @@ export function ModelSheet({
             <FieldLabel
               label="Description"
               info="Free text shown in the catalog and pickers. Note capabilities, intended use, or gotchas for your team."
+              htmlFor="ms-field-7"
             />
             <Textarea
+              id="ms-field-7"
               value={draft.description}
               placeholder="What is this model for? Any routing notes for the team…"
               disabled={readonly}
@@ -1147,6 +1189,7 @@ export function ModelSheet({
           className="space-y-3"
         >
           <Segmented
+            ariaLabel={t("modelSheet.paramLockMode")}
             value={draft.paramMode}
             options={lockModeOptions}
             disabled={readonly}
@@ -1343,8 +1386,10 @@ export function ModelSheet({
                     ? `Flat price per image (${cur})`
                     : `Flat price per minute (${cur})`
                 }
+                htmlFor="ms-field-8"
               />
               <Input
+                id="ms-field-8"
                 type="number"
                 step="any"
                 className="font-mono"
@@ -1357,8 +1402,9 @@ export function ModelSheet({
           )}
           <div className="flex items-end gap-3">
             <div className="w-36 space-y-1">
-              <FieldLabel label="Currency" />
+              <FieldLabel label="Currency" htmlFor="ms-field-9" />
               <Select
+                id="ms-field-9"
                 className="font-mono"
                 value={cur}
                 disabled={readonly}
@@ -1449,6 +1495,7 @@ export function ModelSheet({
           className="space-y-3"
         >
           <Segmented
+            ariaLabel={t("modelSheet.headerLockMode")}
             value={draft.headerMode}
             options={lockModeOptions}
             disabled={readonly}
@@ -1532,8 +1579,10 @@ export function ModelSheet({
             <FieldLabel
               label="Minimum role"
               info="The lowest role allowed to call this model. Members below this role won't see it in pickers or be able to invoke it."
+              htmlFor="ms-field-10"
             />
             <Select
+              id="ms-field-10"
               className="font-mono"
               value={draft.rbac.minRole}
               disabled={readonly}
@@ -1550,8 +1599,10 @@ export function ModelSheet({
             <FieldLabel
               label="Visibility"
               info="Public = available to anyone meeting the minimum role. Restricted = only the teams, virtual keys, and users you list below."
+              id="ms-visibility-label"
             />
             <Segmented
+              labelledBy="ms-visibility-label"
               value={draft.rbac.visibility}
               options={[
                 { value: "public", label: "Public" },
@@ -1641,6 +1692,7 @@ export function ModelSheet({
             disabled={readonly}
             onClick={runTest}
             className={cn(
+              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
               "inline-flex h-9 items-center gap-1.5 rounded-md border border-[color:var(--border-subtle)] px-3 text-sm transition-colors hover:bg-[color:var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50",
               testState === "ok"
                 ? "text-[color:var(--status-success)]"

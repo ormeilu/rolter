@@ -140,10 +140,11 @@ export default function Security() {
           <Switch checked={form.authEnabled} onCheckedChange={(v) => set({ authEnabled: v })} />
         </div>
         <div className="flex flex-col gap-1.5" style={{ opacity: disabledAuth ? 0.55 : 1 }}>
-          <label className="text-xs font-medium text-[color:var(--text-secondary)]">
+          <label htmlFor="security-credential-ref" className="text-xs font-medium text-[color:var(--text-secondary)]">
             Credential reference
           </label>
           <Input
+            id="security-credential-ref"
             value={form.credentialRef}
             disabled={disabledAuth}
             placeholder="vault://secrets/rolter-dashboard"
@@ -151,10 +152,11 @@ export default function Security() {
           />
         </div>
         <div className="flex flex-col gap-1.5" style={{ opacity: disabledAuth ? 0.55 : 1 }}>
-          <label className="text-xs font-medium text-[color:var(--text-secondary)]">
+          <label htmlFor="security-managed-secret" className="text-xs font-medium text-[color:var(--text-secondary)]">
             Managed secret
           </label>
           <Input
+            id="security-managed-secret"
             type="password"
             value={form.managedSecret}
             disabled={disabledAuth}

@@ -93,7 +93,9 @@
     "ru": "Русский"
   },
   "modelSheet": {
-    "currencyUnconvertible": "{{code}} has no conversion rate configured, so this price cannot be converted to {{base}} and will not reach spend or budgets. Add it to [currency.rates] in the bootstrap config, or price in {{base}}."
+    "currencyUnconvertible": "{{code}} has no conversion rate configured, so this price cannot be converted to {{base}} and will not reach spend or budgets. Add it to [currency.rates] in the bootstrap config, or price in {{base}}.",
+    "paramLockMode": "Parameter lock mode",
+    "headerLockMode": "Header lock mode"
   },
   "nav": {
     "playground": "Playground",
@@ -1004,6 +1006,8 @@
     }
   },
   "analytics": {
-    "noRowsYet": "No requests logged in this window. Either nothing was served, or the gateways are not writing to ClickHouse — an unconfigured destination looks exactly like a quiet deployment."
+    "noRowsYet": "No requests logged in this window. Either nothing was served, or the gateways are not writing to ClickHouse — an unconfigured destination looks exactly like a quiet deployment.",
+    "details": "Details",
+    "mcpDetails": "MCP call details"
   }
 }

@@ -17,6 +17,7 @@ import {
   fetchModels,
   type InvocationRow,
 } from "@/lib/api";
+import { useDrawerA11y } from "@/lib/use-drawer-a11y";
 import { cn } from "@/lib/utils";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -54,6 +55,7 @@ export default function Logs() {
   const [modelSel, setModelSel] = React.useState<string[]>([]);
   const [page, setPage] = React.useState(0);
   const [selected, setSelected] = React.useState<InvocationRow | null>(null);
+  const drawer = useDrawerA11y(selected != null, () => setSelected(null));
   const [streaming, setStreaming] = React.useState(true);
 
   const window = React.useMemo(
@@ -276,7 +278,11 @@ export default function Logs() {
       </div>
 
       {selected && (
-        <div className="w-[380px] flex-none overflow-y-auto border-l border-[color:var(--border-subtle)] bg-background">
+        <aside
+          {...drawer}
+          aria-label={t("analytics.details")}
+          className="w-[380px] flex-none overflow-y-auto border-l border-[color:var(--border-subtle)] bg-background focus-visible:outline-none"
+        >
           <div className="flex items-center gap-2.5 border-b border-[color:var(--border-subtle)] px-[18px] py-3.5">
             <span className="truncate font-mono text-sm">{selected.request_id || "request"}</span>
             <button
@@ -312,7 +318,7 @@ export default function Logs() {
               content={pretty(selected.response_payload) ?? "payload logging is off"}
             />
           </div>
-        </div>
+        </aside>
       )}
     </div>
   );

@@ -177,10 +177,11 @@ export default function LogsSettings() {
           />
         </div>
         <div className="flex flex-col gap-1.5" style={{ opacity: capture ? 1 : 0.55 }}>
-          <label className="text-xs font-medium text-[color:var(--text-secondary)]">
+          <label htmlFor="logs-max-bytes" className="text-xs font-medium text-[color:var(--text-secondary)]">
             Max bytes per payload
           </label>
           <Input
+            id="logs-max-bytes"
             className="max-w-[180px]"
             inputMode="numeric"
             disabled={!capture}
@@ -229,10 +230,11 @@ export default function LogsSettings() {
         </div>
         <div className="flex flex-wrap gap-4">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-[color:var(--text-secondary)]">
+            <label htmlFor="logs-retention-days" className="text-xs font-medium text-[color:var(--text-secondary)]">
               Log metadata (days)
             </label>
             <Input
+              id="logs-retention-days"
               className="max-w-[140px]"
               inputMode="numeric"
               aria-label="Retention days"
@@ -241,10 +243,11 @@ export default function LogsSettings() {
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-[color:var(--text-secondary)]">
+            <label htmlFor="logs-payload-retention-hours" className="text-xs font-medium text-[color:var(--text-secondary)]">
               Captured payloads (hours)
             </label>
             <Input
+              id="logs-payload-retention-hours"
               className="max-w-[140px]"
               inputMode="numeric"
               aria-label="Payload retention hours"

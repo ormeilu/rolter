@@ -221,10 +221,11 @@ export default function Performance() {
             onChange={(v) => set({ queueWorkers: v })}
           />
           <div className="flex min-w-[200px] flex-col gap-1.5">
-            <label className="text-xs font-medium text-[color:var(--text-secondary)]">
+            <label htmlFor="perf-queue-backpressure" className="text-xs font-medium text-[color:var(--text-secondary)]">
               When the queue is full
             </label>
             <Select
+              id="perf-queue-backpressure"
               value={form.queueBackpressure}
               disabled={!queue}
               aria-label="When the queue is full"
@@ -305,15 +306,16 @@ function NumberField({
   disabled?: boolean;
   onChange: (v: string) => void;
 }) {
+  const id = React.useId();
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-medium text-[color:var(--text-secondary)]">
+      <label htmlFor={id} className="text-xs font-medium text-[color:var(--text-secondary)]">
         {label}
       </label>
       <Input
+        id={id}
         className="max-w-[160px]"
         inputMode="numeric"
-        aria-label={label}
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
