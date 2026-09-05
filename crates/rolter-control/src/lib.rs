@@ -1957,7 +1957,13 @@ mod tests {
             "u:p@",
             "ch:pass",
         ] {
-            assert!(!json.contains(secret), "{secret} leaked: {json}");
+            // the message names the seed, not the serialised document: a
+            // failing run must not print the very thing it is guarding
+            assert!(
+                !json.contains(secret),
+                "a seeded secret survived redaction (seed #{})",
+                secret.len()
+            );
         }
         assert_eq!(
             config.providers[0].egress_proxy.as_deref(),
