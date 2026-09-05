@@ -36,7 +36,8 @@
             "pages": [
               "introduction",
               "quickstart",
-              "installation"
+              "installation",
+              "concepts/dashboard"
             ]
           },
           {
