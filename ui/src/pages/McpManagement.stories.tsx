@@ -23,6 +23,7 @@ const OAUTH_CLIENT = { server_id: "server-github", authorize_url: null, token_ur
 const AUTHORIZE_STARTED = { authorization_url: "https://linear.app/oauth/authorize?client_id=rolter-linear&state=abc", state: "abc", expires_in: 600 };
 const LIBRARY: McpLibraryItem[] = [
   { slug: "github", name: "GitHub", description: "Repository, issue, pull request, and code search tools.", url: "https://api.githubcopilot.com/mcp/", transport: "streamable_http", tools: ["search_code", "create_issue"], required_scopes: ["repo"], installed: true },
+  { slug: "notion", name: "Notion", description: "Search and update pages in an organization workspace.", url: "https://mcp.notion.com/mcp", transport: "streamable_http", tools: ["search", "notion-create-pages"], required_scopes: [], installed: false },
   { slug: "linear", name: "Linear", description: "Browse and manage teams, issues, and projects.", url: "https://mcp.linear.app/mcp", transport: "streamable_http", tools: ["list_issues", "create_issue"], required_scopes: ["read", "write"], installed: false },
 ];
 const GROUPS: McpToolGroupRow[] = [{ id: "group-1", org_id: ORG.id, name: "Triage", slug: "triage", description: "Read-only incident and code investigation tools.", enabled: true, tools: [{ server_id: "server-github", tool: "search_code" }, { server_id: "server-sentry", tool: "list_issues" }], created_at: ORG.created_at, updated_at: ORG.created_at }];
@@ -175,8 +176,25 @@ export const CatalogConnectNeedsAClient: Story = {
 };
 
 export const LibraryLoaded: Story = { render: () => <Harness fetchStub={routed()}><McpLibrary /></Harness> };
-// the curated definitions in mcp_oauth.rs carry no tool list at all, so every
-// entry claimed "No tools declared" — a statement about the catalog that was
+// a curated entry now arrives with the manifest the upstream server publishes
+// (#1252), which is what an install stores, what the tool tally counts, and
+// what a tool group can pick from
+export const LibraryShowsCuratedTools: Story = {
+  render: () => <Harness fetchStub={routed()}><McpLibrary /></Harness>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("Linear")).toBeVisible());
+    await expect(canvas.getByText("search_code")).toBeVisible();
+    await expect(canvas.getAllByText("create_issue")).toHaveLength(2);
+    await expect(canvas.queryByText("No tools declared")).not.toBeInTheDocument();
+    // Notion has tools but no scopes to request — its consent screen grants
+    // selected pages — so that line stays honest instead of inventing one
+    await expect(canvas.getByText("notion-create-pages")).toBeVisible();
+    await expect(canvas.getByText("No OAuth scopes")).toBeVisible();
+  },
+};
+// a control plane older than #1252 still answers with empty lists; every entry
+// then claimed "No tools declared" — a statement about the catalog that was
 // not true of the servers behind it (#1194)
 export const LibraryHidesAnEmptyToolList: Story = {
   render: () => <Harness fetchStub={routed({ library: async () => json(LIBRARY.map((item) => ({ ...item, tools: [] }))) })}><McpLibrary /></Harness>,
@@ -186,7 +204,9 @@ export const LibraryHidesAnEmptyToolList: Story = {
     await expect(canvas.queryByText("No tools declared")).not.toBeInTheDocument();
   },
 };
-export const LibraryInstallsServer: Story = { render: () => { let installed = false; const stub = routed({ library: async () => json(LIBRARY.map((item) => item.slug === "linear" ? { ...item, installed } : item)), servers: async (_input, init) => { if (init?.method === "POST") { installed = true; return json({ ...SERVERS[0], id: "server-linear", name: "Linear", slug: "linear" }); } return json(SERVERS); } }); return <Harness fetchStub={stub}><McpLibrary /></Harness>; }, play: async ({ canvasElement }) => { const canvas = within(canvasElement); await userEvent.click(await canvas.findByRole("button", { name: "Install" })); await waitFor(() => expect(canvas.getAllByRole("button", { name: "Installed" })).toHaveLength(2)); } };
+// notion is filtered out so exactly one entry is uninstalled and "Install"
+// names a single button
+export const LibraryInstallsServer: Story = { render: () => { let installed = false; const stub = routed({ library: async () => json(LIBRARY.filter((item) => item.slug !== "notion").map((item) => item.slug === "linear" ? { ...item, installed } : item)), servers: async (_input, init) => { if (init?.method === "POST") { installed = true; return json({ ...SERVERS[0], id: "server-linear", name: "Linear", slug: "linear" }); } return json(SERVERS); } }); return <Harness fetchStub={stub}><McpLibrary /></Harness>; }, play: async ({ canvasElement }) => { const canvas = within(canvasElement); await userEvent.click(await canvas.findByRole("button", { name: "Install" })); await waitFor(() => expect(canvas.getAllByRole("button", { name: "Installed" })).toHaveLength(2)); } };
 
 export const ToolGroupsLoaded: Story = { render: () => <Harness fetchStub={routed()}><ToolGroups /></Harness>, play: async ({ canvasElement }) => { const canvas = within(canvasElement); await waitFor(() => expect(canvas.getByText("Triage")).toBeVisible()); await expect(canvas.getByText("GitHub/search_code")).toBeVisible(); } };
 export const ToolGroupsEmpty: Story = { render: () => <Harness fetchStub={routed({ groups: async () => json([]) })}><ToolGroups /></Harness> };

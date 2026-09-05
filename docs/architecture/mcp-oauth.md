@@ -35,10 +35,36 @@ The gateway indexes servers by `(org, slug)` and sessions by `(server, user)`. A
 
 Every listing is joined through `mcp_servers.org_id`, so a cross-tenant read is not expressible, not merely filtered out.
 
+## The curated catalog
+
+`LIBRARY` in `crates/rolter-control/src/mcp_oauth.rs` holds the four reviewed
+server definitions the dashboard offers under **MCP Library**: GitHub, Sentry,
+Notion and Linear. Each entry names the server's URL, transport, tool manifest
+and the OAuth scopes an authorization request must ask for.
+
+The manifest matters beyond the card it renders on. `create_server` admits a
+`source: "library"` request only when it reproduces the catalog entry element
+for element, so what is written here is exactly what an installed server ends
+up storing — and therefore what the tool tally counts, what a tool group can
+select, and what `allow_unlisted_tools` is deciding about. While the lists were
+empty (#1252) an install produced a server that declared nothing at all.
+
+Two properties are worth stating plainly:
+
+- **The lists are a hand-taken snapshot, not discovery.** Nothing re-checks them
+  against the live server, so a tool renamed upstream is stale here until
+  someone edits the file. Calling `tools/list` on the server after install is
+  the real fix and is tracked separately; this is the cheap step that stops the
+  catalog from asserting something false.
+- **An empty `required_scopes` can be the accurate answer.** Notion's remote
+  server grants access to the pages the user picks on its consent screen rather
+  than to named scopes, so it asks for none. Every other entry declaring an
+  empty list would be an unfilled row, and a test enforces that distinction.
+
 ## Endpoints
 
 - `GET`/`POST /api/v1/orgs/{org_id}/mcp-servers`, `PATCH`/`DELETE /api/v1/mcp-servers/{id}` — viewer reads, admin writes. A server URL must be `http(s)`; the transport must be one of `stdio`, `sse`, `streamable_http`, `websocket`. `PATCH` updates registry metadata, enabled state, declared tools and required scopes without destroying grants or sessions.
-- `GET /api/v1/orgs/{org_id}/mcp/library` — curated definitions annotated with whether the slug is installed. Installing one uses the ordinary server create endpoint, so the registry remains the source of truth.
+- `GET /api/v1/orgs/{org_id}/mcp/library` — curated definitions annotated with whether the slug is installed. Installing one uses the ordinary server create endpoint, so the registry remains the source of truth. See [The curated catalog](#the-curated-catalog) for what an entry declares.
 - `GET`/`POST /api/v1/orgs/{org_id}/mcp/tool-groups`, `PUT`/`DELETE /api/v1/mcp/tool-groups/{id}` — exact server/tool policy manifests. These definitions are not yet enforced by the proxy.
 - `GET`/`PUT /api/v1/orgs/{org_id}/mcp/settings` — organization transport and request defaults. The current HTTP proxy still uses deployment-level transport timeouts.
 - `GET /api/v1/orgs/{org_id}/mcp/grants`, `DELETE /api/v1/mcp/grants/{id}`

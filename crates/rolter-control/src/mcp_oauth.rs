@@ -207,28 +207,19 @@ async fn create_server(
     if !matches!(body.source.as_str(), "custom" | "library") {
         return Err(invalid("source must be custom or library"));
     }
-    if body.source == "library" {
-        let trusted = LIBRARY.iter().any(|item| {
-            item.slug == body.slug
-                && item.name == body.name
-                && item.url == body.url
-                && item.transport == transport
-                && body
-                    .tools
-                    .iter()
-                    .map(String::as_str)
-                    .eq(item.tools.iter().copied())
-                && body
-                    .required_scopes
-                    .iter()
-                    .map(String::as_str)
-                    .eq(item.required_scopes.iter().copied())
-        });
-        if !trusted {
-            return Err(invalid(
-                "library server definition does not match the curated catalog",
-            ));
-        }
+    if body.source == "library"
+        && !matches_catalog(
+            &body.slug,
+            &body.name,
+            &body.url,
+            transport,
+            &body.tools,
+            &body.required_scopes,
+        )
+    {
+        return Err(invalid(
+            "library server definition does not match the curated catalog",
+        ));
     }
     let server = McpServerRepo(pool(&state))
         .create(
@@ -388,6 +379,26 @@ struct LibraryDefinition {
     required_scopes: &'static [&'static str],
 }
 
+/// The curated catalog.
+///
+/// Every entry is a **snapshot** of what the upstream server published, taken
+/// by hand. It is not discovered: nothing here is re-checked against the live
+/// server, so a tool renamed upstream goes stale here until someone edits this
+/// list. That is a deliberate, cheap first step — an empty list was worse,
+/// because it made a card claim the server declares no tools at all, left the
+/// installed server contributing nothing to the tool tally, and made the entry
+/// unpickable in a tool group (#1252). Replacing this with a `tools/list` call
+/// on install is tracked separately.
+///
+/// The install path in [`create_server`] compares a `library` request against
+/// these lists element for element, so filling them in here is what makes an
+/// installed curated server arrive with its manifest — a client that sends a
+/// different list is rejected as not matching the catalog.
+///
+/// `required_scopes` is what the OAuth authorization request must ask for.
+/// Notion's remote server has none: its consent screen grants access to the
+/// pages the user picks rather than to named scopes, so an empty list there is
+/// the accurate answer, not a gap.
 const LIBRARY: &[LibraryDefinition] = &[
     LibraryDefinition {
         slug: "github",
@@ -395,8 +406,44 @@ const LIBRARY: &[LibraryDefinition] = &[
         description: "Repository, issue, pull request, and code search tools.",
         url: "https://api.githubcopilot.com/mcp/",
         transport: "streamable_http",
-        tools: &[],
-        required_scopes: &[],
+        tools: &[
+            "get_me",
+            "search_repositories",
+            "search_code",
+            "search_issues",
+            "get_file_contents",
+            "create_or_update_file",
+            "push_files",
+            "create_branch",
+            "list_commits",
+            "get_commit",
+            "list_issues",
+            "get_issue",
+            "create_issue",
+            "update_issue",
+            "add_issue_comment",
+            "get_issue_comments",
+            "list_pull_requests",
+            "get_pull_request",
+            "get_pull_request_files",
+            "get_pull_request_diff",
+            "create_pull_request",
+            "update_pull_request",
+            "create_pull_request_review",
+            "merge_pull_request",
+            "list_workflow_runs",
+            "get_workflow_run",
+            "list_code_scanning_alerts",
+            "get_code_scanning_alert",
+            "list_notifications",
+        ],
+        required_scopes: &[
+            "repo",
+            "read:org",
+            "read:user",
+            "workflow",
+            "security_events",
+        ],
     },
     LibraryDefinition {
         slug: "sentry",
@@ -404,8 +451,23 @@ const LIBRARY: &[LibraryDefinition] = &[
         description: "Inspect production issues, traces, and event context.",
         url: "https://mcp.sentry.dev/mcp",
         transport: "streamable_http",
-        tools: &[],
-        required_scopes: &[],
+        tools: &[
+            "whoami",
+            "find_organizations",
+            "find_teams",
+            "find_projects",
+            "find_releases",
+            "find_issues",
+            "find_errors",
+            "find_transactions",
+            "get_issue_details",
+            "get_trace_details",
+            "get_event_attachment",
+            "update_issue",
+            "search_docs",
+            "get_doc",
+        ],
+        required_scopes: &["org:read", "project:read", "team:read", "event:read"],
     },
     LibraryDefinition {
         slug: "notion",
@@ -413,7 +475,23 @@ const LIBRARY: &[LibraryDefinition] = &[
         description: "Search and update pages in an organization workspace.",
         url: "https://mcp.notion.com/mcp",
         transport: "streamable_http",
-        tools: &[],
+        tools: &[
+            "search",
+            "fetch",
+            "notion-create-pages",
+            "notion-update-page",
+            "notion-move-pages",
+            "notion-duplicate-page",
+            "notion-create-database",
+            "notion-update-database",
+            "notion-create-comment",
+            "notion-get-comments",
+            "notion-get-self",
+            "notion-get-user",
+            "notion-get-users",
+        ],
+        // the Notion consent screen grants the pages the user selects, not
+        // named scopes, so there is nothing to request here
         required_scopes: &[],
     },
     LibraryDefinition {
@@ -422,10 +500,66 @@ const LIBRARY: &[LibraryDefinition] = &[
         description: "Browse and manage teams, issues, and projects.",
         url: "https://mcp.linear.app/mcp",
         transport: "streamable_http",
-        tools: &[],
-        required_scopes: &[],
+        tools: &[
+            "list_teams",
+            "get_team",
+            "list_users",
+            "get_user",
+            "list_issues",
+            "get_issue",
+            "create_issue",
+            "update_issue",
+            "list_my_issues",
+            "list_issue_statuses",
+            "get_issue_status",
+            "list_issue_labels",
+            "create_issue_label",
+            "list_comments",
+            "create_comment",
+            "list_projects",
+            "get_project",
+            "create_project",
+            "update_project",
+            "list_project_labels",
+            "list_cycles",
+            "list_documents",
+            "get_document",
+            "search_documentation",
+        ],
+        required_scopes: &["read", "write", "issues:create", "comments:create"],
     },
 ];
+
+/// Whether a `library` install request reproduces a curated entry exactly.
+///
+/// The lists are compared element for element, order included: a caller may
+/// install what the catalog publishes, not an edited subset of it. That is what
+/// makes [`LIBRARY`]'s tool manifest reach the stored server — before #1252 the
+/// catalog's lists were empty, so the only request that could pass this check
+/// was one that also declared nothing.
+fn matches_catalog(
+    slug: &str,
+    name: &str,
+    url: &str,
+    transport: &str,
+    tools: &[String],
+    required_scopes: &[String],
+) -> bool {
+    LIBRARY.iter().any(|item| {
+        item.slug == slug
+            && item.name == name
+            && item.url == url
+            && item.transport == transport
+            && tools
+                .iter()
+                .map(String::as_str)
+                .eq(item.tools.iter().copied())
+            && required_scopes
+                .iter()
+                .map(String::as_str)
+                .eq(item.required_scopes.iter().copied())
+    })
+}
 
 async fn list_library(
     principal: Principal,
@@ -988,6 +1122,96 @@ mod tests {
                     .collect::<Vec<_>>()
             )
             .is_ok());
+            // an empty manifest is not a fact about the server, it is a hole in
+            // this catalog: it renders as "declares no tools", contributes
+            // nothing to the tool tally, and cannot be picked in a tool group
+            assert!(
+                !item.tools.is_empty(),
+                "curated entry {} carries no tools",
+                item.slug
+            );
         }
+    }
+
+    /// Only Notion is allowed an empty scope list, and only because its consent
+    /// screen grants selected pages rather than named scopes. Anything else
+    /// arriving empty is an unfilled entry, not a server without scopes.
+    #[test]
+    fn curated_entries_declare_their_oauth_scopes() {
+        for item in LIBRARY {
+            if item.slug == "notion" {
+                assert!(item.required_scopes.is_empty());
+            } else {
+                assert!(
+                    !item.required_scopes.is_empty(),
+                    "curated entry {} carries no required scopes",
+                    item.slug
+                );
+            }
+        }
+    }
+
+    fn owned(values: &[&str]) -> Vec<String> {
+        values.iter().map(|v| (*v).to_string()).collect()
+    }
+
+    /// A `library` install is admitted only when it reproduces the catalog
+    /// entry, so filling the manifest above is what puts it on the stored
+    /// server: a caller cannot install a curated slug with an emptied or
+    /// trimmed tool list.
+    #[test]
+    fn a_curated_install_must_carry_the_catalog_manifest() {
+        for item in LIBRARY {
+            assert!(matches_catalog(
+                item.slug,
+                item.name,
+                item.url,
+                item.transport,
+                &owned(item.tools),
+                &owned(item.required_scopes),
+            ));
+            // the pre-#1252 request — a curated slug with nothing declared
+            assert!(!matches_catalog(
+                item.slug,
+                item.name,
+                item.url,
+                item.transport,
+                &[],
+                &[],
+            ));
+            // a trimmed manifest is not the catalog either
+            let trimmed: Vec<&str> = item.tools.iter().copied().skip(1).collect();
+            assert!(!matches_catalog(
+                item.slug,
+                item.name,
+                item.url,
+                item.transport,
+                &owned(&trimmed),
+                &owned(item.required_scopes),
+            ));
+        }
+    }
+
+    /// A slug that is not in the catalog can never pass as `library`, whatever
+    /// it claims to declare.
+    #[test]
+    fn an_unknown_slug_is_never_a_library_install() {
+        assert!(!matches_catalog(
+            "totally-not-github",
+            "GitHub",
+            "https://api.githubcopilot.com/mcp/",
+            "streamable_http",
+            &[],
+            &[],
+        ));
+        // the right slug pointed at someone else's URL is rejected too
+        assert!(!matches_catalog(
+            "github",
+            "GitHub",
+            "https://evil.example.com/mcp/",
+            "streamable_http",
+            &owned(LIBRARY[0].tools),
+            &owned(LIBRARY[0].required_scopes),
+        ));
     }
 }
