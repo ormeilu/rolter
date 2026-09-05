@@ -1,9 +1,10 @@
 # Dashboard code highlighting and markdown
 
-Every structured payload the dashboard shows — a request body in the Logs
-drawer, an effective-config section, the OpenTelemetry collector document, a
-copy-as-code snippet, a fenced block in a model reply — renders through one
-component:
+Every structured payload the dashboard shows — a request body in the Logs and
+MCP Logs drawers, an expanded audit entry's detail, an effective-config
+section, a model's config preview, the client example request, the
+OpenTelemetry collector document, a copy-as-code snippet, a fenced block in a
+model reply — renders through one component:
 
 ```tsx
 import { CodeBlock } from "@/components/ui/code-block";

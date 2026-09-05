@@ -146,7 +146,8 @@
     "paramLockMode": "Parameter lock mode",
     "headerLockMode": "Header lock mode",
     "pricingDocs": "Rolter docs: how request cost is calculated ↗",
-    "advancedRejected": "The control plane refused this model's advanced configuration: {{message}}. Everything else was saved."
+    "advancedRejected": "The control plane refused this model's advanced configuration: {{message}}. Everything else was saved.",
+    "configPreview": "Config preview"
   },
   "nav": {
     "playground": "Playground",
@@ -1036,7 +1037,8 @@
       "targetFilterAria": "Filter by target type",
       "actorFilterAria": "Filter by actor",
       "anyActor": "Any actor",
-      "actorPlaceholder": "Actor user id (full UUID)…"
+      "actorPlaceholder": "Actor user id (full UUID)…",
+      "detail": "Entry detail"
     },
     "complexityRouter": {
       "emptyTitle": "No routes to give a policy",
@@ -1184,6 +1186,9 @@
       "captureOnSummary": "Stored: the raw prompt and completion body of each matching request, truncated at {{bytes}} bytes, kept for {{hours}} hours and then deleted. Redacted before writing: {{redacted}}. Models captured: {{models}}.",
       "everyModel": "every model",
       "nothing": "nothing"
+    },
+    "clientSettings": {
+      "exampleRequest": "Example request"
     }
   },
   "playground": {
