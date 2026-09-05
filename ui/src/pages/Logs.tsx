@@ -16,12 +16,15 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Sheet, SheetBody, SheetHeader } from "@/components/ui/sheet";
 import {
   AnalyticsUnavailableError,
+  fetchBusinessUnits,
+  fetchCustomers,
   fetchInvocations,
   fetchModelPrices,
   fetchModels,
   type InvocationRow,
 } from "@/lib/api";
 import { useCurrencyCode } from "@/lib/currency";
+import { useScope } from "@/lib/scope";
 import { useFormat } from "@/lib/i18n/format";
 import { useModalA11y } from "@/lib/modal-a11y";
 import { useDrawerA11y } from "@/lib/use-drawer-a11y";
@@ -63,6 +66,8 @@ export default function Logs() {
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [status, setStatus] = React.useState<StatusFilter>("all");
   const [modelSel, setModelSel] = React.useState<string[]>([]);
+  const [unitSel, setUnitSel] = React.useState<string[]>([]);
+  const [customerSel, setCustomerSel] = React.useState<string[]>([]);
   const [page, setPage] = React.useState(0);
   const [selected, setSelected] = React.useState<InvocationRow | null>(null);
   // below `md` the 248px filter rail would leave the table 127px; below `lg`
@@ -85,7 +90,23 @@ export default function Logs() {
     [],
   );
 
+  const scope = useScope();
   const models = useQuery({ queryKey: ["models"], queryFn: fetchModels });
+  // the two governance dimensions a row can be attributed to. named here so
+  // the rail and the drawer both show "Platform Engineering" rather than the
+  // uuid ClickHouse actually stores
+  const units = useQuery({
+    queryKey: ["business-units", scope.orgId],
+    queryFn: () => fetchBusinessUnits(scope.orgId as string),
+    enabled: !!scope.orgId,
+    retry: false,
+  });
+  const customers = useQuery({
+    queryKey: ["customers", scope.orgId],
+    queryFn: () => fetchCustomers(scope.orgId as string),
+    enabled: !!scope.orgId,
+    retry: false,
+  });
   // the price table is what tells a zero cost apart from an unpriced one: the
   // control plane records `unpriced` per request but does not return it on an
   // invocation row, so the dashboard re-derives it from the same evidence the
@@ -105,7 +126,10 @@ export default function Logs() {
 
   useErrorState(!!models.error, "logs");
 
-  React.useEffect(() => setPage(0), [status, modelSel]);
+  React.useEffect(
+    () => setPage(0),
+    [status, modelSel, unitSel, customerSel],
+  );
 
   const query = useQuery({
     queryKey: ["invocations", window.since, status, modelSel[0] ?? "", page],
@@ -122,8 +146,20 @@ export default function Logs() {
     refetchInterval: streaming ? 5000 : false,
   });
 
-  const rows = query.data ?? [];
-  const hasMore = rows.length === PAGE_SIZE;
+  // attribution narrows the page the server already returned:
+  // `/analytics/invocations` filters on model, key and status only, so asking
+  // it for a business unit would silently return everything (#1193). The rail
+  // says so rather than implying the whole window was searched.
+  const pageRows = query.data ?? [];
+  const rows = pageRows.filter(
+    (r) =>
+      (unitSel.length === 0 || unitSel.includes(r.business_unit_id)) &&
+      (customerSel.length === 0 || customerSel.includes(r.customer_id)),
+  );
+  const hasMore = pageRows.length === PAGE_SIZE;
+  const unitName = (id: string) => units.data?.find((u) => u.id === id)?.name;
+  const customerName = (id: string) =>
+    customers.data?.find((c) => c.id === id)?.name;
   // while the price table is loading, or if it failed, every model would
   // otherwise be reported as unpriced on no evidence
   const pricedModels = new Set((prices.data ?? []).map((p) => p.model));
@@ -131,10 +167,16 @@ export default function Logs() {
     num(row.cost_usd) <= 0 && prices.isSuccess && !pricedModels.has(row.model);
   const cost = (row: InvocationRow) =>
     isUnpriced(row) ? null : fmt.currency(num(row.cost_usd), currency);
-  const filterCount = (status === "all" ? 0 : 1) + modelSel.length;
+  const filterCount =
+    (status === "all" ? 0 : 1) +
+    modelSel.length +
+    unitSel.length +
+    customerSel.length;
   const clearFilters = () => {
     setStatus("all");
     setModelSel([]);
+    setUnitSel([]);
+    setCustomerSel([]);
   };
 
   if (isUnavailable(query.error)) {
@@ -174,6 +216,24 @@ export default function Logs() {
           value={`${num(selected.prompt_tokens)} in · ${num(selected.completion_tokens)} out`}
         />
         <DrawerStat label="Virtual key" value={selected.virtual_key_id || "—"} />
+        {/* where this request's spend was charged; a uuid with no row behind
+            it still beats hiding the attribution entirely */}
+        <DrawerStat
+          label={t("pages.logs.businessUnit")}
+          value={
+            selected.business_unit_id
+              ? (unitName(selected.business_unit_id) ?? selected.business_unit_id)
+              : "—"
+          }
+        />
+        <DrawerStat
+          label={t("pages.logs.customer")}
+          value={
+            selected.customer_id
+              ? (customerName(selected.customer_id) ?? selected.customer_id)
+              : "—"
+          }
+        />
       </div>
       {selected.error && (
         <DrawerBlock label="Error" content={selected.error} />
@@ -229,6 +289,44 @@ export default function Logs() {
                 placeholder="Filter models"
               />
             </FilterSection>
+            {(units.data ?? []).length > 0 && (
+              <FilterSection
+                title={t("pages.logs.businessUnit")}
+                count={unitSel.length}
+              >
+                <FilterSearchList
+                  options={(units.data ?? []).map((u) => ({
+                    value: u.id,
+                    label: u.name,
+                  }))}
+                  selected={unitSel}
+                  onChange={setUnitSel}
+                  placeholder={t("pages.logs.filterBusinessUnits")}
+                />
+                <p className="px-0.5 pt-1 text-[0.6875rem] text-[color:var(--text-subtle)]">
+                  {t("pages.logs.attributionFilterHint")}
+                </p>
+              </FilterSection>
+            )}
+            {(customers.data ?? []).length > 0 && (
+              <FilterSection
+                title={t("pages.logs.customer")}
+                count={customerSel.length}
+              >
+                <FilterSearchList
+                  options={(customers.data ?? []).map((c) => ({
+                    value: c.id,
+                    label: c.name,
+                  }))}
+                  selected={customerSel}
+                  onChange={setCustomerSel}
+                  placeholder={t("pages.logs.filterCustomers")}
+                />
+                <p className="px-0.5 pt-1 text-[0.6875rem] text-[color:var(--text-subtle)]">
+                  {t("pages.logs.attributionFilterHint")}
+                </p>
+              </FilterSection>
+            )}
           </FilterPanel>
         </div>
       )}

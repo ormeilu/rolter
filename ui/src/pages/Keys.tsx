@@ -1,18 +1,30 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Plus, Trash2, Key, Loader2 } from "lucide-react";
+import { Check, Copy, Pencil, Plus, Trash2, Key, Loader2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import {
   DEFAULT_KEY_TTL_DAYS,
+  KeyCacheField,
   KeyExpiryField,
   KeyModelsField,
   KeyNameField,
   KeyReachSummary,
+  cacheMode,
   keyNameProblem,
+  parseCacheMode,
   parseModels,
   ttlToDays,
+  type CacheMode,
 } from "@/components/KeyMintFields";
+import {
+  AttributionBadges,
+  KeyAttributionFields,
+  KeyProvidersField,
+  UNATTRIBUTED,
+  attributionId,
+  attributionValue,
+} from "@/components/KeyAttributionFields";
 
 import { LoadError } from "@/components/LoadError";
 import { ListSkeleton } from "@/components/LoadingState";
@@ -29,17 +41,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tag } from "@/components/ui/tag";
 import {
   createVirtualKey,
   deleteVirtualKey,
+  fetchBusinessUnits,
+  fetchCustomers,
+  fetchProviders,
   fetchVirtualKeys,
+  setVirtualKeyAttribution,
   setVirtualKeyCache,
   setVirtualKeyDisabled,
+  setVirtualKeyProviders,
+  type BusinessUnitRow,
   type CreatedVirtualKey,
+  type CustomerRow,
+  type ProviderRow,
   type VirtualKeyRow,
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
@@ -64,6 +83,28 @@ export default function Keys() {
     queryKey: [...KEYS_QUERY_KEY, scope.projectId],
     queryFn: () => fetchVirtualKeys(scope.projectId as string),
     enabled: !!scope.projectId,
+  });
+
+  // the three org-scoped lookups the attribution editor needs. `retry: false`
+  // because a member without org read access gets a 403 that will not improve
+  // by asking again — the editor drops the control it cannot populate instead
+  const units = useQuery({
+    queryKey: ["business-units", scope.orgId],
+    queryFn: () => fetchBusinessUnits(scope.orgId as string),
+    enabled: !!scope.orgId,
+    retry: false,
+  });
+  const customers = useQuery({
+    queryKey: ["customers", scope.orgId],
+    queryFn: () => fetchCustomers(scope.orgId as string),
+    enabled: !!scope.orgId,
+    retry: false,
+  });
+  const providers = useQuery({
+    queryKey: ["providers", scope.orgId],
+    queryFn: () => fetchProviders(scope.orgId as string),
+    enabled: !!scope.orgId,
+    retry: false,
   });
 
   const invalidate = () =>
@@ -98,6 +139,7 @@ export default function Keys() {
   });
 
   const [addOpen, setAddOpen] = React.useState(false);
+  const [editTarget, setEditTarget] = React.useState<VirtualKeyRow | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<VirtualKeyRow | null>(null);
   const [created, setCreated] = React.useState<CreatedVirtualKey | null>(null);
   const [search, setSearch] = React.useState("");
@@ -114,11 +156,27 @@ export default function Keys() {
     (k) => !q || (k.name ?? "").toLowerCase().includes(q) || k.key_prefix.includes(q),
   );
 
+  // id -> display name for the two attribution dimensions, so a row and the
+  // editor name the same unit rather than showing a uuid in one of them
+  const unitName = (id: string | null | undefined) =>
+    units.data?.find((u) => u.id === id)?.name;
+  const customerName = (id: string | null | undefined) =>
+    customers.data?.find((c) => c.id === id)?.name;
+
   const exportCsv = () => {
     const lines = [
-      "name,key_prefix,models,disabled,expires_at",
+      "name,key_prefix,models,providers,business_unit,customer,disabled,expires_at",
       ...rows.map((k) =>
-        [k.name ?? "", k.key_prefix, k.models.join("|"), k.disabled, k.expires_at ?? ""].join(","),
+        [
+          k.name ?? "",
+          k.key_prefix,
+          k.models.join("|"),
+          (k.providers ?? []).join("|"),
+          unitName(k.business_unit_id) ?? "",
+          customerName(k.customer_id) ?? "",
+          k.disabled,
+          k.expires_at ?? "",
+        ].join(","),
       ),
     ];
     const blob = new Blob([lines.join("\n")], { type: "text/csv" });
@@ -129,7 +187,7 @@ export default function Keys() {
     URL.revokeObjectURL(a.href);
   };
 
-  const GRID = "1.3fr 1.2fr 1.8fr 1.3fr 66px 40px";
+  const GRID = "1.2fr 1fr 1.4fr 1.4fr 1.1fr 60px 68px";
 
   return (
     <PageBody>
@@ -170,11 +228,14 @@ export default function Keys() {
 
       <ListTable>
         <ListHeader grid={GRID}>
-          <span>Name</span>
-          <span>Key</span>
-          <span>Models</span>
-          <span>Cache</span>
-          <span>Status</span>
+          <span>{t("pages.virtualKeys.colName")}</span>
+          <span>{t("pages.virtualKeys.colKey")}</span>
+          <span>{t("pages.virtualKeys.colModels")}</span>
+          {/* attribution sits next to the models allow-list because both
+              answer "what does this key touch", and neither is the secret */}
+          <span>{t("pages.virtualKeys.colAttribution")}</span>
+          <span>{t("pages.virtualKeys.colCache")}</span>
+          <span>{t("pages.virtualKeys.colStatus")}</span>
           <span />
         </ListHeader>
         {keys.isLoading && <ListSkeleton rows={4} className="p-3" />}
@@ -206,6 +267,10 @@ export default function Keys() {
                 </span>
               )}
             </div>
+            <AttributionBadges
+              unit={unitName(key.business_unit_id)}
+              customer={customerName(key.customer_id)}
+            />
             <Select
               aria-label={`Response cache policy for ${key.name ?? key.key_prefix}`}
               className="h-8 text-xs"
@@ -226,15 +291,29 @@ export default function Keys() {
                 toggleDisabled.mutate({ id: key.id, disabled: !enabled })
               }
             />
-            <button
-              type="button"
-              title="Delete key"
-              aria-label={`Delete key ${key.name ?? key.key_prefix}`}
-              onClick={() => setDeleteTarget(key)}
-              className="flex justify-self-end rounded-[6px] p-1 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
+            <div className="flex items-center justify-self-end">
+              <button
+                type="button"
+                title={t("pages.virtualKeys.edit")}
+                aria-label={t("pages.virtualKeys.editKey", {
+                  name: key.name ?? key.key_prefix,
+                })}
+                disabled={scopeBlocked}
+                onClick={() => setEditTarget(key)}
+                className="flex rounded-[6px] p-1 text-[color:var(--text-subtle)] transition-colors hover:bg-[color:var(--surface-hover)] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                title="Delete key"
+                aria-label={`Delete key ${key.name ?? key.key_prefix}`}
+                onClick={() => setDeleteTarget(key)}
+                className="flex rounded-[6px] p-1 text-[color:var(--status-danger)] transition-colors hover:bg-[color:var(--red-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </ListRow>
         ))}
         {!keys.isLoading && rows.length === 0 && (
@@ -273,12 +352,27 @@ export default function Keys() {
           open={addOpen}
           onOpenChange={setAddOpen}
           projectId={scope.projectId}
+          units={units.data ?? []}
+          customers={customers.data ?? []}
+          providers={providers.data ?? []}
           onCreated={(key) => {
             invalidate();
             setCreated(key);
           }}
         />
       )}
+
+      <EditKeyDialog
+        target={editTarget}
+        onOpenChange={(open) => !open && setEditTarget(null)}
+        units={units.data ?? []}
+        customers={customers.data ?? []}
+        providers={providers.data ?? []}
+        onSaved={() => {
+          invalidate();
+          setEditTarget(null);
+        }}
+      />
 
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogHeader>
@@ -337,18 +431,27 @@ function AddKeyDialog({
   open,
   onOpenChange,
   projectId,
+  units,
+  customers,
+  providers,
   onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string;
+  units: BusinessUnitRow[];
+  customers: CustomerRow[];
+  providers: ProviderRow[];
   onCreated: (key: CreatedVirtualKey) => void;
 }) {
   const { t } = useTranslation();
   const [name, setName] = React.useState("");
   const [modelsText, setModelsText] = React.useState("");
-  const [cache, setCache] = React.useState<"inherit" | "off" | "on">("inherit");
+  const [cache, setCache] = React.useState<CacheMode>("inherit");
   const [ttl, setTtl] = React.useState(String(DEFAULT_KEY_TTL_DAYS));
+  const [providerSel, setProviderSel] = React.useState<string[]>([]);
+  const [unitId, setUnitId] = React.useState(UNATTRIBUTED);
+  const [customerId, setCustomerId] = React.useState(UNATTRIBUTED);
 
   // names the form, never its contents — this dialog mints a credential
   const ux = useFormTelemetry("virtual-key-create", open);
@@ -359,19 +462,34 @@ function AddKeyDialog({
       setModelsText("");
       setCache("inherit");
       setTtl(String(DEFAULT_KEY_TTL_DAYS));
+      setProviderSel([]);
+      setUnitId(UNATTRIBUTED);
+      setCustomerId(UNATTRIBUTED);
     }
   }, [open]);
 
   const models = React.useMemo(() => parseModels(modelsText), [modelsText]);
 
   const create = useMutation({
-    mutationFn: () =>
-      createVirtualKey(projectId, {
+    // POST /virtual-keys carries the provider allow-list but not the
+    // attribution, so a key that was given one is pointed at it immediately
+    // afterwards through the endpoint that owns that decision
+    mutationFn: async () => {
+      const created = await createVirtualKey(projectId, {
         name: name.trim(),
         models,
+        providers: providerSel,
         cache: parseCacheMode(cache),
         expires_in_days: ttlToDays(ttl),
-      }),
+      });
+      if (unitId !== UNATTRIBUTED || customerId !== UNATTRIBUTED) {
+        await setVirtualKeyAttribution(created.id, {
+          business_unit_id: attributionId(unitId),
+          customer_id: attributionId(customerId),
+        });
+      }
+      return created;
+    },
     onSuccess: (key) => {
       ux.saved();
       onOpenChange(false);
@@ -386,7 +504,12 @@ function AddKeyDialog({
       onOpenChange={onOpenChange}
       title="Create virtual key"
       subtitle="The plaintext key is shown once, right after creation — copy it then"
-      dirty={Boolean(name || modelsText) || cache !== "inherit"}
+      dirty={
+        Boolean(name || modelsText || providerSel.length) ||
+        cache !== "inherit" ||
+        unitId !== UNATTRIBUTED ||
+        customerId !== UNATTRIBUTED
+      }
       errorMessage={create.isError ? (create.error as Error).message : undefined}
       // the sheet footer has no room for a spinner, so pending state reads
       // from the label instead
@@ -401,20 +524,27 @@ function AddKeyDialog({
       <div className="space-y-3">
         <KeyNameField value={name} onChange={setName} />
         <KeyExpiryField value={ttl} onChange={setTtl} />
-        <Field
-          label="Response cache"
-          hint="Inherit uses the route setting; the deployment-wide cache switch still applies."
-        >
-          <Select value={cache} onChange={(event) => setCache(event.target.value as typeof cache)}>
-            <option value="inherit">Inherit route setting</option>
-            <option value="off">Off</option>
-            <option value="on">On</option>
-          </Select>
-        </Field>
+        <KeyCacheField value={cache} onChange={setCache} />
         <KeyModelsField value={modelsText} onChange={setModelsText} />
+        <KeyProvidersField
+          providers={providers}
+          selected={providerSel}
+          onChange={setProviderSel}
+        />
+        <KeyAttributionFields
+          units={units}
+          customers={customers}
+          businessUnitId={unitId}
+          customerId={customerId}
+          onChange={(unit, customer) => {
+            setUnitId(unit);
+            setCustomerId(customer);
+          }}
+        />
         <KeyReachSummary
           project={t("keyMint.reach.thisProject")}
           models={models}
+          providers={providerSel}
           ttl={ttl}
         />
       </div>
@@ -422,16 +552,123 @@ function AddKeyDialog({
   );
 }
 
-function cacheMode(cache: boolean | null | undefined): "inherit" | "off" | "on" {
-  if (cache === true) return "on";
-  if (cache === false) return "off";
-  return "inherit";
-}
+/**
+ * Edit what an existing key reaches and who pays for it.
+ *
+ * Deliberately not a general key editor: the control plane has no rename and no
+ * re-scope, so the sheet offers exactly the two things it can actually change —
+ * the upstream allow-list and the attribution — and each goes to its own
+ * endpoint. Only the dimension that moved is sent, so re-saving an untouched
+ * sheet writes nothing and audits nothing.
+ */
+function EditKeyDialog({
+  target,
+  onOpenChange,
+  units,
+  customers,
+  providers,
+  onSaved,
+}: {
+  target: VirtualKeyRow | null;
+  onOpenChange: (open: boolean) => void;
+  units: BusinessUnitRow[];
+  customers: CustomerRow[];
+  providers: ProviderRow[];
+  onSaved: () => void;
+}) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const [providerSel, setProviderSel] = React.useState<string[]>([]);
+  const [unitId, setUnitId] = React.useState(UNATTRIBUTED);
+  const [customerId, setCustomerId] = React.useState(UNATTRIBUTED);
+  const ux = useFormTelemetry("virtual-key-attribution", !!target);
 
-function parseCacheMode(value: string): boolean | null {
-  if (value === "on") return true;
-  if (value === "off") return false;
-  return null;
+  // seeded from the row every time the sheet opens on a different key, so a
+  // draft abandoned on one key cannot leak into the next one
+  React.useEffect(() => {
+    if (!target) return;
+    setProviderSel(target.providers ?? []);
+    setUnitId(attributionValue(target.business_unit_id));
+    setCustomerId(attributionValue(target.customer_id));
+  }, [target]);
+
+  const name = target?.name ?? target?.key_prefix ?? "";
+  const sorted = (list: string[]) => [...list].sort().join("|");
+  const providersChanged = sorted(providerSel) !== sorted(target?.providers ?? []);
+  const attributionChanged =
+    unitId !== attributionValue(target?.business_unit_id) ||
+    customerId !== attributionValue(target?.customer_id);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!target) return;
+      if (providersChanged) await setVirtualKeyProviders(target.id, providerSel);
+      if (attributionChanged) {
+        await setVirtualKeyAttribution(target.id, {
+          business_unit_id: attributionId(unitId),
+          customer_id: attributionId(customerId),
+        });
+      }
+    },
+    onSuccess: () => {
+      ux.saved();
+      // the sheet closes on success, taking any inline confirmation with it,
+      // so the outcome is announced where it survives that (#1197)
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: name }),
+      });
+      onSaved();
+    },
+    onError: (error) => {
+      ux.failed();
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: name }),
+        detail: errorDetail(error),
+      });
+    },
+  });
+
+  return (
+    <EditorSheet
+      open={!!target}
+      onOpenChange={onOpenChange}
+      title={t("pages.virtualKeys.editTitle")}
+      subtitle={name}
+      dirty={providersChanged || attributionChanged}
+      errorMessage={save.isError ? (save.error as Error).message : undefined}
+      saveLabel={save.isPending ? t("pages.virtualKeys.saving") : t("pages.virtualKeys.save")}
+      canSave={providersChanged || attributionChanged}
+      saving={save.isPending}
+      onSave={() => {
+        ux.submitted();
+        save.mutate();
+      }}
+    >
+      <div className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          {t("pages.virtualKeys.editSubtitleHint")}
+        </p>
+        <KeyProvidersField
+          providers={providers}
+          selected={providerSel}
+          onChange={setProviderSel}
+        />
+        <KeyAttributionFields
+          units={units}
+          customers={customers}
+          businessUnitId={unitId}
+          customerId={customerId}
+          onChange={(unit, customer) => {
+            setUnitId(unit);
+            setCustomerId(customer);
+          }}
+        />
+      </div>
+    </EditorSheet>
+  );
 }
 
 // shows the plaintext secret exactly once, right after creation; state is

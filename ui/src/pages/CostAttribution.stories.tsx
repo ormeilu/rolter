@@ -10,7 +10,30 @@ import {
   expectSkeleton,
   recording,
 } from "./story-harness";
-import type { BusinessUnitRow, CustomerRow } from "@/lib/api";
+import type {
+  AttributionSpendRow,
+  BusinessUnitRow,
+  CustomerRow,
+} from "@/lib/api";
+import { formattersFor } from "@/lib/i18n/format";
+
+// the formatter the screen itself uses, so a story asserts the house format
+// rather than a second copy of it
+const fmt = formattersFor("en");
+
+const spendRow = (
+  id: string,
+  cost: number,
+  requests: number,
+): AttributionSpendRow => ({
+  id,
+  requests,
+  tokens: requests * 900,
+  prompt_tokens: requests * 600,
+  completion_tokens: requests * 300,
+  cost_usd: cost,
+  errors: 0,
+});
 
 const ORG = "11111111-1111-1111-1111-111111111111";
 
@@ -54,6 +77,22 @@ const CUSTOMERS: CustomerRow[] = [
   },
 ];
 
+// `""` is the unattributed bucket the control plane returns when a key never
+// named a unit or a customer — the hole in an otherwise tidy chargeback report
+const UNIT_SPEND: AttributionSpendRow[] = [
+  spendRow(UNITS[0].id, 128.5, 4200),
+  // a retired unit still carries its history: that is the whole reason
+  // retiring exists rather than deleting
+  spendRow(UNITS[1].id, 20, 700),
+  spendRow("", 41.5, 1300),
+];
+
+const CUSTOMER_SPEND: AttributionSpendRow[] = [
+  spendRow(CUSTOMERS[0].id, 90, 3000),
+  spendRow(CUSTOMERS[1].id, 25, 800),
+  spendRow("", 60, 2000),
+];
+
 type FetchStub = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 const json = (body: unknown, status = 200) =>
@@ -65,11 +104,24 @@ const json = (body: unknown, status = 200) =>
 // route by path so useScope's /api/v1/orgs call is served alongside the
 // screen's own collection
 function router(
-  handlers: Partial<Record<"units" | "customers", (init?: RequestInit) => Response>>,
+  handlers: Partial<
+    Record<"units" | "customers" | "spend", (init?: RequestInit) => Response>
+  >,
 ): FetchStub {
   return async (input, init) => {
     const url = String(input);
     if (url.endsWith("/orgs")) return json([{ id: ORG, name: "Acme", slug: "acme" }]);
+    // checked before the collections: the rollup's own query string carries
+    // `dimension=customer`, and a looser match would answer it with the roster
+    if (url.includes("/analytics/by-attribution")) {
+      return (
+        handlers.spend?.(init) ??
+        json({
+          data: url.includes("dimension=customer") ? CUSTOMER_SPEND : UNIT_SPEND,
+        })
+      );
+    }
+    if (url.includes("/currency")) return json({ base: "USD", codes: ["USD"], rates: {} });
     if (url.includes("/business-units") || url.includes("/business-units/")) {
       return handlers.units?.(init) ?? json(UNITS);
     }
@@ -302,5 +354,149 @@ export const ConfirmsBeforeDeletingACustomer: Story = {
     await userEvent.click(canvas.getAllByRole("button", { name: "Delete" })[0]);
     await confirmDestructive(/Acme Corp/, "Delete");
     await customerDeletes.expectSent("DELETE", `/customers/${CUSTOMERS[0].id}`);
+  },
+};
+
+/**
+ * #1193: the screens listed units and customers but could not say what any of
+ * them cost, which made the whole feature write-only. Spend for the window now
+ * sits on every card, with the totals above the grid.
+ */
+export const BusinessUnitsShowWindowSpend: Story = {
+  render: () => (
+    <Harness fetchStub={router({})}>
+      <BusinessUnits />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getByText(fmt.currency(190, "USD"))).toBeVisible(),
+    );
+    // attributed and unattributed are shown side by side: a report that lists
+    // five units and quietly omits a quarter of the spend is the failure mode
+    await expect(canvas.getByText(fmt.currency(148.5, "USD"))).toBeVisible();
+    await expect(canvas.getByText(fmt.currency(128.5, "USD"))).toBeVisible();
+    await expect(canvas.getByText(fmt.currency(41.5, "USD"))).toBeVisible();
+    await expect(canvas.getByText("Unattributed")).toBeVisible();
+    await expect(canvas.getByText(/of the window/)).toBeVisible();
+  },
+};
+
+/** amounts follow the deployment's settlement currency, never a literal `$` */
+export const SpendFollowsTheDeploymentCurrency: Story = {
+  render: () => (
+    <Harness
+      fetchStub={async (input, init) =>
+        String(input).includes("/currency")
+          ? json({ base: "EUR", codes: ["EUR"], rates: {} })
+          : router({})(input, init)
+      }
+    >
+      <BusinessUnits />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getByText(fmt.currency(190, "EUR"))).toBeVisible(),
+    );
+  },
+};
+
+/** the customer screen reads the same rollup on its own dimension */
+export const CustomersShowWindowSpend: Story = {
+  render: () => (
+    <Harness fetchStub={router({})}>
+      <Customers />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // total, attributed and each card's own figure are all distinct here, so
+    // the assertions cannot pass by coincidence
+    await waitFor(() =>
+      expect(canvas.getByText(fmt.currency(175, "USD"))).toBeVisible(),
+    );
+    await expect(canvas.getByText(fmt.currency(115, "USD"))).toBeVisible();
+    await expect(canvas.getByText(fmt.currency(90, "USD"))).toBeVisible();
+    await expect(canvas.getByText(fmt.currency(25, "USD"))).toBeVisible();
+  },
+};
+
+/** a unit with no traffic in the window says so rather than printing a zero */
+export const AUnitWithNoTrafficSaysSo: Story = {
+  render: () => (
+    <Harness fetchStub={router({ spend: () => json({ data: [] }) })}>
+      <BusinessUnits />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getAllByText("No spend in this window").length).toBeGreaterThan(0),
+    );
+  },
+};
+
+export const SpendLoading: Story = {
+  render: () => (
+    <Harness
+      fetchStub={async (input, init) =>
+        String(input).includes("/analytics/by-attribution")
+          ? new Promise<Response>(() => {})
+          : router({})(input, init)
+      }
+    >
+      <BusinessUnits />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    await expectSkeleton(canvasElement);
+  },
+};
+
+/**
+ * Analytics is optional; governance is not. A deployment with no ClickHouse
+ * gets the Dashboard's calm note where the spend strip would be, and keeps the
+ * postgres-backed roster it can still serve.
+ */
+export const SpendUnavailableKeepsTheRoster: Story = {
+  render: () => (
+    <Harness
+      fetchStub={router({
+        spend: () => json({ error: { message: "analytics is not configured" } }, 503),
+      })}
+    >
+      <BusinessUnits />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getByText("Analytics not configured")).toBeVisible(),
+    );
+    await expect(canvas.getByText("Platform Engineering")).toBeVisible();
+  },
+};
+
+/** a failed rollup is a failure, not a quiet day: it says so and offers a retry */
+export const SpendFailed: Story = {
+  render: () => (
+    <Harness
+      fetchStub={router({
+        spend: () => json({ error: { message: "analytics query failed" } }, 502),
+      })}
+    >
+      <BusinessUnits />
+    </Harness>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(
+        canvas.getAllByRole("alert").some((a) => /attribution spend/.test(a.textContent ?? "")),
+      ).toBe(true),
+    );
   },
 };

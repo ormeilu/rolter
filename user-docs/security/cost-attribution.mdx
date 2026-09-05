@@ -45,6 +45,91 @@ The unit must belong to the same org as the customer; a cross-org assignment is 
 
 ---
 
+## Pointing a key at a unit or a customer
+
+Spend is attributed by the **virtual key** that served the request. A key carries an optional `business_unit_id` and an optional `customer_id`, and every request it serves is recorded against both.
+
+In the dashboard, open **Virtual Keys**, press the pencil on a row, and pick a business unit and a customer. The same two controls sit in the **Create virtual key** sheet, so a key can be attributed from the moment it exists. Each row shows where its spend lands; a key with no attribution shows a dash rather than a badge, because leaving a key unattributed is a legitimate choice, not a warning.
+
+Two rules the editor enforces before you save, because the server rejects them afterwards:
+
+- The unit and the customer must belong to the key's own org.
+- A customer already owned by a business unit cannot be paired with a different one. Only customers that fit the unit you picked are offered.
+
+Both fields follow the same three-state contract customers use for `business_unit_id`:
+
+| Value | Meaning |
+|---|---|
+| omitted | leave unchanged |
+| `null` | clear the attribution |
+| a UUID | attribute to that unit or customer |
+
+The dashboard always sends both fields, so clearing one is something you can actually express.
+
+```bash
+curl -X PUT -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"business_unit_id": "'"$UNIT_ID"'", "customer_id": null}' \
+  https://control.example.com/api/v1/virtual-keys/$KEY_ID/attribution
+```
+
+<Note>
+Creating a key and attributing it are two calls. `POST /virtual-keys` takes the provider allow-list but not the attribution, so the dashboard follows a create that chose one with the `attribution` PUT.
+</Note>
+
+---
+
+## Per-key provider allow-list
+
+Beside the attribution, a key carries a list of upstream provider **slugs** it may reach. An empty list is the permissive default — the key may reach every provider on a route it is already allowed to use — so ticking nothing does not lock the key out of everything.
+
+The dashboard offers the org's providers as checkboxes in both the create sheet and the per-row editor, and the self-service **Account** panel offers the same list plus the response-cache override when you mint your own key.
+
+```bash
+curl -X PUT -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" -d '{"providers": ["openai", "anthropic"]}' \
+  https://control.example.com/api/v1/virtual-keys/$KEY_ID/providers
+```
+
+---
+
+## Reading the spend
+
+`GET /api/v1/analytics/by-attribution` rolls `request_logs` up by one governance dimension over a time window:
+
+| Parameter | Meaning |
+|---|---|
+| `since` / `until` | window bounds; both default to the last 7 days |
+| `dimension` | `business_unit` or `customer` (defaults to `business_unit`) |
+| `include_unattributed` | include the bucket for keys that named neither (defaults to `false`) |
+
+```bash
+curl -H "Authorization: Bearer $ROLTER_ADMIN_TOKEN" \
+  "https://control.example.com/api/v1/analytics/by-attribution?dimension=customer&include_unattributed=true"
+```
+
+Each row carries `id`, `requests`, `tokens`, `prompt_tokens`, `completion_tokens`, `cost_usd` and `errors`. The unattributed bucket comes back with an **empty** `id`.
+
+The **Business Units** and **Customers** screens read this over the last 24 hours — the same window the Dashboard reports — and show three figures above the roster: what the window cost in total, how much of it was attributed, and how much was not, with the unattributed share as a percentage. Each card then carries its own spend and request count; a unit with no traffic says so rather than printing a zero, because a zero claims a fact the window does not contain.
+
+Amounts are rendered in the deployment's settlement currency, not a hardcoded `$`.
+
+<Note>
+The rollup needs ClickHouse. A deployment with no `clickhouse_url` gets the same calm "analytics not configured" note the Dashboard shows, and the roster itself keeps working — it is backed by Postgres.
+</Note>
+
+---
+
+## Attribution in the request log
+
+Every row in `request_logs` carries `business_unit_id` and `customer_id`, so **LLM Logs** can be read per unit or per customer. The filter rail offers both dimensions, and the detail drawer names the unit and the customer a request was charged to.
+
+<Warning>
+The attribution filter narrows the page in front of you. `GET /api/v1/analytics/invocations` searches by model, virtual key and status only, so the two attribution filters are applied client-side and the rail says so. For a whole-window answer, use `by-attribution` rather than paging the log.
+</Warning>
+
+---
+
 ## API
 
 Listing needs **Viewer** on the org; creating, updating and deleting need **Admin**. Every mutation is audited.

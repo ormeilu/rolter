@@ -123,7 +123,8 @@
       "scimGroupMappings": "group mappings",
       "securitySettings": "security settings",
       "toolGroups": "tool groups",
-      "rbacMatrix": "the permission matrix"
+      "rbacMatrix": "the permission matrix",
+      "attributionSpend": "attribution spend"
     }
   },
   "locale": {
@@ -583,7 +584,19 @@
       "emptyBody": "A virtual key is the credential your applications send to the gateway. Create one to start authenticating them.",
       "emptyAction": "Add virtual key",
       "noMatchTitle": "No keys match",
-      "noMatchBody": "Nothing matched your search. Clear it to see every key in this project."
+      "noMatchBody": "Nothing matched your search. Clear it to see every key in this project.",
+      "colName": "Name",
+      "colKey": "Key",
+      "colModels": "Models",
+      "colAttribution": "Attribution",
+      "colCache": "Cache",
+      "colStatus": "Status",
+      "edit": "Edit key",
+      "editKey": "Edit key {{name}}",
+      "editTitle": "Key reach and attribution",
+      "editSubtitleHint": "Renaming and re-scoping a key are not offered: the control plane cannot change either after the secret is issued.",
+      "save": "Save",
+      "saving": "Saving…"
     },
     "acceptInvite": {
       "invalidLink": "This invitation link is not valid. It may have been used, revoked, or expired — ask whoever invited you for a new one.",
@@ -693,7 +706,14 @@
       "unitEmptyTitle": "No business units yet",
       "unitEmptyBody": "Business units roll teams up so spend can be attributed to the part of the organisation that incurred it.",
       "customerEmptyTitle": "No customers yet",
-      "customerEmptyBody": "Customers attribute usage and spend to the people you serve, so it can be billed on or reported per account."
+      "customerEmptyBody": "Customers attribute usage and spend to the people you serve, so it can be billed on or reported per account.",
+      "spendWindow": "Spend, last 24 hours",
+      "spendAttributed": "Attributed",
+      "spendUnattributed": "Unattributed",
+      "spendUnattributedShare": "{{share}} of the window",
+      "noSpend": "No spend in this window",
+      "cardRequests_one": "{{count}} request",
+      "cardRequests_other": "{{count}} requests"
     },
     "guardrailRules": {
       "confirm": {
@@ -889,7 +909,12 @@
       "emptyTitle": "Nothing logged yet",
       "emptyBody": "Every request the gateway serves is recorded here with its model, latency, tokens and cost.",
       "noMatchTitle": "No requests match these filters",
-      "noMatchBody": "Nothing in the last 24 hours matched the status and models you selected."
+      "noMatchBody": "Nothing in the last 24 hours matched the filters you selected.",
+      "businessUnit": "Business unit",
+      "customer": "Customer",
+      "filterBusinessUnits": "Filter business units",
+      "filterCustomers": "Filter customers",
+      "attributionFilterHint": "Narrows the page below. The gateway logs are searched by model, key and status only."
     },
     "mcpLogs": {
       "emptyTitle": "No MCP tool calls yet",
@@ -1359,8 +1384,25 @@
       "someModels_other": "{{count}} models: {{models}}",
       "until": "Until {{date}}",
       "never": "Forever, until revoked",
-      "thisProject": "this project"
-    }
+      "thisProject": "this project",
+      "allProviders": "Every provider on an allowed route",
+      "someProviders_one": "One provider: {{providers}}",
+      "someProviders_other": "{{count}} providers: {{providers}}"
+    },
+    "cache": "Response cache",
+    "cacheHint": "Inherit uses the route setting; the deployment-wide cache switch still applies.",
+    "cacheInherit": "Inherit route setting",
+    "cacheOff": "Off",
+    "cacheOn": "On",
+    "providers": "Provider allow-list (optional)",
+    "providersAll": "Nothing selected — the key may reach every provider on an allowed route.",
+    "providersSome_one": "{{count}} provider selected",
+    "providersSome_other": "{{count}} providers selected",
+    "businessUnit": "Business unit",
+    "businessUnitHint": "Charge this key's spend to a business unit.",
+    "customer": "Customer",
+    "customerHint": "Charge this key's spend to one of your customers. Only customers that fit the chosen business unit are offered.",
+    "unattributed": "Unattributed"
   },
   "analytics": {
     "noRowsYet": "No requests logged in this window. Either nothing was served, or the gateways are not writing to ClickHouse — an unconfigured destination looks exactly like a quiet deployment.",
