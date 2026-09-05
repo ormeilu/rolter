@@ -3,6 +3,7 @@ import { Ban, Building2, Loader2, Pencil, Plus, Trash2, UsersRound } from "lucid
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { ListSkeleton } from "@/components/LoadingState";
 import { EditorSheet } from "@/components/EditorSheet";
@@ -179,10 +180,10 @@ export default function Users() {
             </button>
           ))}
         </div>
-        <Button className="ml-auto" onClick={() => setInviteOpen(true)} disabled={!orgId}>
+        <GatedButton gate="invitation:create" className="ml-auto" onClick={() => setInviteOpen(true)} disabled={!orgId}>
           <Plus className="h-4 w-4" />
           Invite user
-        </Button>
+        </GatedButton>
       </Toolbar>
 
       {!orgId && (
@@ -301,9 +302,9 @@ export default function Users() {
                   {t("common.clearSearch")}
                 </Button>
               ) : (
-                <Button disabled={!orgId} onClick={() => setInviteOpen(true)}>
+                <GatedButton gate="invitation:create" disabled={!orgId} onClick={() => setInviteOpen(true)}>
                   {t("pages.users.emptyAction")}
-                </Button>
+                </GatedButton>
               )
             }
           />

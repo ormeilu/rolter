@@ -7,6 +7,7 @@ import {
   ProviderGroupSheet,
   type ProviderGroupSheetMode,
 } from "@/components/ProviderGroupSheet";
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { ListSkeleton } from "@/components/LoadingState";
 import { CopyButton } from "@/components/CopyButton";
@@ -111,13 +112,14 @@ export default function ProviderGroups() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <Button
+        <GatedButton
+          gate="provider_group:create"
           className="ml-auto"
           onClick={() => setSheet({ mode: "add" })}
           disabled={scopeBlocked || !scope.orgId}
         >
           + Add group
-        </Button>
+        </GatedButton>
       </Toolbar>
 
       {groups.error && (
@@ -225,12 +227,13 @@ export default function ProviderGroups() {
                   {t("common.clearSearch")}
                 </Button>
               ) : (
-                <Button
+                <GatedButton
+                  gate="provider_group:create"
                   disabled={scopeBlocked || !scope.orgId}
                   onClick={() => setSheet({ mode: "add" })}
                 >
                   {t("pages.providerGroups.emptyAction")}
-                </Button>
+                </GatedButton>
               )
             }
           />

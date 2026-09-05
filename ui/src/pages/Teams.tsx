@@ -4,10 +4,10 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { EditorSheet } from "@/components/EditorSheet";
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { CardGridSkeleton } from "@/components/LoadingState";
 import { PageBody, Toolbar } from "@/components/screen";
-import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -84,9 +84,9 @@ export default function Teams() {
         <span className="text-sm text-muted-foreground">
           {teams.data?.length ?? 0} teams · group users, share budgets and access
         </span>
-        <Button className="ml-auto" onClick={() => setAddOpen(true)} disabled={!scope.orgId}>
+        <GatedButton gate="team:create" className="ml-auto" onClick={() => setAddOpen(true)} disabled={!scope.orgId}>
           + New team
-        </Button>
+        </GatedButton>
       </Toolbar>
 
       {teams.isLoading && <CardGridSkeleton cards={3} height={186} min={320} />}
@@ -104,9 +104,9 @@ export default function Teams() {
           title={t("pages.teams.emptyTitle")}
           description={t("pages.teams.emptyBody")}
           actions={
-            <Button disabled={!scope.orgId} onClick={() => setAddOpen(true)}>
+            <GatedButton gate="team:create" disabled={!scope.orgId} onClick={() => setAddOpen(true)}>
               {t("pages.teams.emptyAction")}
-            </Button>
+            </GatedButton>
           }
         />
       )}

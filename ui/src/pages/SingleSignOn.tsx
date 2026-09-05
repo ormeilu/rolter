@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { CopyButton } from "@/components/CopyButton";
 import { EditorSheet } from "@/components/EditorSheet";
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { PageBody, Pill, RowIconButton } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
@@ -739,14 +740,15 @@ export default function SingleSignOn() {
         <span className="text-sm text-muted-foreground">
           {t("pages.sso.providers.count", { count: rows.length })}
         </span>
-        <Button
+        <GatedButton
+          gate="sso_provider:create"
           className="ml-auto"
           disabled={!canManage}
           onClick={() => setAddOpen(true)}
         >
           <Plus className="h-4 w-4" aria-hidden />
           {t("pages.sso.providers.add")}
-        </Button>
+        </GatedButton>
       </div>
 
       {providers.isError && (
@@ -765,10 +767,10 @@ export default function SingleSignOn() {
             title={t("pages.sso.empty.title")}
             description={t("pages.sso.empty.body")}
             actions={
-              <Button disabled={!canManage} onClick={() => setAddOpen(true)}>
+              <GatedButton gate="sso_provider:create" disabled={!canManage} onClick={() => setAddOpen(true)}>
                 <Plus className="h-4 w-4" aria-hidden />
                 {t("pages.sso.providers.add")}
-              </Button>
+              </GatedButton>
             }
           />
         ) : (

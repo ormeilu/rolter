@@ -7,6 +7,7 @@ import {
   ProviderSheet,
   type ProviderSheetMode,
 } from "@/components/ProviderSheet";
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { ListSkeleton } from "@/components/LoadingState";
 import { UnservedConfigNotice } from "@/components/UnservedConfigNotice";
@@ -116,13 +117,14 @@ export default function Providers() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <Button
+        <GatedButton
+          gate="provider:create"
           className="ml-auto"
           onClick={() => setSheet({ mode: "add" })}
           disabled={scopeBlocked || !scope.orgId}
         >
           {t("pages.providers.add")}
-        </Button>
+        </GatedButton>
       </Toolbar>
 
       {providers.error && (
@@ -213,12 +215,13 @@ export default function Providers() {
                   {t("common.clearSearch")}
                 </Button>
               ) : (
-                <Button
+                <GatedButton
+                  gate="provider:create"
                   disabled={scopeBlocked || !scope.orgId}
                   onClick={() => setSheet({ mode: "add" })}
                 >
                   {t("pages.providers.add")}
-                </Button>
+                </GatedButton>
               )
             }
           />

@@ -5,6 +5,7 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { TableSkeleton } from "@/components/LoadingState";
 import { CopyButton } from "@/components/CopyButton";
@@ -274,7 +275,8 @@ function GroupMappings({ orgId, canManage }: { orgId: string; canManage: boolean
               </option>
             ))}
           </Select>
-          <Button
+          <GatedButton
+            gate="scim_group_mapping:create"
             size="sm"
             variant="outline"
             disabled={!canManage || !group.trim() || create.isPending}
@@ -284,7 +286,7 @@ function GroupMappings({ orgId, canManage }: { orgId: string; canManage: boolean
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
             )}
             {t("pages.userProvisioning.mappings.add")}
-          </Button>
+          </GatedButton>
         </div>
         {/* the control plane's own message, never a gloss on it */}
         {create.isError && (
@@ -431,10 +433,10 @@ export default function UserProvisioning() {
           update and deactivate accounts in this org.
         </span>
         <div className="ml-auto">
-          <Button disabled={!canManage} onClick={() => setIssueOpen(true)}>
+          <GatedButton gate="scim_token:create" disabled={!canManage} onClick={() => setIssueOpen(true)}>
             <Plus className="h-4 w-4" />
             Issue token
-          </Button>
+          </GatedButton>
         </div>
       </div>
 
@@ -467,9 +469,9 @@ export default function UserProvisioning() {
               title={t("pages.userProvisioning.emptyTitle")}
               description={t("pages.userProvisioning.emptyBody")}
               actions={
-                <Button disabled={!canManage} onClick={() => setIssueOpen(true)}>
+                <GatedButton gate="scim_token:create" disabled={!canManage} onClick={() => setIssueOpen(true)}>
                   {t("pages.userProvisioning.emptyAction")}
-                </Button>
+                </GatedButton>
               }
             />
           }

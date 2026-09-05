@@ -3,7 +3,15 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { Toaster } from "@/components/ui/toaster";
+import type {
+  RbacAction,
+  RbacActionView,
+  RbacEffective,
+  RbacMatrix,
+  Role,
+} from "@/lib/api";
 import { AuthProvider } from "@/lib/auth";
+import { CapabilityProvider } from "@/lib/can";
 import en from "@/lib/i18n/locales/en.json";
 import { ToastProvider } from "@/lib/toast";
 
@@ -75,27 +83,183 @@ export function routes(table: [string, () => unknown][], status = 200): FetchStu
 
 export function Harness({
   fetchStub,
+  role,
   children,
 }: {
   fetchStub: FetchStub;
+  /**
+   * Answer `GET /api/v1/rbac/effective` as this role and mount the screen
+   * under a `CapabilityProvider` (#1183).
+   *
+   * Omitted, nothing is stubbed and no provider is mounted — which is the
+   * un-gated case every other story asserts, because `can()` with no provider
+   * above it says "unknown" and every control renders enabled.
+   */
+  role?: StoryRole;
   children: React.ReactNode;
 }) {
   const original = React.useRef<typeof globalThis.fetch | null>(null);
   const client = React.useMemo(() => {
     original.current ??= globalThis.fetch;
     localStorage.removeItem("rolter.scope");
-    globalThis.fetch = fetchStub as typeof globalThis.fetch;
+    globalThis.fetch = (role ? withCapabilities(role, fetchStub) : fetchStub) as typeof globalThis.fetch;
     // no retries: a story asserting an error state should not wait out a
     // backoff schedule before the screen admits the request failed
     return new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  }, [fetchStub]);
+  }, [fetchStub, role]);
   React.useEffect(
     () => () => {
       if (original.current) globalThis.fetch = original.current;
     },
     [],
   );
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  const body = role ? <CapabilityProvider>{children}</CapabilityProvider> : children;
+  return <QueryClientProvider client={client}>{body}</QueryClientProvider>;
+}
+
+/** The four kinds of caller the gating stories are written for. */
+export type StoryRole = Role | "superadmin";
+
+// the capability table, as much of it as the stories need
+// (crates/rolter-control/src/rbac_matrix.rs). read is a viewer's and mutations
+// are an admin's for everything with a tenancy scope; everything without one is
+// the superadmin's alone
+const SCOPED_RESOURCES = [
+  "org",
+  "team",
+  "project",
+  "provider",
+  "provider_group",
+  "plugin",
+  "route",
+  "virtual_key",
+  "budget",
+  "rate_limit",
+  "model",
+  "model_price",
+  "business_unit",
+  "customer",
+  "prompt_template",
+  "skill",
+  "user",
+  "membership",
+  "custom_role",
+  "access_profile",
+  "access_profile_assignment",
+  "mcp_server",
+  "mcp_tool_group",
+  "mcp_settings",
+  "mcp_oauth_grant",
+  "mcp_oauth_session",
+];
+
+// an admin read: the rows name the IdPs and the invitations, not just the data
+const ADMIN_RESOURCES = [
+  "scim_token",
+  "scim_group_mapping",
+  "audit_log",
+  "invitation",
+  "sso_provider",
+  "sso_group_mapping",
+  "org_auth_policy",
+  "mcp_oauth_client",
+];
+
+const DEPLOYMENT_RESOURCES = [
+  "feature_flags",
+  "runtime_policy",
+  "logging_settings",
+  "compatibility_policy",
+  "client_settings",
+  "model_defaults",
+  "adaptive_routing_policy",
+  "adaptive_routing_telemetry",
+  "guardrail_rule",
+  "guardrail_provider",
+  "cluster_node",
+  "security_settings",
+  "connector",
+  "alert_channel",
+  "alert_rule",
+  "alert_history",
+  "mcp_log",
+];
+
+const ACTIONS: RbacAction[] = ["read", "create", "update", "delete"];
+
+/** What the control plane would answer for a caller holding `role`. */
+export function effectiveFor(role: StoryRole): RbacEffective {
+  const allowed: string[] = [];
+  if (role !== "superadmin") {
+    for (const resource of SCOPED_RESOURCES) {
+      allowed.push(`${resource}:read`);
+      if (role === "admin") {
+        for (const action of ACTIONS) allowed.push(`${resource}:${action}`);
+      }
+    }
+    // a key a member mints for themself, which is the one create a non-admin has
+    if (role !== "viewer") allowed.push("my_virtual_key:create");
+    if (role === "admin") {
+      for (const resource of ADMIN_RESOURCES) {
+        for (const action of ACTIONS) allowed.push(`${resource}:${action}`);
+      }
+    }
+  }
+  return {
+    superadmin: role === "superadmin",
+    role: role === "superadmin" ? "admin" : role,
+    // a superadmin's list is empty on the wire too: `decide` short-circuits on
+    // the flag rather than enumerating every pair
+    allowed: role === "superadmin" ? [] : allowed,
+    custom_roles: [],
+    model_policy: null,
+  };
+}
+
+/** The published rules, which is where a disabled control reads its role from. */
+export function matrixFixture(): RbacMatrix {
+  const actions = (minimum: Role | null): RbacActionView[] =>
+    ACTIONS.map((action) => ({
+      action,
+      minimum_role: minimum === null ? null : action === "read" ? "viewer" : minimum,
+      superadmin_only: minimum === null,
+      authenticated_only: false,
+    }));
+  return {
+    roles: [
+      { role: "viewer", rank: 0 },
+      { role: "member", rank: 1 },
+      { role: "admin", rank: 2 },
+    ],
+    resources: [
+      ...SCOPED_RESOURCES.map((resource) => ({
+        resource,
+        scope: "org",
+        actions: actions("admin"),
+      })),
+      ...ADMIN_RESOURCES.map((resource) => ({
+        resource,
+        scope: "org",
+        actions: actions("admin"),
+      })),
+      ...DEPLOYMENT_RESOURCES.map((resource) => ({
+        resource,
+        scope: "deployment",
+        actions: actions(null),
+      })),
+    ],
+    custom_roles: [],
+  };
+}
+
+/** Answer the two RBAC endpoints as `role`, then fall through to `handler`. */
+export function withCapabilities(role: StoryRole, handler: FetchStub): FetchStub {
+  return async (input, init) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    if (path === "/api/v1/rbac/effective") return json(effectiveFor(role));
+    if (path === "/api/v1/rbac/matrix") return json(matrixFixture());
+    return handler(input, init);
+  };
 }
 
 /**

@@ -3,12 +3,12 @@ import { Gauge, Plus, Trash2, Loader2, Wallet } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { CardGridSkeleton } from "@/components/LoadingState";
 import { EditorSheet } from "@/components/EditorSheet";
 import { PageBody } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -259,7 +259,8 @@ export default function Limits() {
               {t("pages.limits.budgetsHint")}
             </span>
           </div>
-          <Button
+          <GatedButton
+            gate="budget:create"
             size="sm"
             className="ml-auto"
             onClick={() => setAddBudgetOpen(true)}
@@ -267,7 +268,7 @@ export default function Limits() {
           >
             <Plus className="h-4 w-4" />
             Add budget
-          </Button>
+          </GatedButton>
         </div>
         {budgets.isLoading && <CardGridSkeleton cards={3} height={152} min={280} />}
         {budgets.error && (
@@ -284,9 +285,9 @@ export default function Limits() {
             title={t("pages.limits.budgetsEmptyTitle")}
             description={t("pages.limits.budgetsEmptyBody")}
             actions={
-              <Button disabled={!scopeId} onClick={() => setAddBudgetOpen(true)}>
+              <GatedButton gate="budget:create" disabled={!scopeId} onClick={() => setAddBudgetOpen(true)}>
                 {t("pages.limits.budgetsEmptyAction")}
-              </Button>
+              </GatedButton>
             }
           />
         )}
@@ -310,7 +311,8 @@ export default function Limits() {
               {t("pages.limits.rateLimitsHint")}
             </span>
           </div>
-          <Button
+          <GatedButton
+            gate="rate_limit:create"
             size="sm"
             className="ml-auto"
             onClick={() => setAddRateLimitOpen(true)}
@@ -318,7 +320,7 @@ export default function Limits() {
           >
             <Plus className="h-4 w-4" />
             Add rate limit
-          </Button>
+          </GatedButton>
         </div>
         {rateLimits.isLoading && <CardGridSkeleton cards={3} height={152} min={280} />}
         {rateLimits.error && (
@@ -335,9 +337,9 @@ export default function Limits() {
             title={t("pages.limits.rateLimitsEmptyTitle")}
             description={t("pages.limits.rateLimitsEmptyBody")}
             actions={
-              <Button disabled={!scopeId} onClick={() => setAddRateLimitOpen(true)}>
+              <GatedButton gate="rate_limit:create" disabled={!scopeId} onClick={() => setAddRateLimitOpen(true)}>
                 {t("pages.limits.rateLimitsEmptyAction")}
-              </Button>
+              </GatedButton>
             }
           />
         )}

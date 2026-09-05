@@ -3,6 +3,7 @@ import { Wrench, X } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { superadminOnly } from "@/components/ForbiddenScreen";
 import { LoadError } from "@/components/LoadError";
 import { FormSkeleton, TableSkeleton } from "@/components/LoadingState";
 import { ListHeader, ListRow, ListTable, PageBody, Pill } from "@/components/screen";
@@ -38,7 +39,7 @@ const GRID = "150px 1.1fr 1.3fr 130px 110px 90px";
 
 // clickhouse-backed MCP tool-call log explorer: summary KPIs, filterable
 // cursor-paginated table, and a per-event detail drawer with redacted payloads
-export default function McpLogs() {
+function McpLogsScreen() {
   const { t } = useTranslation();
   const [status, setStatus] = React.useState("");
   const [transport, setTransport] = React.useState("");
@@ -380,3 +381,8 @@ function DrawerBlock({ label, body }: { label: string; body: string }) {
     </div>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(McpLogsScreen, "errors.resources.mcpLogs");

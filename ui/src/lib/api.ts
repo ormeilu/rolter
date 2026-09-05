@@ -2197,6 +2197,63 @@ export function fetchRbacMatrix(orgId?: string): Promise<RbacMatrix> {
   return getJson<RbacMatrix>(`/api/v1/rbac/matrix${query}`);
 }
 
+/** A custom role the caller holds at the requested scope. */
+export interface RbacHeldRole {
+  profile_id: string;
+  role_id: string;
+  role_slug: string;
+  base_role: Role;
+}
+
+/** The model/route visibility a caller's access profiles impose. */
+export interface RbacModelPolicy {
+  allowed_models?: string[];
+  denied_models?: string[];
+  allowed_routes?: string[];
+  denied_routes?: string[];
+}
+
+/**
+ * What *this* caller may do at one org/team/project chain.
+ *
+ * The counterpart to [`RbacMatrix`], which describes the rules for everyone:
+ * this is the caller's own answer, evaluated server-side from their
+ * memberships and access profiles. The dashboard disables controls with it
+ * (#1183); enforcement stays on the control plane, so the answer is advisory
+ * here and authoritative only there.
+ */
+export interface RbacEffective {
+  /** the admin token, a superadmin user, or any caller in open mode */
+  superadmin: boolean;
+  /** the resolved role at the chain, null when no membership reaches it */
+  role: Role | null;
+  /** the `resource:action` pairs the caller may perform, default-deny */
+  allowed: string[];
+  /** the custom roles behind any pair `role` alone does not explain */
+  custom_roles: RbacHeldRole[];
+  /** absent when no access profile restricts anything, which means "all" */
+  model_policy: RbacModelPolicy | null;
+}
+
+/** The org/team/project chain a capability question is asked at. */
+export interface RbacScope {
+  orgId?: string;
+  teamId?: string;
+  projectId?: string;
+}
+
+// every part of the chain is optional: the deployment-scoped resources need no
+// chain at all, and a caller who is not in an org yet still gets an answer —
+// an empty one, which is exactly what `authorize` would decide
+export function fetchEffective(scope: RbacScope = {}): Promise<RbacEffective> {
+  const params = new URLSearchParams();
+  if (scope.orgId) params.set("org_id", scope.orgId);
+  if (scope.teamId) params.set("team_id", scope.teamId);
+  if (scope.projectId) params.set("project_id", scope.projectId);
+  const query = params.size ? `?${params}` : "";
+  return getJson<RbacEffective>(`/api/v1/rbac/effective${query}`);
+}
+
 // --- scim provisioning tokens (crates/rolter-control/src/scim.rs, #540) ---
 //
 // the dashboard only manages the tokens an IdP authenticates with; the SCIM

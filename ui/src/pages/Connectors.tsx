@@ -6,6 +6,8 @@ import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { CopyButton } from "@/components/CopyButton";
 import { EditorSheet } from "@/components/EditorSheet";
+import { superadminOnly } from "@/components/ForbiddenScreen";
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { CardGridSkeleton, PanelSkeleton } from "@/components/LoadingState";
 import { PageBody, Pill, StatusDot, Toolbar } from "@/components/screen";
@@ -153,7 +155,7 @@ function CollectorConfigDialog({
 
 // OTLP log-shipping connectors: request logs mirrored to Datadog, Langfuse,
 // or any OTLP/HTTP collector, with per-connector sampling and health checks
-export default function Connectors() {
+function ConnectorsScreen() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const queryClient = useQueryClient();
@@ -212,7 +214,7 @@ export default function Connectors() {
           <FileCode2 className="h-4 w-4" aria-hidden />
           {t("pages.connectors.collectorConfig.open")}
         </Button>
-        <Button onClick={() => setAddOpen(true)}>+ Add connector</Button>
+        <GatedButton gate="connector:create" onClick={() => setAddOpen(true)}>+ Add connector</GatedButton>
       </Toolbar>
 
       {connectors.isLoading && <CardGridSkeleton cards={3} height={186} min={380} />}
@@ -233,9 +235,9 @@ export default function Connectors() {
           title={t("pages.connectors.emptyTitle")}
           description={t("pages.connectors.emptyBody")}
           actions={
-            <Button onClick={() => setAddOpen(true)}>
+            <GatedButton gate="connector:create" onClick={() => setAddOpen(true)}>
               {t("pages.connectors.emptyAction")}
-            </Button>
+            </GatedButton>
           }
         />
       )}
@@ -472,3 +474,8 @@ function AddConnectorDialog({
     </EditorSheet>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(ConnectorsScreen, "errors.resources.connectors");

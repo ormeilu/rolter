@@ -111,6 +111,8 @@
       "connectors": "connectors",
       "customers": "customers",
       "featureFlags": "feature flags",
+    "guardrailProviders": "guardrail providers",
+    "guardrailRules": "guardrail rules",
       "logsSettings": "logs settings",
       "mcpLibrary": "the MCP library",
       "mcpLogDetail": "this MCP tool call",
@@ -1590,5 +1592,10 @@
     "deleted": "{{what}} deleted",
     "deleteFailed": "Could not delete {{what}}",
     "created": "{{what}} created"
+  },
+  "rbac": {
+    "needsRole": "Requires the {{role}} role",
+    "needsSuperadmin": "Requires a superadmin",
+    "needsPermission": "Your role does not permit this"
   }
 }

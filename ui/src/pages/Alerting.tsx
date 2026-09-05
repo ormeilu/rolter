@@ -5,6 +5,8 @@ import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EditorSheet } from "@/components/EditorSheet";
+import { superadminOnly } from "@/components/ForbiddenScreen";
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { CardGridSkeleton, TableSkeleton } from "@/components/LoadingState";
 import { ListHeader, ListRow, ListTable, PageBody, Pill, StatusDot, Toolbar } from "@/components/screen";
@@ -47,7 +49,7 @@ const stateTone = (state: string) => STATE_TONE[state] ?? STATE_TONE.unknown;
 // ---------------------------------------------------------------------------
 // channels: webhook destinations alerts are delivered to
 
-export function AlertChannels() {
+function AlertChannelsScreen() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -89,9 +91,9 @@ export function AlertChannels() {
         <span className="text-sm text-muted-foreground">
           {channels.data?.length ?? 0} channels · webhook destinations for alert delivery
         </span>
-        <Button className="ml-auto" onClick={() => setAddOpen(true)}>
+        <GatedButton gate="alert_channel:create" className="ml-auto" onClick={() => setAddOpen(true)}>
           + Add channel
-        </Button>
+        </GatedButton>
       </Toolbar>
 
       {channels.isLoading && <CardGridSkeleton cards={3} height={168} min={340} />}
@@ -108,7 +110,7 @@ export function AlertChannels() {
           icon={<Megaphone />}
           title={t("pages.alerting.channels.emptyTitle")}
           description={t("pages.alerting.channels.emptyBody")}
-          actions={<Button onClick={() => setAddOpen(true)}>{t("pages.alerting.channels.add")}</Button>}
+          actions={<GatedButton gate="alert_channel:create" onClick={() => setAddOpen(true)}>{t("pages.alerting.channels.add")}</GatedButton>}
         />
       )}
       <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr))]">
@@ -280,7 +282,7 @@ function AddChannelDialog({
 // ---------------------------------------------------------------------------
 // rules: threshold rules over gateway signals
 
-export function AlertRules() {
+function AlertRulesScreen() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const queryClient = useQueryClient();
@@ -350,9 +352,9 @@ export function AlertRules() {
         <span className="text-sm text-muted-foreground">
           {rules.data?.length ?? 0} rules · evaluated every 60s against gateway analytics
         </span>
-        <Button className="ml-auto" onClick={() => setAddOpen(true)}>
+        <GatedButton gate="alert_rule:create" className="ml-auto" onClick={() => setAddOpen(true)}>
           + Add rule
-        </Button>
+        </GatedButton>
       </Toolbar>
 
       {rules.isLoading && <CardGridSkeleton cards={3} height={196} min={380} />}
@@ -373,7 +375,7 @@ export function AlertRules() {
               ? t("pages.alerting.rules.emptyBodyNoChannel")
               : t("pages.alerting.rules.emptyBody")
           }
-          actions={<Button onClick={() => setAddOpen(true)}>{t("pages.alerting.rules.add")}</Button>}
+          actions={<GatedButton gate="alert_rule:create" onClick={() => setAddOpen(true)}>{t("pages.alerting.rules.add")}</GatedButton>}
         />
       )}
       <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(min(380px,100%),1fr))]">
@@ -622,7 +624,7 @@ function AddRuleDialog({
 
 const HISTORY_GRID = "150px 1.4fr 110px 130px 2fr";
 
-export function AlertHistory() {
+function AlertHistoryScreen() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const history = useQuery({
@@ -705,3 +707,10 @@ export function AlertHistory() {
     </PageBody>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export const AlertChannels = superadminOnly(AlertChannelsScreen, "errors.resources.alertChannels");
+export const AlertRules = superadminOnly(AlertRulesScreen, "errors.resources.alertRules");
+export const AlertHistory = superadminOnly(AlertHistoryScreen, "errors.resources.alertHistory");

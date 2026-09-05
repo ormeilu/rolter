@@ -4,6 +4,7 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -147,9 +148,9 @@ export default function Plugins() {
             {t("pages.plugins.intro")}
           </p>
         </div>
-        <Button onClick={() => setEditing(null)}>
+        <GatedButton gate="plugin:create" onClick={() => setEditing(null)}>
           <Plus className="h-4 w-4" aria-hidden /> {t("pages.plugins.install")}
-        </Button>
+        </GatedButton>
       </header>
 
       {query.isLoading ? (
@@ -167,9 +168,9 @@ export default function Plugins() {
           title={t("pages.plugins.emptyTitle")}
           description={t("pages.plugins.emptyDescription")}
           actions={
-            <Button onClick={() => setEditing(null)}>
+            <GatedButton gate="plugin:create" onClick={() => setEditing(null)}>
               {t("pages.plugins.installFirst")}
-            </Button>
+            </GatedButton>
           }
         />
       ) : (

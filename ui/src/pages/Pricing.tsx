@@ -3,6 +3,7 @@ import { CircleDollarSign, Plus, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { CardGridSkeleton } from "@/components/LoadingState";
 import { EditorSheet } from "@/components/EditorSheet";
@@ -80,7 +81,8 @@ export default function Pricing() {
         <span className="text-sm text-muted-foreground">
           {prices.data?.length ?? 0} models · per-million-token pricing · currency set per model
         </span>
-        <Button
+        <GatedButton
+          gate="model_price:create"
           className="ml-auto"
           onClick={() => {
             setEditTarget(null);
@@ -89,7 +91,7 @@ export default function Pricing() {
         >
           <Plus className="h-4 w-4" />
           Add price
-        </Button>
+        </GatedButton>
       </Toolbar>
 
       {prices.isLoading && <CardGridSkeleton cards={4} height={152} min={300} />}
@@ -107,14 +109,15 @@ export default function Pricing() {
           title={t("pages.pricing.emptyTitle")}
           description={t("pages.pricing.emptyBody")}
           actions={
-            <Button
+            <GatedButton
+              gate="model_price:create"
               onClick={() => {
                 setEditTarget(null);
                 setEditOpen(true);
               }}
             >
               {t("pages.pricing.emptyAction")}
-            </Button>
+            </GatedButton>
           }
         />
       )}

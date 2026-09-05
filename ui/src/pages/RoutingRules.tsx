@@ -5,10 +5,10 @@ import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EditorSheet } from "@/components/EditorSheet";
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { CardGridSkeleton } from "@/components/LoadingState";
 import { PageBody, StatusDot, Toolbar } from "@/components/screen";
-import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -104,9 +104,9 @@ export default function RoutingRules() {
           {routes.data?.length ?? 0} routes · public model names clients call, resolved to
           upstream targets
         </span>
-        <Button className="ml-auto" onClick={() => setAddOpen(true)} disabled={!scope.projectId}>
+        <GatedButton gate="route:create" className="ml-auto" onClick={() => setAddOpen(true)} disabled={!scope.projectId}>
           + Add route
-        </Button>
+        </GatedButton>
       </Toolbar>
 
       {routes.isLoading && <CardGridSkeleton cards={3} height={196} min={360} />}
@@ -124,9 +124,9 @@ export default function RoutingRules() {
           title={t("pages.routing.emptyTitle")}
           description={t("pages.routing.emptyBody")}
           actions={
-            <Button disabled={!scope.projectId} onClick={() => setAddOpen(true)}>
+            <GatedButton gate="route:create" disabled={!scope.projectId} onClick={() => setAddOpen(true)}>
               {t("pages.routing.emptyAction")}
-            </Button>
+            </GatedButton>
           }
         />
       )}

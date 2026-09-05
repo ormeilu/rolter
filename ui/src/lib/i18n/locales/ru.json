@@ -113,6 +113,8 @@
       "connectors": "коннекторы",
       "customers": "клиенты",
       "featureFlags": "флаги функциональности",
+      "guardrailProviders": "провайдеры ограничений",
+      "guardrailRules": "правила ограничений",
       "logsSettings": "настройки журналирования",
       "mcpLibrary": "библиотека MCP",
       "mcpLogDetail": "этот вызов MCP-инструмента",
@@ -1660,5 +1662,10 @@
     "deleted": "Удалено: {{what}}",
     "deleteFailed": "Не удалось удалить: {{what}}",
     "created": "Создано: {{what}}"
+  },
+  "rbac": {
+    "needsRole": "Требуется роль «{{role}}»",
+    "needsSuperadmin": "Требуются права суперадминистратора",
+    "needsPermission": "Ваша роль не позволяет это действие"
   }
 }

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { superadminOnly } from "@/components/ForbiddenScreen";
 import { LoadError } from "@/components/LoadError";
 import { PanelSkeleton } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
@@ -71,7 +72,7 @@ const hasAnyDefault = (form: FormState) =>
 // deployment-wide inference defaults, persisted via /api/v1/model-defaults
 // (superadmin only). they only ever fill a gap: a parameter the client sent is
 // never overwritten, which is what makes this safe to turn on mid-flight
-export default function ModelSettings() {
+function ModelSettingsScreen() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -302,3 +303,8 @@ function Field({
     </div>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(ModelSettingsScreen, "errors.resources.modelSettings");

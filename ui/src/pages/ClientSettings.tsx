@@ -3,6 +3,7 @@ import { Check, Copy, Plus, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { superadminOnly } from "@/components/ForbiddenScreen";
 import { LoadError } from "@/components/LoadError";
 import { PanelSkeleton } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
@@ -88,7 +89,7 @@ function validate(form: FormState, reserved: string[]): string | null {
 // deployment-wide client settings, persisted via /api/v1/client-settings
 // (superadmin only): the base URL the dashboard hands out, and what the gateway
 // does with headers on the upstream leg
-export default function ClientSettings() {
+function ClientSettingsScreen() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -373,3 +374,8 @@ function Snippet({ base }: { base: string }) {
     </div>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(ClientSettingsScreen, "errors.resources.clientSettings");

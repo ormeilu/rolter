@@ -3,6 +3,7 @@ import { Boxes, Lock, Trash2, Loader2 } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { ListSkeleton } from "@/components/LoadingState";
 import { ModelPriceCell } from "@/components/ModelPriceCell";
@@ -231,13 +232,14 @@ export default function Models() {
         <span className="text-sm text-muted-foreground">
           {rows.length} models · {providerCount} providers
         </span>
-        <Button
+        <GatedButton
+          gate="model:create"
           className="ml-auto"
           onClick={() => setSheet({ mode: "add" })}
           disabled={scopeBlocked || !scope.projectId}
         >
           + Add model
-        </Button>
+        </GatedButton>
       </Toolbar>
 
       <div className="flex flex-wrap items-center gap-2.5">
@@ -428,12 +430,13 @@ export default function Models() {
                   {t("common.clearSearch")}
                 </Button>
               ) : (
-                <Button
+                <GatedButton
+                  gate="model:create"
                   disabled={scopeBlocked || !scope.projectId}
                   onClick={() => setSheet({ mode: "add" })}
                 >
                   {t("pages.models.emptyAction")}
-                </Button>
+                </GatedButton>
               )
             }
           />

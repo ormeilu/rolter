@@ -26,6 +26,7 @@ import {
   attributionValue,
 } from "@/components/KeyAttributionFields";
 
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { ListSkeleton } from "@/components/LoadingState";
 import { CopyButton } from "@/components/CopyButton";
@@ -206,10 +207,10 @@ export default function Keys() {
           <Button variant="outline" onClick={exportCsv}>
             Export CSV
           </Button>
-          <Button onClick={() => setAddOpen(true)} disabled={scopeBlocked || !scope.projectId}>
+          <GatedButton gate="virtual_key:create" onClick={() => setAddOpen(true)} disabled={scopeBlocked || !scope.projectId}>
             <Plus className="h-4 w-4" />
             Add Virtual Key
-          </Button>
+          </GatedButton>
         </div>
       </div>
 
@@ -340,12 +341,13 @@ export default function Keys() {
                   {t("common.clearSearch")}
                 </Button>
               ) : (
-                <Button
+                <GatedButton
+                  gate="virtual_key:create"
                   disabled={scopeBlocked || !scope.projectId}
                   onClick={() => setAddOpen(true)}
                 >
                   {t("pages.virtualKeys.emptyAction")}
-                </Button>
+                </GatedButton>
               )
             }
           />
