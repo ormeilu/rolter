@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { superadminOnly } from "@/components/ForbiddenScreen";
 import { LoadError } from "@/components/LoadError";
 import { PanelSkeleton } from "@/components/LoadingState";
 import { Button } from "@/components/ui/button";
@@ -76,7 +77,7 @@ function validate(form: FormState): string | null {
 // global request-log policy, persisted via /api/v1/logging-settings (superadmin
 // only). controls how much traffic is sampled, whether raw payloads are
 // captured, what is redacted from them, and how long each is kept (#537)
-export default function LogsSettings() {
+function LogsSettingsScreen() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -332,3 +333,8 @@ function ListCard({
     </fieldset>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(LogsSettingsScreen, "errors.resources.logsSettings");

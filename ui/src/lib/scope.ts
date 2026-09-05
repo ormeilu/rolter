@@ -42,6 +42,13 @@ function writeStored(scope: StoredScope) {
   }
 }
 
+// every mounted `useScope` keeps its own copy of the selection, so a pick made
+// in the switcher used to reach only the switcher: the components that were
+// already mounted — the shell, and since #1183 the capability query that has to
+// re-ask when the org changes — kept the previous scope until they remounted.
+// the write is broadcast instead
+const listeners = new Set<(scope: StoredScope) => void>();
+
 export interface ScopeResult {
   orgId?: string;
   teamId?: string;
@@ -59,6 +66,12 @@ export interface ScopeResult {
 
 export function useScope(): ScopeResult {
   const [stored, setStored] = React.useState<StoredScope>(() => readStored());
+  React.useEffect(() => {
+    listeners.add(setStored);
+    return () => {
+      listeners.delete(setStored);
+    };
+  }, []);
 
   const orgs = useQuery({ queryKey: ["scope", "orgs"], queryFn: fetchOrgs });
   // the first org this account is actually a member of, from /auth/me (#1196).
@@ -100,8 +113,8 @@ export function useScope(): ScopeResult {
       : undefined) ?? projects.data?.[0]?.id;
 
   const persist = React.useCallback((next: StoredScope) => {
-    setStored(next);
     writeStored(next);
+    for (const listener of listeners) listener(next);
   }, []);
 
   const setOrgId = React.useCallback(

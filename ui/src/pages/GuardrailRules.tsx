@@ -10,6 +10,8 @@ import {
   GuardrailLoading,
   PolicyCard,
 } from "@/components/GuardrailPanel";
+import { superadminOnly } from "@/components/ForbiddenScreen";
+import { GatedButton } from "@/components/GatedButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -48,7 +50,7 @@ const EMPTY: GuardrailRuleInput = {
   position: 0,
 };
 
-export default function GuardrailRules() {
+function GuardrailRulesScreen() {
   const { t } = useTranslation();
   const client = useQueryClient();
   const toast = useToast();
@@ -127,9 +129,9 @@ export default function GuardrailRules() {
             but never inspect traffic.
           </p>
         </div>
-        <Button onClick={() => setEditing(null)}>
+        <GatedButton gate="guardrail_rule:create" onClick={() => setEditing(null)}>
           <Plus className="h-4 w-4" aria-hidden /> Add rule
-        </Button>
+        </GatedButton>
       </div>
 
       {query.isLoading ? (
@@ -144,7 +146,7 @@ export default function GuardrailRules() {
           title="No inspection rules"
           description="Add a built-in detector or a bounded custom regex before enabling the deployment guardrails flag."
           action={
-            <Button onClick={() => setEditing(null)}>Add first rule</Button>
+            <GatedButton gate="guardrail_rule:create" onClick={() => setEditing(null)}>Add first rule</GatedButton>
           }
         />
       ) : (
@@ -443,3 +445,8 @@ function ToggleRow({
     </div>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(GuardrailRulesScreen, "errors.resources.guardrailRules");

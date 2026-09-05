@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { superadminOnly } from "@/components/ForbiddenScreen";
 import { LoadError } from "@/components/LoadError";
 import { PanelSkeleton } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
@@ -73,7 +74,7 @@ function validate(form: FormState): string | null {
 // global adaptive-routing policy, persisted via /api/v1/adaptive-routing-policy
 // (superadmin only). only the ratio between the weights matters — the blend is
 // a weighted sum of signals each scored in [0, 1] (#544, #565)
-export default function AdaptiveSettings() {
+function AdaptiveSettingsScreen() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -267,3 +268,8 @@ export default function AdaptiveSettings() {
     </div>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(AdaptiveSettingsScreen, "errors.resources.adaptiveSettings");

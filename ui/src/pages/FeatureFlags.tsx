@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { superadminOnly } from "@/components/ForbiddenScreen";
 import { LoadError } from "@/components/LoadError";
 import { PanelSkeleton } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
@@ -61,7 +62,7 @@ const toValues = (dto: FeatureFlagsDto): FeatureFlagValues =>
 // the server also reports which flags have no working subsystem in this
 // deployment and rejects enabling them, so those render as unavailable rather
 // than as a switch that silently does nothing (#535)
-export default function FeatureFlags() {
+function FeatureFlagsScreen() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -195,3 +196,8 @@ function FlagCard({
     </section>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(FeatureFlagsScreen, "errors.resources.featureFlags");

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, Network } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { superadminOnly } from "@/components/ForbiddenScreen";
 import { LoadError } from "@/components/LoadError";
 import { PanelSkeleton, StatGridSkeleton } from "@/components/LoadingState";
 import { PageBody } from "@/components/screen";
@@ -73,7 +74,7 @@ function targetName(target: AdaptiveTargetTelemetryDto): string {
   return model ? `${provider} / ${model}` : provider;
 }
 
-export default function AdaptiveDashboard() {
+function AdaptiveDashboardScreen() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const telemetry = useQuery({
@@ -330,3 +331,8 @@ export default function AdaptiveDashboard() {
     </PageBody>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(AdaptiveDashboardScreen, "errors.resources.adaptiveTelemetry");

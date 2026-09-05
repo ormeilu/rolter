@@ -16,6 +16,7 @@ import {
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { GatedButton } from "@/components/GatedButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -385,7 +386,7 @@ export default function PromptRepository() {
               icon={<FilePlus2 />}
               title={t("pages.promptRepo.emptyTitle")}
               description={t("pages.promptRepo.emptyDescription")}
-              actions={<Button onClick={() => setCreateOpen(true)}>{t("pages.promptRepo.createTemplate")}</Button>}
+              actions={<GatedButton gate="prompt_template:create" onClick={() => setCreateOpen(true)}>{t("pages.promptRepo.createTemplate")}</GatedButton>}
             />
           </main>
         ) : (
@@ -486,9 +487,9 @@ function TemplateIndex({
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--text-subtle)]">{t("pages.promptRepo.templates")}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">{t("pages.promptRepo.inThisOrg", { count: templates.length })}</p>
         </div>
-        <Button variant="ghost" onClick={onCreate} aria-label={t("pages.promptRepo.createTemplate")}>
+        <GatedButton gate="prompt_template:create" variant="ghost" onClick={onCreate} aria-label={t("pages.promptRepo.createTemplate")}>
           <Plus className="h-4 w-4" />
-        </Button>
+        </GatedButton>
       </div>
       <div className="max-h-[26rem] overflow-y-auto p-1.5 lg:max-h-[calc(100vh-14rem)]">
         {templates.length === 0 ? (

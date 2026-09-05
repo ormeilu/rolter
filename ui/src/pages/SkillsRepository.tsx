@@ -15,6 +15,7 @@ import {
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { GatedButton } from "@/components/GatedButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -338,7 +339,7 @@ export default function SkillsRepository() {
               icon={<FilePlus2 />}
               title={t("pages.skillsRepo.emptyTitle")}
               description={t("pages.skillsRepo.emptyDescription")}
-              actions={<Button onClick={() => setCreateOpen(true)}>{t("pages.skillsRepo.createSkill")}</Button>}
+              actions={<GatedButton gate="skill:create" onClick={() => setCreateOpen(true)}>{t("pages.skillsRepo.createSkill")}</GatedButton>}
             />
           </main>
         ) : versions.isLoading ? (
@@ -452,7 +453,7 @@ function SkillIndex({ skills, selectedId, onSelect, onCreate }: { skills: SkillR
     <aside className="overflow-hidden rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-raised)]">
       <div className="flex items-center justify-between border-b border-[color:var(--border-subtle)] px-3 py-2.5">
         <div><p className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--text-subtle)]">{t("pages.skillsRepo.orgSkills")}</p><p className="mt-0.5 text-xs text-muted-foreground">{t("pages.skillsRepo.visibleCount", { count: skills.length })}</p></div>
-        <Button variant="ghost" onClick={onCreate} aria-label={t("pages.skillsRepo.createSkill")}><Plus className="h-4 w-4" /></Button>
+        <GatedButton gate="skill:create" variant="ghost" onClick={onCreate} aria-label={t("pages.skillsRepo.createSkill")}><Plus className="h-4 w-4" /></GatedButton>
       </div>
       <div className="max-h-[26rem] overflow-y-auto p-1.5 lg:max-h-[calc(100vh-14rem)]">
         {skills.length === 0 ? <p className="px-2 py-5 text-center text-xs text-muted-foreground">{t("pages.skillsRepo.noSkills")}</p> : skills.map((skill) => (

@@ -10,6 +10,8 @@ import {
   GuardrailLoading,
   PolicyCard,
 } from "@/components/GuardrailPanel";
+import { superadminOnly } from "@/components/ForbiddenScreen";
+import { GatedButton } from "@/components/GatedButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,7 +49,7 @@ const EMPTY: GuardrailProviderInput = {
   auth_env: null,
 };
 
-export default function GuardrailProviders() {
+function GuardrailProvidersScreen() {
   const { t } = useTranslation();
   const client = useQueryClient();
   const toast = useToast();
@@ -124,9 +126,9 @@ export default function GuardrailProviders() {
             provider atomically hands enforcement over from the current service.
           </p>
         </div>
-        <Button onClick={() => setEditing(null)}>
+        <GatedButton gate="guardrail_provider:create" onClick={() => setEditing(null)}>
           <Plus className="h-4 w-4" aria-hidden /> Add provider
-        </Button>
+        </GatedButton>
       </div>
 
       {active && (
@@ -160,9 +162,9 @@ export default function GuardrailProviders() {
           title="No guardrail providers"
           description="Register a self-hosted HTTP guardrail service. Credentials remain environment references, never stored secret values."
           action={
-            <Button onClick={() => setEditing(null)}>
+            <GatedButton gate="guardrail_provider:create" onClick={() => setEditing(null)}>
               Register first provider
-            </Button>
+            </GatedButton>
           }
         />
       ) : (
@@ -456,3 +458,8 @@ function ProviderDialog({
     </Dialog>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(GuardrailProvidersScreen, "errors.resources.guardrailProviders");

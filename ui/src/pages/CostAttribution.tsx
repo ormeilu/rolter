@@ -4,6 +4,7 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { TableSkeleton } from "@/components/LoadingState";
 import { PageBody } from "@/components/screen";
@@ -30,6 +31,7 @@ import {
   type BusinessUnitRow,
   type CustomerRow,
 } from "@/lib/api";
+import type { Capability } from "@/lib/can";
 import { useCurrencyCode } from "@/lib/currency";
 import { useFormat } from "@/lib/i18n/format";
 import { errorDetail, useToast } from "@/lib/toast";
@@ -416,6 +418,10 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
 
   const noun = kind === "unit" ? "business unit" : "customer";
   const plural = kind === "unit" ? "business units" : "customers";
+  // one screen serves two resources, so the capability it gates on follows the
+  // kind rather than the file (#1183)
+  const gate: Capability =
+    kind === "unit" ? "business_unit:create" : "customer:create";
   const unitName = (id: string | null) =>
     units.find((u) => u.id === id)?.name ?? null;
   const spendById = new Map(spend.map((row) => [row.id, row]));
@@ -456,9 +462,9 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
         {mutationError && !deleteTarget && (
           <span className="text-xs text-[color:var(--status-danger-text)]">{mutationError.message}</span>
         )}
-        <Button className="ml-auto" disabled={disabled} onClick={startCreate}>
+        <GatedButton gate={gate} className="ml-auto" disabled={disabled} onClick={startCreate}>
           + New {noun}
-        </Button>
+        </GatedButton>
       </div>
 
       <SpendStrip
@@ -483,9 +489,9 @@ function AttributionScreen<T extends BusinessUnitRow | CustomerRow>({
               : t("pages.costAttribution.customerEmptyBody")
           }
           actions={
-            <Button disabled={disabled} onClick={startCreate}>
+            <GatedButton gate={gate} disabled={disabled} onClick={startCreate}>
               + New {noun}
-            </Button>
+            </GatedButton>
           }
         />
       ) : (

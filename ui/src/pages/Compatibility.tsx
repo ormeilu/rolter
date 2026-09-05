@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { superadminOnly } from "@/components/ForbiddenScreen";
 import { LoadError } from "@/components/LoadError";
 import { PanelSkeleton } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
@@ -46,7 +47,7 @@ function validate(form: FormState): string | null {
 // cross-dialect compatibility policy, persisted via /api/v1/compatibility-policy
 // (superadmin only). these are the values applied when a request is translated
 // between the OpenAI and Anthropic wire formats (#546)
-export default function Compatibility() {
+function CompatibilityScreen() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -183,3 +184,8 @@ export default function Compatibility() {
     </div>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(CompatibilityScreen, "errors.resources.compatibilitySettings");

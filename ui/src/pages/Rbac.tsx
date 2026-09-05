@@ -5,10 +5,10 @@ import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EditorSheet } from "@/components/EditorSheet";
+import { GatedButton } from "@/components/GatedButton";
 import { LoadError } from "@/components/LoadError";
 import { ListSkeleton } from "@/components/LoadingState";
 import { PageBody, Pill, RowIconButton } from "@/components/screen";
-import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -576,9 +576,9 @@ function CustomRolesTab({
         <p className="max-w-2xl text-sm text-muted-foreground">
           {t("pages.rbac.custom.intro")}
         </p>
-        <Button className="ml-auto" disabled={!orgId} onClick={startCreate}>
+        <GatedButton gate="custom_role:create" className="ml-auto" disabled={!orgId} onClick={startCreate}>
           {t("pages.rbac.custom.add")}
-        </Button>
+        </GatedButton>
       </div>
 
       {roles.isLoading && <ListSkeleton rows={3} />}
@@ -596,9 +596,9 @@ function CustomRolesTab({
           title={t("pages.rbac.custom.emptyTitle")}
           description={t("pages.rbac.custom.emptyBody")}
           actions={
-            <Button disabled={!orgId} onClick={startCreate}>
+            <GatedButton gate="custom_role:create" disabled={!orgId} onClick={startCreate}>
               {t("pages.rbac.custom.emptyAction")}
-            </Button>
+            </GatedButton>
           }
         />
       )}

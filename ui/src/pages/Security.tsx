@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { superadminOnly } from "@/components/ForbiddenScreen";
 import { LoadError } from "@/components/LoadError";
 import { PanelSkeleton } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
@@ -63,7 +64,7 @@ const fromDto = (dto: SecuritySettingsDto): FormState => ({
 // global gateway security policy, persisted via /api/v1/security-settings
 // (superadmin only). dashboard secret is write-only: the server seals it and
 // reports only whether one is configured.
-export default function Security() {
+function SecurityScreen() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -303,3 +304,8 @@ function TextCard({
     </section>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(SecurityScreen, "errors.resources.securitySettings");

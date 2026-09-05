@@ -10,6 +10,7 @@ import {
   useNavigate,
 } from "react-router";
 
+import { ForbiddenScreen } from "@/components/ForbiddenScreen";
 import { LocalePicker } from "@/components/LocalePicker";
 import { OpenModeBanner } from "@/components/OpenModeBanner";
 import { Toaster } from "@/components/ui/toaster";
@@ -21,9 +22,16 @@ import {
   type NavGroup,
   type NavItem,
 } from "@/components/ui/nav-sidebar";
-import { NAV, leafKeys, useScreenMeta, type NavDef } from "@/lib/nav";
+import {
+  findLeaf,
+  leafKeys,
+  useScreenMeta,
+  visibleNav,
+  type NavDef,
+} from "@/lib/nav";
 import { logout, ROLES, type MeMembership } from "@/lib/api";
 import { useAuth, type SessionUser } from "@/lib/auth";
+import { CapabilityProvider, useCan } from "@/lib/can";
 import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 import { isOpenMode } from "@/lib/telemetry";
@@ -236,7 +244,16 @@ function roleLabel(
 }
 
 function Screen({ screen, onOpenNav }: { screen: string; onOpenNav: () => void }) {
+  const { t } = useTranslation();
   const [title, subtitle] = useScreenMeta(screen);
+  const can = useCan();
+  // a leaf the rail hides is still reachable by URL — a bookmark, a shared
+  // link, the browser's history. it renders the refusal in the shell rather
+  // than mounting a screen whose every request is already known to be a 403
+  // (#1183). the screen's own name is the noun, since it is the whole screen
+  // that is refused and not one of its queries
+  const resource = findLeaf(screen)?.resource;
+  const forbidden = !!resource && can(resource, "read") === false;
   return (
     // names the screen for every UX event emitted below it (#805), so shared
     // components like EmptyState are instrumented without a prop per screen
@@ -244,16 +261,37 @@ function Screen({ screen, onOpenNav }: { screen: string; onOpenNav: () => void }
       <div className="flex h-full min-h-0 flex-col">
         <ScreenHeader title={title} subtitle={subtitle} onOpenNav={onOpenNav} />
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {SCREENS[screen]}
+          {forbidden ? (
+            <ForbiddenScreen resource={t(`nav.${screen}`)} />
+          ) : (
+            SCREENS[screen]
+          )}
         </div>
       </div>
     </UxScreenProvider>
   );
 }
 
+/**
+ * The dashboard, under one answer to "what may this caller do" (#1183).
+ *
+ * The provider sits above the shell rather than inside it because the rail is
+ * gated too: a group whose every leaf is unreadable is hidden, so the nav has
+ * to be built with the answer already in hand. It asks nothing while signed
+ * out — the login screen has no capabilities to ask about.
+ */
 export default function App() {
+  return (
+    <CapabilityProvider>
+      <Shell />
+    </CapabilityProvider>
+  );
+}
+
+function Shell() {
   const { t } = useTranslation();
   const { email, token, user, memberships, status, signOut } = useAuth();
+  const can = useCan();
   const navigate = useNavigate();
   const location = useLocation();
   const scope = useScope();
@@ -306,7 +344,7 @@ export default function App() {
   const redirect = LEGACY[key];
   const orgName = scope.orgs.find((o) => o.id === scope.orgId)?.name;
   const navGroups: NavGroup[] = [
-    { items: NAV.map((def) => toNavItem(def, t)) },
+    { items: visibleNav(can).map((def) => toNavItem(def, t)) },
   ];
   const roleName = roleLabel(t, user, memberships, scope.orgId);
   const role = orgName

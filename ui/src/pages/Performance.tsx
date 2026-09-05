@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { superadminOnly } from "@/components/ForbiddenScreen";
 import { LoadError } from "@/components/LoadError";
 import { PanelSkeleton } from "@/components/LoadingState";
 import { Button } from "@/components/ui/button";
@@ -85,7 +86,7 @@ function validate(form: FormState): string | null {
 // global runtime policy, persisted via /api/v1/runtime-policy (superadmin only).
 // covers upstream retries, timeouts and the bounded admission queue every
 // provider gets its own instance of
-export default function Performance() {
+function PerformanceScreen() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -335,3 +336,8 @@ function NumberField({
     </div>
   );
 }
+
+// deployment-scoped settings: superadmin-only in the capability table, so a
+// lesser caller sees the refusal instead of a screen that loads and then 403s
+// (#1183)
+export default superadminOnly(PerformanceScreen, "errors.resources.performanceSettings");
