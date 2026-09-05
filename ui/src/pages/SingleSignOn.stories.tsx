@@ -5,9 +5,11 @@ import SingleSignOn from "./SingleSignOn";
 import {
   Harness,
   ORG,
+  Toasted,
   cancelConfirmation,
   clickWhenEnabled,
   confirmDestructive,
+  expectToast,
   json,
   pending,
   scoped,
@@ -344,7 +346,9 @@ const policySave = record(api({ providers: () => [provider()] }));
 export const SavesPolicy: Story = {
   render: () => (
     <Harness fetchStub={policySave.stub}>
-      <SingleSignOn />
+      <Toasted>
+        <SingleSignOn />
+      </Toasted>
     </Harness>
   ),
   play: async ({ canvasElement }) => {
@@ -367,7 +371,7 @@ export const SavesPolicy: Story = {
         allow_sso: true,
       });
     });
-    await waitFor(() => expect(canvas.getByText("Policy saved.")).toBeVisible());
+    await expectToast(canvasElement, /the sign-in policy updated/i);
   },
 };
 

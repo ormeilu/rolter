@@ -141,7 +141,6 @@
   "src/pages/AdaptiveSettings.tsx": [
     "Adaptive Routing",
     "Adaptive routing enabled",
-    "Adaptive routing settings updated.",
     "Blend Weights",
     "Each signal is scored in",
     "Exploration",
@@ -187,7 +186,6 @@
     "Add header",
     "Always propagated:",
     "Base URL",
-    "Client settings updated.",
     "Copy example request",
     "Correlation",
     "Forwarded request headers",
@@ -211,7 +209,6 @@
     "Anthropic API Version",
     "Anthropic API version",
     "Anthropic requires",
-    "Compatibility settings updated.",
     "Default Max Tokens",
     "Default max tokens",
     "Save Changes",
@@ -270,7 +267,6 @@
     "Unassigned"
   ],
   "src/pages/FeatureFlags.tsx": [
-    "Feature flags updated.",
     "Save Changes",
     "Saving…"
   ],
@@ -422,7 +418,6 @@
     "Captured payloads (hours)",
     "How long each half of the log is kept. Payloads are the sensitive half, so they cannot outlive the metadata they belong to.",
     "Log metadata (days)",
-    "Logs settings updated.",
     "Max bytes per payload",
     "Payload retention hours",
     "Percentage of requests written to the log. Lower it to cut storage on high-volume deployments; metrics and budgets are unaffected.",
@@ -535,7 +530,6 @@
     "Fill in the parameters below when a request omits them. A value the client sent is never overwritten, so turning this on cannot change a request that was already explicit. With it off, request bodies reach the provider untouched.",
     "Max tokens",
     "Model",
-    "Model defaults updated.",
     "No defaults are set yet, so nothing is applied. Fill in at least one field below.",
     "Sampling",
     "Save Changes",
@@ -573,7 +567,6 @@
     "Max retries",
     "Request (s)",
     "Retries",
-    "Runtime policy updated.",
     "Save Changes",
     "Saving…",
     "Timeouts",
@@ -658,7 +651,6 @@
     "Required Headers",
     "Save Changes",
     "Saving…",
-    "Security settings updated.",
     "Write-only: the secret is encrypted server-side and never shown again.",
     "X-Stainless-Timeout",
     "X-Tenant-ID: acme, X-Custom-Header: value",

@@ -40,7 +40,7 @@ import {
 } from "@/lib/api";
 import { useFormat, type Formatters } from "@/lib/i18n/format";
 import { useScope, type ScopeResult } from "@/lib/scope";
-import { useToast } from "@/lib/toast";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const TOKENS_QUERY_KEY = ["scim-tokens"];
@@ -322,6 +322,7 @@ function GroupMappings({ orgId, canManage }: { orgId: string; canManage: boolean
 // resource endpoints under /scim/v2 are driven by the IdP, never from here
 export default function UserProvisioning() {
   const { t } = useTranslation();
+  const toast = useToast();
   const fmt = useFormat();
   const queryClient = useQueryClient();
   const scope = useScope();
@@ -513,8 +514,21 @@ export default function UserProvisioning() {
             disabled={revoke.isPending}
             onClick={() => {
               if (!revokeTarget) return;
+              const what = revokeTarget.name;
+              // this dialog has nowhere to put a failure — it is hand-rolled
+              // and carries no error line — so both outcomes toast (#1197)
               revoke.mutate(revokeTarget.id, {
-                onSuccess: () => setRevokeTarget(null),
+                onSuccess: () => {
+                  setRevokeTarget(null);
+                  toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+                },
+                onError: (error) => {
+                  toast.push({
+                    tone: "error",
+                    title: t("toast.deleteFailed", { what }),
+                    detail: errorDetail(error),
+                  });
+                },
               });
             }}
           >

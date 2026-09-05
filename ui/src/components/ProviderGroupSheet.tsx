@@ -20,6 +20,7 @@ import {
 } from "@/lib/api";
 import { StrategyHint } from "@/components/StrategyHint";
 import { strategyOptions } from "@/lib/strategies";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useFormTelemetry } from "@/lib/ux-react";
 
 export type ProviderGroupSheetMode = "add" | "edit";
@@ -208,6 +209,7 @@ export function ProviderGroupSheet({
 
   const dirty = initialRef.current !== "" && JSON.stringify(draft) !== initialRef.current;
   const { t } = useTranslation();
+  const toast = useToast();
   const guard = React.useCallback(() => {
     if (!dirty) return true;
     return window.confirm(t("common.discardChanges"));
@@ -243,10 +245,28 @@ export function ProviderGroupSheet({
     },
     onSuccess: () => {
       ux.saved();
+      // the sheet closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push(
+        mode === "add"
+          ? { tone: "success", title: t("toast.created", { what: draft.name }) }
+          : {
+              tone: "success",
+              title: t("toast.saved"),
+              detail: t("toast.savedDetail", { what: draft.name }),
+            },
+      );
       onDone();
       onOpenChange(false);
     },
-    onError: () => ux.failed(),
+    onError: (error) => {
+      ux.failed();
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: draft.name }),
+        detail: errorDetail(error),
+      });
+    },
   });
 
   const title = mode === "add" ? "Add provider group" : `Edit ${group?.name ?? ""}`;

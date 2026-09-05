@@ -4,6 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import SkillsRepository from "./SkillsRepository";
+import { Toasted, expectToast } from "./story-harness";
 import type { SkillRow, SkillVersionRow } from "@/lib/api";
 
 const ORG = "00000000-0000-4000-8000-000000000011";
@@ -101,7 +102,7 @@ function Harness({ fetchStub }: { fetchStub: FetchStub }) {
   React.useEffect(() => () => {
     if (original.current) globalThis.fetch = original.current;
   }, []);
-  return <QueryClientProvider client={client}><div className="h-screen bg-[color:var(--surface-app)]"><SkillsRepository /></div></QueryClientProvider>;
+  return <QueryClientProvider client={client}><Toasted><div className="h-screen bg-[color:var(--surface-app)]"><SkillsRepository /></div></Toasted></QueryClientProvider>;
 }
 
 const meta = {
@@ -133,11 +134,11 @@ export const Error: Story = {
 
 export const SavesImmutableVersion: Story = {
   render: () => <Harness fetchStub={loadedStub()} />,
-  play: async ({ canvas }) => {
+  play: async ({ canvas, canvasElement }) => {
     const content = await canvas.findByRole("textbox", { name: "SKILL.md content" });
     await userEvent.type(content, "\n4. Schedule the follow-up.");
     await userEvent.click(canvas.getByRole("button", { name: /Save new version/ }));
-    await waitFor(() => expect(canvas.getByText(/Version v3 saved/)).toBeVisible());
+    await expectToast(canvasElement, /Version v3 saved/);
   },
 };
 
@@ -160,7 +161,7 @@ export const RetiresSkillWithPolicyIntact: Story = {
     await userEvent.click(page.getByRole("checkbox", { name: /Retire this skill/ }));
     await userEvent.click(page.getByRole("button", { name: "Save settings" }));
     await waitFor(() => expect(canvas.getAllByText("Retired")).toHaveLength(2));
-    await expect(canvas.getByText(/no longer resolves/)).toBeVisible();
+    await expectToast(canvasElement, /no longer resolves/);
   },
 };
 

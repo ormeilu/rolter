@@ -30,6 +30,7 @@ import {
   type PluginInstanceRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 type Stage = PluginInstanceRow["stage"];
@@ -75,6 +76,7 @@ export default function Plugins() {
   // the scope hook names a catalog key rather than carrying english copy
   const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
   const client = useQueryClient();
+  const toast = useToast();
   const query = useQuery({
     queryKey: ["plugins", scope.orgId],
     queryFn: () => fetchPlugins(scope.orgId as string),
@@ -95,6 +97,14 @@ export default function Plugins() {
     mutationFn: (plugin: PluginInstanceRow) =>
       updatePlugin(plugin.id, { ...asInput(plugin), enabled: !plugin.enabled }),
     onSuccess: invalidate,
+    // a switch that bounced back reads as nothing having happened (#1197)
+    onError: (error, plugin) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: plugin.name }),
+        detail: errorDetail(error),
+      });
+    },
   });
   const remove = useMutation({
     mutationFn: deletePlugin,
@@ -197,10 +207,23 @@ export default function Plugins() {
         confirmLabel={t("common.delete")}
         pending={remove.isPending}
         error={remove.error}
-        onConfirm={() =>
-          deleteTarget &&
-          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
-        }
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          const what = deleteTarget.name;
+          remove.mutate(deleteTarget.id, {
+            onSuccess: () => {
+              setDeleteTarget(null);
+              toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+            },
+            onError: (error) => {
+              toast.push({
+                tone: "error",
+                title: t("toast.deleteFailed", { what }),
+                detail: errorDetail(error),
+              });
+            },
+          });
+        }}
       />
 
       <PluginDialog
@@ -366,6 +389,7 @@ function PluginDialog({
   onDone: () => void;
 }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [form, setForm] = React.useState({
     project_id: initial?.project_id ?? "",
     name: initial?.name ?? "",
@@ -385,7 +409,27 @@ function PluginDialog({
   const mutation = useMutation({
     mutationFn: (body: PluginInstanceInput) =>
       initial ? updatePlugin(initial.id, body) : createPlugin(orgId, body),
-    onSuccess: onDone,
+    onSuccess: (_result, body) => {
+      // the dialog closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push(
+        initial
+          ? {
+              tone: "success",
+              title: t("toast.saved"),
+              detail: t("toast.savedDetail", { what: body.name }),
+            }
+          : { tone: "success", title: t("toast.created", { what: body.name }) },
+      );
+      onDone();
+    },
+    onError: (error, body) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: body.name }),
+        detail: errorDetail(error),
+      });
+    },
   });
   const set = (patch: Partial<typeof form>) => {
     setForm((value) => ({ ...value, ...patch }));

@@ -4,7 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import AdaptiveSettings from "./AdaptiveSettings";
-import { expectSkeleton } from "./story-harness";
+import { Toasted, expectSkeleton, expectToast } from "./story-harness";
 import type { AdaptiveRoutingPolicyDto } from "@/lib/api";
 
 const BASE: AdaptiveRoutingPolicyDto = {
@@ -43,7 +43,9 @@ function Harness({ fetchStub }: { fetchStub: FetchStub }) {
   );
   return (
     <QueryClientProvider client={client}>
-      <AdaptiveSettings />
+      <Toasted>
+        <AdaptiveSettings />
+      </Toasted>
     </QueryClientProvider>
   );
 }
@@ -146,9 +148,7 @@ export const SavesChanges: Story = {
     await userEvent.clear(cost);
     await userEvent.type(cost, "2");
     await userEvent.click(canvas.getByRole("button", { name: "Save Changes" }));
-    await waitFor(() =>
-      expect(canvas.getByText("Adaptive routing settings updated.")).toBeVisible(),
-    );
+    await expectToast(canvasElement, /adaptive routing settings updated/i);
     await expect(canvas.getByLabelText("Cost weight")).toHaveValue("2");
   },
 };

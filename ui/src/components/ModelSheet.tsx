@@ -39,6 +39,7 @@ import {
   type ProviderRow,
   type RouteRow,
 } from "@/lib/api";
+import { errorDetail, useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useFormTelemetry } from "@/lib/ux-react";
 
@@ -830,6 +831,7 @@ export function ModelSheet({
 
   const dirty = !readonly && initialRef.current !== "" && JSON.stringify(draft) !== initialRef.current;
   const { t } = useTranslation();
+  const toast = useToast();
   const guard = React.useCallback(() => {
     if (!dirty) return true;
     return window.confirm(t("common.discardChanges"));
@@ -984,10 +986,28 @@ export function ModelSheet({
       ux.saved();
       queryClient.invalidateQueries({ queryKey: ["route-targets", route?.id] });
       queryClient.invalidateQueries({ queryKey: ["model-prices"] });
+      // the sheet closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push(
+        mode === "add"
+          ? { tone: "success", title: t("toast.created", { what: publicName }) }
+          : {
+              tone: "success",
+              title: t("toast.saved"),
+              detail: t("toast.savedDetail", { what: publicName }),
+            },
+      );
       onDone();
       onOpenChange(false);
     },
-    onError: () => ux.failed(),
+    onError: (error) => {
+      ux.failed();
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: publicName }),
+        detail: errorDetail(error),
+      });
+    },
   });
 
   const runTest = () => {

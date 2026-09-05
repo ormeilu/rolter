@@ -5,9 +5,11 @@ import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import Cluster from "./Cluster";
 import {
+  Toasted,
   cancelConfirmation,
   confirmDestructive,
   expectSkeleton,
+  expectToast,
   recording,
 } from "./story-harness";
 import type { ClusterNodeRow } from "@/lib/api";
@@ -40,8 +42,9 @@ const FLEET: ClusterNodeRow[] = [
 
 type FetchStub = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+// 204 may not carry a body — see the same note on the shared helper (#1197)
 const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
+  new Response(status === 204 ? null : JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -63,7 +66,9 @@ function Harness({ fetchStub }: { fetchStub: FetchStub }) {
   );
   return (
     <QueryClientProvider client={client}>
-      <Cluster />
+      <Toasted>
+        <Cluster />
+      </Toasted>
     </QueryClientProvider>
   );
 }
@@ -136,9 +141,9 @@ export const RefusesDrainingTheLastGateway: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(await canvas.findByRole("button", { name: "Drain" }));
-    await waitFor(() =>
-      expect(canvas.getByText(/only live gateway still serving/)).toBeVisible(),
-    );
+    // the refusal used to sit in a line beside the node count; it is an
+    // assertive toast now, carrying the control plane's own words (#1197)
+    await expectToast(canvasElement, /only live gateway still serving/, "error");
   },
 };
 

@@ -20,6 +20,7 @@ import {
 } from "@/lib/api";
 import { useFormat, type Formatters } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // bounded input-size tiers per route: requests below each byte ceiling are
@@ -189,6 +190,7 @@ function PolicyDialog({
 }) {
   // `t` is the tier in the rows below, so the catalog reader takes another name
   const { t: translate } = useTranslation();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const existing = useQuery({
     queryKey: ["route-complexity", route.id],
@@ -213,7 +215,21 @@ function PolicyDialog({
     mutationFn: (next: ComplexityTier[]) => setRouteComplexity(route.id, { tiers: next }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["route-complexity", route.id] });
+      // the sheet closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push({
+        tone: "success",
+        title: translate("toast.saved"),
+        detail: translate("toast.savedDetail", { what: route.model }),
+      });
       onClose();
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: translate("toast.saveFailed", { what: route.model }),
+        detail: errorDetail(error),
+      });
     },
   });
   const set = (i: number, patch: Partial<ComplexityTier>) =>

@@ -14,6 +14,7 @@ import {
   updateSecuritySettings,
   type SecuritySettingsDto,
 } from "@/lib/api";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 interface FormState {
@@ -65,6 +66,7 @@ const fromDto = (dto: SecuritySettingsDto): FormState => ({
 export default function Security() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const settings = useQuery({
     queryKey: ["security-settings"],
     queryFn: fetchSecuritySettings,
@@ -77,7 +79,6 @@ export default function Security() {
   useErrorState(!!settings.error, "security");
 
   const [form, setForm] = React.useState<FormState | null>(null);
-  const [saved, setSaved] = React.useState(false);
   React.useEffect(() => {
     if (settings.data && form === null) {
       setForm(fromDto(settings.data));
@@ -100,8 +101,22 @@ export default function Security() {
       }),
     onSuccess: (dto) => {
       queryClient.setQueryData(["security-settings"], dto);
+      // the cached write alone left every other reader of this key on the
+      // value it already had; the refetch is what makes the save stick (#1197)
+      void queryClient.invalidateQueries({ queryKey: ["security-settings"] });
       setForm(fromDto(dto));
-      setSaved(true);
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: t("errors.resources.securitySettings") }),
+      });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: t("errors.resources.securitySettings") }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -127,7 +142,6 @@ export default function Security() {
 
   const set = (patch: Partial<FormState>) => {
     setForm((f) => (f ? { ...f, ...patch } : f));
-    setSaved(false);
   };
   const disabledAuth = !form.authEnabled;
   const secretConfigured = settings.data?.dashboard_secret_configured ?? false;
@@ -231,16 +245,6 @@ export default function Security() {
       />
 
       <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-[color:var(--border-subtle)] bg-background py-3">
-        {save.isError && (
-          <span className="text-xs text-[color:var(--status-danger-text)]">
-            {(save.error as Error).message}
-          </span>
-        )}
-        {saved && (
-          <span className="text-xs text-[color:var(--status-success-text)]">
-            Security settings updated.
-          </span>
-        )}
         <Button disabled={save.isPending} onClick={() => save.mutate(form)}>
           {save.isPending ? "Saving…" : "Save Changes"}
         </Button>

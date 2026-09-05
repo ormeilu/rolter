@@ -47,6 +47,7 @@ import {
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
@@ -117,6 +118,7 @@ export default function SkillsRepository() {
   // the scope hook names a catalog key rather than carrying english copy
   const scopeMessage = scope.errorKey ? t(scope.errorKey) : undefined;
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [selectedId, setSelectedId] = React.useState<string>();
   const [selectedVersion, setSelectedVersion] = React.useState<number>();
   const [draft, setDraft] = React.useState<Draft>({ ...EMPTY_DRAFT });
@@ -124,7 +126,6 @@ export default function SkillsRepository() {
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [rollbackVersion, setRollbackVersion] = React.useState<number>();
-  const [notice, setNotice] = React.useState<string>();
 
   const skills = useQuery({
     queryKey: ["skills", scope.orgId],
@@ -183,7 +184,16 @@ export default function SkillsRepository() {
       queryClient.setQueryData<SkillRow[]>(["skills", scope.orgId], (current = []) => [...current, skill]);
       setSelectedId(skill.id);
       setCreateOpen(false);
-      setNotice(t("pages.skillsRepo.created"));
+      // the workbench's notice strip vanished the moment the draft was
+      // touched; the outcome belongs in the toast queue instead (#1197)
+      toast.push({ tone: "success", title: t("pages.skillsRepo.created") });
+    },
+    onError: (error, input) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: input.name }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -200,7 +210,17 @@ export default function SkillsRepository() {
     onSuccess: async (version) => {
       await queryClient.invalidateQueries({ queryKey: ["skill-versions", selectedId] });
       setSelectedVersion(version.version);
-      setNotice(t("pages.skillsRepo.versionSaved", { version: version.version }));
+      toast.push({
+        tone: "success",
+        title: t("pages.skillsRepo.versionSaved", { version: version.version }),
+      });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: selected?.name ?? "" }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -208,7 +228,17 @@ export default function SkillsRepository() {
     mutationFn: (version: number) => publishSkillVersion(selectedId as string, version),
     onSuccess: (skill) => {
       replaceSkill(queryClient, scope.orgId, skill);
-      setNotice(t("pages.skillsRepo.publishedNotice", { version: skill.published_version }));
+      toast.push({
+        tone: "success",
+        title: t("pages.skillsRepo.publishedNotice", { version: skill.published_version }),
+      });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: selected?.name ?? "" }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -217,7 +247,17 @@ export default function SkillsRepository() {
     onSuccess: (skill) => {
       replaceSkill(queryClient, scope.orgId, skill);
       setRollbackVersion(undefined);
-      setNotice(t("pages.skillsRepo.rolledBack", { version: skill.published_version }));
+      toast.push({
+        tone: "success",
+        title: t("pages.skillsRepo.rolledBack", { version: skill.published_version }),
+      });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: selected?.name ?? "" }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -225,16 +265,24 @@ export default function SkillsRepository() {
     mutationFn: () => deleteSkill(selectedId as string),
     onSuccess: async () => {
       const removedId = selectedId;
+      const what = selected?.name ?? "";
       // clear the selection first so the workbench never renders against a
       // skill the control plane has already dropped
       setSelectedId(undefined);
       setSelectedVersion(undefined);
       setDeleteOpen(false);
-      setNotice(undefined);
       queryClient.setQueryData<SkillRow[]>(["skills", scope.orgId], (current = []) =>
         current.filter((item) => item.id !== removedId),
       );
       await queryClient.invalidateQueries({ queryKey: ["skills", scope.orgId] });
+      toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.deleteFailed", { what: selected?.name ?? "" }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -243,7 +291,19 @@ export default function SkillsRepository() {
     onSuccess: (skill) => {
       replaceSkill(queryClient, scope.orgId, skill);
       setSettingsOpen(false);
-      setNotice(skill.retired_at ? t("pages.skillsRepo.retiredNotice") : t("pages.skillsRepo.settingsUpdated"));
+      toast.push({
+        tone: "success",
+        title: skill.retired_at
+          ? t("pages.skillsRepo.retiredNotice")
+          : t("pages.skillsRepo.settingsUpdated"),
+      });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: selected?.name ?? "" }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -304,13 +364,9 @@ export default function SkillsRepository() {
             skill={selected}
             baseVersion={baseVersion}
             draft={draft}
-            notice={notice}
             pending={save.isPending || publish.isPending}
             error={(save.error ?? publish.error) as Error | null}
-            onDraftChange={(next) => {
-              setDraft(next);
-              setNotice(undefined);
-            }}
+            onDraftChange={setDraft}
             onSave={() => save.mutate()}
             onPublish={(version) => publish.mutate(version)}
             onSettings={() => setSettingsOpen(true)}
@@ -410,7 +466,7 @@ function SkillIndex({ skills, selectedId, onSelect, onCreate }: { skills: SkillR
   );
 }
 
-function SkillWorkbench({ skill, baseVersion, draft, notice, pending, error, onDraftChange, onSave, onPublish, onSettings, onDelete }: { skill: SkillRow; baseVersion?: SkillVersionRow; draft: Draft; notice?: string; pending: boolean; error: Error | null; onDraftChange: (draft: Draft) => void; onSave: () => void; onPublish: (version: number) => void; onSettings: () => void; onDelete: () => void }) {
+function SkillWorkbench({ skill, baseVersion, draft, pending, error, onDraftChange, onSave, onPublish, onSettings, onDelete }: { skill: SkillRow; baseVersion?: SkillVersionRow; draft: Draft; pending: boolean; error: Error | null; onDraftChange: (draft: Draft) => void; onSave: () => void; onPublish: (version: number) => void; onSettings: () => void; onDelete: () => void }) {
   const { t } = useTranslation();
   const problemKey = draftProblem(draft);
   const problem = problemKey && t(`pages.skillsRepo.${problemKey}`);
@@ -422,7 +478,7 @@ function SkillWorkbench({ skill, baseVersion, draft, notice, pending, error, onD
           <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-lg font-semibold tracking-[-0.02em]">{skill.name}</h2>{skill.retired_at ? <Badge tone="neutral">{t("pages.skillsRepo.retired")}</Badge> : skill.published_version ? <Badge tone="success" dot>{t("pages.skillsRepo.liveBadge", { version: skill.published_version })}</Badge> : <Badge tone="warning">{t("pages.skillsRepo.unpublished")}</Badge>}</div><p className="mt-1 max-w-2xl text-sm text-muted-foreground">{skill.description || t("pages.skillsRepo.noDescription")}</p></div>
           <div className="flex flex-wrap items-center gap-2"><Button variant="ghost" onClick={onSettings}><Settings2 className="h-4 w-4" /> {t("pages.skillsRepo.settings")}</Button><Button variant="ghost" aria-label={t("pages.skillsRepo.deleteAction", { name: skill.name })} onClick={onDelete}><Trash2 className="h-4 w-4" /></Button>{baseVersion && !selectedPublished && !skill.retired_at && <Button variant="outline" disabled={pending} onClick={() => onPublish(baseVersion.version)}><Check className="h-4 w-4" /> {t("pages.skillsRepo.publishVersion", { version: baseVersion.version })}</Button>}<Button disabled={pending || !!problem || !!skill.retired_at} onClick={onSave}><FilePlus2 className="h-4 w-4" />{pending ? t("pages.skillsRepo.saving") : t("pages.skillsRepo.saveNewVersion")}</Button></div>
         </div>
-        <div className="mt-3 flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1 text-xs"><span className="font-mono text-[color:var(--text-subtle)]">{skill.slug}</span><span className="text-muted-foreground">{t("pages.skillsRepo.minimumRoleMeta", { role: skill.minimum_role })}</span><span className="text-muted-foreground">{skill.allowed_team_ids.length ? t("pages.skillsRepo.teamsCount", { count: skill.allowed_team_ids.length }) : t("pages.skillsRepo.allOrgTeams")}</span>{baseVersion && <span className="text-muted-foreground">{t("pages.skillsRepo.editingFrom", { version: baseVersion.version })}</span>}{problem && <span role="alert" className="text-[color:var(--status-danger-text)]">{problem}</span>}{error && <span role="alert" className="text-[color:var(--status-danger-text)]">{error.message}</span>}{notice && <span role="status" className="text-[color:var(--status-success-text)]">{notice}</span>}</div>
+        <div className="mt-3 flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1 text-xs"><span className="font-mono text-[color:var(--text-subtle)]">{skill.slug}</span><span className="text-muted-foreground">{t("pages.skillsRepo.minimumRoleMeta", { role: skill.minimum_role })}</span><span className="text-muted-foreground">{skill.allowed_team_ids.length ? t("pages.skillsRepo.teamsCount", { count: skill.allowed_team_ids.length }) : t("pages.skillsRepo.allOrgTeams")}</span>{baseVersion && <span className="text-muted-foreground">{t("pages.skillsRepo.editingFrom", { version: baseVersion.version })}</span>}{problem && <span role="alert" className="text-[color:var(--status-danger-text)]">{problem}</span>}{error && <span role="alert" className="text-[color:var(--status-danger-text)]">{error.message}</span>}</div>
       </header>
 
       <div className="space-y-7 p-4 sm:p-5">

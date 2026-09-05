@@ -18,6 +18,7 @@ import {
   type ClusterNodeRow,
 } from "@/lib/api";
 import { useFormat } from "@/lib/i18n/format";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // nodes fall out of the liveness window in under a minute, so the inventory is
@@ -48,6 +49,7 @@ export default function Cluster() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const nodes = useQuery({
     queryKey: ["cluster-nodes"],
     queryFn: fetchClusterNodes,
@@ -72,13 +74,26 @@ export default function Cluster() {
   const drain = useMutation({
     mutationFn: (v: { id: string; draining: boolean }) =>
       setClusterNodeDrain(v.id, v.draining),
-    onSuccess: invalidate,
+    onSuccess: (_result, v) => {
+      invalidate();
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: v.id }),
+      });
+    },
+    onError: (error, v) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: v.id }),
+        detail: errorDetail(error),
+      });
+    },
   });
   const forget = useMutation({
     mutationFn: (id: string) => forgetClusterNode(id),
     onSuccess: invalidate,
   });
-  const actionError = (drain.error ?? forget.error) as Error | undefined;
 
   // forgetting drops the node's history from the inventory, so it is confirmed
   // by id — and the dialog repeats the one thing that surprises people, that a
@@ -190,9 +205,6 @@ export default function Cluster() {
           {rows.length} nodes · {live} live
           {lagging > 0 && ` · ${lagging} still applying the newest config`}
         </span>
-        {actionError && !forgetTarget && (
-          <span className="text-xs text-[color:var(--status-danger-text)]">{actionError.message}</span>
-        )}
       </div>
 
       <ConfirmDialog
@@ -203,10 +215,23 @@ export default function Cluster() {
         confirmLabel={t("pages.cluster.confirm.confirm")}
         pending={forget.isPending}
         error={forget.error}
-        onConfirm={() =>
-          forgetTarget &&
-          forget.mutate(forgetTarget.id, { onSuccess: () => setForgetTarget(null) })
-        }
+        onConfirm={() => {
+          if (!forgetTarget) return;
+          const what = forgetTarget.id;
+          forget.mutate(what, {
+            onSuccess: () => {
+              setForgetTarget(null);
+              toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+            },
+            onError: (error) => {
+              toast.push({
+                tone: "error",
+                title: t("toast.deleteFailed", { what }),
+                detail: errorDetail(error),
+              });
+            },
+          });
+        }}
       />
 
       {/* the placeholder rides inside the table rather than replacing it: the

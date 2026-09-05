@@ -4,7 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import Performance from "./Performance";
-import { expectSkeleton } from "./story-harness";
+import { Toasted, expectSkeleton, expectToast } from "./story-harness";
 import type { RuntimePolicyDto } from "@/lib/api";
 
 const BASE: RuntimePolicyDto = {
@@ -46,7 +46,9 @@ function Harness({ fetchStub }: { fetchStub: FetchStub }) {
   );
   return (
     <QueryClientProvider client={client}>
-      <Performance />
+      <Toasted>
+        <Performance />
+      </Toasted>
     </QueryClientProvider>
   );
 }
@@ -152,9 +154,7 @@ export const SavesChanges: Story = {
     await userEvent.clear(retries);
     await userEvent.type(retries, "4");
     await userEvent.click(canvas.getByRole("button", { name: "Save Changes" }));
-    await waitFor(() =>
-      expect(canvas.getByText("Runtime policy updated.")).toBeVisible(),
-    );
+    await expectToast(canvasElement, /performance settings updated/i);
     await expect(canvas.getByLabelText("Max retries")).toHaveValue("4");
   },
 };

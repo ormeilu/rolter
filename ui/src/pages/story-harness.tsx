@@ -2,8 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
+import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider } from "@/lib/auth";
 import en from "@/lib/i18n/locales/en.json";
+import { ToastProvider } from "@/lib/toast";
 
 // Shared fetch-stub harness for screen stories (#879).
 //
@@ -21,8 +23,13 @@ export const ORG = { id: "org-1", name: "Rolter", slug: "rolter", created_at: "2
 export const TEAM = { id: "team-1", org_id: "org-1", name: "Platform", created_at: "2026-01-01T00:00:00Z" };
 export const PROJECT = { id: "project-1", team_id: "team-1", name: "Gateway", created_at: "2026-01-01T00:00:00Z" };
 
+// 204/205/304 may not carry a body: the Response constructor rejects one
+// outright, and a stub that throws turns a story's success path into its
+// failure path while every url-only assertion still passes (#1197)
+const NO_BODY = new Set([204, 205, 304]);
+
 export const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
+  new Response(NO_BODY.has(status) ? null : JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -341,4 +348,48 @@ export async function expectClosesWithoutPrompting(closeLabel = "Cancel"): Promi
   } finally {
     window.confirm = original;
   }
+}
+
+/**
+ * A screen under the shell's toast queue (#1197).
+ *
+ * `useToast()` is a no-op outside a provider, so a screen story renders
+ * perfectly well without this — which is exactly why a story that means to
+ * assert the outcome has to opt in. It is not folded into `Harness` because
+ * the `Toaster` contributes its own `role="status"` and `role="alert"`
+ * regions, and the stories that already query those by role would stop being
+ * able to.
+ */
+export function Toasted({ children }: { children: React.ReactNode }) {
+  return (
+    <ToastProvider>
+      {children}
+      <Toaster />
+    </ToastProvider>
+  );
+}
+
+/**
+ * Assert the toast queue is announcing `says`.
+ *
+ * `tone` picks the live region: a success is polite (`status`), a failure
+ * assertive (`alert`). The card fades in, so visibility is awaited rather than
+ * asserted at once — and the region is looked up among all of them, because a
+ * screen carries live regions of its own that have nothing to do with this.
+ */
+export async function expectToast(
+  canvasElement: HTMLElement,
+  says: RegExp,
+  tone: "success" | "error" = "success",
+): Promise<void> {
+  const canvas = within(canvasElement);
+  const role = tone === "error" ? "alert" : "status";
+  const region = await waitFor(() => {
+    const found = canvas
+      .getAllByRole(role)
+      .find((node) => says.test(node.textContent ?? ""));
+    expect(found).toBeDefined();
+    return found as HTMLElement;
+  });
+  await waitFor(() => expect(within(region).getByText(says)).toBeVisible());
 }

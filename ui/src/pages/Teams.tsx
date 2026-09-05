@@ -15,6 +15,7 @@ import { createTeam, fetchBudgets, fetchMemberships, fetchTeams } from "@/lib/ap
 import { useCurrencyCode } from "@/lib/currency";
 import { useFormat } from "@/lib/i18n/format";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 // teams from the design prototype: card per team with member count, the
@@ -24,6 +25,7 @@ export default function Teams() {
   const fmt = useFormat();
   const currency = useCurrencyCode();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const scope = useScope();
 
   const teams = useQuery({
@@ -61,8 +63,18 @@ export default function Teams() {
     mutationFn: () => createTeam(scope.orgId as string, { name }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["teams", scope.orgId] });
+      // the sheet closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push({ tone: "success", title: t("toast.created", { what: name }) });
       setAddOpen(false);
       setName("");
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: name }),
+        detail: errorDetail(error),
+      });
     },
   });
 

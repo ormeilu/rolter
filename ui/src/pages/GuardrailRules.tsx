@@ -32,6 +32,7 @@ import {
   type GuardrailRuleInput,
   type GuardrailRuleRow,
 } from "@/lib/api";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const EMPTY: GuardrailRuleInput = {
@@ -50,6 +51,7 @@ const EMPTY: GuardrailRuleInput = {
 export default function GuardrailRules() {
   const { t } = useTranslation();
   const client = useQueryClient();
+  const toast = useToast();
   const query = useQuery({
     queryKey: ["guardrail-rules"],
     queryFn: fetchGuardrailRules,
@@ -69,9 +71,27 @@ export default function GuardrailRules() {
       editing
         ? updateGuardrailRule(editing.id, body)
         : createGuardrailRule(body),
-    onSuccess: () => {
+    onSuccess: (_result, body) => {
       void client.invalidateQueries({ queryKey: ["guardrail-rules"] });
+      // the dialog closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push(
+        editing
+          ? {
+              tone: "success",
+              title: t("toast.saved"),
+              detail: t("toast.savedDetail", { what: body.name }),
+            }
+          : { tone: "success", title: t("toast.created", { what: body.name }) },
+      );
       setEditing(undefined);
+    },
+    onError: (error, body) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: body.name }),
+        detail: errorDetail(error),
+      });
     },
   });
   const remove = useMutation({
@@ -193,10 +213,23 @@ export default function GuardrailRules() {
         confirmLabel={t("common.delete")}
         pending={remove.isPending}
         error={remove.error}
-        onConfirm={() =>
-          deleteTarget &&
-          remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) })
-        }
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          const what = deleteTarget.name;
+          remove.mutate(deleteTarget.id, {
+            onSuccess: () => {
+              setDeleteTarget(null);
+              toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+            },
+            onError: (error) => {
+              toast.push({
+                tone: "error",
+                title: t("toast.deleteFailed", { what }),
+                detail: errorDetail(error),
+              });
+            },
+          });
+        }}
       />
 
       <RuleDialog

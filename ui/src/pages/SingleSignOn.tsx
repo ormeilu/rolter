@@ -33,6 +33,7 @@ import {
   type SsoProviderRow,
 } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { errorDetail, useToast } from "@/lib/toast";
 import { useErrorState, useScreenReady } from "@/lib/ux-react";
 
 const PROVIDERS_KEY = "sso-providers";
@@ -92,6 +93,7 @@ function SignInPolicyCard({
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [password, setPassword] = React.useState(policy.allow_password_login);
   const [sso, setSso] = React.useState(policy.allow_sso);
 
@@ -108,7 +110,22 @@ function SignInPolicyCard({
         allow_password_login: password,
         allow_sso: sso,
       }),
-    onSuccess: (next) => queryClient.setQueryData([POLICY_KEY, orgId], next),
+    onSuccess: (next) => {
+      queryClient.setQueryData([POLICY_KEY, orgId], next);
+      void queryClient.invalidateQueries({ queryKey: [POLICY_KEY, orgId] });
+      toast.push({
+        tone: "success",
+        title: t("toast.saved"),
+        detail: t("toast.savedDetail", { what: t("errors.resources.signInPolicy") }),
+      });
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: t("errors.resources.signInPolicy") }),
+        detail: errorDetail(error),
+      });
+    },
   });
 
   const dirty =
@@ -169,11 +186,6 @@ function SignInPolicyCard({
             {(save.error as Error).message}
           </p>
         )}
-        {save.isSuccess && !dirty && (
-          <p className="text-xs text-[color:var(--status-success-text)]">
-            {t("pages.sso.policy.saved")}
-          </p>
-        )}
         <Button
           className="ml-auto"
           size="sm"
@@ -199,6 +211,7 @@ function SignInPolicyCard({
 function GroupMappings({ provider }: { provider: SsoProviderRow }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const mappings = useQuery({
     queryKey: [MAPPINGS_KEY, provider.id],
     queryFn: () => fetchSsoGroupMappings(provider.id),
@@ -218,8 +231,16 @@ function GroupMappings({ provider }: { provider: SsoProviderRow }) {
         role,
       }),
     onSuccess: () => {
+      toast.push({ tone: "success", title: t("toast.created", { what: group.trim() }) });
       setGroup("");
       invalidate();
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: group.trim() }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -340,12 +361,23 @@ function GroupMappings({ provider }: { provider: SsoProviderRow }) {
         confirmLabel={t("pages.sso.mappings.confirm.confirm")}
         pending={remove.isPending}
         error={remove.error}
-        onConfirm={() =>
-          removeTarget &&
+        onConfirm={() => {
+          if (!removeTarget) return;
+          const what = removeTarget.group_name;
           remove.mutate(removeTarget.id, {
-            onSuccess: () => setRemoveTarget(null),
-          })
-        }
+            onSuccess: () => {
+              setRemoveTarget(null);
+              toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+            },
+            onError: (error) => {
+              toast.push({
+                tone: "error",
+                title: t("toast.deleteFailed", { what }),
+                detail: errorDetail(error),
+              });
+            },
+          });
+        }}
       />
     </div>
   );
@@ -469,6 +501,7 @@ function AddProviderSheet({
   onCreated: () => void;
 }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [draft, setDraft] = React.useState<Draft>(EMPTY_DRAFT);
 
   React.useEffect(() => {
@@ -492,8 +525,18 @@ function AddProviderSheet({
         default_role: draft.defaultRole || undefined,
       }),
     onSuccess: () => {
+      // the sheet closes on success, so the outcome is announced somewhere
+      // that outlives it (#1197)
+      toast.push({ tone: "success", title: t("toast.created", { what: draft.name.trim() }) });
       onCreated();
       onOpenChange(false);
+    },
+    onError: (error) => {
+      toast.push({
+        tone: "error",
+        title: t("toast.saveFailed", { what: draft.name.trim() }),
+        detail: errorDetail(error),
+      });
     },
   });
 
@@ -622,6 +665,7 @@ function AddProviderSheet({
 export default function SingleSignOn() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const scope = useScope();
   const orgId = scope.orgId;
 
@@ -757,12 +801,23 @@ export default function SingleSignOn() {
         confirmLabel={t("pages.sso.confirm.confirm")}
         pending={remove.isPending}
         error={remove.error}
-        onConfirm={() =>
-          deleteTarget &&
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          const what = deleteTarget.name;
           remove.mutate(deleteTarget.id, {
-            onSuccess: () => setDeleteTarget(null),
-          })
-        }
+            onSuccess: () => {
+              setDeleteTarget(null);
+              toast.push({ tone: "success", title: t("toast.deleted", { what }) });
+            },
+            onError: (error) => {
+              toast.push({
+                tone: "error",
+                title: t("toast.deleteFailed", { what }),
+                detail: errorDetail(error),
+              });
+            },
+          });
+        }}
       />
     </PageBody>
   );

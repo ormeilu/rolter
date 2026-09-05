@@ -4,9 +4,11 @@ import { expect, userEvent, waitFor, within } from "storybook/test";
 import RoutingRules from "./RoutingRules";
 import {
   Harness,
+  Toasted,
   cancelConfirmation,
   confirmDestructive,
   expectSkeleton,
+  expectToast,
   json,
   pending,
   recording,
@@ -159,7 +161,9 @@ const deletes = recording(
 export const ConfirmsBeforeDeletingARoute: Story = {
   render: () => (
     <Harness fetchStub={deletes.stub}>
-      <RoutingRules />
+      <Toasted>
+        <RoutingRules />
+      </Toasted>
     </Harness>
   ),
   play: async ({ canvasElement }) => {
@@ -176,6 +180,9 @@ export const ConfirmsBeforeDeletingARoute: Story = {
     await userEvent.click(buttons[0]);
     await confirmDestructive(/gpt-4o/, /delete route/i);
     await deletes.expectSent("DELETE", "/api/v1/routes/route-1");
+    // the confirmation closes on success, so the outcome is announced where it
+    // outlives the dialog (#1197)
+    await expectToast(canvasElement, /gpt-4o deleted/);
   },
 };
 

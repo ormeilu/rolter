@@ -4,7 +4,7 @@ import * as React from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import FeatureFlags from "./FeatureFlags";
-import { expectSkeleton } from "./story-harness";
+import { Toasted, expectSkeleton, expectToast } from "./story-harness";
 import type { FeatureFlagsDto } from "@/lib/api";
 
 const BASE: FeatureFlagsDto = {
@@ -44,7 +44,9 @@ function Harness({ fetchStub }: { fetchStub: FetchStub }) {
   );
   return (
     <QueryClientProvider client={client}>
-      <FeatureFlags />
+      <Toasted>
+        <FeatureFlags />
+      </Toasted>
     </QueryClientProvider>
   );
 }
@@ -129,6 +131,6 @@ export const SavesChanges: Story = {
     await userEvent.click(complexity);
     await expect(complexity).toHaveAttribute("aria-checked", "true");
     await userEvent.click(canvas.getByRole("button", { name: "Save Changes" }));
-    await waitFor(() => expect(canvas.getByText("Feature flags updated.")).toBeVisible());
+    await expectToast(canvasElement, /feature flags updated/i);
   },
 };

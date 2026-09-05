@@ -108,3 +108,27 @@ that stays longer, carries the control plane's own message as its detail line,
 and can be dismissed by hand. Outside the provider — a story, a test — the hook
 is a no-op, so a screen never has to know whether the shell is around it.
 Use `t("toast.*")` for the titles so every screen says "saved" the same way.
+
+### Which outcomes toast
+
+Every `useMutation` reports its outcome. The rule is *where*, not *whether*:
+the toast carries what the surface that triggered the action cannot, because
+that surface is gone by the time the answer arrives.
+
+| the action | success | failure |
+| --- | --- | --- |
+| a settings screen's Save | toast — the sticky footer's "…updated." flash is gone | toast; the footer no longer keeps a copy |
+| a sheet or dialog that closes on success | toast | toast, plus the inline line the still-open sheet already carried |
+| a delete behind a `ConfirmDialog` | toast | toast, plus the dialog's own `error` line |
+| a row toggle | nothing — the switch staying flipped *is* the confirmation | toast; a switch that bounces back says nothing at all |
+| a reveal-once secret (mint a key, issue a token) | nothing — the secret on screen is the confirmation | the inline line beside the button |
+
+Field-level validation never moves: a value that will not parse belongs next to
+the field, on screen for as long as it is wrong.
+
+### The settings screens invalidate
+
+`setQueryData` alone left every other reader of the key on the value it already
+had — the screen looked saved and the rest of the dashboard did not agree. The
+eleven settings screens now write the response *and* invalidate the query, so
+the save is what the next read sees (#1197).

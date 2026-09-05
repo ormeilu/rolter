@@ -4,12 +4,14 @@ import { expect, userEvent, waitFor, within } from "storybook/test";
 import { AlertChannels, AlertHistory, AlertRules } from "./Alerting";
 import {
   Harness,
+  Toasted,
   cancelConfirmation,
   clickWhenEnabled,
   confirmDestructive,
   expectClosesWithoutPrompting,
   expectSheetClosed,
   expectSkeleton,
+  expectToast,
   json,
   pending,
   recording,
@@ -180,7 +182,9 @@ export const CreatesAChannel: Story = {
         init?.method === "POST" ? json(CHANNELS[0], 201) : json(CHANNELS),
       )}
     >
-      <AlertChannels />
+      <Toasted>
+        <AlertChannels />
+      </Toasted>
     </Harness>
   ),
   play: async ({ canvasElement }) => {
@@ -193,6 +197,9 @@ export const CreatesAChannel: Story = {
     );
     await userEvent.click(within(form).getByRole("button", { name: "Create" }));
     await expectSheetClosed();
+    // the sheet takes any inline confirmation with it, so the outcome is
+    // asserted where it actually lives now (#1197)
+    await expectToast(canvasElement, /oncall created/);
   },
 };
 
