@@ -56,6 +56,7 @@
 - [Dashboard capability gating](development/rbac-gating.md)
 - [Dashboard navigation rail](development/dashboard-navigation.md)
 - [Dashboard theme](development/dashboard-theme.md)
+- [Dashboard code highlighting](development/highlighting.md)
 - [Commit conventions](development/commit-conventions.md)
 - [Issue tracking](development/issue-tracking.md)
 - [Merge protection on master](development/merge-protection.md)
