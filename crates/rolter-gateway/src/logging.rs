@@ -16,6 +16,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use crossbeam_queue::ArrayQueue;
 use futures_util::Stream;
 use serde::Serialize;
@@ -23,6 +24,45 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::metrics::Metrics;
+
+/// ClickHouse setting appended to every insert URL so a `DateTime64(3)` column
+/// accepts the RFC 3339 literal [`clickhouse_ts`] writes. The default `basic`
+/// parser only reads `YYYY-MM-DD hh:mm:ss`, so without this the insert fails
+/// outright rather than falling back to the column default (#1210)
+pub(crate) const BEST_EFFORT_DATES: &str = "&date_time_input_format=best_effort";
+
+/// Serialize a timestamp the way ClickHouse's `best_effort` parser reads it
+/// into a `DateTime64(3)`: RFC 3339, UTC, truncated to milliseconds.
+///
+/// Milliseconds are the column's own precision, so nothing is sent that the
+/// column would silently round away.
+pub(crate) mod clickhouse_ts {
+    use super::{DateTime, SecondsFormat, Utc};
+    use serde::Serializer;
+
+    pub(crate) fn serialize<S>(ts: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&ts.to_rfc3339_opts(SecondsFormat::Millis, true))
+    }
+}
+
+/// The wall-clock instant a request began, reconstructed from its monotonic
+/// start.
+///
+/// An `Instant` has no calendar value, and threading a second wall-clock field
+/// down every forwarding path would only add state to keep in sync, so the
+/// start is derived by walking back the elapsed monotonic time. This is what
+/// makes `request_logs.ts` the request's own time rather than the time its
+/// batch happened to be flushed (#1210).
+pub fn started_at(started: Instant) -> DateTime<Utc> {
+    let now = Utc::now();
+    TimeDelta::from_std(started.elapsed())
+        .ok()
+        .and_then(|elapsed| now.checked_sub_signed(elapsed))
+        .unwrap_or(now)
+}
 
 /// Bounded, lock-free reuse for the response bytes retained only long enough
 /// to extract token usage. Oversized buffers are deliberately not retained so
@@ -75,10 +115,15 @@ impl UsageBufferPool {
 }
 
 /// One row of the ClickHouse `request_logs` table. Field names match the column
-/// names so the struct serializes directly as a `JSONEachRow` line. `ts` is
-/// omitted deliberately — ClickHouse fills it with `now64(3)` on insert.
+/// names so the struct serializes directly as a `JSONEachRow` line.
 #[derive(Debug, Clone, Serialize)]
 pub struct RequestLog {
+    /// when the request began, not when its batch was flushed. the column still
+    /// carries `default now64(3)` so a gateway older than #1210 keeps writing,
+    /// but every row this writer emits stamps its own time — otherwise a whole
+    /// batch lands on one millisecond and ordering within it is lost
+    #[serde(serialize_with = "clickhouse_ts::serialize")]
+    pub ts: DateTime<Utc>,
     pub request_id: String,
     /// inbound distributed-trace id (W3C traceparent / B3), empty when the caller
     /// sent none — lets logs join a caller's trace across services
@@ -137,6 +182,10 @@ pub struct RequestLog {
 impl Default for RequestLog {
     fn default() -> Self {
         Self {
+            // now, not the epoch: a row that forgets to stamp its start is only
+            // slightly late, where a zero would land in a 1970 partition and
+            // fall straight past the table's ttl
+            ts: Utc::now(),
             request_id: String::new(),
             trace_id: String::new(),
             org_id: String::new(),
@@ -785,6 +834,9 @@ fn passive_health_event(record: &RequestLog) -> crate::health_events::HealthEven
         }),
     };
     HealthEvent {
+        // the request's own instant, so an uptime rollup and the request row it
+        // was derived from agree on when the observation happened
+        ts: record.ts,
         target_id: record.target.clone(),
         provider: record.provider.clone(),
         source: HealthSource::Passive,
@@ -862,11 +914,11 @@ impl LogSink {
         let (tx, rx) = mpsc::channel(queue_capacity.max(1));
         let writer = BatchWriter {
             url: format!(
-                "{}/?query=INSERT%20INTO%20request_logs%20FORMAT%20JSONEachRow",
+                "{}/?query=INSERT%20INTO%20request_logs%20FORMAT%20JSONEachRow{BEST_EFFORT_DATES}",
                 clickhouse_url.trim_end_matches('/')
             ),
             payload_url: format!(
-                "{}/?query=INSERT%20INTO%20request_payloads%20FORMAT%20JSONEachRow",
+                "{}/?query=INSERT%20INTO%20request_payloads%20FORMAT%20JSONEachRow{BEST_EFFORT_DATES}",
                 clickhouse_url.trim_end_matches('/')
             ),
             client: reqwest::Client::new(),
@@ -1036,6 +1088,10 @@ impl BatchWriter {
 /// One short-retention raw payload row keyed by the corresponding metadata log.
 #[derive(Serialize)]
 struct PayloadLog<'a> {
+    /// the same instant as the metadata row, so a payload and the request it
+    /// belongs to sit in the same partition and sort together
+    #[serde(serialize_with = "clickhouse_ts::serialize")]
+    ts: DateTime<Utc>,
     request_id: &'a str,
     request_payload: &'a str,
     response_payload: &'a str,
@@ -1044,6 +1100,7 @@ struct PayloadLog<'a> {
 impl<'a> From<&'a RequestLog> for PayloadLog<'a> {
     fn from(log: &'a RequestLog) -> Self {
         Self {
+            ts: log.ts,
             request_id: &log.request_id,
             request_payload: &log.request_payload,
             response_payload: &log.response_payload,
@@ -1080,8 +1137,9 @@ mod tests {
     }
 
     #[test]
-    fn request_log_serializes_without_ts() {
+    fn request_log_serializes_ts_clickhouse_accepts() {
         let rec = RequestLog {
+            ts: DateTime::from_timestamp_millis(1_757_030_542_061).expect("timestamp is in range"),
             request_id: "req-1".to_string(),
             model: "gpt-4o".to_string(),
             provider: "openai".to_string(),
@@ -1092,8 +1150,9 @@ mod tests {
         };
         let value: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&rec).unwrap()).unwrap();
-        // ts is filled by clickhouse, never serialized by us
-        assert!(value.get("ts").is_none());
+        // rfc 3339 at exactly the column's millisecond precision, which the
+        // best_effort parser reads into DateTime64(3)
+        assert_eq!(value["ts"], "2025-09-05T00:02:22.061Z");
         assert_eq!(value["request_id"], "req-1");
         assert_eq!(value["status"], 200);
         assert_eq!(value["stream"], 1);
@@ -1461,6 +1520,8 @@ data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\
             ..base.clone()
         });
         assert_eq!(ok.source, HealthSource::Passive);
+        // the derived event is stamped with the request's instant, not "now"
+        assert_eq!(ok.ts, base.ts);
         assert_eq!(ok.outcome, HealthOutcome::Ok);
         assert_eq!(ok.status_code, Some(200));
         assert!(ok.error_kind.is_none());
@@ -1506,6 +1567,15 @@ data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\
         // no queue, nothing written or dropped
         assert_eq!(metrics.logs_dropped_total.load(Relaxed), 0);
         assert_eq!(metrics.logs_written_total.load(Relaxed), 0);
+    }
+
+    #[test]
+    fn started_at_walks_back_the_monotonic_elapsed_time() {
+        let now = Instant::now();
+        let a_minute_ago = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
+        let stamped = started_at(a_minute_ago);
+        let gap = (Utc::now() - stamped).num_seconds();
+        assert!((55..=65).contains(&gap), "expected ~60s back, got {gap}s");
     }
 
     #[test]
@@ -1561,6 +1631,81 @@ data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\
         // give the writer a moment to record the success
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(metrics.logs_written_total.load(Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn each_row_in_a_batch_keeps_its_own_request_time() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = sock.read(&mut buf).await.unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            req
+        });
+
+        let metrics = Arc::new(Metrics::default());
+        let sink = LogSink::spawn(
+            format!("http://{addr}"),
+            10,
+            Duration::from_millis(50),
+            100,
+            metrics.clone(),
+        );
+
+        // two requests that began a minute apart but complete close enough
+        // together to share one flush
+        let now = Instant::now();
+        let older = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
+        let flushed_after = Utc::now();
+        for (request_id, started) in [("req-old", older), ("req-new", now)] {
+            sink.log(RequestLog {
+                ts: started_at(started),
+                request_id: request_id.to_string(),
+                ..Default::default()
+            });
+        }
+
+        let req = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("server timed out")
+            .unwrap();
+        // clickhouse only reads an rfc 3339 literal into DateTime64(3) when the
+        // insert asks for the best_effort parser
+        assert!(req.contains("date_time_input_format=best_effort"));
+
+        let body = req.split("\r\n\r\n").nth(1).expect("request has a body");
+        let rows: Vec<serde_json::Value> = body
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("each line is one json row"))
+            .collect();
+        assert_eq!(rows.len(), 2);
+
+        let mut stamps = Vec::new();
+        for row in &rows {
+            let raw = row["ts"].as_str().expect("ts is serialized");
+            stamps.push(
+                DateTime::parse_from_rfc3339(raw)
+                    .expect("ts is rfc 3339")
+                    .with_timezone(&Utc),
+            );
+        }
+        // the whole point of #1210: one batch, two rows, two different times
+        assert_ne!(stamps[0], stamps[1]);
+        let gap = (stamps[1] - stamps[0]).num_seconds();
+        assert!(
+            (55..=65).contains(&gap),
+            "rows should be ~60s apart, were {gap}s"
+        );
+        // and both predate the flush, so neither borrowed the writer's clock
+        assert!(stamps[1] <= flushed_after);
     }
 
     #[tokio::test]

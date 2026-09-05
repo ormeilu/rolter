@@ -75,6 +75,16 @@ container's init directory:
 - `request_logs` — one row per proxied request, with cost and token counts.
 - `provider_health_events` — per-target health observations from every signal.
 - `mcp_tool_call_logs` — MCP tool invocations.
+
+Every one of these tables declares `ts DateTime64(3) default now64(3)`, but that
+default is a **fallback for old writers only**. Because the writers batch, a row
+that relies on it is stamped with the flush time rather than its own, so each
+writer sends `ts` explicitly: `request_logs` and its `request_payloads` row use
+the instant the request began, `provider_health_events` the instant the
+observation was made, and `mcp_tool_call_logs` the `ts` the submitter reports
+for the tool call (falling back to ingest time). See
+[Observability](observability.md#request--cost-logs) for what each instant
+means; rows written before #1210 carry flush time.
 - `ui_events` — dashboard UX events (#805): screen views and time-to-interactive,
   navigation and back-outs, form submit/abandon and which validation rules fire,
   empty- and error-state impressions, save-to-confirmation latency. Carries

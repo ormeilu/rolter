@@ -1712,6 +1712,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
         state.log.clone(),
         started,
         RequestLog {
+            ts: crate::logging::started_at(started),
             request_id: request_id.clone(),
             trace_id: trace_id.clone(),
             virtual_key_id: vk_id.clone(),
@@ -2087,6 +2088,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
                     None
                 };
             let log = RequestLog {
+                ts: crate::logging::started_at(started),
                 request_id,
                 trace_id,
                 virtual_key_id: vk_id,
@@ -2240,6 +2242,7 @@ async fn proxy(state: AppState, headers: HeaderMap, body: Bytes, path: &str) -> 
             state.metrics.upstream_errors_total.fetch_add(1, Relaxed);
             let message = last_error.unwrap_or_default();
             state.log.log(RequestLog {
+                ts: crate::logging::started_at(started),
                 request_id,
                 trace_id,
                 virtual_key_id: vk_id,
@@ -2445,6 +2448,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
         state.log.clone(),
         started,
         RequestLog {
+            ts: crate::logging::started_at(started),
             request_id: request_id.clone(),
             trace_id: trace_id.clone(),
             virtual_key_id: vk_id.clone(),
@@ -2620,6 +2624,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
     match outcome {
         Some((response, status, is_sse)) => {
             let log = RequestLog {
+                ts: crate::logging::started_at(started),
                 request_id,
                 trace_id,
                 virtual_key_id: vk_id,
@@ -2675,6 +2680,7 @@ async fn proxy_multipart(state: AppState, headers: HeaderMap, body: Bytes, path:
             state.metrics.upstream_errors_total.fetch_add(1, Relaxed);
             let message = last_error.unwrap_or_default();
             state.log.log(RequestLog {
+                ts: crate::logging::started_at(started),
                 request_id,
                 trace_id,
                 virtual_key_id: vk_id,
@@ -3537,6 +3543,7 @@ fn cached_response(
     }
     let latency_ms = ctx.started.elapsed().as_millis() as u32;
     let log = RequestLog {
+        ts: crate::logging::started_at(ctx.started),
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
         virtual_key_id: ctx.vk_id,

@@ -100,7 +100,10 @@ impl ClickHouseClient {
         let response = self
             .client
             .post(format!(
-                "{}/?query=INSERT%20INTO%20mcp_tool_call_logs%20FORMAT%20JSONEachRow",
+                // best_effort so the row's own RFC 3339 `ts` is read into the
+                // DateTime64(3) column instead of being rejected (#1210)
+                "{}/?query=INSERT%20INTO%20mcp_tool_call_logs%20FORMAT%20JSONEachRow\
+                 &date_time_input_format=best_effort",
                 self.base
             ))
             .body(serde_json::to_vec(event)?)

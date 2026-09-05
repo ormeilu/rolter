@@ -125,6 +125,8 @@ async fn poll_one(
             .fetch_add(1, Relaxed);
     }
     state.health_events.emit(HealthEvent {
+        // the poll's own instant, not the batch flush time
+        ts: chrono::Utc::now(),
         target_id: provider.to_string(),
         provider: provider.to_string(),
         source: HealthSource::StatusPage,
